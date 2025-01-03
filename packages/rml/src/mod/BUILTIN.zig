@@ -40,15 +40,20 @@ pub const import = Rml.Procedure {
 
             const localEnv: ptr(Rml.Env) = interpreter.evaluation_env.data;
 
-            for (env.data.keys()) |key| {
-                const slashSym = slashSym: {
-                    const slashStr = try std.fmt.allocPrint(getRml(interpreter).storage.object, "{}/{}", .{namespaceSym, key});
+            var it = env.data.table.iter();
+            while (it.next()) |entry| {
+                const slashSym = slashSym: { // TODO: use frame allocator
+                    const slashStr = try std.fmt.allocPrint(getRml(interpreter).storage.object, "{}/{}", .{namespaceSym, entry.key_ptr.*});
                     defer getRml(interpreter).storage.object.free(slashStr);
 
                     break :slashSym try Rml.newWith(Rml.Symbol, getRml(interpreter), origin, .{slashStr});
                 };
+                errdefer slashSym.deinit();
 
-                try localEnv.bindOrSetCell(slashSym, env.data.getCell(key).?);
+                const val = entry.value_ptr.clone();
+                defer val.deinit();
+
+                try localEnv.rebindCell(slashSym, val);
             }
 
             return Rml.newObject(Nil, getRml(interpreter), origin);
@@ -59,48 +64,49 @@ pub const import = Rml.Procedure {
 /// Create a global variable binding
 pub const global = Rml.Procedure {
     .native_macro = &struct {
-        pub fn fun (interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
-            Rml.interpreter.evaluation.debug("global {}: {any}", .{origin, args});
+        pub fn fun (_: ptr(Interpreter), _: Origin, _: []const Object) Result! Object {
+            @panic("NYI");
+            // Rml.interpreter.evaluation.debug("global {}: {any}", .{origin, args});
 
-            if (args.len < 1) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
+            // if (args.len < 1) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
 
-            const sym = try interpreter.castObj(Rml.Symbol, args[0]);
-            errdefer sym.deinit();
+            // const sym = try interpreter.castObj(Rml.Symbol, args[0]);
+            // errdefer sym.deinit();
 
-            const nilObj = try Rml.newObject(Nil, getRml(interpreter), origin);
-            errdefer nilObj.deinit();
+            // const nilObj = try Rml.newObject(Nil, getRml(interpreter), origin);
+            // errdefer nilObj.deinit();
 
-            const equalSym = try Rml.newObjectWith(Rml.Symbol, getRml(interpreter), origin, .{"="});
-            defer equalSym.deinit();
+            // const equalSym = try Rml.newObjectWith(Rml.Symbol, getRml(interpreter), origin, .{"="});
+            // defer equalSym.deinit();
 
-            const obj =
-                if (args.len == 1) nilObj.clone()
-                else obj: {
-                    var offset: usize = 1;
-                    if (Rml.equal(args[offset], equalSym)) offset += 1;
-                    const body = args[offset..];
-                    break :obj if (body.len == 1) single: {
-                        const bod = body[0];
-                        if (Rml.castObj(Rml.Block, bod)) |b| {
-                            defer b.deinit();
+            // const obj =
+            //     if (args.len == 1) nilObj.clone()
+            //     else obj: {
+            //         var offset: usize = 1;
+            //         if (Rml.equal(args[offset], equalSym)) offset += 1;
+            //         const body = args[offset..];
+            //         break :obj if (body.len == 1) single: {
+            //             const bod = body[0];
+            //             if (Rml.castObj(Rml.Block, bod)) |b| {
+            //                 defer b.deinit();
 
-                            break :single try interpreter.runProgram(origin, b.data.kind == .paren, b.data.array.items());
-                        } else {
-                            break :single try interpreter.eval(bod);
-                        }
-                    } else try interpreter.runProgram(origin, false, body);
-                };
-            errdefer obj.deinit();
+            //                 break :single try interpreter.runProgram(origin, b.data.kind == .paren, b.data.array.items());
+            //             } else {
+            //                 break :single try interpreter.eval(bod);
+            //             }
+            //         } else try interpreter.runProgram(origin, false, body);
+            //     };
+            // errdefer obj.deinit();
 
-            getRml(interpreter).global_env.data.bind(sym, obj) catch |err| {
-                if (err == error.SymbolAlreadyBound) {
-                    try interpreter.abort(origin, error.SymbolAlreadyBound, "symbol `{}` is already bound", .{sym});
-                } else {
-                    return err;
-                }
-            };
+            // getRml(interpreter).global_env.data.bind(sym, obj) catch |err| {
+            //     if (err == error.SymbolAlreadyBound) {
+            //         try interpreter.abort(origin, error.SymbolAlreadyBound, "symbol `{}` is already bound", .{sym});
+            //     } else {
+            //         return err;
+            //     }
+            // };
 
-            return nilObj;
+            // return nilObj;
         }
     }.fun,
 };
@@ -112,45 +118,137 @@ pub const local = Rml.Procedure {
         pub fn fun(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
             Rml.interpreter.evaluation.debug("local {}: {any}", .{origin, args});
 
-            if (args.len < 1) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
-
-            const sym = try interpreter.castObj(Rml.Symbol, args[0]);
-            errdefer sym.deinit();
+            if (args.len < 1)
+                try interpreter.abort(origin, error.InvalidArgumentCount,
+                    "expected at least a name for local variable", .{});
 
             const nilObj = try Rml.newObject(Nil, getRml(interpreter), origin);
-            errdefer nilObj.deinit();
+            defer nilObj.deinit();
 
             const equalSym = try Rml.newObjectWith(Rml.Symbol, getRml(interpreter), origin, .{"="});
             defer equalSym.deinit();
 
-            const obj =
-                if (args.len == 1) nilObj.clone()
-                else obj: {
-                    var offset: usize = 1;
-                    if (Rml.equal(args[offset], equalSym)) offset += 1;
-                    const body = args[offset..];
-                    break :obj if (body.len == 1) single: {
-                        const bod = body[0];
-                        if (Rml.castObj(Rml.Block, bod)) |b| {
-                            defer b.deinit();
-
-                            break :single try interpreter.runProgram(origin, b.data.kind == .paren, b.data.array.items());
-                        } else {
-                            break :single try interpreter.eval(bod);
+            const patt, const offset = parse: {
+                var diag: ?Rml.Diagnostic = null;
+                const parseResult = Rml.Pattern.parse(&diag, args)
+                    catch |err| {
+                        if (err == error.SyntaxError) {
+                            if (diag) |d| {
+                                try interpreter.abort(origin, error.PatternError,
+                                    "cannot parse local variable pattern: {}",
+                                    .{d.formatter(error.SyntaxError)});
+                            } else {
+                                Rml.log.err("requested pattern parse diagnostic is null", .{});
+                                try interpreter.abort(origin, error.PatternError,
+                                    "cannot parse local variable pattern `{}`", .{args[0]});
+                            }
                         }
-                    } else try interpreter.runProgram(origin, false, body);
-                };
-            errdefer obj.deinit();
 
-            interpreter.evaluation_env.data.bind(sym, obj) catch |err| {
-                if (err == error.SymbolAlreadyBound) {
-                    try interpreter.abort(origin, error.SymbolAlreadyBound, "symbol `{}` is already bound", .{sym});
+                        return err;
+                    };
+
+                break :parse .{parseResult.value, parseResult.offset};
+            };
+            defer patt.deinit();
+
+            Rml.parser.parsing.debug("local variable pattern: {}", .{patt});
+
+            var dom = Rml.pattern.patternBinders(patt.typeEraseLeak())
+                catch |err| switch (err) {
+                    error.BadDomain => {
+                        try interpreter.abort(origin, error.SyntaxError,
+                            "bad domain in pattern `{}`", .{patt});
+                    },
+                    error.OutOfMemory => return error.OutOfMemory,
+                };
+            defer dom.deinit(getRml(interpreter));
+
+            // for (dom.keys()) |sym| {
+            //     Rml.interpreter.evaluation.debug("rebinding local variable {} = nil", .{sym});
+            //     try interpreter.evaluation_env.data.rebind(sym.clone(), nilObj.clone());
+            // }
+
+            const obj =
+                if (args.len - offset == 0) nilObj.clone()
+                else obj: {
+                    if (!Rml.equal(args[offset], equalSym)) {
+                        try interpreter.abort(origin, error.SyntaxError,
+                            "expected `=` after local variable pattern", .{});
+                    }
+
+                    const body = args[offset + 1..];
+
+                    if (body.len == 1) {
+                        if (Rml.castObj(Rml.Block, body[0])) |bod| {
+                            defer bod.deinit();
+
+                            break :obj try interpreter.runProgram(
+                                origin,
+                                bod.data.kind == .paren,
+                                bod.data.array.items(),
+                            );
+                        }
+                    }
+
+                    break :obj try interpreter.runProgram(origin, false, body);
+                };
+            defer obj.deinit();
+
+            Rml.interpreter.evaluation.debug("evaluating local variable {} ({}) = {} ({})", .{
+                patt, patt.getHeader().ref_count, obj, obj.getHeader().ref_count
+            });
+
+            const table = table: {
+                var diag: ?Rml.Diagnostic = null;
+                if (try patt.data.run(interpreter, &diag, origin, &.{obj})) |m| break :table m;
+
+                if (diag) |d| {
+                    try interpreter.abort(origin, error.PatternError,
+                        "failed to match; {} vs {}:\n\t{}",
+                        .{patt, obj, d.formatter(error.PatternError)});
                 } else {
-                    return err;
+                    Rml.interpreter.evaluation.err("requested pattern diagnostic is null", .{});
+                    try interpreter.abort(origin, error.PatternError,
+                        "failed to match; {} vs {}", .{patt, obj});
                 }
             };
+            defer table.deinit();
 
-            return nilObj;
+            var it = table.data.unmanaged.iter();
+            while (it.next()) |entry| {
+                const sym = entry.key_ptr.clone();
+                errdefer sym.deinit();
+                const val = entry.value_ptr.clone();
+                errdefer val.deinit();
+
+                Rml.interpreter.evaluation.debug("setting local variable {} ({}) = {} ({})", .{
+                    sym, sym.getHeader().ref_count, val, val.getHeader().ref_count
+                });
+
+                try interpreter.evaluation_env.data.rebind(sym, val);
+            }
+
+            return nilObj.clone();
+        }
+    }.fun,
+};
+
+/// Set the value of a variable associated with an existing binding in the current environment
+pub const @"set!" = Rml.Procedure {
+    .native_macro = &struct {
+        pub fn fun (interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+            const sym = Rml.castObj(Rml.Symbol, args[0])
+                orelse try interpreter.abort(origin, error.TypeError,
+                    "expected symbol, found {s}", .{TypeId.name(args[0].getTypeId())});
+            defer sym.deinit();
+
+            const value = try interpreter.eval(args[1]);
+            errdefer value.deinit();
+
+            try interpreter.evaluation_env.data.set(sym, value);
+
+            const nil = try Rml.newObject(Nil, getRml(interpreter), origin);
+            return nil;
         }
     }.fun,
 };
@@ -169,10 +267,10 @@ pub const fun = Rml.Procedure {
             errdefer cases.deinit(rml);
 
             if (args.len == 1) {
-                Rml.interpreter.evaluation.debug("case fun", .{});
+                Rml.parser.parsing.debug("case fun", .{});
                 const caseSet: Obj(Rml.Block) = try interpreter.castObj(Rml.Block, args[0]);
                 defer caseSet.deinit();
-                Rml.interpreter.evaluation.debug("case set {}", .{caseSet});
+                Rml.parser.parsing.debug("case set {}", .{caseSet});
 
                 var isCases = true;
                 for (caseSet.data.items()) |obj| {
@@ -184,31 +282,31 @@ pub const fun = Rml.Procedure {
 
                 if (isCases) {
                     for (caseSet.data.array.items()) |case| {
-                        Rml.interpreter.evaluation.debug("case {}", .{case});
+                        Rml.parser.parsing.debug("case {}", .{case});
                         const caseBlock = try interpreter.castObj(Rml.Block, case);
                         defer caseBlock.deinit();
 
-                        const c = try Rml.procedure.Case.parse(interpreter, origin, caseBlock.data.array.items());
+                        const c = try Rml.procedure.Case.parse(interpreter, caseBlock.getOrigin(), caseBlock.data.array.items());
                         errdefer c.deinit();
 
                         try cases.append(rml, c);
                     }
                 } else {
-                    Rml.interpreter.evaluation.debug("fun single case: {any}", .{caseSet.data.array.items()});
-                    const c = try Rml.procedure.Case.parse(interpreter, origin, caseSet.data.array.items());
+                    Rml.parser.parsing.debug("fun single case: {any}", .{caseSet.data.array.items()});
+                    const c = try Rml.procedure.Case.parse(interpreter, caseSet.getOrigin(), caseSet.data.array.items());
                     errdefer c.deinit();
 
                     try cases.append(rml, c);
                 }
             } else {
-                Rml.interpreter.evaluation.debug("fun single case: {any}", .{args});
+                Rml.parser.parsing.debug("fun single case: {any}", .{args});
                 const c = try Rml.procedure.Case.parse(interpreter, origin, args);
                 errdefer c.deinit();
 
                 try cases.append(rml, c);
             }
 
-            const env = try interpreter.evaluation_env.data.dupe(origin);
+            const env = try interpreter.evaluation_env.data.clone(origin);
             errdefer env.deinit();
 
             const out = try Rml.wrapObject(rml, origin, Rml.Procedure {
@@ -217,6 +315,8 @@ pub const fun = Rml.Procedure {
                     .cases = cases,
                 },
             });
+
+            Rml.parser.parsing.debug("fun done: {} ({})", .{out, out.getHeader().ref_count});
 
             return out;
         }
@@ -276,7 +376,7 @@ pub const macro = Rml.Procedure {
                 try cases.append(rml, c);
             }
 
-            const env = try interpreter.evaluation_env.data.dupe(origin);
+            const env = try interpreter.evaluation_env.data.clone(origin);
             errdefer env.deinit();
 
             const out = try Rml.wrapObject(rml, origin, Rml.Procedure {

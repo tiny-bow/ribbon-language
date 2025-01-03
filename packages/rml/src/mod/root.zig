@@ -89,6 +89,7 @@ pub const ref = object.ref;
 pub const Wk = object.Wk;
 pub const Weak = object.Weak;
 pub const getObj = object.getObj;
+pub const tempObj = object.tempObj;
 pub const getHeader = object.getHeader;
 pub const getOrigin = object.getOrigin;
 pub const getTypeId = object.getTypeId;
@@ -103,6 +104,7 @@ pub const upgradeCast = object.upgradeCast;
 pub const downgradeCast = object.downgradeCast;
 pub const coerceBool = object.coerceBool;
 pub const coerceArray = object.coerceArray;
+pub const isArrayLike = object.isArrayLike;
 pub const new = object.new;
 pub const newWith = object.newWith;
 pub const wrap = object.wrap;
@@ -155,6 +157,30 @@ pub const Diagnostic = struct {
 
 
 pub const BUILTIN = @import("BUILTIN.zig");
+
+pub const BUILTIN_NAMESPACES = .{
+    .type = struct {
+        pub fn @"nil?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Nil)); }
+        pub fn @"bool?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Bool)); }
+        pub fn @"int?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Int)); }
+        pub fn @"float?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Float)); }
+        pub fn @"char?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Char)); }
+        pub fn @"string?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(String)); }
+        pub fn @"symbol?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Symbol)); }
+        pub fn @"procedure?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Procedure)); }
+        pub fn @"interpreter?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Interpreter)); }
+        pub fn @"parser?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Parser)); }
+        pub fn @"pattern?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Pattern)); }
+        pub fn @"writer?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Writer)); }
+        pub fn @"cell?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Cell)); }
+        pub fn @"block?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Block)); }
+        pub fn @"quote?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Quote)); }
+        pub fn @"env?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Env)); }
+        pub fn @"map?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Map)); }
+        pub fn @"set?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Set)); }
+        pub fn @"array?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Array)); }
+    },
+};
 
 pub const BUILTIN_TYPES = TypeUtils.structConcat(.{VALUE_TYPES, OBJECT_TYPES});
 
@@ -219,6 +245,12 @@ pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWrit
     errdefer self.namespace_env.deinit();
 
     bindgen.bindObjectNamespaces(self, self.namespace_env, BUILTIN_TYPES)
+        catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => @panic(@errorName(err)),
+        };
+
+    bindgen.bindObjectNamespaces(self, self.namespace_env, BUILTIN_NAMESPACES)
         catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => @panic(@errorName(err)),

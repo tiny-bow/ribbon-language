@@ -106,7 +106,9 @@ pub fn TypedArrayUnmanaged (comptime T: type) type {
         }
 
         pub fn clone(self: *const Self, rml: *Rml) OOM! Self {
-            return Self{ .native_array = try self.native_array.clone(rml.storage.object) };
+            const arr = try self.native_array.clone(rml.storage.object);
+            for (self.native_array.items) |obj| obj.getHeader().incrRefCount();
+            return Self{.native_array = arr};
         }
 
         pub fn clear(self: *Self) void {

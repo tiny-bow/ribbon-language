@@ -267,8 +267,37 @@ pub fn isVTableMethodName(name: []const u8) bool {
 
 pub const NativeFunction = *const fn (ptr(Interpreter), Origin, []const Object) Result! Object;
 
+inline fn onAList(comptime T: type, comptime fieldName: []const u8) bool {
+    comptime {
+        const alist: []const []const u8 =
+            if (@hasDecl(T, "BINDGEN_ALLOW")) T.BINDGEN_ALLOW
+            else return true;
+
+        for (alist) |name| {
+            if (std.mem.eql(u8, name, fieldName)) return true;
+        }
+
+        return false;
+    }
+}
+
+inline fn onDList(comptime T: type, comptime fieldName: []const u8) bool {
+    comptime {
+        const dlist: []const []const u8 =
+            if (@hasDecl(T, "BINDGEN_DENY")) T.BINDGEN_DENY
+            else return false;
+
+        for (dlist) |name| {
+            if (std.mem.eql(u8, name, fieldName)) return true;
+        }
+
+        return false;
+    }
+}
+
 pub fn Namespace(comptime T: type) type {
     @setEvalBranchQuota(10_000);
+
     const BaseMethods = BaseMethods: {
         if (!TypeUtils.supportsDecls(T)) break :BaseMethods @Type(.{.@"struct" = std.builtin.Type.Struct {
             .layout = .auto,
@@ -276,6 +305,7 @@ pub fn Namespace(comptime T: type) type {
             .decls = &.{},
             .is_tuple = false,
         }});
+
         const Api = Api: {
             const ApiEntry = struct { type: type, name: [:0]const u8 };
             const decls = std.meta.declarations(T);
@@ -283,9 +313,12 @@ pub fn Namespace(comptime T: type) type {
             var entries = [1]ApiEntry {undefined} ** decls.len;
             var i = 0;
 
+
             for (decls) |decl| {
-                if (std.meta.hasMethod(T, decl.name)
-                and !isVTableMethodName(decl.name)) {
+                if (std.meta.hasFn(T, decl.name)
+                and !isVTableMethodName(decl.name)
+                and onAList(T, decl.name)
+                and !onDList(T, decl.name)) {
                     const F = @TypeOf(@field(T, decl.name));
                     if (@typeInfo(F) != .@"fn") continue;
                     const fInfo = @typeInfo(F).@"fn";
@@ -410,7 +443,9 @@ pub fn fromObject(comptime T: type, _: *Rml, value: Object) Error! T {
             }
         },
         else => {
-            if (comptime std.mem.startsWith(u8, @typeName(T), "object.Obj(")) {
+            if (T == Object) {
+                return value;  // TODO: why shouldn't we clone?
+            } else if (comptime std.mem.startsWith(u8, @typeName(T), "object.Obj(")) {
                 const O = @typeInfo(tInfo.@"struct".fields[0].type).pointer.child;
 
                 if (!Rml.equal(Rml.TypeId.of(O), value.getTypeId())) {
@@ -418,12 +453,12 @@ pub fn fromObject(comptime T: type, _: *Rml, value: Object) Error! T {
                 }
 
                 const obj = forceObj(O, value);
-                defer obj.deinit();
+                defer obj.deinit(); // TODO: why should we deinit?
 
                 return obj;
             } else {
                 const obj = forceObj(T, value);
-                defer obj.deinit();
+                defer obj.deinit(); // TODO: why should we deinit?
 
                 return obj.data.*;
             }
@@ -434,6 +469,7 @@ pub fn fromObject(comptime T: type, _: *Rml, value: Object) Error! T {
 pub fn ObjectRepr(comptime T: type) type {
     const tInfo = @typeInfo(T);
     return switch (T) {
+        Object => Object,
         Rml.Int => Obj(Rml.Int),
         Rml.Float => Obj(Rml.Float),
         Rml.Char => Obj(Rml.Char),

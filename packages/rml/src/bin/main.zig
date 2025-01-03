@@ -7,9 +7,13 @@ pub const std_options = std.Options {
     .log_level = .info,
     // .log_scope_levels = &.{
     //     std.log.ScopeLevel {
-    //         .level = .debug,
+    //         .level = .info,
     //         .scope = .refcount,
-    //     }
+    //     },
+    //     std.log.ScopeLevel {
+    //         .level = .info,
+    //         .scope = .@"object-dispatch",
+    //     },
     // },
     // .log_scope_levels = &.{
     //     std.log.ScopeLevel {
@@ -77,6 +81,7 @@ pub fn main () !void {
         log.debug("Deinitializing input", .{});
         input.deinit();
     }
+
     while (parser.data.nextBlob() catch |err| {
         if (diagnostic) |diag| {
             log.err("{s} {}: {s}", .{@errorName(err), diag.error_origin, diag.message_mem[0..diag.message_len]});

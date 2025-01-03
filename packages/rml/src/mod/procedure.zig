@@ -56,8 +56,8 @@ pub const Case = union(enum) {
 
         var offset: usize = 1;
 
-        const case = if (Rml.object.isExactSymbol("else", args[0])) Rml.procedure.Case {
-            .@"else" = .{},
+        const case = if (Rml.object.isExactSymbol("else", args[0])) elseCase: {
+            break :elseCase Rml.procedure.Case { .@"else" = .{} };
         } else patternCase: {
             var diag: ?Rml.Diagnostic = null;
             const parseResult = Rml.Pattern.parse(&diag, args)
@@ -91,6 +91,7 @@ pub const Case = union(enum) {
         errdefer out.deinit();
 
         const content = out.data.body();
+        errdefer content.deinit(getRml(interpreter));
 
         for (args[offset..]) |arg| {
             try content.append(getRml(interpreter), arg.clone());
@@ -142,6 +143,8 @@ pub const Procedure = union(ProcedureKind) {
     pub fn call(self: ptr(Procedure), interpreter: ptr(Rml.Interpreter), callOrigin: Rml.Origin, blame: Object, args: []const Object) Rml.Result! Object {
         switch (self.*) {
             .macro => |macro| {
+                Rml.interpreter.evaluation.debug("calling macro {}", .{macro});
+
                 var errors: Rml.string.StringUnmanaged = .{};
                 defer errors.deinit(getRml(self));
 
@@ -168,10 +171,10 @@ pub const Procedure = union(ProcedureKind) {
                             }
 
                             interpreter.evaluation_env = env: {
-                                const env: Obj(Rml.Env) = try macro.env.data.dupe(callOrigin);
+                                const env: Obj(Rml.Env) = try macro.env.data.clone(callOrigin);
                                 errdefer env.deinit();
 
-                                try env.data.overwriteFromTable(&tbl.data.unmanaged);
+                                try env.data.copyFromTable(&tbl.data.unmanaged);
 
                                 break :env env;
                             };
@@ -196,6 +199,8 @@ pub const Procedure = union(ProcedureKind) {
                 }
             },
             .function => |func| {
+                Rml.interpreter.evaluation.debug("calling func {}", .{func});
+
                 var eArgs = try interpreter.evalAll(args);
                 defer eArgs.deinit(getRml(self));
 
@@ -221,10 +226,10 @@ pub const Procedure = union(ProcedureKind) {
                             }
 
                             interpreter.evaluation_env = env: {
-                                const env: Obj(Rml.Env) = try func.env.data.dupe(callOrigin);
+                                const env: Obj(Rml.Env) = try func.env.data.clone(callOrigin);
                                 errdefer env.deinit();
 
-                                try env.data.overwriteFromTable(&res.data.unmanaged);
+                                try env.data.copyFromTable(&res.data.unmanaged);
 
                                 break :env env;
                             };
@@ -243,8 +248,14 @@ pub const Procedure = union(ProcedureKind) {
 
                 try interpreter.abort(callOrigin, error.PatternError, "{} failed; no matching case found for input {any}", .{blame, eArgs});
             },
-            .native_macro => |func| return func(interpreter, callOrigin, args),
+            .native_macro => |func| {
+                Rml.interpreter.evaluation.debug("calling native macro {x}", .{@intFromPtr(func)});
+
+                return func(interpreter, callOrigin, args);
+            },
             .native_function => |func| {
+                Rml.interpreter.evaluation.debug("calling native func {x}", .{@intFromPtr(func)});
+
                 var eArgs = try interpreter.evalAll(args);
                 defer eArgs.deinit(getRml(self));
 

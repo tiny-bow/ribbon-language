@@ -2,6 +2,8 @@ const std = @import("std");
 const MiscUtils = @import("Utils").Misc;
 const TypeUtils = @import("Utils").Type;
 
+const dispatch = std.log.scoped(.@"object-dispatch");
+
 const Rml = @import("root.zig");
 const Nil = Rml.Nil;
 const Bool = Rml.Bool;
@@ -185,7 +187,7 @@ pub const VTable = struct {
 
                         const F = @typeInfo(@TypeOf(def)).pointer.child;
                         if (@typeInfo(F) != .@"fn") {
-                            @compileError("wtf1 " ++ @typeName(T) ++ " " ++ @typeName(@TypeOf(def)));
+                            @compileError("expected fn: " ++ @typeName(T) ++ "." ++ @typeName(@TypeOf(def)));
                         }
                         const fInfo = @typeInfo(F).@"fn";
 
@@ -207,25 +209,26 @@ pub const VTable = struct {
 
     pub fn onCompare(self: *const VTable, header: ptr(Header), other: Object) Ordering {
         const data = header.getData();
-        log.debug("VTable/onCompare {s}", .{TypeId.name(header.type_id)});
+        dispatch.debug("VTable/onCompare {s}", .{TypeId.name(header.type_id)});
         return self.obj_data.onCompare.?(data, other);
     }
 
     pub fn onFormat(self: *const VTable, header: ptr(Header), writer: Obj(Writer)) Error! void {
         const data = header.getData();
-        log.debug("VTable/onFormat {s}", .{TypeId.name(header.type_id)});
+        // too noisy
+        // dispatch.debug("VTable/onFormat {s}", .{TypeId.name(header.type_id)});
         return self.obj_data.onFormat.?(data, writer);
     }
 
     pub fn onDeinit(self: *const VTable, header: ptr(Header)) void {
         const data = header.getData();
-        log.debug("VTable/onDeinit {s}", .{TypeId.name(header.type_id)});
+        dispatch.debug("VTable/onDeinit {s}", .{TypeId.name(header.type_id)});
         return self.obj_data.onDeinit.?(data);
     }
 
     pub fn onDestroy(self: *const VTable, header: ptr(Header)) void {
         const data = header.getObjMemory();
-        log.debug("VTable/onDestroy {s}", .{TypeId.name(header.type_id)});
+        dispatch.debug("VTable/onDestroy {s}", .{TypeId.name(header.type_id)});
         return self.obj_memory.onDestroy.?(data);
     }
 };
@@ -258,7 +261,7 @@ pub fn ObjMemory (comptime T: type) type {
         }
 
         pub fn onDestroy(self: ptr(Self)) void {
-            log.debug("(ObjMemory {s})/onDestroy", .{@typeName(T)});
+            refcount.debug("(ObjMemory {s})/onDestroy", .{@typeName(T)});
             const rml = self.getHeader().rml;
             rml.storage.object.destroy(self);
             rml.storage.object_count -= 1;
@@ -414,7 +417,7 @@ pub fn Obj(comptime T: type) type {
         }
 
         pub fn deinit(self: Self) void {
-            refcount.debug("deinit Obj({s})", .{TypeId.name(self.getTypeId())});
+            //refcount.debug("deinit Obj({s})", .{TypeId.name(self.getTypeId())});
             self.getHeader().decrRefCount();
         }
 
@@ -448,9 +451,15 @@ pub fn Obj(comptime T: type) type {
     };
 }
 
+pub fn tempObj(p: anytype) Obj(@typeInfo(@TypeOf(p)).pointer.child) {
+    refcount.debug("tempObj", .{});
+    const out = Obj(@typeInfo(@TypeOf(p)).pointer.child) { .data = p };
+    return out;
+}
+
 pub fn getObj(p: anytype) Obj(@typeInfo(@TypeOf(p)).pointer.child) {
     refcount.debug("getObj", .{});
-    const out = Obj(@typeInfo(@TypeOf(p)).pointer.child) { .data = p };
+    const out = tempObj(p);
     out.getHeader().incrRefCount();
     return out;
 }
@@ -631,6 +640,14 @@ pub fn coerceArray(obj: Object) OOM! ?Obj(Rml.Array) {
         defer x.deinit();
         return try x.data.toArray();
     } else return null;
+}
+
+pub fn isArrayLike(obj: Object) bool {
+    return isType(Rml.Array, obj)
+        or isType(Rml.Map, obj)
+        or isType(Rml.Set, obj)
+        or isType(Rml.Block, obj)
+        ;
 }
 
 

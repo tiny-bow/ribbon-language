@@ -95,7 +95,7 @@ pub const Interpreter = struct {
 
     pub fn eval(self: ptr(Interpreter), expr: Object) Result! Object {
         var offset: usize = 0;
-        return self.evalCheck(expr.getOrigin(), true, &.{expr}, &offset, null);
+        return self.evalCheck(expr.getOrigin(), false, &.{expr}, &offset, null);
     }
 
     pub fn evalAll(self: ptr(Interpreter), exprs: []const Object) Result! Rml.array.ArrayUnmanaged {
@@ -113,7 +113,7 @@ pub const Interpreter = struct {
         return results;
     }
 
-    pub fn evalCheck(self: ptr(Interpreter), origin: Origin, inParenBlock: bool, program: []const Object, offset: *usize, workDone: ?*bool) Result! Object {
+    pub fn evalCheck(self: ptr(Interpreter), origin: Origin, shouldInvoke: bool, program: []const Object, offset: *usize, workDone: ?*bool) Result! Object {
         evaluation.debug("evalCheck {}:{any} @ {}", .{origin, program, offset.*});
 
         const expr = if (offset.* < program.len) expr: {
@@ -151,6 +151,7 @@ pub const Interpreter = struct {
 
                 if (workDone) |x| x.* = true;
 
+                evaluation.debug("running quote", .{});
                 break :value try quote.data.run(self);
             }
 
@@ -159,7 +160,7 @@ pub const Interpreter = struct {
             break :value expr.clone();
         };
 
-        if (Rml.isType(Rml.Procedure, value) and (inParenBlock or program.len > offset.*)) {
+        if (Rml.isType(Rml.Procedure, value) and (shouldInvoke or program.len > offset.*)) {
             defer value.deinit();
 
             const args = program[offset.*..];
@@ -176,7 +177,7 @@ pub const Interpreter = struct {
         orelse getRml(self).global_env.data.get(symbol);
     }
 
-    pub fn runProgram(self: ptr(Interpreter), origin: Origin, inParenBlock: bool, program: []const Object) Result! Object {
+    pub fn runProgram(self: ptr(Interpreter), origin: Origin, shouldInvoke: bool, program: []const Object) Result! Object {
         evaluation.debug("runProgram {}:{any}", .{origin, program});
 
         const rml = getRml(self);
@@ -188,7 +189,7 @@ pub const Interpreter = struct {
 
         var offset: usize = 0;
         while (offset < program.len) {
-            const value = try self.evalCheck(origin, inParenBlock, program, &offset, null);
+            const value = try self.evalCheck(origin, shouldInvoke, program, &offset, null);
 
             last.deinit();
             last = value;
