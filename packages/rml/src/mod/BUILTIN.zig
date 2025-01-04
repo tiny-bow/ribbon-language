@@ -416,13 +416,11 @@ pub fn @"print-ln"(interpreter: ptr(Interpreter), origin: Origin, args: []const 
     const stdout = std.io.getStdOut();
     const nativeWriter = stdout.writer();
 
-    const writer: Obj(Writer) = try .wrap(rml, origin, .create(nativeWriter.any()));
+    nativeWriter.print("{}: ", .{origin}) catch |err| return Rml.errorCast(err);
 
-    try writer.data.print("{}: ", .{origin});
+    for (args) |arg| try arg.getHeader().onFormat(nativeWriter.any());
 
-    for (args) |arg| try arg.getHeader().onFormat(writer);
-
-    try writer.data.writeAll("\n");
+    nativeWriter.writeAll("\n") catch |err| return Rml.errorCast(err);
 
     return (try Obj(Nil).wrap(rml, origin, .{})).typeErase();
 }
@@ -436,9 +434,8 @@ pub fn print(interpreter: ptr(Interpreter), origin: Origin, args: []const Object
     const stdout = std.io.getStdOut();
     const nativeWriter = stdout.writer();
 
-    const writer: Obj(Writer) = try .wrap(rml, origin, .create(nativeWriter.any()));
 
-    for (args) |arg| try arg.getHeader().onFormat(writer);
+    for (args) |arg| try arg.getHeader().onFormat(nativeWriter.any());
 
     return (try Obj(Nil).wrap(rml, origin, .{})).typeErase();
 }

@@ -88,16 +88,16 @@ pub const Block = struct {
         return ord;
     }
 
-    pub fn onFormat(self: ptr(Block), writer: Obj(Writer)) Error! void {
-        try writer.data.writeAll(self.kind.toOpenStrFmt());
+    pub fn onFormat(self: ptr(Block), writer: std.io.AnyWriter) anyerror! void {
+        try writer.writeAll(self.kind.toOpenStrFmt());
         for (self.array.items(), 0..) |item, i| {
             try item.onFormat(writer);
 
             if (i < self.array.length() - 1) {
-                try writer.data.writeAll(" ");
+                try writer.writeAll(" ");
             }
         }
-        try writer.data.writeAll(self.kind.toCloseStrFmt());
+        try writer.writeAll(self.kind.toCloseStrFmt());
     }
 
     /// Length of the block.

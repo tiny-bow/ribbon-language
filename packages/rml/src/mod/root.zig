@@ -38,8 +38,8 @@ pub const symbol = @import("symbol.zig");
 pub const writer = @import("writer.zig");
 
 pub const Nil = extern struct {
-    pub fn onFormat(_: ptr(Nil), w: Obj(Writer)) Error! void {
-        return w.data.print("nil", .{});
+    pub fn onFormat(_: ptr(Nil), w: std.io.AnyWriter) anyerror! void {
+        return w.print("nil", .{});
     }
 
     pub fn onCompare(_: ptr(Nil), other: Object) Ordering {

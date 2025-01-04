@@ -51,8 +51,8 @@ pub const Header = struct {
         return self.vtable.onCompare(self, obj);
     }
 
-    pub fn onFormat(self: ptr(Header), writer: Obj(Writer)) Error! void {
-        return self.vtable.onFormat(self, writer);
+    pub fn onFormat(self: ptr(Header), writer: std.io.AnyWriter) Error! void {
+        return self.vtable.onFormat(self, writer) catch |err| Rml.errorCast(err);
     }
 
     pub fn getObject(self: ptr(Header)) Object {
@@ -77,7 +77,7 @@ pub const VTable = struct {
 
     pub const ObjDataFunctions = struct {
         onCompare: ?*const fn (const_ptr(ObjData), Rml.Object) Ordering = null,
-        onFormat: ?*const fn (const_ptr(ObjData), Obj(Writer)) Error! void = null,
+        onFormat: ?*const fn (const_ptr(ObjData), std.io.AnyWriter) anyerror! void = null,
     };
 
     pub fn of(comptime T: type) *const VTable {
@@ -150,11 +150,11 @@ pub const VTable = struct {
         return self.obj_data.onCompare.?(data, other);
     }
 
-    pub fn onFormat(self: *const VTable, header: ptr(Header), writer: Obj(Writer)) Error! void {
+    pub fn onFormat(self: *const VTable, header: ptr(Header), writer: std.io.AnyWriter) Error! void {
         const data = header.getData();
         // too noisy
         // dispatch.debug("VTable/onFormat {s}", .{TypeId.name(header.type_id)});
-        return self.obj_data.onFormat.?(data, writer);
+        return self.obj_data.onFormat.?(data, writer) catch |err| Rml.errorCast(err);
     }
 };
 
@@ -218,12 +218,10 @@ pub fn Obj(comptime T: type) type {
             return self.getHeader().onCompare(other.getHeader());
         }
 
-        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) Error! void {
-            const w: Rml.writer.Native = if (@TypeOf(writer) == Rml.writer.Native) writer else writer.any();
+        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+            const w: Rml.writer.Native = if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any();
 
-            const wObj: Obj(Writer) = try .wrap(self.getRml(), self.getRml().storage.origin, .{.native = w});
-
-            try self.getHeader().onFormat(wObj);
+            try self.getHeader().onFormat(w);
         }
 
         pub fn getMemory(self: Self) *ObjMemory(T) {
@@ -250,7 +248,7 @@ pub fn Obj(comptime T: type) type {
             return self.getHeader().onCompare(other.getHeader());
         }
 
-        pub fn onFormat(self: Self, writer: Obj(Writer)) Error! void {
+        pub fn onFormat(self: Self, writer: std.io.AnyWriter) Error! void {
             return self.getHeader().onFormat(writer);
         }
     };

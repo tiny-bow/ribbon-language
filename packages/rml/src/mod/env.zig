@@ -42,8 +42,8 @@ pub const Env = struct {
         return ord;
     }
 
-    pub fn onFormat(self: ptr(Env), writer: Obj(Writer)) Error! void {
-        return writer.data.print("{}", .{self.table});
+    pub fn onFormat(self: ptr(Env), writer: std.io.AnyWriter) anyerror! void {
+        return writer.print("{}", .{self.table});
     }
 
     pub fn clone(self: ptr(Env), origin: ?Origin) OOM! Obj(Env) {

@@ -66,8 +66,8 @@ pub const Parser = struct {
         return ord;
     }
 
-    pub fn onFormat(self: ptr(Parser), writer: Obj(Writer)) Error! void {
-        return writer.data.print("Parser{x}", .{@intFromPtr(self)});
+    pub fn onFormat(self: ptr(Parser), writer: std.io.AnyWriter) anyerror! void {
+        return writer.print("Parser{x}", .{@intFromPtr(self)});
     }
 
     pub fn peek(self: ptr(Parser)) Error! ?Object {

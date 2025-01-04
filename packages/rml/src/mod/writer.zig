@@ -30,8 +30,8 @@ pub const Writer = struct {
         return ord;
     }
 
-    pub fn onFormat(self: ptr(Writer), writer: Obj(Writer)) Error! void {
-        try writer.data.print("{}", .{self.native});
+    pub fn onFormat(self: ptr(Writer), writer: std.io.AnyWriter) anyerror! void {
+        try writer.print("{}", .{self.native});
     }
 
     pub fn print(self: ptr(Writer), comptime fmt: []const u8, args: anytype) Error! void {

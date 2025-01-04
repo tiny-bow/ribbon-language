@@ -22,8 +22,8 @@ pub const String = struct {
         return self;
     }
 
-    pub fn onFormat(self: ptr(String), writer: Rml.Obj(Writer)) Error! void {
-        try writer.data.print("{}", .{self.unmanaged});
+    pub fn onFormat(self: ptr(String), writer: std.io.AnyWriter) anyerror! void {
+        try writer.print("{}", .{self.unmanaged});
     }
 
 

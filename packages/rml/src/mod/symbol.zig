@@ -35,9 +35,9 @@ pub const Symbol = struct {
         return ord;
     }
 
-    pub fn onFormat(self: ptr(Symbol), writer: Rml.Obj(Writer)) Error! void {
+    pub fn onFormat(self: ptr(Symbol), writer: std.io.AnyWriter) anyerror! void {
         // TODO: escape non-ascii & control etc chars
-        try writer.data.print("{s}", .{self.str});
+        try writer.print("{s}", .{self.str});
     }
 
     pub fn text(self: ptr(Symbol)) Rml.str {

@@ -70,20 +70,20 @@ pub const Pattern = union(enum) {
     alternation: Obj(Array),
 
 
-    pub fn onFormat (self: ptr(Pattern), writer: Obj(Rml.Writer)) Error! void {
+    pub fn onFormat (self: ptr(Pattern), writer: std.io.AnyWriter) anyerror! void {
         switch (self.*) {
-            .wildcard => try writer.data.writeAll("_"),
-            .symbol => try writer.data.print("{}", .{self.symbol}),
-            .block => try writer.data.print("{}", .{self.block}),
-            .value_literal => try writer.data.print("{}", .{self.value_literal}),
-            .procedure => try writer.data.print("{}", .{self.procedure}),
-            .quote => try writer.data.print("{}", .{self.quote}),
-            .alias => try writer.data.print("{{as {} {}}}", .{self.alias.sym, self.alias.sub}),
-            .sequence => try writer.data.print("{s}", .{self.sequence}),
-            .optional => try writer.data.print("{{? {s}}}", .{self.optional}),
-            .zero_or_more => try writer.data.print("{{* {s}}}", .{self.zero_or_more}),
-            .one_or_more => try writer.data.print("{{+ {s}}}", .{self.one_or_more}),
-            .alternation => try writer.data.print("{{| {s}}}", .{self.alternation}),
+            .wildcard => try writer.writeAll("_"),
+            .symbol => try writer.print("{}", .{self.symbol}),
+            .block => try writer.print("{}", .{self.block}),
+            .value_literal => try writer.print("{}", .{self.value_literal}),
+            .procedure => try writer.print("{}", .{self.procedure}),
+            .quote => try writer.print("{}", .{self.quote}),
+            .alias => try writer.print("{{as {} {}}}", .{self.alias.sym, self.alias.sub}),
+            .sequence => try writer.print("{s}", .{self.sequence}),
+            .optional => try writer.print("{{? {s}}}", .{self.optional}),
+            .zero_or_more => try writer.print("{{* {s}}}", .{self.zero_or_more}),
+            .one_or_more => try writer.print("{{+ {s}}}", .{self.one_or_more}),
+            .alternation => try writer.print("{{| {s}}}", .{self.alternation}),
         }
     }
 

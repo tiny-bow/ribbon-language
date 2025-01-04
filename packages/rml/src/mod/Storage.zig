@@ -7,6 +7,22 @@ const OOM = Rml.OOM;
 const Storage = @This();
 
 
+long_term: std.mem.Allocator,
+map: Map,
+permanent: std.heap.ArenaAllocator,
+blob: ?Blob = null,
+_fresh: usize = 0,
+/// callback should use rml.storage.blob for return allocator
+read_file_callback: ?*const fn (rml: *Rml, []const u8) (Rml.IOError || OOM)![]const u8 = null,
+userstate: *anyopaque = undefined,
+origin: Rml.Origin = undefined,
+
+
+
+
+pub const ARENA_RETAIN_AMOUNT = 1024 * 1024 * 16;
+const Map = std.ArrayHashMapUnmanaged([]const u8, void, MiscUtils.SimpleHashContext, true);
+
 pub const Blob = struct {
     arena: std.heap.ArenaAllocator,
     id: BlobId,
@@ -21,21 +37,6 @@ pub const BlobId = enum(usize) {
     _,
 };
 
-long_term: std.mem.Allocator,
-map: Map,
-permanent: std.heap.ArenaAllocator,
-blob: ?Blob = null,
-
-_fresh: usize = 0,
-/// callback should use rml.storage.blob for return allocator
-read_file_callback: ?*const fn (rml: *Rml, []const u8) (Rml.IOError || OOM)![]const u8 = null,
-userstate: *anyopaque = undefined,
-origin: Rml.Origin = undefined,
-
-
-
-pub const ARENA_RETAIN_AMOUNT = 1024 * 1024 * 16;
-const Map = std.ArrayHashMapUnmanaged([]const u8, void, MiscUtils.SimpleHashContext, true);
 
 pub fn init(long_term: std.mem.Allocator) OOM! Storage {
     return .{

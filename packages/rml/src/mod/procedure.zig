@@ -110,8 +110,8 @@ pub const Procedure = union(ProcedureKind) {
         return Rml.compare(getHeader(self).type_id, other.getTypeId());
     }
 
-    pub fn onFormat(self: ptr(Procedure), writer: Rml.Obj(Writer)) Error! void {
-        return writer.data.print("[{s}-{x}]", .{@tagName(self.*), @intFromPtr(self)});
+    pub fn onFormat(self: ptr(Procedure), writer: std.io.AnyWriter) anyerror! void {
+        return writer.print("[{s}-{x}]", .{@tagName(self.*), @intFromPtr(self)});
     }
 
     pub fn call(self: ptr(Procedure), interpreter: ptr(Rml.Interpreter), callOrigin: Rml.Origin, blame: Object, args: []const Object) Rml.Result! Object {

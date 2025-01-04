@@ -37,8 +37,8 @@ pub fn TypedSet (comptime K: type) type {
             return ord;
         }
 
-        pub fn onFormat(self: const_ptr(Self), writer: Rml.Obj(Writer)) Error! void {
-            return writer.data.print("{}", .{self.unmanaged});
+        pub fn onFormat(self: const_ptr(Self), writer: std.io.AnyWriter) anyerror! void {
+            return writer.print("{}", .{self.unmanaged});
         }
 
         /// Set a key

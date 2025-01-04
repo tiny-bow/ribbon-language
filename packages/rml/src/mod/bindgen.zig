@@ -78,30 +78,30 @@ pub fn Support(comptime T: type) type {
 
         pub const onFormat = switch (T) {
             Rml.Char => struct {
-                pub fn onFormat(self: ptr(T), writer: Obj(Writer)) Error! void {
+                pub fn onFormat(self: ptr(T), writer: std.io.AnyWriter) anyerror! void {
                     var buf = [1]u8{0} ** 4;
                     const len = TextUtils.encode(self.*, buf[0..]) catch 0;
-                    try writer.data.print("'{s}'", .{buf[0..len]});
+                    try writer.print("'{s}'", .{buf[0..len]});
                 }
             },
             else => switch(@typeInfo(T)) {
                 .pointer => |info| if (@typeInfo(info.child) == .@"fn") struct {
-                    pub fn onFormat(self: ptr(T), writer: Obj(Writer)) Error! void {
-                        try writer.data.print("[native-function {s} {x}]", .{fmtNativeType(T), @intFromPtr(self)});
+                    pub fn onFormat(self: ptr(T), writer: std.io.AnyWriter) anyerror! void {
+                        try writer.print("[native-function {s} {x}]", .{fmtNativeType(T), @intFromPtr(self)});
                     }
                 } else struct {
-                    pub fn onFormat(self: ptr(T), writer: Obj(Writer)) Error! void {
-                        try writer.data.print("[native-{s} {x}]", .{@typeName(T), @intFromPtr(self)});
+                    pub fn onFormat(self: ptr(T), writer: std.io.AnyWriter) anyerror! void {
+                        try writer.print("[native-{s} {x}]", .{@typeName(T), @intFromPtr(self)});
                     }
                 },
                 .array => struct {
-                    pub fn onFormat(self: ptr(T), writer: Obj(Writer)) Error! void {
-                        try writer.data.print("{any}", .{self.*});
+                    pub fn onFormat(self: ptr(T), writer: std.io.AnyWriter) anyerror! void {
+                        try writer.print("{any}", .{self.*});
                     }
                 },
                 else => struct {
-                    pub fn onFormat(self: ptr(T), writer: Obj(Writer)) Error! void {
-                        try writer.data.print("{}", .{self.*});
+                    pub fn onFormat(self: ptr(T), writer: std.io.AnyWriter) anyerror! void {
+                        try writer.print("{}", .{self.*});
                     }
                 },
             },

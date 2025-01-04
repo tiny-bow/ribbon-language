@@ -49,8 +49,8 @@ pub const Interpreter = struct {
         return Rml.compare(@intFromPtr(a), @intFromPtr(other.data));
     }
 
-    pub fn onFormat(self: ptr(Interpreter), writer: Obj(Writer)) Error! void {
-        return writer.data.print("Obj(Interpreter){x}", .{@intFromPtr(self)});
+    pub fn onFormat(self: ptr(Interpreter), writer: std.io.AnyWriter) anyerror! void {
+        return writer.print("Obj(Interpreter){x}", .{@intFromPtr(self)});
     }
 
     pub fn reset(self: ptr(Interpreter)) OOM! void {

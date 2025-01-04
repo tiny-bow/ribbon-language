@@ -33,8 +33,8 @@ pub fn TypedArray (comptime T: type) type {
             return ord;
         }
 
-        pub fn onFormat(self: ptr(Self), writer: Obj(Writer)) Error! void {
-            try writer.data.print("{}", .{self.unmanaged});
+        pub fn onFormat(self: ptr(Self), writer: std.io.AnyWriter) anyerror! void {
+            try writer.print("{}", .{self.unmanaged});
         }
 
         /// Length of the array.
@@ -81,8 +81,8 @@ pub fn TypedArrayUnmanaged (comptime T: type) type {
             return Rml.compare(self.native_array.items, other.native_array.items);
         }
 
-        pub fn format(self: *const Self, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) Error! void {
-            writer.print("ARRAY[{}]{{", .{self.native_array.items.len}) catch |err| return Rml.errorCast(err);
+        pub fn format(self: *const Self, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+            writer.print("array[{}]{{", .{self.native_array.items.len}) catch |err| return Rml.errorCast(err);
             for (self.native_array.items, 0..) |obj, i| {
                 try obj.format(fmt, opts, writer);
                 if (i < self.native_array.items.len - 1) writer.writeAll(" ") catch |err| return Rml.errorCast(err);

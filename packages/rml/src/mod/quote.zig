@@ -76,8 +76,8 @@ pub const Quote = struct {
         return ord;
     }
 
-    pub fn onFormat(self: ptr(Quote), writer: Obj(Writer)) Error! void {
-        try writer.data.writeAll(self.kind.toStr());
+    pub fn onFormat(self: ptr(Quote), writer: std.io.AnyWriter) anyerror! void {
+        try writer.writeAll(self.kind.toStr());
         try self.body.onFormat(writer);
     }
 
