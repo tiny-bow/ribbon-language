@@ -11,12 +11,9 @@ check 1
 (check)
 
 local check2 = fun
-    (1 2)
-        print-ln "let me see u one, two step"
-    {+ args}
-        print-ln args
-    else
-        print-ln "no args"
+    (1 2) print-ln "let me see u one, two step"
+    {+ args} print-ln args
+    else print-ln "no args"
 check2 1 2 3 4 5
 check2 1 2
 check2 1
@@ -45,16 +42,14 @@ print-ln (incr 1)
 print-ln (incr 2)
 
 
-local mac = macro (x) `(print-ln ,x)
-mac 1
+local mac = macro x `(print-ln ,x)
+mac 1003
 
 
 
 local closure = fun x
-    (local a = fun y
-        + x y)
-    (local b = fun y
-        set! x y)
+    local a = fun y + x y
+    local b = fun y set! x y
     `(,a ,b)
 
 local (a b) = closure 1
@@ -66,20 +61,25 @@ b 2
 a 1
 
 
+local check-self = fun()
+    print-ln "check-self " check-self
 
-; global one-hundred = 100
-; print-ln one-hundred
+(check-self)
+
+
+global one-hundred = 100
+print-ln one-hundred
 
 
 
-; import type
+import type
 
-; print-ln (type/nil? nil)
-; print-ln (type/nil? 1)
+print-ln (type/nil? nil)
+print-ln (type/nil? 1)
 
-; print-ln (type/string? "foo")
-; print-ln (type/string? 1)
+print-ln (type/string? "foo")
+print-ln (type/string? 1)
 
-; import String
+import String
 
-; print-ln (String/length "test")
+print-ln (String/length "test")

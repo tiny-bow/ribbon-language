@@ -26,16 +26,11 @@ const upgradeCast = Rml.upgradeCast;
 pub const Cell = struct {
     value: Object,
 
-    pub fn onDeinit(self: ptr(Cell)) void {
-        self.value.deinit();
-    }
-
     pub fn set(self: ptr(Cell), value: Object) void {
-        self.value.deinit();
         self.value = value;
     }
 
     pub fn get(self: ptr(Cell)) Object {
-        return self.value.clone();
+        return self.value;
     }
 };

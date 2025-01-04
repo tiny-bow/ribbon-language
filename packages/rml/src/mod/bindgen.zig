@@ -35,11 +35,8 @@ const isBuiltinType = Rml.isBuiltinType;
 
 pub fn bindGlobals(rml: *Rml, env: Obj(Env), comptime globals: type) (OOM || SymbolAlreadyBound)! void {
     inline for (comptime std.meta.declarations(globals)) |field| {
-        const symbol: Obj(Symbol) = try .new(rml, rml.storage.origin, .{field.name});
-        errdefer symbol.deinit();
-
+        const symbol: Obj(Symbol) = try .wrap(rml, rml.storage.origin, try .create(rml, field.name));
         const object = try toObjectConst(rml, rml.storage.origin, &@field(globals, field.name));
-        defer object.deinit();
 
         try env.data.bind(symbol, object.typeErase());
     }
@@ -48,20 +45,16 @@ pub fn bindGlobals(rml: *Rml, env: Obj(Env), comptime globals: type) (OOM || Sym
 
 pub fn bindObjectNamespaces(rml: *Rml, env: Obj(Env), comptime namespaces: anytype) (OOM || SymbolAlreadyBound)! void {
     inline for (comptime std.meta.fields(@TypeOf(namespaces))) |field| {
-        const builtinEnv: Obj(Env) = try .new(rml, rml.storage.origin);
+        const builtinEnv: Obj(Env) = try .wrap(rml, rml.storage.origin, .{});
         // defer std.debug.assert(builtinEnv.getHeader().ref_count == 1);
-        errdefer builtinEnv.deinit();
-
         const Ns = Namespace(@field(namespaces, field.name));
 
         const methods = try Ns.methods(rml, rml.storage.origin);
-        defer Ns.deinitMethods(methods);
 
         try builtinEnv.data.bindNamespace(methods);
-        const sym = try Rml.newWith(Symbol, rml, rml.storage.origin, .{field.name});
-        errdefer sym.deinit();
+        const sym: Obj(Symbol) = try .wrap(rml, rml.storage.origin, try .create(rml, field.name));
 
-        try env.data.bind(sym, builtinEnv.typeEraseLeak());
+        try env.data.bind(sym, builtinEnv.typeErase());
     }
 }
 
@@ -75,8 +68,6 @@ pub fn Support(comptime T: type) type {
 
                     if (ord == .Equal) {
                         const b = forceObj(T, obj);
-                        defer b.deinit();
-
                         ord = Rml.compare(a.*, b.data.*);
                     }
 
@@ -115,20 +106,6 @@ pub fn Support(comptime T: type) type {
                 },
             },
         }.onFormat;
-
-        pub const onDeinit = switch(@typeInfo(T)) {
-            .array => struct {
-                pub fn onDeinit(self: ptr(T)) void {
-                    Rml.object.refcount.debug("{s}/onDeinit ", .{@typeName(T)});
-                    for (self.*) |item| item.deinit();
-                }
-            },
-            else => struct {
-                pub fn onDeinit(_: ptr(T)) void {
-                    Rml.object.refcount.debug("{s}/onDeinit-auto", .{@typeName(T)});
-                }
-            }
-        }.onDeinit;
     };
 }
 
@@ -403,12 +380,6 @@ pub fn Namespace(comptime T: type) type {
     };
 
     return struct {
-        pub fn deinitMethods(ms: Methods) void {
-            inline for (comptime std.meta.fieldNames(Methods)) |fieldName| {
-                @field(ms, fieldName).deinit();
-            }
-        }
-
         pub fn methods(rml: *Rml, origin: Origin) OOM! Methods {
             var ms: Methods = undefined;
 
@@ -433,12 +404,9 @@ pub fn fromObject(comptime T: type, _: *Rml, value: Object) Error! T {
                 }
 
                 const obj = forceObj(info.child, value);
-                defer obj.deinit();
-
                 return obj.data;
             } else {
                 const obj = Rml.castObj(T, value) orelse return error.TypeError;
-                defer obj.deinit();
                 return obj.data.*;
             }
         },
@@ -453,13 +421,9 @@ pub fn fromObject(comptime T: type, _: *Rml, value: Object) Error! T {
                 }
 
                 const obj = forceObj(O, value);
-                defer obj.deinit(); // TODO: why should we deinit?
-
                 return obj;
             } else {
                 const obj = forceObj(T, value);
-                defer obj.deinit(); // TODO: why should we deinit?
-
                 return obj.data.*;
             }
         },
@@ -513,7 +477,7 @@ pub fn toObject(rml: *Rml, origin: Origin, value: anytype) OOM! ObjectRepr(@Type
         Float => Obj(Float).wrap(rml, origin, value),
         Char => Obj(Char).wrap(rml, origin, value),
         str => Obj(str).wrap(rml, origin, value),
-        Object => return value.clone(),
+        Object => return value,
         NativeFunction => Obj(Procedure).wrap(rml, origin, .{ .native = value }),
         else => switch (tInfo) {
             .bool =>
@@ -542,11 +506,9 @@ pub fn toObject(rml: *Rml, origin: Origin, value: anytype) OOM! ObjectRepr(@Type
             .optional =>
                 if (value) |v| v: {
                     const x = try toObject(rml, origin, v);
-                    defer x.deinit();
                     break :v x.typeErase();
                 } else nil: {
                     const x = try Obj(Nil).wrap(rml, origin, Nil{});
-                    defer x.deinit();
                     break :nil x.typeErase();
                 },
 
@@ -592,11 +554,9 @@ pub fn toObjectConst(rml: *Rml, origin: Origin, comptime value: anytype) OOM! Ob
             .optional =>
                 if (value) |v| v: {
                     const x = try toObject(rml, origin, v);
-                    defer x.deinit();
                     break :v x.typeErase();
                 } else nil: {
                     const x = try Obj(Nil).wrap(rml, origin, Nil{});
-                    defer x.deinit();
                     break :nil x.typeErase();
                 },
 
@@ -632,7 +592,6 @@ pub fn wrapNativeFunction(rml: *Rml, origin: Origin, comptime value: anytype) OO
             const objWrapper = toObject(getRml(interpreter), callOrigin, nativeResult) catch |err| {
                 try interpreter.abort(callOrigin, err, "failed to convert result from native to rml", .{});
             };
-            defer objWrapper.deinit();
 
             return objWrapper.typeErase();
         }

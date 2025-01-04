@@ -49,57 +49,43 @@ pub fn main () !void {
 
     log.debug("test start", .{});
 
-
-    Rml.object.refcount.debug("test start object_count: {}", .{rml.storage.object_count});
-    defer Rml.object.refcount.debug("test end object_count: {}", .{rml.storage.object_count});
+    rml.beginBlob();
+    defer rml.endBlob().deinit();
 
     log.debug("namespace_env: {}", .{rml.namespace_env});
     log.debug("global_env: {}", .{rml.global_env});
     log.debug("evaluation_env: {}", .{rml.main_interpreter.data.evaluation_env});
 
     try rml.main_interpreter.data.evaluation_env.data.bind(
-        try Rml.Obj(Rml.Symbol).new(rml, rml.storage.origin, .{"print-int"}),
+        try Rml.Obj(Rml.Symbol).wrap(rml, rml.storage.origin, try .create(rml,"print-int")),
         (try Rml.bindgen.toObjectConst(rml, rml.storage.origin, &struct{
             pub fn func(int: Rml.Int) void {
                 log.info("print-int: {}", .{int});
             }
-        }.func)).typeEraseLeak(),
+        }.func)).typeErase(),
     );
 
 
-    const srcText: []const u8 = try std.fs.cwd().readFileAlloc(rml.storage.object, "test.bb", std.math.maxInt(u16));
-    defer rml.storage.object.free(srcText);
+    const srcText: []const u8 = try std.fs.cwd().readFileAlloc(rml.blobAllocator(), "test.bb", std.math.maxInt(u16));
 
-    const parser: Rml.Obj(Rml.Parser) = try .new(rml, rml.storage.origin, .{"test.bb", try Rml.Obj(Rml.String).new(rml, rml.storage.origin, .{srcText})});
-    defer {
-        log.debug("Deinitializing parser", .{});
-        parser.deinit();
-    }
+    const parser: Rml.Obj(Rml.Parser) = try .wrap(rml, rml.storage.origin, .create("test.bb", try Rml.Obj(Rml.String).wrap(rml, rml.storage.origin, try .create(rml, srcText))));
 
-    const input: Rml.Obj(Rml.Int) = try .wrap(rml, rml.storage.origin, 10);
-    defer {
-        log.debug("Deinitializing input", .{});
-        input.deinit();
-    }
+    while (true) {
+        const blob = parser.data.nextBlob() catch |err| {
+            if (diagnostic) |diag| {
+                log.err("{s} {}: {s}", .{@errorName(err), diag.error_origin, diag.message_mem[0..diag.message_len]});
+            } else {
+                log.err("requested parser diagnostic is null", .{});
+            }
 
-    while (parser.data.nextBlob() catch |err| {
-        if (diagnostic) |diag| {
-            log.err("{s} {}: {s}", .{@errorName(err), diag.error_origin, diag.message_mem[0..diag.message_len]});
-        } else {
-            log.err("requested interpreter diagnostic is null", .{});
-        }
+            diagnostic = null;
 
-        diagnostic = null;
-
-        return err;
-    }) |blob| {
-        defer blob.deinit();
+            return err;
+        } orelse break;
 
         log.debug("blob{}: {}", .{blob.getHeader().origin, blob});
 
         if (rml.main_interpreter.data.eval(blob)) |result| {
-            defer result.deinit();
-
             if (!Rml.isType(Rml.Nil, result)) {
                 log.info("result: {}", .{result});
             }

@@ -36,8 +36,6 @@ pub const Env = struct {
 
         if (ord == .Equal) {
             const b = forceObj(Env, other);
-            defer b.deinit();
-
             ord = Rml.compare(a.table, b.data.table);
         }
 
@@ -48,13 +46,8 @@ pub const Env = struct {
         return writer.data.print("{}", .{self.table});
     }
 
-    pub fn onDeinit(self: ptr(Env)) void {
-        self.table.deinit(getRml(self));
-    }
-
     pub fn clone(self: ptr(Env), origin: ?Origin) OOM! Obj(Env) {
-        var table = try self.table.clone(getRml(self));
-        errdefer table.deinit(getRml(self));
+        const table = try self.table.clone(getRml(self));
 
         return try .wrap(getRml(self), origin orelse Rml.getOrigin(self), .{.table = table});
     }
@@ -66,8 +59,7 @@ pub const Env = struct {
     /// Returns an error if:
     /// * Rml is out of memory
     pub fn rebind(self: ptr(Env), key: Obj(Symbol), val: Object) OOM! void {
-        const cell = try Rml.wrap(getRml(self), key.getOrigin(), Rml.Cell {.value = val});
-        errdefer cell.deinit();
+        const cell = try Obj(Rml.Cell).wrap(getRml(self), key.getOrigin(), .{.value = val});
 
         try self.table.set(getRml(self), key, cell);
     }
@@ -121,14 +113,14 @@ pub const Env = struct {
     pub fn copyFromEnv(self: ptr(Env), other: ptr(Env)) (OOM || SymbolAlreadyBound)! void {
         var it = other.table.iter();
         while (it.next()) |entry| {
-            try self.rebindCell(entry.key_ptr.clone(), entry.value_ptr.clone());
+            try self.rebindCell(entry.key_ptr.*, entry.value_ptr.*);
         }
     }
 
     pub fn copyFromTable(self: ptr(Env), table: *const Rml.map.TableUnmanaged) (OOM || SymbolAlreadyBound)! void {
         var it = table.iter();
         while (it.next()) |entry| {
-            try self.rebind(entry.key_ptr.clone(), entry.value_ptr.clone());
+            try self.rebind(entry.key_ptr.*, entry.value_ptr.*);
         }
     }
 
@@ -158,7 +150,7 @@ pub const Env = struct {
         const rml = getRml(self);
         const origin = Origin.fromComptimeStr("builtin-" ++ @typeName(T));
         inline for (comptime std.meta.fields(T)) |field| {
-            const sym: Obj(Symbol) = try .new(rml, origin, .{field.name});
+            const sym: Obj(Symbol) = try .wrap(rml, origin, try .create(rml, field.name));
 
             if (comptime std.mem.startsWith(u8, @typeName(field.type), "object.Obj")) {
                 self.bind(sym, @field(namespace, field.name).typeErase()) catch |err| {
@@ -167,7 +159,6 @@ pub const Env = struct {
                 };
             } else {
                 const val: Obj(field.type) = try .wrap(rml, origin, @field(namespace, field.name));
-                defer val.deinit();
 
                 self.bind(sym, val.typeErase()) catch |err| {
                     if (err == error.OutOfMemory) return error.OutOfMemory

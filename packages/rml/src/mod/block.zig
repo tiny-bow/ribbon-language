@@ -72,16 +72,11 @@ pub const Block = struct {
         self.kind = kind;
     }
 
-    pub fn onDeinit(self: ptr(Block)) void {
-        self.array.deinit(getRml(self));
-    }
-
     pub fn onCompare(a: ptr(Block), other: Object) Ordering {
         var ord = Rml.compare(getTypeId(a), other.getTypeId());
 
         if (ord == .Equal) {
             const b = forceObj(Block, other);
-            defer b.deinit();
 
             ord = Rml.compare(a.kind, b.data.kind);
 

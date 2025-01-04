@@ -28,7 +28,6 @@ pub fn TypedArray (comptime T: type) type {
             var ord = Rml.compare(getTypeId(self), other.getTypeId());
             if (ord == .Equal) {
                 const otherObj = forceObj(Self, other);
-                defer otherObj.deinit();
                 ord = Rml.compare(self.unmanaged, otherObj.data.unmanaged);
             }
             return ord;
@@ -36,12 +35,6 @@ pub fn TypedArray (comptime T: type) type {
 
         pub fn onFormat(self: ptr(Self), writer: Obj(Writer)) Error! void {
             try writer.data.print("{}", .{self.unmanaged});
-        }
-
-        pub fn onDeinit(self: ptr(Self)) void {
-            const rml = getRml(self);
-
-            self.unmanaged.deinit(rml);
         }
 
         /// Length of the array.
@@ -97,25 +90,12 @@ pub fn TypedArrayUnmanaged (comptime T: type) type {
             writer.writeAll("}") catch |err| return Rml.errorCast(err);
         }
 
-        pub fn deinit(self: *Self, rml: *Rml) void {
-            for (self.native_array.items) |obj| {
-                obj.deinit();
-            }
-
-            self.native_array.deinit(rml.storage.object);
-        }
-
         pub fn clone(self: *const Self, rml: *Rml) OOM! Self {
-            const arr = try self.native_array.clone(rml.storage.object);
-            for (self.native_array.items) |obj| obj.getHeader().incrRefCount();
+            const arr = try self.native_array.clone(rml.blobAllocator());
             return Self{.native_array = arr};
         }
 
         pub fn clear(self: *Self) void {
-            for (self.native_array.items) |obj| {
-                obj.deinit();
-            }
-
             self.native_array.clearRetainingCapacity();
         }
 
@@ -133,13 +113,13 @@ pub fn TypedArrayUnmanaged (comptime T: type) type {
 
         /// Get the last element of the array.
         pub fn last(self: *const Self) ?Obj(T) {
-            return if (self.native_array.items.len > 0) self.native_array.items[self.native_array.items.len - 1].clone()
+            return if (self.native_array.items.len > 0) self.native_array.items[self.native_array.items.len - 1]
             else null;
         }
 
         /// Get an element of the array.
         pub fn get(self: *const Self, index: usize) ?Obj(T) {
-            return if (index < self.native_array.items.len) self.native_array.items[index].clone()
+            return if (index < self.native_array.items.len) self.native_array.items[index]
             else null;
         }
 
@@ -148,7 +128,7 @@ pub fn TypedArrayUnmanaged (comptime T: type) type {
         /// This operation is O(N).
         /// Invalidates element pointers.
         pub fn prepend(self: *Self, rml: *Rml, val: Obj(T)) OOM! void {
-            try self.native_array.insert(rml.storage.object, 0, val);
+            try self.native_array.insert(rml.blobAllocator(), 0, val);
         }
 
         /// Insert item at index i.
@@ -156,20 +136,20 @@ pub fn TypedArrayUnmanaged (comptime T: type) type {
         /// This operation is O(N).
         /// Invalidates element pointers.
         pub fn insert(self: *Self, rml: *Rml, index: usize, val: Obj(T)) OOM! void {
-            try self.native_array.insert(rml.storage.object, index, val);
+            try self.native_array.insert(rml.blobAllocator(), index, val);
         }
 
         /// Extend the array by 1 element.
         /// Allocates more memory as necessary.
         /// Invalidates element pointers if additional memory is needed.
         pub fn append(self: *Self, rml: *Rml, val: Obj(T)) OOM! void {
-            try self.native_array.append(rml.storage.object, val);
+            try self.native_array.append(rml.blobAllocator(), val);
         }
 
         /// Append the slice of items to the array. Allocates more memory as necessary.
         /// Invalidates element pointers if additional memory is needed.
         pub fn appendSlice(self: *Self, rml: *Rml, slice: []const Obj(T)) OOM! void {
-            try self.native_array.appendSlice(rml.storage.object, slice);
+            try self.native_array.appendSlice(rml.blobAllocator(), slice);
         }
     };
 }

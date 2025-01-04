@@ -26,10 +26,6 @@ const coerceBool = Rml.coerceBool;
 pub const Alias = struct {
     sym: Obj(Symbol),
     sub: Object,
-
-    pub fn deinit(self: Alias) void {
-        self.sub.deinit();
-    }
 };
 
 
@@ -91,30 +87,12 @@ pub const Pattern = union(enum) {
         }
     }
 
-    pub fn onDeinit (self: *Pattern) void {
-        switch (self.*) {
-            .wildcard => {},
-            .symbol => |sym| sym.deinit(),
-            .block => |block| block.deinit(),
-            .value_literal => |value_literal| value_literal.deinit(),
-            .procedure => |procedure| procedure.deinit(),
-            .quote => |quote| quote.deinit(),
-            .alias => |alias| alias.deinit(),
-            .sequence => |sequence| sequence.deinit(),
-            .optional => |optional| optional.deinit(),
-            .zero_or_more => |zero_or_more| zero_or_more.deinit(),
-            .one_or_more => |one_or_more| one_or_more.deinit(),
-            .alternation => |alternation| alternation.deinit(),
-        }
-    }
-
     pub fn run(self: ptr(Pattern), interpreter: ptr(Rml.Interpreter), diag: ?*?Rml.Diagnostic, origin: Rml.Origin, input: []const Object) Rml.Result! ?Obj(Table) {
-        patternMatching.debug("Pattern.run `{} :: {any}` @ {}", .{Rml.tempObj(self), input, origin});
+        const obj = getObj(self);
+
+        patternMatching.debug("Pattern.run `{} :: {any}` @ {}", .{obj, input, origin});
 
         var offset: usize = 0;
-
-        const obj = getObj(self);
-        defer obj.deinit();
 
         const out = try out: {
             if (self.* == .block) {
@@ -122,7 +100,6 @@ pub const Pattern = union(enum) {
                     patternMatching.debug("block pattern with array-like input", .{});
                     const inner = try Rml.coerceArray(input[0])
                         orelse @panic("array-like object is not an array");
-                    defer inner.deinit();
 
                     break :out runSequence(interpreter, diag, origin, self.block.data.array.items(), inner.data.items(), &offset);
                 } else {
@@ -139,7 +116,6 @@ pub const Pattern = union(enum) {
         };
 
         if (offset < input.len) {
-            out.deinit();
             return patternAbort(diag, origin, "expected end of input, got `{}`", .{input[offset]});
         }
 
@@ -169,10 +145,8 @@ pub fn patternBinders(patternObj: Object) (OOM || error{BadDomain})! Rml.env.Dom
     const rml = patternObj.getRml();
 
     const pattern = Rml.castObj(Pattern, patternObj) orelse return .{};
-    defer pattern.deinit();
 
     var domain: Rml.env.Domain = .{};
-    errdefer domain.deinit(rml);
 
     switch (pattern.data.*) {
         .wildcard,
@@ -181,55 +155,41 @@ pub fn patternBinders(patternObj: Object) (OOM || error{BadDomain})! Rml.env.Dom
         .quote,
             => {},
 
-        .symbol => |symbol| try domain.set(rml, symbol.clone()),
+        .symbol => |symbol| try domain.set(rml, symbol),
 
         .block => |block| for (block.data.array.items()) |item| {
-            var subDomain = try patternBinders(item);
-            defer subDomain.deinit(rml);
-
+            const subDomain = try patternBinders(item);
             try domain.copyFrom(rml, &subDomain);
         },
 
-        .alias => |alias| try domain.set(rml, alias.sym.clone()),
+        .alias => |alias| try domain.set(rml, alias.sym),
 
         .sequence => |sequence| for (sequence.data.items()) |item| {
-            var subDomain = try patternBinders(item);
-            defer subDomain.deinit(rml);
-
+            const subDomain = try patternBinders(item);
             try domain.copyFrom(rml, &subDomain);
         },
 
         .optional => |optional| {
-            var subDomain = try patternBinders(optional);
-            defer subDomain.deinit(rml);
-
+            const subDomain = try patternBinders(optional);
             try domain.copyFrom(rml, &subDomain);
         },
 
         .zero_or_more => |zero_or_more| {
-            var subDomain = try patternBinders(zero_or_more);
-            defer subDomain.deinit(rml);
-
+            const subDomain = try patternBinders(zero_or_more);
             try domain.copyFrom(rml, &subDomain);
         },
 
         .one_or_more => |one_or_more| {
-            var subDomain = try patternBinders(one_or_more);
-            defer subDomain.deinit(rml);
-
+            const subDomain = try patternBinders(one_or_more);
             try domain.copyFrom(rml, &subDomain);
         },
 
         .alternation => |alternation| {
             var referenceSubDomain: ?Rml.env.Domain = null;
-            defer if (referenceSubDomain) |*d| d.deinit(rml);
-
             for (alternation.data.items()) |item| {
                 var subDomain = try patternBinders(item);
 
                 if (referenceSubDomain) |refDomain| {
-                    defer subDomain.deinit(rml);
-
                     if (Rml.equal(refDomain, subDomain)) {
                         try domain.copyFrom(rml, &subDomain);
                     } else {
@@ -247,18 +207,16 @@ pub fn patternBinders(patternObj: Object) (OOM || error{BadDomain})! Rml.env.Dom
 
 
 pub fn nilBinders (interpreter: ptr(Rml.Interpreter), table: Obj(Table), origin: Rml.Origin, patt: Obj(Pattern)) Rml.Result! void {
-    var binders = patternBinders(patt.typeEraseLeak()) catch |err| switch (err) {
+    var binders = patternBinders(patt.typeErase()) catch |err| switch (err) {
         error.BadDomain => try interpreter.abort(patt.getOrigin(), error.PatternError,
             "bad domain in pattern `{}`", .{patt}),
         error.OutOfMemory => return error.OutOfMemory,
     };
-    defer binders.deinit(getRml(interpreter));
 
-    const nil = try Rml.newObject(Rml.Nil, getRml(interpreter), origin);
-    defer nil.deinit();
+    const nil = (try Obj(Rml.Nil).wrap(getRml(interpreter), origin, .{})).typeErase();
 
     for (binders.keys()) |key| {
-        try table.data.set(key.clone(), nil.clone());
+        try table.data.set(key, nil);
     }
 }
 
@@ -270,8 +228,7 @@ pub fn runPattern(
     objects: []const Object,
     offset: *usize,
 ) Rml.Result! ?Obj(Table) {
-    const table: Obj(Table) = try .new(getRml(interpreter), origin);
-    defer table.deinit();
+    const table: Obj(Table) = try .wrap(getRml(interpreter), origin, .{});
 
     patternMatching.debug("runPattern `{} :: {?}` {any} {}", .{pattern, if (offset.* < objects.len) objects[offset.*] else null, objects, offset.*});
 
@@ -284,7 +241,7 @@ pub fn runPattern(
             const input = objects[offset.*];
             offset.* += 1;
             patternMatching.debug("input {}", .{input});
-            try table.data.set(symbol.clone(), input.clone());
+            try table.data.set(symbol, input);
             patternMatching.debug("bound", .{});
         },
 
@@ -296,23 +253,17 @@ pub fn runPattern(
             if (Rml.castObj(Rml.Block, objects[offset.*])) |inputBlock| {
                 offset.* += 1;
 
-                defer inputBlock.deinit();
-
                 const seqOrigin = pattern.getOrigin();
                 switch (block.data.kind) {
                     .doc => {
                         var newOffset: usize = 0;
                         const result = try runSequence(interpreter, diag, inputBlock.getOrigin(), patts, inputBlock.data.array.items(), &newOffset) orelse return null;
-                        defer result.deinit();
-
                         try table.data.copyFrom(result);
                     },
                     else =>
                         if (inputBlock.data.kind == block.data.kind) {
                             var newOffset: usize = 0;
                             const result = try runSequence(interpreter, diag, inputBlock.getOrigin(), patts, inputBlock.data.array.items(), &newOffset) orelse return null;
-                            defer result.deinit();
-
                             try table.data.copyFrom(result);
                         } else return patternAbort(
                             diag,
@@ -355,9 +306,7 @@ pub fn runPattern(
             const input = objects[offset.*];
             offset.* += 1;
 
-            const result = try interpreter.invoke(input.getOrigin(), pattern.typeEraseLeak(), procedure, &.{input});
-            defer result.deinit();
-
+            const result = try interpreter.invoke(input.getOrigin(), pattern.typeErase(), procedure, &.{input});
             if (!coerceBool(result))
                 return patternAbort(diag, input.getOrigin(),
                     "expected a truthy value, got `{}`", .{input});
@@ -377,28 +326,18 @@ pub fn runPattern(
                 },
                 .quasi => {
                     const w = try Rml.quote.runQuasi(interpreter, quote.data.body, null);
-                    defer w.deinit();
-
                     if (w.onCompare(input) != .Equal) return patternAbort(diag, input.getOrigin(),
                         "expected `{}`, got `{}`", .{w, input});
                 },
                 .to_quote => {
                     const v = try interpreter.eval(quote.data.body);
-                    defer v.deinit();
-
                     const q = try Obj(Rml.Quote).wrap(getRml(interpreter), quote.getOrigin(), .{ .kind = .basic, .body = v});
-                    defer q.deinit();
-
                     if (q.onCompare(input) != .Equal) return patternAbort(diag, input.getOrigin(),
                         "expected `{}`, got `{}`", .{q, input});
                 },
                 .to_quasi => {
                     const v = try interpreter.eval(quote.data.body);
-                    defer v.deinit();
-
                     const q = try Obj(Rml.Quote).wrap(getRml(interpreter), quote.getOrigin(), .{ .kind = .quasi, .body = v});
-                    defer q.deinit();
-
                     if (q.onCompare(input) != .Equal) return patternAbort(diag, input.getOrigin(),
                         "expected `{}`, got `{}`", .{q, input});
                 },
@@ -412,25 +351,20 @@ pub fn runPattern(
                 try interpreter.abort(alias.sub.getOrigin(), error.UnexpectedInput,
                     "alias syntax expects a pattern in this context, found `{}`", .{alias.sub});
             };
-            defer sub.deinit();
-
             const result = try runPattern(interpreter, diag, origin, sub, objects, offset) orelse return null;
-            defer result.deinit();
-
             if (result.data.length() > 0) {
-                try table.data.set(alias.sym.clone(), result.typeErase());
+                try table.data.set(alias.sym, result.typeErase());
             } else {
                 if (offset.* < objects.len) {
-                    try table.data.set(alias.sym.clone(), objects[offset.*]);
+                    try table.data.set(alias.sym, objects[offset.*]);
                 } else {
-                    try table.data.set(alias.sym.clone(), try Rml.newObject(Rml.Nil, getRml(interpreter), origin));
+                    try table.data.set(alias.sym, (try Obj(Rml.Nil).wrap(getRml(interpreter), origin, .{})).typeErase());
                 }
             }
         },
 
         .sequence => |sequence| {
             const subEnv = try runSequence(interpreter, diag, sequence.getOrigin(), sequence.data.items(), objects, offset) orelse return null;
-            defer subEnv.deinit();
 
             try table.data.copyFrom(subEnv);
         },
@@ -440,14 +374,11 @@ pub fn runPattern(
                 try interpreter.abort(optional.getOrigin(), error.TypeError,
                     "optional syntax expects a pattern in this context, found `{}`", .{optional});
             };
-            defer patt.deinit();
 
             var subOffset = offset.*;
             const result = try runPattern(interpreter, null, origin, patt, objects, &subOffset);
 
             if (result) |res| {
-                defer res.deinit();
-
                 offset.* = subOffset;
 
                 try table.data.copyFrom(res);
@@ -461,25 +392,21 @@ pub fn runPattern(
                 try interpreter.abort(zero_or_more.getOrigin(), error.TypeError,
                     "zero-or-more syntax expects a pattern in this context, found `{}`", .{zero_or_more});
             };
-            defer patt.deinit();
 
             var i: usize = 0;
 
-            var binders = patternBinders(patt.typeEraseLeak()) catch |err| switch (err) {
+            var binders = patternBinders(patt.typeErase()) catch |err| switch (err) {
                 error.BadDomain => try interpreter.abort(patt.getOrigin(), error.PatternError,
                     "bad domain in pattern `{}`", .{patt}),
                 error.OutOfMemory => return error.OutOfMemory,
             };
-            defer binders.deinit(getRml(interpreter));
 
             for (binders.keys()) |key| {
-                const k = key.clone();
-                errdefer k.deinit();
+                const k = key;
 
-                const obj = try Rml.newObject(Rml.Array, getRml(interpreter), origin);
-                errdefer obj.deinit();
+                const obj = try Obj(Rml.Array).wrap(getRml(interpreter), origin, .{});
 
-                try table.data.set(k, obj);
+                try table.data.set(k, obj.typeErase());
             }
 
             while (offset.* < objects.len) {
@@ -487,22 +414,17 @@ pub fn runPattern(
                 patternMatching.debug("*{} `{} :: {}`", .{i, patt, objects[subOffset]});
                 const result = try runPattern(interpreter, null, origin, patt, objects, &subOffset);
                 if (result) |res| {
-                    defer res.deinit();
-
                     i += 1;
 
                     for (res.data.keys()) |key| {
                         const arrayObj = table.data.get(key) orelse @panic("binder not in patternBinders result");
-                        defer arrayObj.deinit();
 
                         const array = Rml.castObj(Rml.Array, arrayObj) orelse {
                             try interpreter.abort(arrayObj.getOrigin(), error.TypeError,
                                 "expected an array, found `{}`", .{arrayObj});
                         };
-                        defer array.deinit();
 
                         const erase = res.typeErase();
-                        errdefer erase.deinit();
 
                         try array.data.append(erase);
                     }
@@ -519,23 +441,19 @@ pub fn runPattern(
                 try interpreter.abort(one_or_more.getOrigin(), error.TypeError,
                     "one-or-more syntax expects a pattern in this context, found `{}`", .{one_or_more});
             };
-            defer patt.deinit();
 
-            var binders = patternBinders(patt.typeEraseLeak()) catch |err| switch (err) {
+            var binders = patternBinders(patt.typeErase()) catch |err| switch (err) {
                 error.BadDomain => try interpreter.abort(patt.getOrigin(), error.PatternError,
                     "bad domain in pattern {}", .{patt}),
                 error.OutOfMemory => return error.OutOfMemory,
             };
-            defer binders.deinit(getRml(interpreter));
 
             for (binders.keys()) |key| {
-                const k = key.clone();
-                errdefer k.deinit();
+                const k = key;
 
-                const obj = try Rml.newObject(Rml.Array, getRml(interpreter), origin);
-                errdefer obj.deinit();
+                const obj = try Obj(Rml.Array).wrap(getRml(interpreter), origin, .{});
 
-                try table.data.set(k, obj);
+                try table.data.set(k, obj.typeErase());
             }
 
 
@@ -548,22 +466,18 @@ pub fn runPattern(
                 patternMatching.debug("✓", .{});
                 if (result) |res| {
                     patternMatching.debug("matched `{} :: {}`", .{patt, objects[offset.*]});
-                    defer res.deinit();
 
                     i += 1;
 
                     for (res.data.keys()) |key| {
                         const arrayObj = table.data.get(key) orelse @panic("binder not in patternBinders result");
-                        defer arrayObj.deinit();
 
                         const array = Rml.castObj(Rml.Array, arrayObj) orelse {
                             try interpreter.abort(arrayObj.getOrigin(), error.TypeError,
                                 "expected an array, found {}", .{arrayObj});
                         };
-                        defer array.deinit();
 
                         const erase = res.typeErase();
-                        errdefer erase.deinit();
 
                         try array.data.append(erase);
                     }
@@ -582,7 +496,6 @@ pub fn runPattern(
         .alternation => |alternation| {
             const pattObjs = alternation.data.items();
             var errs: Rml.string.StringUnmanaged = .{};
-            defer errs.deinit(getRml(interpreter));
 
             const errWriter = errs.writer(getRml(interpreter));
 
@@ -591,7 +504,6 @@ pub fn runPattern(
                     try interpreter.abort(pattObj.getOrigin(), error.UnexpectedInput,
                         "alternation syntax expects a pattern in this context, found `{}`", .{pattObj});
                 };
-                defer patt.deinit();
 
                 var diagStorage: ?Rml.Diagnostic = null;
                 const newDiag = if (diag != null) &diagStorage else null;
@@ -600,8 +512,6 @@ pub fn runPattern(
                 const result = try runPattern(interpreter, newDiag, origin, patt, objects, &subOffset);
 
                 if (result) |res| {
-                    defer res.deinit();
-
                     offset.* = subOffset;
 
                     try table.data.copyFrom(res);
@@ -628,13 +538,13 @@ pub fn runPattern(
 
     var it = table.data.unmanaged.iter();
     while (it.next()) |entry| {
-        patternMatching.debug("{} ({}) :: {} ({})", .{
-            entry.key_ptr.*, entry.key_ptr.getHeader().ref_count,
-            entry.value_ptr.*, entry.value_ptr.getHeader().ref_count
+        patternMatching.debug("{} :: {}", .{
+            entry.key_ptr.*,
+            entry.value_ptr.*,
         });
     }
 
-    return table.clone();
+    return table;
 }
 
 fn runSequence(
@@ -645,8 +555,7 @@ fn runSequence(
     objects: []const Object,
     offset: *usize,
 ) Rml.Result! ?Obj(Table) {
-    const table: Obj(Table) = try .new(getRml(interpreter), origin);
-    defer table.deinit();
+    const table: Obj(Table) = try .wrap(getRml(interpreter), origin, .{});
 
     for (patterns, 0..) |patternObj, p| {
         _ = p;
@@ -655,17 +564,15 @@ fn runSequence(
             try interpreter.abort(patternObj.getOrigin(), error.UnexpectedInput,
                 "sequence syntax expects a pattern in this context, found `{}`", .{patternObj});
         };
-        defer pattern.deinit();
 
         const result = try runPattern(interpreter, diag, origin, pattern, objects, offset) orelse return null;
-        defer result.deinit();
 
         try table.data.copyFrom(result);
     }
 
     if (offset.* < objects.len) return patternAbort(diag, origin, "unexpected input `{}`", .{objects[offset.*]});
 
-    return table.clone();
+    return table;
 }
 
 fn patternAbort(diagnostic: ?*?Rml.Diagnostic, origin: Rml.Origin, comptime fmt: []const u8, args: anytype) ?Obj(Table) {
@@ -712,11 +619,9 @@ fn abortParse(diagnostic: ?*?Rml.Diagnostic, origin: Rml.Origin, err: (OOM || Rm
 fn parseSequence(diag: ?*?Rml.Diagnostic, rml: *Rml, objects: []const Object, offset: *usize) (OOM || Rml.SyntaxError)! Rml.array.ArrayUnmanaged {
     patternMatching.debug("parseSequence {any} {}", .{objects, offset.*});
     var output: Rml.array.ArrayUnmanaged = .{};
-    errdefer output.deinit(rml);
 
     while (offset.* < objects.len) {
         const patt = try parsePattern(diag, objects, offset);
-        defer patt.deinit();
 
         try output.append(rml, patt.typeErase());
     }
@@ -735,27 +640,23 @@ fn parsePattern(diag: ?*?Rml.Diagnostic, objects: []const Object, offset: *usize
         return patt;
     } else {
         patternMatching.debug("parsePattern {}:`{}` {any} {}", .{input.getOrigin(), input, objects, offset.*});
-        var body: Pattern =
+        const body: Pattern =
             if (Rml.castObj(Rml.Symbol, input)) |sym| sym: {
                 patternMatching.debug("parsePattern symbol", .{});
 
                 break :sym if (BUILTIN_SYMBOLS.matchText(sym.data.text())) |fun| {
-                    sym.deinit();
                     return fun(diag, input, objects, offset);
                 } else .{.symbol = sym};
             }
-            else if (Rml.isAtom(input)) .{.value_literal = input.clone()}
+            else if (Rml.isAtom(input)) .{.value_literal = input}
             else if (Rml.castObj(Rml.Quote, input)) |quote| .{.quote = quote}
             else if (Rml.castObj(Rml.Block, input)) |block| block: {
                 patternMatching.debug("parsePattern block", .{});
-
-                defer block.deinit();
 
                 if (block.data.length() > 0) not_a_block: {
                     const items = block.data.array.items();
 
                     const symbol = Rml.castObj(Rml.Symbol, items[0]) orelse break :not_a_block;
-                    defer symbol.deinit();
 
                     inline for (comptime std.meta.declarations(NOT_A_BLOCK)) |decl| {
                         if (std.mem.eql(u8, decl.name, symbol.data.text())) {
@@ -767,16 +668,16 @@ fn parsePattern(diag: ?*?Rml.Diagnostic, objects: []const Object, offset: *usize
                 }
 
                 var subOffset: usize = 0;
-                var seq: Rml.array.ArrayUnmanaged = try parseSequence(diag, rml, block.data.array.items(), &subOffset);
-                errdefer seq.deinit(rml);
+                const seq: Rml.array.ArrayUnmanaged = try parseSequence(diag, rml, block.data.array.items(), &subOffset);
 
-                break :block Pattern { .block = try Rml.wrap(rml, input.getOrigin(), Rml.Block { .kind = .doc, .array = seq }) };
+                break :block Pattern { .block = try Obj(Rml.Block).wrap(rml, input.getOrigin(), .{ .kind = .doc, .array = seq }) };
             }
-            else try abortParse(diag, input.getOrigin(), error.SyntaxError, "`{}` is not a valid pattern", .{input});
+            else {
+                try abortParse(diag, input.getOrigin(), error.SyntaxError,
+                    "`{}` is not a valid pattern", .{input});
+            };
 
-        errdefer body.onDeinit();
-
-        return Rml.wrap(rml, input.getOrigin(), body);
+        return Obj(Rml.Pattern).wrap(rml, input.getOrigin(), body);
     }
 }
 
@@ -802,13 +703,12 @@ const BUILTIN_SYMBOLS = struct {
         const block = Rml.castObj(Rml.Block, objects[offset.*]) orelse {
             return error.SyntaxError;
         };
-        defer block.deinit();
         offset.* += 1;
 
         var subOffset: usize = 0;
         const body = try parseSequence(diag, rml, block.data.array.items(), &subOffset);
 
-        const patternBlock = try Rml.wrap(rml, origin, Rml.Block { .kind = block.data.kind, .array = body });
+        const patternBlock = try Obj(Rml.Block).wrap(rml, origin, .{ .kind = block.data.kind, .array = body });
 
         return Obj(Pattern).wrap(rml, origin, .{.block = patternBlock});
     }
@@ -821,16 +721,13 @@ const BUILTIN_SYMBOLS = struct {
 
         const block = Rml.castObj(Rml.Block, objects[offset.*])
             orelse try abortParse(diag, origin, error.SyntaxError, "expected a block to escape following `$`, got `{}`", .{objects[offset.*]});
-        defer block.deinit();
         offset.* += 1;
 
         const seq = seq: {
-            var items = try block.data.array.clone(input.getRml());
-            errdefer items.deinit(input.getRml());
+            const items = try block.data.array.clone(input.getRml());
 
             break :seq try Obj(Rml.Array).wrap(rml, origin, .{ .unmanaged = items });
         };
-        defer seq.deinit();
 
         return Obj(Pattern).wrap(rml, origin, .{.sequence = seq});
     }
@@ -850,26 +747,21 @@ const NOT_A_BLOCK = struct {
                     try abortParse(diag, obj.getOrigin(), error.SyntaxError, "expected a pattern for {s}-syntax", .{name});
 
                 const array = array: {
-                    var seq = try parseSequence(diag, rml, objects, offset);
-                    errdefer seq.deinit(rml);
+                    const seq = try parseSequence(diag, rml, objects, offset);
 
                     break :array try Obj(Rml.Array).wrap(rml, obj.getOrigin(), .{ .unmanaged = seq });
                 };
-                errdefer array.deinit();
 
                 const sub = switch (array.data.length()) {
                     0 => unreachable,
                     1 => one: {
-                        defer array.deinit();
                         const singleObj = array.data.get(0).?;
-                        defer singleObj.deinit();
                         break :one Rml.object.castObj(Pattern, singleObj).?;
                     },
-                    else => try Rml.wrap(obj.getRml(), obj.getOrigin(), Pattern{.sequence = array}),
+                    else => try Obj(Pattern).wrap(obj.getRml(), obj.getOrigin(), .{.sequence = array}),
                 };
-                errdefer sub.deinit();
 
-                return Rml.wrap(obj.getRml(), obj.getOrigin(), @unionInit(Pattern, name, sub.typeEraseLeak()));
+                return Obj(Pattern).wrap(obj.getRml(), obj.getOrigin(), @unionInit(Pattern, name, sub.typeErase()));
             }
         }.fun;
     }
@@ -889,12 +781,10 @@ const NOT_A_BLOCK = struct {
         const origin = input.getOrigin();
 
         const array = array: {
-            var seq = try parseSequence(diag, rml, objects, offset);
-            errdefer seq.deinit(rml);
+            const seq = try parseSequence(diag, rml, objects, offset);
 
             break :array try Obj(Rml.Array).wrap(rml, origin, .{ .unmanaged = seq });
         };
-        errdefer array.deinit();
 
         return Obj(Pattern).wrap(rml, origin, .{.alternation = array});
     }

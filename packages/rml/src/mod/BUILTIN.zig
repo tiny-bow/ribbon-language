@@ -28,35 +28,27 @@ pub const import = Rml.Procedure {
             if (args.len != 1) try interpreter.abort(origin, error.InvalidArgumentCount, "expected 1 argument, found {}", .{args.len});
 
             const namespaceSym = try interpreter.castObj(Rml.Symbol, args[0]);
-            defer namespaceSym.deinit();
 
             const namespace: Object = getRml(interpreter).namespace_env.data.get(namespaceSym) orelse {
                 try interpreter.abort(origin, error.UnboundSymbol, "namespace {} not found; available namespaces are: {any}", .{namespaceSym, getRml(interpreter).namespace_env.data.keys()});
             };
-            defer namespace.deinit();
 
             const env = try interpreter.castObj(Rml.Env, namespace);
-            defer env.deinit();
 
             const localEnv: ptr(Rml.Env) = interpreter.evaluation_env.data;
 
             var it = env.data.table.iter();
             while (it.next()) |entry| {
                 const slashSym = slashSym: { // TODO: use frame allocator
-                    const slashStr = try std.fmt.allocPrint(getRml(interpreter).storage.object, "{}/{}", .{namespaceSym, entry.key_ptr.*});
-                    defer getRml(interpreter).storage.object.free(slashStr);
+                    const slashStr = try std.fmt.allocPrint(getRml(interpreter).blobAllocator(), "{}/{}", .{namespaceSym, entry.key_ptr.*});
 
-                    break :slashSym try Rml.newWith(Rml.Symbol, getRml(interpreter), origin, .{slashStr});
+                    break :slashSym try Obj(Rml.Symbol).wrap(getRml(interpreter), origin, try .create(getRml(interpreter), slashStr));
                 };
-                errdefer slashSym.deinit();
 
-                const val = entry.value_ptr.clone();
-                defer val.deinit();
-
-                try localEnv.rebindCell(slashSym, val);
+                try localEnv.rebindCell(slashSym, entry.value_ptr.*);
             }
 
-            return Rml.newObject(Nil, getRml(interpreter), origin);
+            return (try Obj(Nil).wrap(getRml(interpreter), origin, .{})).typeErase();
         }
     }.fun,
 };
@@ -64,49 +56,107 @@ pub const import = Rml.Procedure {
 /// Create a global variable binding
 pub const global = Rml.Procedure {
     .native_macro = &struct {
-        pub fn fun (_: ptr(Interpreter), _: Origin, _: []const Object) Result! Object {
-            @panic("NYI");
-            // Rml.interpreter.evaluation.debug("global {}: {any}", .{origin, args});
+        pub fn fun (interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+            Rml.interpreter.evaluation.debug("global {}: {any}", .{origin, args});
 
-            // if (args.len < 1) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
+            if (args.len < 1)
+                try interpreter.abort(origin, error.InvalidArgumentCount,
+                    "expected at least a name for global variable", .{});
 
-            // const sym = try interpreter.castObj(Rml.Symbol, args[0]);
-            // errdefer sym.deinit();
+            const nilObj = try Obj(Nil).wrap(getRml(interpreter), origin, .{});
+            const equalSym = try Obj(Rml.Symbol).wrap(getRml(interpreter), origin, try .create(getRml(interpreter), "="));
 
-            // const nilObj = try Rml.newObject(Nil, getRml(interpreter), origin);
-            // errdefer nilObj.deinit();
+            const patt, const offset = parse: {
+                var diag: ?Rml.Diagnostic = null;
+                const parseResult = Rml.Pattern.parse(&diag, args)
+                    catch |err| {
+                        if (err == error.SyntaxError) {
+                            if (diag) |d| {
+                                try interpreter.abort(origin, error.PatternError,
+                                    "cannot parse global variable pattern: {}",
+                                    .{d.formatter(error.SyntaxError)});
+                            } else {
+                                Rml.log.err("requested pattern parse diagnostic is null", .{});
+                                try interpreter.abort(origin, error.PatternError,
+                                    "cannot parse global variable pattern `{}`", .{args[0]});
+                            }
+                        }
 
-            // const equalSym = try Rml.newObjectWith(Rml.Symbol, getRml(interpreter), origin, .{"="});
-            // defer equalSym.deinit();
+                        return err;
+                    };
 
-            // const obj =
-            //     if (args.len == 1) nilObj.clone()
-            //     else obj: {
-            //         var offset: usize = 1;
-            //         if (Rml.equal(args[offset], equalSym)) offset += 1;
-            //         const body = args[offset..];
-            //         break :obj if (body.len == 1) single: {
-            //             const bod = body[0];
-            //             if (Rml.castObj(Rml.Block, bod)) |b| {
-            //                 defer b.deinit();
+                break :parse .{parseResult.value, parseResult.offset};
+            };
 
-            //                 break :single try interpreter.runProgram(origin, b.data.kind == .paren, b.data.array.items());
-            //             } else {
-            //                 break :single try interpreter.eval(bod);
-            //             }
-            //         } else try interpreter.runProgram(origin, false, body);
-            //     };
-            // errdefer obj.deinit();
+            Rml.parser.parsing.debug("global variable pattern: {}", .{patt});
 
-            // getRml(interpreter).global_env.data.bind(sym, obj) catch |err| {
-            //     if (err == error.SymbolAlreadyBound) {
-            //         try interpreter.abort(origin, error.SymbolAlreadyBound, "symbol `{}` is already bound", .{sym});
-            //     } else {
-            //         return err;
-            //     }
-            // };
+            const dom = Rml.pattern.patternBinders(patt.typeErase())
+                catch |err| switch (err) {
+                    error.BadDomain => {
+                        try interpreter.abort(origin, error.SyntaxError,
+                            "bad domain in pattern `{}`", .{patt});
+                    },
+                    error.OutOfMemory => return error.OutOfMemory,
+                };
 
-            // return nilObj;
+            for (dom.keys()) |sym| {
+                Rml.interpreter.evaluation.debug("rebinding global variable {} = nil", .{sym});
+                try getRml(interpreter).global_env.data.rebind(sym, nilObj.typeErase());
+            }
+
+            const obj =
+                if (args.len - offset == 0) nilObj.typeErase()
+                else obj: {
+                    if (!Rml.equal(args[offset], equalSym.typeErase())) {
+                        try interpreter.abort(origin, error.SyntaxError,
+                            "expected `=` after global variable pattern", .{});
+                    }
+
+                    const body = args[offset + 1..];
+
+                    if (body.len == 1) {
+                        if (Rml.castObj(Rml.Block, body[0])) |bod| {
+                            break :obj try interpreter.runProgram(
+                                origin,
+                                bod.data.kind == .paren,
+                                bod.data.array.items(),
+                            );
+                        }
+                    }
+
+                    break :obj try interpreter.runProgram(origin, false, body);
+                };
+
+            Rml.interpreter.evaluation.debug("evaluating global variable {} = {}", .{patt, obj});
+
+            const table = table: {
+                var diag: ?Rml.Diagnostic = null;
+                if (try patt.data.run(interpreter, &diag, origin, &.{obj})) |m| break :table m;
+
+                if (diag) |d| {
+                    try interpreter.abort(origin, error.PatternError,
+                        "failed to match; {} vs {}:\n\t{}",
+                        .{patt, obj, d.formatter(error.PatternError)});
+                } else {
+                    Rml.interpreter.evaluation.err("requested pattern diagnostic is null", .{});
+                    try interpreter.abort(origin, error.PatternError,
+                        "failed to match; {} vs {}", .{patt, obj});
+                }
+            };
+
+            var it = table.data.unmanaged.iter();
+            while (it.next()) |entry| {
+                const sym = entry.key_ptr.*;
+                const val = entry.value_ptr.*;
+
+                Rml.interpreter.evaluation.debug("setting global variable {} = {}", .{ sym, val });
+
+                // TODO: deep copy into long term memory
+
+                try getRml(interpreter).global_env.data.rebind(sym, val);
+            }
+
+            return nilObj.typeErase();
         }
     }.fun,
 };
@@ -122,11 +172,8 @@ pub const local = Rml.Procedure {
                 try interpreter.abort(origin, error.InvalidArgumentCount,
                     "expected at least a name for local variable", .{});
 
-            const nilObj = try Rml.newObject(Nil, getRml(interpreter), origin);
-            defer nilObj.deinit();
-
-            const equalSym = try Rml.newObjectWith(Rml.Symbol, getRml(interpreter), origin, .{"="});
-            defer equalSym.deinit();
+            const nilObj = try Obj(Nil).wrap(getRml(interpreter), origin, .{});
+            const equalSym = try Obj(Rml.Symbol).wrap(getRml(interpreter), origin, try .create(getRml(interpreter), "="));
 
             const patt, const offset = parse: {
                 var diag: ?Rml.Diagnostic = null;
@@ -149,11 +196,10 @@ pub const local = Rml.Procedure {
 
                 break :parse .{parseResult.value, parseResult.offset};
             };
-            defer patt.deinit();
 
             Rml.parser.parsing.debug("local variable pattern: {}", .{patt});
 
-            var dom = Rml.pattern.patternBinders(patt.typeEraseLeak())
+            const dom = Rml.pattern.patternBinders(patt.typeErase())
                 catch |err| switch (err) {
                     error.BadDomain => {
                         try interpreter.abort(origin, error.SyntaxError,
@@ -161,17 +207,16 @@ pub const local = Rml.Procedure {
                     },
                     error.OutOfMemory => return error.OutOfMemory,
                 };
-            defer dom.deinit(getRml(interpreter));
 
-            // for (dom.keys()) |sym| {
-            //     Rml.interpreter.evaluation.debug("rebinding local variable {} = nil", .{sym});
-            //     try interpreter.evaluation_env.data.rebind(sym.clone(), nilObj.clone());
-            // }
+            for (dom.keys()) |sym| {
+                Rml.interpreter.evaluation.debug("rebinding local variable {} = nil", .{sym});
+                try interpreter.evaluation_env.data.rebind(sym, nilObj.typeErase());
+            }
 
             const obj =
-                if (args.len - offset == 0) nilObj.clone()
+                if (args.len - offset == 0) nilObj.typeErase()
                 else obj: {
-                    if (!Rml.equal(args[offset], equalSym)) {
+                    if (!Rml.equal(args[offset], equalSym.typeErase())) {
                         try interpreter.abort(origin, error.SyntaxError,
                             "expected `=` after local variable pattern", .{});
                     }
@@ -180,8 +225,6 @@ pub const local = Rml.Procedure {
 
                     if (body.len == 1) {
                         if (Rml.castObj(Rml.Block, body[0])) |bod| {
-                            defer bod.deinit();
-
                             break :obj try interpreter.runProgram(
                                 origin,
                                 bod.data.kind == .paren,
@@ -192,11 +235,8 @@ pub const local = Rml.Procedure {
 
                     break :obj try interpreter.runProgram(origin, false, body);
                 };
-            defer obj.deinit();
 
-            Rml.interpreter.evaluation.debug("evaluating local variable {} ({}) = {} ({})", .{
-                patt, patt.getHeader().ref_count, obj, obj.getHeader().ref_count
-            });
+            Rml.interpreter.evaluation.debug("evaluating local variable {} = {}", .{patt, obj});
 
             const table = table: {
                 var diag: ?Rml.Diagnostic = null;
@@ -212,23 +252,18 @@ pub const local = Rml.Procedure {
                         "failed to match; {} vs {}", .{patt, obj});
                 }
             };
-            defer table.deinit();
 
             var it = table.data.unmanaged.iter();
             while (it.next()) |entry| {
-                const sym = entry.key_ptr.clone();
-                errdefer sym.deinit();
-                const val = entry.value_ptr.clone();
-                errdefer val.deinit();
+                const sym = entry.key_ptr.*;
+                const val = entry.value_ptr.*;
 
-                Rml.interpreter.evaluation.debug("setting local variable {} ({}) = {} ({})", .{
-                    sym, sym.getHeader().ref_count, val, val.getHeader().ref_count
-                });
+                Rml.interpreter.evaluation.debug("setting local variable {} = {}", .{ sym, val });
 
                 try interpreter.evaluation_env.data.rebind(sym, val);
             }
 
-            return nilObj.clone();
+            return nilObj.typeErase();
         }
     }.fun,
 };
@@ -240,15 +275,13 @@ pub const @"set!" = Rml.Procedure {
             const sym = Rml.castObj(Rml.Symbol, args[0])
                 orelse try interpreter.abort(origin, error.TypeError,
                     "expected symbol, found {s}", .{TypeId.name(args[0].getTypeId())});
-            defer sym.deinit();
 
             const value = try interpreter.eval(args[1]);
-            errdefer value.deinit();
 
             try interpreter.evaluation_env.data.set(sym, value);
 
-            const nil = try Rml.newObject(Nil, getRml(interpreter), origin);
-            return nil;
+            const nil = try Obj(Nil).wrap(getRml(interpreter), origin, .{});
+            return nil.typeErase();
         }
     }.fun,
 };
@@ -264,12 +297,10 @@ pub const fun = Rml.Procedure {
             const rml = getRml(interpreter);
 
             var cases: Rml.array.TypedArrayUnmanaged(Rml.procedure.Case) = .{};
-            errdefer cases.deinit(rml);
 
             if (args.len == 1) {
                 Rml.parser.parsing.debug("case fun", .{});
                 const caseSet: Obj(Rml.Block) = try interpreter.castObj(Rml.Block, args[0]);
-                defer caseSet.deinit();
                 Rml.parser.parsing.debug("case set {}", .{caseSet});
 
                 var isCases = true;
@@ -284,41 +315,36 @@ pub const fun = Rml.Procedure {
                     for (caseSet.data.array.items()) |case| {
                         Rml.parser.parsing.debug("case {}", .{case});
                         const caseBlock = try interpreter.castObj(Rml.Block, case);
-                        defer caseBlock.deinit();
 
                         const c = try Rml.procedure.Case.parse(interpreter, caseBlock.getOrigin(), caseBlock.data.array.items());
-                        errdefer c.deinit();
 
                         try cases.append(rml, c);
                     }
                 } else {
                     Rml.parser.parsing.debug("fun single case: {any}", .{caseSet.data.array.items()});
                     const c = try Rml.procedure.Case.parse(interpreter, caseSet.getOrigin(), caseSet.data.array.items());
-                    errdefer c.deinit();
 
                     try cases.append(rml, c);
                 }
             } else {
                 Rml.parser.parsing.debug("fun single case: {any}", .{args});
                 const c = try Rml.procedure.Case.parse(interpreter, origin, args);
-                errdefer c.deinit();
 
                 try cases.append(rml, c);
             }
 
             const env = try interpreter.evaluation_env.data.clone(origin);
-            errdefer env.deinit();
 
-            const out = try Rml.wrapObject(rml, origin, Rml.Procedure {
+            const out: Obj(Rml.Procedure) = try .wrap(rml, origin, Rml.Procedure {
                 .function = .{
                     .env = env,
                     .cases = cases,
                 },
             });
 
-            Rml.parser.parsing.debug("fun done: {} ({})", .{out, out.getHeader().ref_count});
+            Rml.parser.parsing.debug("fun done: {}", .{out});
 
-            return out;
+            return out.typeErase();
         }
     }.fun,
 };
@@ -334,12 +360,10 @@ pub const macro = Rml.Procedure {
             const rml = getRml(interpreter);
 
             var cases: Rml.array.TypedArrayUnmanaged(Rml.procedure.Case) = .{};
-            errdefer cases.deinit(rml);
 
             if (args.len == 1) {
                 Rml.interpreter.evaluation.debug("case macro", .{});
                 const caseSet: Obj(Rml.Block) = try interpreter.castObj(Rml.Block, args[0]);
-                defer caseSet.deinit();
                 Rml.interpreter.evaluation.debug("case set {}", .{caseSet});
 
                 var isCases = true;
@@ -354,39 +378,33 @@ pub const macro = Rml.Procedure {
                     for (caseSet.data.array.items()) |case| {
                         Rml.interpreter.evaluation.debug("case {}", .{case});
                         const caseBlock = try interpreter.castObj(Rml.Block, case);
-                        defer caseBlock.deinit();
 
                         const c = try Rml.procedure.Case.parse(interpreter, origin, caseBlock.data.array.items());
-                        errdefer c.deinit();
 
                         try cases.append(rml, c);
                     }
                 } else {
                     Rml.interpreter.evaluation.debug("macro single case: {any}", .{caseSet.data.array.items()});
                     const c = try Rml.procedure.Case.parse(interpreter, origin, caseSet.data.array.items());
-                    errdefer c.deinit();
 
                     try cases.append(rml, c);
                 }
             } else {
                 Rml.interpreter.evaluation.debug("macro single case: {any}", .{args});
                 const c = try Rml.procedure.Case.parse(interpreter, origin, args);
-                errdefer c.deinit();
-
                 try cases.append(rml, c);
             }
 
             const env = try interpreter.evaluation_env.data.clone(origin);
-            errdefer env.deinit();
 
-            const out = try Rml.wrapObject(rml, origin, Rml.Procedure {
+            const out: Obj(Rml.Procedure) = try .wrap(rml, origin, Rml.Procedure {
                 .macro = .{
                     .env = env,
                     .cases = cases,
                 },
             });
 
-            return out;
+            return out.typeErase();
         }
     }.fun,
 };
@@ -398,8 +416,7 @@ pub fn @"print-ln"(interpreter: ptr(Interpreter), origin: Origin, args: []const 
     const stdout = std.io.getStdOut();
     const nativeWriter = stdout.writer();
 
-    const writer: Obj(Writer) = try .new(rml, origin, .{nativeWriter.any()});
-    defer writer.deinit();
+    const writer: Obj(Writer) = try .wrap(rml, origin, .create(nativeWriter.any()));
 
     try writer.data.print("{}: ", .{origin});
 
@@ -407,7 +424,7 @@ pub fn @"print-ln"(interpreter: ptr(Interpreter), origin: Origin, args: []const 
 
     try writer.data.writeAll("\n");
 
-    return Rml.newObject(Nil, rml, origin);
+    return (try Obj(Nil).wrap(rml, origin, .{})).typeErase();
 }
 
 
@@ -419,12 +436,11 @@ pub fn print(interpreter: ptr(Interpreter), origin: Origin, args: []const Object
     const stdout = std.io.getStdOut();
     const nativeWriter = stdout.writer();
 
-    const writer: Obj(Writer) = try .new(rml, origin, .{nativeWriter.any()});
-    defer writer.deinit();
+    const writer: Obj(Writer) = try .wrap(rml, origin, .create(nativeWriter.any()));
 
     for (args) |arg| try arg.getHeader().onFormat(writer);
 
-    return Rml.newObject(Nil, rml, origin);
+    return (try Obj(Nil).wrap(rml, origin, .{})).typeErase();
 }
 
 
@@ -436,22 +452,15 @@ pub const add = @"+";
 pub fn @"+"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
     if (args.len == 0) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
 
-    var sum: Object = args[0].clone();
-    defer sum.deinit();
+    var sum: Object = args[0];
 
     if (args.len == 1) {
         if (castObj(Int, sum)) |int| {
-            defer int.deinit();
-
-            return (try Obj(Int).wrap(int.getRml(), origin, @intCast(@abs(int.data.*)))).typeEraseLeak();
+            return (try Obj(Int).wrap(int.getRml(), origin, @intCast(@abs(int.data.*)))).typeErase();
         } else if (castObj(Float, sum)) |float| {
-            defer float.deinit();
-
-            return (try Obj(Float).wrap(float.getRml(), origin, @abs(float.data.*))).typeEraseLeak();
+            return (try Obj(Float).wrap(float.getRml(), origin, @abs(float.data.*))).typeErase();
         } if (castObj(Char, sum)) |char| {
-            defer char.deinit();
-
-            return (try Obj(Char).wrap(char.getRml(), origin, char.data.*)).typeEraseLeak();
+            return (try Obj(Char).wrap(char.getRml(), origin, char.data.*)).typeErase();
         } else {
             try interpreter.abort(origin, error.TypeError, "expected int | float | char, found {s}", .{TypeId.name(sum.getTypeId())});
         }
@@ -473,22 +482,15 @@ pub const sub = @"-";
 pub fn @"-"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
     if (args.len == 0) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
 
-    var sum: Object = args[0].clone();
-    defer sum.deinit();
+    var sum: Object = args[0];
 
     if (args.len == 1) {
         if (castObj(Int, sum)) |int| {
-            defer int.deinit();
-
-            return (try Obj(Int).wrap(int.getRml(), origin, -int.data.*)).typeEraseLeak();
+            return (try Obj(Int).wrap(int.getRml(), origin, -int.data.*)).typeErase();
         } else if (castObj(Float, sum)) |float| {
-            defer float.deinit();
-
-            return (try Obj(Float).wrap(float.getRml(), origin, -float.data.*)).typeEraseLeak();
+            return (try Obj(Float).wrap(float.getRml(), origin, -float.data.*)).typeErase();
         } if (castObj(Char, sum)) |char| { // TODO: ???
-            defer char.deinit();
-
-            return (try Obj(Char).wrap(char.getRml(), origin, char.data.*)).typeEraseLeak();
+            return (try Obj(Char).wrap(char.getRml(), origin, char.data.*)).typeErase();
         } else {
             try interpreter.abort(origin, error.TypeError, "expected int | float | char, found {s}", .{TypeId.name(sum.getTypeId())});
         }
@@ -509,8 +511,7 @@ pub const div = @"/";
 pub fn @"/"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
-    var sum: Object = args[0].clone();
-    defer sum.deinit();
+    var sum: Object = args[0];
 
     return arithCastReduce(interpreter, origin, &sum, args[1..], struct {
         pub fn int(a: Int, b: Int) Int { return @divFloor(a, b); }
@@ -527,8 +528,7 @@ pub const mul = @"*";
 pub fn @"*"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
-    var sum: Object = args[0].clone();
-    defer sum.deinit();
+    var sum: Object = args[0];
 
     return arithCastReduce(interpreter, origin, &sum, args[1..], struct {
         pub fn int(a: Int, b: Int) Int { return a * b; }
@@ -543,8 +543,7 @@ pub fn @"*"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object)
 pub fn @"rem"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
-    var sum: Object = args[0].clone();
-    defer sum.deinit();
+    var sum: Object = args[0];
 
     return arithCastReduce(interpreter, origin, &sum, args[1..], struct {
         pub fn int(a: Int, b: Int) Int { return @rem(a, b); }
@@ -559,8 +558,7 @@ pub fn @"rem"(interpreter: ptr(Interpreter), origin: Origin, args: []const Objec
 pub fn pow(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
-    var sum: Object = args[0].clone();
-    defer sum.deinit();
+    var sum: Object = args[0];
 
     return arithCastReduce(interpreter, origin, &sum, args[1..], struct {
         pub fn int(a: Int, b: Int) Int { return std.math.pow(Int, a, b); }
@@ -577,7 +575,7 @@ pub fn @"bit-not"(interpreter: ptr(Interpreter), origin: Origin, args: []const O
     if (castObj(Int, args[0])) |i| {
         return (try Obj(Int).wrap(i.getRml(), origin, ~i.data.*)).typeErase();
     } else if (castObj(Char, args[0])) |c| {
-        return (try Obj(Char).wrap(c.getRml(), origin, ~c.data.*)).typeEraseLeak();
+        return (try Obj(Char).wrap(c.getRml(), origin, ~c.data.*)).typeErase();
     } else {
         try interpreter.abort(origin, error.TypeError, "expected int | char, found {s}", .{TypeId.name(args[0].getTypeId())});
     }
@@ -589,8 +587,7 @@ pub fn @"bit-not"(interpreter: ptr(Interpreter), origin: Origin, args: []const O
 pub fn @"bit-and"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
-    var sum: Object = args[0].clone();
-    defer sum.deinit();
+    var sum: Object = args[0];
 
     return arithCastReduce(interpreter, origin, &sum, args[1..], struct {
         pub fn int(a: Int, b: Int) Int { return a & b; }
@@ -603,8 +600,7 @@ pub fn @"bit-and"(interpreter: ptr(Interpreter), origin: Origin, args: []const O
 pub fn @"bit-or"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
-    var sum: Object = args[0].clone();
-    defer sum.deinit();
+    var sum: Object = args[0];
 
     return arithCastReduce(interpreter, origin, &sum, args[1..], struct {
         pub fn int(a: Int, b: Int) Int { return a | b; }
@@ -617,8 +613,7 @@ pub fn @"bit-or"(interpreter: ptr(Interpreter), origin: Origin, args: []const Ob
 pub fn @"bit-xor"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
-    var sum: Object = args[0].clone();
-    defer sum.deinit();
+    var sum: Object = args[0];
 
     return arithCastReduce(interpreter, origin, &sum, args[1..], struct {
         pub fn int(a: Int, b: Int) Int { return a ^ b; }
@@ -633,7 +628,7 @@ pub fn @"truthy?"(interpreter: ptr(Interpreter), origin: Origin, args: []const O
         try interpreter.abort(origin, error.InvalidArgumentCount, "expected 1 argument, found {}", .{args.len});
     }
 
-    return (try Obj(Rml.Bool).wrap(getRml(interpreter), origin, Rml.coerceBool(args[0]))).typeEraseLeak();
+    return (try Obj(Rml.Bool).wrap(getRml(interpreter), origin, Rml.coerceBool(args[0]))).typeErase();
 }
 
 /// logical NOT on an argument coerced to type `bool`
@@ -642,7 +637,7 @@ pub fn not(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) 
         try interpreter.abort(origin, error.InvalidArgumentCount, "expected 1 argument, found {}", .{args.len});
     }
 
-    return (try Obj(Rml.Bool).wrap(getRml(interpreter), origin, !Rml.coerceBool(args[0]))).typeEraseLeak();
+    return (try Obj(Rml.Bool).wrap(getRml(interpreter), origin, !Rml.coerceBool(args[0]))).typeErase();
 }
 
 /// Short-circuiting logical AND on any number of arguments of any type;
@@ -650,22 +645,19 @@ pub fn not(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) 
 pub const @"and" = Rml.Procedure {
     .native_macro = &struct{
         pub fn fun(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
-            if (args.len == 0) return Rml.newObject(Rml.Nil, getRml(interpreter), origin);
+            if (args.len == 0) return (try Obj(Rml.Nil).wrap(getRml(interpreter), origin, .{})).typeErase();
 
             var a = try interpreter.eval(args[0]);
-            errdefer a.deinit();
 
             if (!coerceBool(a)) {
-                return Rml.newObject(Rml.Nil, getRml(interpreter), origin);
+                return (try Obj(Rml.Nil).wrap(getRml(interpreter), origin, .{})).typeErase();
             }
 
             for (args[1..]) |aN| {
                 const b = try interpreter.eval(aN);
-                errdefer b.deinit();
 
                 if (!coerceBool(b)) return a;
 
-                a.deinit();
                 a = b;
             }
 
@@ -683,11 +675,9 @@ pub const @"or" = Rml.Procedure {
                 const a = try interpreter.eval(aN);
 
                 if (coerceBool(a)) return a;
-
-                a.deinit();
             }
 
-            return Rml.newObject(Rml.Nil, getRml(interpreter), origin);
+            return (try Obj(Rml.Nil).wrap(getRml(interpreter), origin, .{})).typeErase();
         }
     }.fun,
 };
@@ -708,96 +698,47 @@ fn arithCastReduce(
     for (args, 0..) |arg, i| {
         if (@hasDecl(Ops, "int") and isType(Int, acc.*)) {
             const int = forceObj(Int, acc.*);
-            defer int.deinit();
-
             if (castObj(Int, arg)) |int2| {
-                defer int2.deinit();
-
                 const int3: Obj(Int) = try .wrap(int2.getRml(), origin, @field(Ops, "int")(int.data.*, int2.data.*));
-                defer int3.deinit();
-
-                acc.deinit();
                 acc.* = int3.typeErase();
             } else if (@hasDecl(Ops, "float") and isType(Float, arg)) {
                 const float = forceObj(Float, arg);
-                defer float.deinit();
-
                 const float2: Obj(Float) = try .wrap(float.getRml(), origin, @field(Ops, "float")(@as(Float, @floatFromInt(int.data.*)), float.data.*));
-                defer float2.deinit();
-
-                acc.deinit();
                 acc.* = float2.typeErase();
             } else if (castObj(Char, arg)) |char| {
-                defer char.deinit();
-
                 const int2: Obj(Int) = try .wrap(char.getRml(), origin, @field(Ops, "int")(int.data.*, @as(Int, @intCast(char.data.*))));
-                defer int2.deinit();
-
-                acc.deinit();
                 acc.* = int2.typeErase();
             } else {
                 try interpreter.abort(origin, error.TypeError, "expected " ++ expect ++ " for argument {}, found {s}", .{i + offset, TypeId.name(arg.getTypeId())});
             }
         } else if (@hasDecl(Ops, "float") and isType(Float, acc.*)) {
             const float = forceObj(Float, acc.*);
-            defer float.deinit();
 
             if (castObj(Int, arg)) |int| {
-                defer int.deinit();
-
                 const float2: Obj(Float) = try .wrap(int.getRml(), origin, @field(Ops, "float")(float.data.*, @as(Float, @floatFromInt(int.data.*))));
-                defer float2.deinit();
-
-                acc.deinit();
                 acc.* = float2.typeErase();
             } else if (castObj(Float, arg)) |float2| {
-                defer float2.deinit();
-
                 const float3: Obj(Float) = try .wrap(float2.getRml(), origin, @field(Ops, "float")(float.data.*, float2.data.*));
-                defer float3.deinit();
-
-                acc.deinit();
                 acc.* = float3.typeErase();
             } else if (castObj(Char, arg)) |char| {
-                defer char.deinit();
-
                 const float2: Obj(Float) = try .wrap(char.getRml(), origin, @field(Ops, "float")(float.data.*, @as(Float, @floatFromInt(char.data.*))));
-                defer float2.deinit();
-
-                acc.deinit();
                 acc.* = float2.typeErase();
             } else {
                 try interpreter.abort(origin, error.TypeError, "expected " ++ expect ++ " for argument {}, found {s}", .{i + offset, TypeId.name(arg.getTypeId())});
             }
         } else if (@hasDecl(Ops, "char") and isType(Char, acc.*)) {
             const char = forceObj(Char, acc.*);
-            defer char.deinit();
 
             if (@hasDecl(Ops, "int") and isType(Int, arg)) {
                 const int = forceObj(Int, arg);
-                defer int.deinit();
-
                 const int2: Obj(Int) = try .wrap(char.getRml(), origin, @field(Ops, "int")(@as(Int, @intCast(char.data.*)), int.data.*));
-                defer int2.deinit();
-
-                acc.deinit();
                 acc.* = int2.typeErase();
             } else if (@hasDecl(Ops, "float") and isType(Float, arg)) {
                 const float = forceObj(Float, arg);
-                defer float.deinit();
-
                 const float2: Obj(Float) = try .wrap(float.getRml(), origin, @field(Ops, "float")(@as(Float, @floatFromInt(char.data.*)), float.data.*));
-                defer float2.deinit();
-
-                acc.deinit();
                 acc.* = float2.typeErase();
             } else if (castObj(Char, arg)) |char2| {
-                defer char2.deinit();
-
                 const char3: Obj(Char) = try .wrap(char2.getRml(), origin, @field(Ops, "char")(char.data.*, char2.data.*));
-                defer char3.deinit();
-
-                acc.deinit();
                 acc.* = char3.typeErase();
             } else {
                 try interpreter.abort(origin, error.TypeError, "expected " ++ expect ++ " for argument {}, found {s}", .{i + offset, TypeId.name(arg.getTypeId())});
@@ -807,6 +748,6 @@ fn arithCastReduce(
         }
     }
 
-    return acc.clone();
+    return acc.*;
 }
 

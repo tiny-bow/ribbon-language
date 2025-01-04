@@ -86,10 +86,7 @@ pub const ObjData = object.ObjData;
 pub const Object = object.Object;
 pub const Header = object.Header;
 pub const ref = object.ref;
-pub const Wk = object.Wk;
-pub const Weak = object.Weak;
 pub const getObj = object.getObj;
-pub const tempObj = object.tempObj;
 pub const getHeader = object.getHeader;
 pub const getOrigin = object.getOrigin;
 pub const getTypeId = object.getTypeId;
@@ -100,17 +97,9 @@ pub const isType = object.isType;
 pub const isBuiltin = object.isBuiltin;
 pub const isBuiltinType = object.isBuiltinType;
 pub const castObj = object.castObj;
-pub const upgradeCast = object.upgradeCast;
-pub const downgradeCast = object.downgradeCast;
 pub const coerceBool = object.coerceBool;
 pub const coerceArray = object.coerceArray;
 pub const isArrayLike = object.isArrayLike;
-pub const new = object.new;
-pub const newWith = object.newWith;
-pub const wrap = object.wrap;
-pub const newObject = object.newObject;
-pub const newObjectWith = object.newObjectWith;
-pub const wrapObject = object.wrapObject;
 
 test {
     std.testing.refAllDeclsRecursive(@This());
@@ -238,11 +227,8 @@ pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWrit
 
     log.debug("initializing interpreter ...", .{});
 
-    self.global_env = try Rml.new(Env, self, self.storage.origin);
-    errdefer self.global_env.deinit();
-
-    self.namespace_env = try Rml.new(Env, self, self.storage.origin);
-    errdefer self.namespace_env.deinit();
+    self.global_env = try Obj(Env).wrap(self, self.storage.origin, .{});
+    self.namespace_env = try Obj(Env).wrap(self, self.storage.origin, .{});
 
     bindgen.bindObjectNamespaces(self, self.namespace_env, BUILTIN_TYPES)
         catch |err| switch (err) {
@@ -265,7 +251,7 @@ pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWrit
     // TODO args
     _ = args;
 
-    if (Rml.newWith(Interpreter, self, self.storage.origin, .{})) |x| {
+    if (Obj(Interpreter).wrap(self, self.storage.origin, try .create(self))) |x| {
         log.debug("... interpreter ready", .{});
         self.main_interpreter = x;
         return self;
@@ -278,19 +264,9 @@ pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWrit
 pub fn deinit(self: *Rml) MemoryLeak! void {
     log.debug("deinitializing Rml", .{});
 
-    self.namespace_env.deinit();
-    self.global_env.deinit();
-    self.main_interpreter.deinit();
     self.storage.deinit();
 
-    defer self.storage.object.destroy(self);
-
-    if (self.storage.object_count != 0) {
-        log.err("memory management problem detected, object_count: {}", .{self.storage.object_count});
-        return error.MemoryLeak;
-    } else {
-        log.debug("no memory management problem detected", .{});
-    }
+    self.storage.long_term.destroy(self);
 }
 
 pub fn expectedOutput(self: *Rml, comptime fmt: []const u8, args: anytype) void {
@@ -300,6 +276,24 @@ pub fn expectedOutput(self: *Rml, comptime fmt: []const u8, args: anytype) void 
     }
 }
 
+
+pub fn beginBlob(self: *Rml) void {
+    log.info("beginBlob", .{});
+    self.storage.beginBlob();
+}
+
+pub fn endBlob(self: *Rml) Storage.Blob {
+    log.info("endBlob", .{});
+    return self.storage.endBlob();
+}
+
+pub fn blobId(self: *Rml) Storage.BlobId {
+    return self.storage.blobId();
+}
+
+pub fn blobAllocator(self: *Rml) std.mem.Allocator {
+    return self.storage.blobAllocator();
+}
 
 // TODO run
 pub fn runString(self: *Rml, fileName: []const u8, text: []const u8) Error! Object {
@@ -312,7 +306,6 @@ pub fn runString(self: *Rml, fileName: []const u8, text: []const u8) Error! Obje
 
 pub fn runFile(self: *Rml, fileName: []const u8) Error! Object {
     const src = try self.readFile(fileName);
-    defer self.storage.object.free(src);
 
     return self.runString(fileName, src);
 }

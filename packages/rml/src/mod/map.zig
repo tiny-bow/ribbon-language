@@ -38,8 +38,6 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
             var ord = Rml.compare(getTypeId(a), other.getTypeId());
             if (ord == .Equal) {
                 const b = forceObj(Self, other);
-                defer b.deinit();
-
                 ord = a.unmanaged.compare(b.data.unmanaged);
             }
             return ord;
@@ -47,11 +45,6 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
 
         pub fn onFormat(self: const_ptr(Self), writer: Rml.Obj(Writer)) Error! void {
             return writer.data.print("{}", .{self.unmanaged});
-        }
-
-        pub fn onDeinit(self: ptr(Self)) void {
-            const rml = getRml(self);
-            self.unmanaged.deinit(rml);
         }
 
         /// Set the value associated with a key
@@ -91,8 +84,7 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
         /// Convert a map to an array of key-value pairs.
         pub fn toArray(self: ptr(Self)) OOM! Obj(Rml.Array) {
             const rml = getRml(self);
-            var pairs = try self.unmanaged.toArray(rml);
-            errdefer pairs.deinit(rml);
+            const pairs = try self.unmanaged.toArray(rml);
             return Obj(Rml.Array).wrap(rml, getOrigin(self), .{ .unmanaged = pairs });
         }
 
@@ -148,32 +140,19 @@ pub fn TypedMapUnmanaged (comptime K: type, comptime V: type) type {
             writer.writeAll("}") catch |err| return Rml.errorCast(err);
         }
 
-        pub fn deinit(self: *Self, rml: *Rml) void {
-            var it = self.iter();
-            while (it.next()) |entry| {
-                entry.key_ptr.deinit();
-                entry.value_ptr.deinit();
-            }
-
-            self.native_map.deinit(rml.storage.object);
-        }
-
         /// Set the value associated with a key
         pub fn set(self: *Self, rml: *Rml, key: Obj(K), val: Obj(V)) OOM! void {
             if (self.native_map.getEntry(key)) |entry| {
-                entry.key_ptr.deinit();
                 entry.key_ptr.* = key;
-
-                entry.value_ptr.deinit();
                 entry.value_ptr.* = val;
             } else {
-                try self.native_map.put(rml.storage.object, key, val);
+                try self.native_map.put(rml.blobAllocator(), key, val);
             }
         }
 
         /// Find the value associated with a key
         pub fn get(self: *const Self, key: Obj(K)) ?Obj(V) {
-            return if (self.native_map.get(key)) |v| v.clone() else null;
+            return self.native_map.get(key);
         }
 
         /// Returns the number of key-value pairs in the map
@@ -209,7 +188,7 @@ pub fn TypedMapUnmanaged (comptime K: type, comptime V: type) type {
         /// call this method to recompute the denormalized metadata
         /// necessary for the operation of the methods of this map that lookup entries by key.
         pub fn reIndex(self: *Self, rml: *Rml) OOM! void {
-            return self.native_map.reIndex(rml.storage.object);
+            return self.native_map.reIndex(rml.blobAllocator());
         }
 
         /// Convert a map to an array of key-value pairs.
@@ -217,35 +196,28 @@ pub fn TypedMapUnmanaged (comptime K: type, comptime V: type) type {
             var it = self.iter();
 
             var out: Rml.array.ArrayUnmanaged = .{};
-            errdefer out.deinit(rml);
 
             while (it.next()) |entry| {
                 var pair: Rml.array.ArrayUnmanaged = .{};
-                errdefer pair.deinit(rml);
 
-                try pair.append(rml, entry.key_ptr.clone().typeEraseLeak());
-                try pair.append(rml, entry.value_ptr.clone().typeEraseLeak());
+                try pair.append(rml, entry.key_ptr.typeErase());
+                try pair.append(rml, entry.value_ptr.typeErase());
 
-                try out.append(rml, (try Obj(Rml.Array).wrap(rml, entry.key_ptr.getOrigin(), .{ .unmanaged = pair })).typeEraseLeak());
+                try out.append(rml, (try Obj(Rml.Array).wrap(rml, entry.key_ptr.getOrigin(), .{ .unmanaged = pair })).typeErase());
             }
 
             return out;
         }
 
         pub fn clone(self: *Self, rml: *Rml) OOM! Self {
-            const newMap = Self { .native_map = try self.native_map.clone(rml.storage.object) };
-            var it = newMap.iter();
-            while (it.next()) |entry| {
-                entry.key_ptr.getHeader().incrRefCount();
-                entry.value_ptr.getHeader().incrRefCount();
-            }
+            const newMap = Self { .native_map = try self.native_map.clone(rml.blobAllocator()) };
             return newMap;
         }
 
         pub fn copyFrom(self: *Self, rml: *Rml, other: *Self) OOM! void {
             var it = other.iter();
             while (it.next()) |entry| {
-                try self.set(rml, entry.key_ptr.clone(), entry.value_ptr.clone());
+                try self.set(rml, entry.key_ptr.*, entry.value_ptr.*);
             }
         }
     };

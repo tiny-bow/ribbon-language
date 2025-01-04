@@ -41,10 +41,8 @@ pub const EvalError = error {
 pub const Interpreter = struct {
     evaluation_env: Obj(Env),
 
-    pub fn onInit(self: ptr(Interpreter)) OOM! void {
-        evaluation.debug("initializing Obj(Interpreter){x}", .{@intFromPtr(self)});
-
-        self.evaluation_env = try Rml.new(Env, getRml(self), getHeader(self).origin);
+    pub fn create(rml: *Rml) OOM! Interpreter {
+        return .{.evaluation_env = try Obj(Env).wrap(rml, try .fromStr(rml, "system"), .{})};
     }
 
     pub fn onCompare(a: ptr(Interpreter), other: Object) Ordering {
@@ -55,15 +53,9 @@ pub const Interpreter = struct {
         return writer.data.print("Obj(Interpreter){x}", .{@intFromPtr(self)});
     }
 
-    pub fn onDeinit(self: ptr(Interpreter)) void {
-        evaluation.debug("deinitializing Obj(Interpreter){x}", .{@intFromPtr(self)});
-        self.evaluation_env.deinit();
-    }
-
     pub fn reset(self: ptr(Interpreter)) OOM! void {
         const rml = getRml(self);
-        self.evaluation_env.deinit();
-        self.evaluation_env = try Rml.new(Env, rml, getHeader(self).origin);
+        self.evaluation_env = try Obj(Env).wrap(rml, getHeader(self).origin, .{});
     }
 
     pub fn castObj(self: ptr(Interpreter), comptime T: type, object: Object) Error! Obj(T) {
@@ -102,7 +94,6 @@ pub const Interpreter = struct {
         const rml = getRml(self);
 
         var results: Rml.array.ArrayUnmanaged = .{};
-        errdefer results.deinit(rml);
 
         for (exprs) |expr| {
             const value = try self.eval(expr);
@@ -119,13 +110,11 @@ pub const Interpreter = struct {
         const expr = if (offset.* < program.len) expr: {
             const out = program[offset.*];
             offset.* += 1;
-            break :expr out.clone();
-        } else try Rml.newObject(Nil, getRml(self), getHeader(self).origin);
-        defer expr.deinit();
+            break :expr out;
+        } else (try Obj(Rml.Nil).wrap(getRml(self), origin, .{})).typeErase();
 
         const value = value: {
             if (Rml.castObj(Symbol, expr)) |symbol| {
-                defer symbol.deinit();
 
                 if (workDone) |x| x.* = true;
 
@@ -135,11 +124,9 @@ pub const Interpreter = struct {
                     try self.abort(origin, error.UnboundSymbol, "no symbol `{s}` in evaluation environment", .{symbol});
                 };
             } else if (Rml.castObj(Block, expr)) |block| {
-                defer block.deinit();
-
                 if (block.data.array.length() == 0) {
                     evaluation.debug("empty block", .{});
-                    break :value expr.clone();
+                    break :value expr;
                 }
 
                 if (workDone) |x| x.* = true;
@@ -147,8 +134,6 @@ pub const Interpreter = struct {
                 evaluation.debug("running block", .{});
                 break :value try self.runProgram(block.getOrigin(), block.data.kind == .paren, block.data.items());
             } else if (Rml.castObj(Rml.Quote, expr)) |quote| {
-                defer quote.deinit();
-
                 if (workDone) |x| x.* = true;
 
                 evaluation.debug("running quote", .{});
@@ -157,12 +142,10 @@ pub const Interpreter = struct {
 
             evaluation.debug("cannot evaluate further: {}", .{expr});
 
-            break :value expr.clone();
+            break :value expr;
         };
 
         if (Rml.isType(Rml.Procedure, value) and (shouldInvoke or program.len > offset.*)) {
-            defer value.deinit();
-
             const args = program[offset.*..];
             offset.* = program.len;
 
@@ -180,10 +163,8 @@ pub const Interpreter = struct {
     pub fn runProgram(self: ptr(Interpreter), origin: Origin, shouldInvoke: bool, program: []const Object) Result! Object {
         evaluation.debug("runProgram {}:{any}", .{origin, program});
 
-        const rml = getRml(self);
 
-        var last: Object = try Rml.newObject(Nil, rml, origin);
-        errdefer last.deinit();
+        var last: Object = (try Obj(Rml.Nil).wrap(getRml(self), origin, .{})).typeErase();
 
         evaluation.debug("runProgram - begin loop", .{});
 
@@ -191,7 +172,6 @@ pub const Interpreter = struct {
         while (offset < program.len) {
             const value = try self.evalCheck(origin, shouldInvoke, program, &offset, null);
 
-            last.deinit();
             last = value;
         }
 
@@ -202,8 +182,6 @@ pub const Interpreter = struct {
 
     pub fn invoke(self: ptr(Interpreter), callOrigin: Origin, blame: Object, callable: Object, args: []const Object) Result! Object {
         if (Rml.castObj(Rml.procedure.Procedure, callable)) |procedure| {
-            defer procedure.deinit();
-
             return procedure.data.call(self, callOrigin, blame, args);
         } else {
             try self.abort(callOrigin, error.TypeError, "expected a procedure, got {s}: {s}", .{Rml.TypeId.name(callable.getTypeId()), callable});

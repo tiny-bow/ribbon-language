@@ -16,17 +16,16 @@ const getRml = Rml.getRml;
 pub const String = struct {
     unmanaged: StringUnmanaged = .{},
 
-    pub fn onInit(self: ptr(String), str: []const u8) OOM! void {
-        return self.unmanaged.appendSlice(getRml(self), str);
+    pub fn create(rml: *Rml, str: []const u8) OOM! String {
+        var self = String {};
+        try self.unmanaged.appendSlice(rml, str);
+        return self;
     }
 
     pub fn onFormat(self: ptr(String), writer: Rml.Obj(Writer)) Error! void {
         try writer.data.print("{}", .{self.unmanaged});
     }
 
-    pub fn onDeinit(self: ptr(String)) void {
-        self.unmanaged.deinit(getRml(self));
-    }
 
     pub fn text(self: ptr(String)) []const u8 {
         return self.unmanaged.text();
@@ -61,10 +60,6 @@ pub const StringUnmanaged = struct {
         w.print("\"{s}\"", .{self.native_string.items}) catch |err| return Rml.errorCast(err);
     }
 
-    pub fn deinit(self: *StringUnmanaged, rml: *Rml) void {
-        self.native_string.deinit(rml.storage.object);
-    }
-
     pub fn text(self: *StringUnmanaged) []const u8 {
         return self.native_string.items;
     }
@@ -76,19 +71,19 @@ pub const StringUnmanaged = struct {
     pub fn append(self: *StringUnmanaged, rml: *Rml, ch: Char) OOM! void {
         var buf = [1]u8{0} ** 4;
         const len = TextUtils.encode(ch, &buf) catch @panic("invalid ch");
-        return self.native_string.appendSlice(rml.storage.object, buf[0..len]);
+        return self.native_string.appendSlice(rml.blobAllocator(), buf[0..len]);
     }
 
     pub fn appendSlice(self: *StringUnmanaged, rml: *Rml, str: []const u8) OOM! void {
-        return self.native_string.appendSlice(rml.storage.object, str);
+        return self.native_string.appendSlice(rml.blobAllocator(), str);
     }
 
     pub fn makeInternedSlice(self: *StringUnmanaged, rml: *Rml) OOM! []const u8 {
-        return try rml.storage.interner.get(self.native_string.items);
+        return try rml.storage.intern(self.native_string.items);
     }
 
     pub fn writer(self: *StringUnmanaged, rml: *Rml) NativeWriter {
-        return self.native_string.writer(rml.storage.object);
+        return self.native_string.writer(rml.blobAllocator());
     }
 };
 

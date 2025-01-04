@@ -16,8 +16,8 @@ const getRml = Rml.getRml;
 pub const Symbol = struct {
     str: Rml.str,
 
-    pub fn onInit(self: ptr(Symbol), str: []const u8) OOM! void {
-        self.str = try getRml(self).storage.interner.get(str);
+    pub fn create(rml: *Rml, str: []const u8) OOM! Symbol {
+        return .{ .str = try rml.storage.intern(str) };
     }
 
     pub fn onCompare(self: ptr(Symbol), other: Object) Ordering {
@@ -25,7 +25,6 @@ pub const Symbol = struct {
 
         if (ord == .Equal) {
             const b = forceObj(Symbol, other);
-            defer b.deinit();
 
             ord = Rml.compare(@intFromPtr(self.str.ptr), @intFromPtr(b.data.str.ptr));
             if (ord == .Equal) {

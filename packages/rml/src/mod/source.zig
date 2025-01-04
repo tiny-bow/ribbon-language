@@ -11,7 +11,7 @@ pub const Origin = struct {
     range: ?Range = null,
 
     pub fn fromStr(rml: *Rml, str: []const u8) OOM! Origin {
-        return Origin { .filename = try rml.storage.interner.get(str) };
+        return Origin { .filename = try rml.storage.intern(str) };
     }
 
     pub fn fromComptimeStr(comptime str: []const u8) Origin {
