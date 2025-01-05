@@ -5,6 +5,7 @@ const Ordering = Rml.Ordering;
 const Error = Rml.Error;
 const OOM = Rml.OOM;
 const ptr = Rml.ptr;
+const const_ptr = Rml.const_ptr;
 const Obj = Rml.Obj;
 const ObjData = Rml.ObjData;
 const Object = Rml.Object;
@@ -66,13 +67,18 @@ pub const BlockKind = enum {
 
 pub const Block = struct {
     kind: BlockKind = .doc,
-    array: Rml.array.ArrayUnmanaged = .{},
+    array: std.ArrayListUnmanaged(Object) = .{},
 
-    pub fn onInit(self: ptr(Block), kind: BlockKind) OOM! void {
-        self.kind = kind;
+    pub fn create(rml: *Rml, kind: BlockKind, initialItems: []const Object) OOM! Block {
+        var array: std.ArrayListUnmanaged(Object) = .{};
+        try array.appendSlice(rml.blobAllocator(), initialItems);
+        return .{
+            .kind = kind,
+            .array = array,
+        };
     }
 
-    pub fn onCompare(a: ptr(Block), other: Object) Ordering {
+    pub fn onCompare(a: *Block, other: Object) Ordering {
         var ord = Rml.compare(getTypeId(a), other.getTypeId());
 
         if (ord == .Equal) {
@@ -88,12 +94,12 @@ pub const Block = struct {
         return ord;
     }
 
-    pub fn onFormat(self: ptr(Block), writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *Block, writer: std.io.AnyWriter) anyerror! void {
         try writer.writeAll(self.kind.toOpenStrFmt());
-        for (self.array.items(), 0..) |item, i| {
+        for (self.items(), 0..) |item, i| {
             try item.onFormat(writer);
 
-            if (i < self.array.length() - 1) {
+            if (i < self.length() - 1) {
                 try writer.writeAll(" ");
             }
         }
@@ -101,34 +107,35 @@ pub const Block = struct {
     }
 
     /// Length of the block.
-    pub fn length(self: ptr(Block)) usize {
-        return self.array.length();
+    pub fn length(self: *const Block) usize {
+        return self.array.items.len;
     }
 
     /// Contents of the block.
     /// Pointers to elements in this slice are invalidated by various functions of this ArrayList in accordance with the respective documentation.
     /// In all cases, "invalidated" means that the memory has been passed to an allocator's resize or free function.
-    pub fn items(self: ptr(Block)) []Object {
-        return self.array.items();
+    pub fn items(self: *const Block) []Object {
+        return self.array.items;
     }
 
     /// Convert a block to an array.
-    pub fn toArray(self: ptr(Block)) OOM! Obj(Rml.Array) {
-        return try Obj(Rml.Array).wrap(getRml(self), getOrigin(self), .{ .unmanaged = try self.array.clone(getRml(self)) });
+    pub fn toArray(self: *Block) OOM! Obj(Rml.Array) {
+        const allocator = getRml(self).blobAllocator();
+        return try Obj(Rml.Array).wrap(getRml(self), getOrigin(self), try .create(allocator, self.items()));
     }
 
     /// Extend the block by 1 element.
     /// Allocates more memory as necessary.
     /// Invalidates element pointers if additional memory is needed.
-    pub fn append(self: ptr(Block), obj: Object) OOM! void {
+    pub fn append(self: *Block, obj: Object) OOM! void {
         const rml = getRml(self);
-        return self.array.append(rml, obj);
+        return self.array.append(rml.blobAllocator(), obj);
     }
 
     /// Append the slice of items to the block. Allocates more memory as necessary.
     /// Invalidates element pointers if additional memory is needed.
-    pub fn appendSlice(self: ptr(Block), slice: []const Object) OOM! void {
+    pub fn appendSlice(self: *Block, slice: []const Object) OOM! void {
         const rml = getRml(self);
-        return self.array.appendSlice(rml, slice);
+        return self.array.appendSlice(rml.blobAllocator(), slice);
     }
 };

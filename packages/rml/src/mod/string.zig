@@ -22,28 +22,28 @@ pub const String = struct {
         return self;
     }
 
-    pub fn onFormat(self: ptr(String), writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *String, writer: std.io.AnyWriter) anyerror! void {
         try writer.print("{}", .{self.unmanaged});
     }
 
 
-    pub fn text(self: ptr(String)) []const u8 {
+    pub fn text(self: *String) []const u8 {
         return self.unmanaged.text();
     }
 
-    pub fn length(self: ptr(String)) usize {
+    pub fn length(self: *String) usize {
         return self.unmanaged.length();
     }
 
-    pub fn append(self: ptr(String), ch: Char) OOM! void {
+    pub fn append(self: *String, ch: Char) OOM! void {
         return self.unmanaged.append(getRml(self), ch);
     }
 
-    pub fn appendSlice(self: ptr(String), str: []const u8) OOM! void {
+    pub fn appendSlice(self: *String, str: []const u8) OOM! void {
         return self.unmanaged.appendSlice(getRml(self), str);
     }
 
-    pub fn makeInternedSlice(self: ptr(String)) OOM! []const u8 {
+    pub fn makeInternedSlice(self: *String) OOM! []const u8 {
         return self.unmanaged.makeInternedSlice(getRml(self));
     }
 };

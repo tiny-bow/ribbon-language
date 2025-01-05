@@ -63,7 +63,7 @@ pub fn Support(comptime T: type) type {
     return struct {
         pub const onCompare = switch (@typeInfo(T)) {
             else => struct {
-                pub fn onCompare(a: ptr(T), obj: Object) Ordering {
+                pub fn onCompare(a: *T, obj: Object) Ordering {
                     var ord = Rml.compare(getTypeId(a), obj.getTypeId());
 
                     if (ord == .Equal) {
@@ -78,7 +78,7 @@ pub fn Support(comptime T: type) type {
 
         pub const onFormat = switch (T) {
             Rml.Char => struct {
-                pub fn onFormat(self: ptr(T), writer: std.io.AnyWriter) anyerror! void {
+                pub fn onFormat(self: *T, writer: std.io.AnyWriter) anyerror! void {
                     var buf = [1]u8{0} ** 4;
                     const len = TextUtils.encode(self.*, buf[0..]) catch 0;
                     try writer.print("'{s}'", .{buf[0..len]});
@@ -86,21 +86,21 @@ pub fn Support(comptime T: type) type {
             },
             else => switch(@typeInfo(T)) {
                 .pointer => |info| if (@typeInfo(info.child) == .@"fn") struct {
-                    pub fn onFormat(self: ptr(T), writer: std.io.AnyWriter) anyerror! void {
+                    pub fn onFormat(self: *T, writer: std.io.AnyWriter) anyerror! void {
                         try writer.print("[native-function {s} {x}]", .{fmtNativeType(T), @intFromPtr(self)});
                     }
                 } else struct {
-                    pub fn onFormat(self: ptr(T), writer: std.io.AnyWriter) anyerror! void {
+                    pub fn onFormat(self: *T, writer: std.io.AnyWriter) anyerror! void {
                         try writer.print("[native-{s} {x}]", .{@typeName(T), @intFromPtr(self)});
                     }
                 },
                 .array => struct {
-                    pub fn onFormat(self: ptr(T), writer: std.io.AnyWriter) anyerror! void {
+                    pub fn onFormat(self: *T, writer: std.io.AnyWriter) anyerror! void {
                         try writer.print("{any}", .{self.*});
                     }
                 },
                 else => struct {
-                    pub fn onFormat(self: ptr(T), writer: std.io.AnyWriter) anyerror! void {
+                    pub fn onFormat(self: *T, writer: std.io.AnyWriter) anyerror! void {
                         try writer.print("{}", .{self.*});
                     }
                 },
@@ -242,7 +242,7 @@ pub fn isVTableMethodName(name: []const u8) bool {
 }
 
 
-pub const NativeFunction = *const fn (ptr(Interpreter), Origin, []const Object) Result! Object;
+pub const NativeFunction = *const fn (*Interpreter, Origin, []const Object) Result! Object;
 
 inline fn onAList(comptime T: type, comptime fieldName: []const u8) bool {
     comptime {
@@ -397,7 +397,7 @@ pub fn fromObject(comptime T: type, _: *Rml, value: Object) Error! T {
 
     switch (tInfo) {
         .pointer => |info| {
-            if (info.alignment == Rml.object.OBJ_ALIGN) {
+            if (info.size == .One and comptime isBuiltinType(info.child)) {
                 if (!Rml.equal(Rml.TypeId.of(info.child), value.getTypeId())) {
                     Rml.log.warn("expected {s} got {s}", .{@typeName(info.child), Rml.TypeId.name(value.getTypeId())});
                     return error.TypeError;
@@ -412,7 +412,7 @@ pub fn fromObject(comptime T: type, _: *Rml, value: Object) Error! T {
         },
         else => {
             if (T == Object) {
-                return value;  // TODO: why shouldn't we clone?
+                return value;
             } else if (comptime std.mem.startsWith(u8, @typeName(T), "object.Obj(")) {
                 const O = @typeInfo(tInfo.@"struct".fields[0].type).pointer.child;
 
@@ -571,7 +571,7 @@ pub fn wrapNativeFunction(rml: *Rml, origin: Origin, comptime value: anytype) OO
     const info = @typeInfo(T).@"fn";
 
     return Obj(Procedure).wrap(rml, origin, .{ .native_function = struct {
-        pub fn method (interpreter: ptr(Interpreter), callOrigin: Origin, args: []const Object) Result! Object {
+        pub fn method (interpreter: *Interpreter, callOrigin: Origin, args: []const Object) Result! Object {
             if (args.len != info.params.len) {
                 try interpreter.abort(callOrigin, error.InvalidArgumentCount, "expected {} arguments, got {}", .{info.params.len, args.len});
             }
@@ -580,7 +580,7 @@ pub fn wrapNativeFunction(rml: *Rml, origin: Origin, comptime value: anytype) OO
 
             inline for (info.params, 0..) |param, i| {
                 nativeArgs[i] = fromObject(param.type.?, getRml(interpreter), args[i]) catch |err| {
-                    try interpreter.abort(callOrigin, err, "failed to convert argument {} from rml to native", .{i});
+                    try interpreter.abort(callOrigin, err, "failed to convert argument {} from rml {} to native {s}", .{i, args[i], @typeName(@TypeOf(nativeArgs[i]))});
                 };
             }
 

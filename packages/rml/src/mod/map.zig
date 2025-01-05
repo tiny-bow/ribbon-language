@@ -34,7 +34,7 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
         unmanaged: TypedMapUnmanaged(K, V) = .{},
 
 
-        pub fn onCompare(a: ptr(Self), other: Object) Ordering {
+        pub fn onCompare(a: *Self, other: Object) Ordering {
             var ord = Rml.compare(getTypeId(a), other.getTypeId());
             if (ord == .Equal) {
                 const b = forceObj(Self, other);
@@ -43,60 +43,59 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
             return ord;
         }
 
-        pub fn onFormat(self: const_ptr(Self), writer: std.io.AnyWriter) anyerror! void {
+        pub fn onFormat(self: *const Self, writer: std.io.AnyWriter) anyerror! void {
             return writer.print("{}", .{self.unmanaged});
         }
 
         /// Set the value associated with a key
-        pub fn set(self: ptr(Self), key: Obj(K), v: Obj(V)) OOM! void {
+        pub fn set(self: *Self, key: Obj(K), v: Obj(V)) OOM! void {
             const rml = getRml(self);
             return self.unmanaged.set(rml, key, v);
         }
 
         /// Find the value associated with a key
-        pub fn get(self: ptr(Self), key: Obj(K)) ?Obj(V) {
+        pub fn get(self: *Self, key: Obj(K)) ?Obj(V) {
             return self.unmanaged.get(key);
         }
 
         /// Returns the number of key-value pairs in the map
-        pub fn length(self: ptr(Self)) usize {
+        pub fn length(self: *Self) usize {
             return self.unmanaged.length();
         }
 
         /// Check whether a key is stored in the map
-        pub fn contains(self: ptr(Self), key: Obj(K)) bool {
+        pub fn contains(self: *Self, key: Obj(K)) bool {
             return self.unmanaged.contains(key);
         }
 
         /// Returns the backing array of keys in this map. Modifying the map may invalidate this array.
         /// Modifying this array in a way that changes key hashes or key equality puts the map into an unusable state until reIndex is called.
-        pub fn keys(self: ptr(Self)) []Obj(K) {
+        pub fn keys(self: *Self) []Obj(K) {
             return self.unmanaged.keys();
         }
 
         /// Returns the backing array of values in this map.
         /// Modifying the map may invalidate this array.
         /// It is permitted to modify the values in this array.
-        pub fn values(self: ptr(Self)) []Obj(V) {
+        pub fn values(self: *Self) []Obj(V) {
             return self.unmanaged.values();
         }
 
         /// Convert a map to an array of key-value pairs.
-        pub fn toArray(self: ptr(Self)) OOM! Obj(Rml.Array) {
+        pub fn toArray(self: *Self) OOM! Obj(Rml.Array) {
             const rml = getRml(self);
-            const pairs = try self.unmanaged.toArray(rml);
-            return Obj(Rml.Array).wrap(rml, getOrigin(self), .{ .unmanaged = pairs });
+            return self.unmanaged.toArray(rml);
         }
 
         /// Recomputes stored hashes and rebuilds the key indexes.
         /// If the underlying keys have been modified directly,
         /// call this method to recompute the denormalized metadata
         /// necessary for the operation of the methods of this map that lookup entries by key.
-        pub fn reIndex(self: ptr(Self)) OOM! void {
+        pub fn reIndex(self: *Self) OOM! void {
             return self.unmanaged.reIndex(getRml(self));
         }
 
-        pub fn copyFrom(self: ptr(Self), other: Obj(Self)) OOM! void {
+        pub fn copyFrom(self: *Self, other: Obj(Self)) OOM! void {
             const rml = getRml(self);
             return self.unmanaged.copyFrom(rml, &other.data.unmanaged);
         }
@@ -127,7 +126,7 @@ pub fn TypedMapUnmanaged (comptime K: type, comptime V: type) type {
         }
 
         pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) Error! void {
-            writer.writeAll("MAP{") catch |err| return Rml.errorCast(err);
+            writer.writeAll("map{") catch |err| return Rml.errorCast(err);
 
             var it = self.iter();
             while (it.next()) |entry| {
@@ -192,18 +191,18 @@ pub fn TypedMapUnmanaged (comptime K: type, comptime V: type) type {
         }
 
         /// Convert a map to an array of key-value pairs.
-        pub fn toArray(self: *Self, rml: *Rml) OOM! Rml.array.ArrayUnmanaged {
+        pub fn toArray(self: *Self, rml: *Rml) OOM! Obj(Rml.Array) {
             var it = self.iter();
 
-            var out: Rml.array.ArrayUnmanaged = .{};
+            var out: Obj(Rml.Array) = try .wrap(rml, getOrigin(self), .{.allocator = rml.blobAllocator()});
 
             while (it.next()) |entry| {
-                var pair: Rml.array.ArrayUnmanaged = .{};
+                var pair: Obj(Rml.Array) = try .wrap(rml, getOrigin(self), try .create(rml.blobAllocator(), &.{
+                    entry.key_ptr.typeErase(),
+                    entry.value_ptr.typeErase(),
+                }));
 
-                try pair.append(rml, entry.key_ptr.typeErase());
-                try pair.append(rml, entry.value_ptr.typeErase());
-
-                try out.append(rml, (try Obj(Rml.Array).wrap(rml, entry.key_ptr.getOrigin(), .{ .unmanaged = pair })).typeErase());
+                try out.data.append(pair.typeErase());
             }
 
             return out;

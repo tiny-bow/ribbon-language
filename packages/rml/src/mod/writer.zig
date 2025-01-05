@@ -22,7 +22,7 @@ pub const Writer = struct {
         return Writer { .native = native_writer };
     }
 
-    pub fn onCompare(self: ptr(Writer), other: Object) Ordering {
+    pub fn onCompare(self: *Writer, other: Object) Ordering {
         var ord = Rml.compare(getHeader(self).type_id, other.getTypeId());
         if (ord == .Equal) {
             ord = Rml.compare(self.native, forceObj(Writer, other).data.native);
@@ -30,19 +30,19 @@ pub const Writer = struct {
         return ord;
     }
 
-    pub fn onFormat(self: ptr(Writer), writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *Writer, writer: std.io.AnyWriter) anyerror! void {
         try writer.print("{}", .{self.native});
     }
 
-    pub fn print(self: ptr(Writer), comptime fmt: []const u8, args: anytype) Error! void {
+    pub fn print(self: *Writer, comptime fmt: []const u8, args: anytype) Error! void {
         return self.native.print(fmt, args) catch |err| return Rml.errorCast(err);
     }
 
-    pub fn write(self: ptr(Writer), val: []const u8) Error! usize {
+    pub fn write(self: *Writer, val: []const u8) Error! usize {
         return self.native.write(val) catch |err| return Rml.errorCast(err);
     }
 
-    pub fn writeAll(self: ptr(Writer), val: []const u8) Error! void {
+    pub fn writeAll(self: *Writer, val: []const u8) Error! void {
         return self.native.writeAll(val) catch |err| return Rml.errorCast(err);
     }
 };

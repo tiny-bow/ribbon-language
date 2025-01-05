@@ -26,11 +26,11 @@ const upgradeCast = Rml.upgradeCast;
 pub const Cell = struct {
     value: Object,
 
-    pub fn set(self: ptr(Cell), value: Object) void {
+    pub fn set(self: *Cell, value: Object) void {
         self.value = value;
     }
 
-    pub fn get(self: ptr(Cell)) Object {
+    pub fn get(self: *Cell) Object {
         return self.value;
     }
 };

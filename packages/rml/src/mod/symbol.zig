@@ -20,7 +20,7 @@ pub const Symbol = struct {
         return .{ .str = try rml.storage.intern(str) };
     }
 
-    pub fn onCompare(self: ptr(Symbol), other: Object) Ordering {
+    pub fn onCompare(self: *Symbol, other: Object) Ordering {
         var ord = Rml.compare(getHeader(self).type_id, other.getTypeId());
 
         if (ord == .Equal) {
@@ -35,12 +35,12 @@ pub const Symbol = struct {
         return ord;
     }
 
-    pub fn onFormat(self: ptr(Symbol), writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *Symbol, writer: std.io.AnyWriter) anyerror! void {
         // TODO: escape non-ascii & control etc chars
         try writer.print("{s}", .{self.str});
     }
 
-    pub fn text(self: ptr(Symbol)) Rml.str {
+    pub fn text(self: *Symbol) Rml.str {
         return self.str;
     }
 };

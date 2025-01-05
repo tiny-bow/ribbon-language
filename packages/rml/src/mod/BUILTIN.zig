@@ -24,7 +24,7 @@ const coerceBool = Rml.coerceBool;
 /// import a namespace into the current environment
 pub const import = Rml.Procedure {
     .native_macro = &struct {
-        pub fn fun(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+        pub fn fun(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
             if (args.len != 1) try interpreter.abort(origin, error.InvalidArgumentCount, "expected 1 argument, found {}", .{args.len});
 
             const namespaceSym = try interpreter.castObj(Rml.Symbol, args[0]);
@@ -35,7 +35,7 @@ pub const import = Rml.Procedure {
 
             const env = try interpreter.castObj(Rml.Env, namespace);
 
-            const localEnv: ptr(Rml.Env) = interpreter.evaluation_env.data;
+            const localEnv: *Rml.Env = interpreter.evaluation_env.data;
 
             var it = env.data.table.iter();
             while (it.next()) |entry| {
@@ -56,7 +56,7 @@ pub const import = Rml.Procedure {
 /// Create a global variable binding
 pub const global = Rml.Procedure {
     .native_macro = &struct {
-        pub fn fun (interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+        pub fn fun (interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
             Rml.interpreter.evaluation.debug("global {}: {any}", .{origin, args});
 
             if (args.len < 1)
@@ -119,7 +119,7 @@ pub const global = Rml.Procedure {
                             break :obj try interpreter.runProgram(
                                 origin,
                                 bod.data.kind == .paren,
-                                bod.data.array.items(),
+                                bod.data.items(),
                             );
                         }
                     }
@@ -165,7 +165,7 @@ pub const global = Rml.Procedure {
 /// Create a local variable binding
 pub const local = Rml.Procedure {
     .native_macro = &struct {
-        pub fn fun(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+        pub fn fun(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
             Rml.interpreter.evaluation.debug("local {}: {any}", .{origin, args});
 
             if (args.len < 1)
@@ -228,7 +228,7 @@ pub const local = Rml.Procedure {
                             break :obj try interpreter.runProgram(
                                 origin,
                                 bod.data.kind == .paren,
-                                bod.data.array.items(),
+                                bod.data.items(),
                             );
                         }
                     }
@@ -260,7 +260,7 @@ pub const local = Rml.Procedure {
 
                 Rml.interpreter.evaluation.debug("setting local variable {} = {}", .{ sym, val });
 
-                try interpreter.evaluation_env.data.rebind(sym, val);
+                try interpreter.evaluation_env.data.set(sym, val);
             }
 
             return nilObj.typeErase();
@@ -271,7 +271,7 @@ pub const local = Rml.Procedure {
 /// Set the value of a variable associated with an existing binding in the current environment
 pub const @"set!" = Rml.Procedure {
     .native_macro = &struct {
-        pub fn fun (interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+        pub fn fun (interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
             const sym = Rml.castObj(Rml.Symbol, args[0])
                 orelse try interpreter.abort(origin, error.TypeError,
                     "expected symbol, found {s}", .{TypeId.name(args[0].getTypeId())});
@@ -289,14 +289,14 @@ pub const @"set!" = Rml.Procedure {
 /// Create a function closure
 pub const fun = Rml.Procedure {
     .native_macro = &struct {
-        pub fn fun(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
-            Rml.interpreter.evaluation.debug("fun {}: {any}", .{origin, args});
+        pub fn fun(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
+            Rml.parser.parsing.debug("fun {}: {any}", .{origin, args});
 
             if (args.len == 0) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
 
             const rml = getRml(interpreter);
 
-            var cases: Rml.array.TypedArrayUnmanaged(Rml.procedure.Case) = .{};
+            var cases: std.ArrayListUnmanaged(Rml.procedure.Case) = .{};
 
             if (args.len == 1) {
                 Rml.parser.parsing.debug("case fun", .{});
@@ -312,25 +312,26 @@ pub const fun = Rml.Procedure {
                 }
 
                 if (isCases) {
-                    for (caseSet.data.array.items()) |case| {
+                    Rml.parser.parsing.debug("isCases {any}", .{caseSet.data.array.items});
+                    for (caseSet.data.array.items) |case| {
                         Rml.parser.parsing.debug("case {}", .{case});
                         const caseBlock = try interpreter.castObj(Rml.Block, case);
 
-                        const c = try Rml.procedure.Case.parse(interpreter, caseBlock.getOrigin(), caseBlock.data.array.items());
+                        const c = try Rml.procedure.Case.parse(interpreter, caseBlock.getOrigin(), caseBlock.data.array.items);
 
-                        try cases.append(rml, c);
+                        try cases.append(rml.blobAllocator(), c);
                     }
                 } else {
-                    Rml.parser.parsing.debug("fun single case: {any}", .{caseSet.data.array.items()});
-                    const c = try Rml.procedure.Case.parse(interpreter, caseSet.getOrigin(), caseSet.data.array.items());
+                    Rml.parser.parsing.debug("fun single case: {any}", .{caseSet.data.array.items});
+                    const c = try Rml.procedure.Case.parse(interpreter, caseSet.getOrigin(), caseSet.data.array.items);
 
-                    try cases.append(rml, c);
+                    try cases.append(rml.blobAllocator(), c);
                 }
             } else {
                 Rml.parser.parsing.debug("fun single case: {any}", .{args});
                 const c = try Rml.procedure.Case.parse(interpreter, origin, args);
 
-                try cases.append(rml, c);
+                try cases.append(rml.blobAllocator(), c);
             }
 
             const env = try interpreter.evaluation_env.data.clone(origin);
@@ -352,14 +353,14 @@ pub const fun = Rml.Procedure {
 /// Create a macro closure
 pub const macro = Rml.Procedure {
     .native_macro = &struct {
-        pub fn fun(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+        pub fn fun(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
             Rml.interpreter.evaluation.debug("macro {}: {any}", .{origin, args});
 
             if (args.len == 0) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
 
             const rml = getRml(interpreter);
 
-            var cases: Rml.array.TypedArrayUnmanaged(Rml.procedure.Case) = .{};
+            var cases: std.ArrayListUnmanaged(Rml.procedure.Case) = .{};
 
             if (args.len == 1) {
                 Rml.interpreter.evaluation.debug("case macro", .{});
@@ -375,24 +376,26 @@ pub const macro = Rml.Procedure {
                 }
 
                 if (isCases) {
-                    for (caseSet.data.array.items()) |case| {
+                    Rml.interpreter.evaluation.debug("isCases {}", .{isCases});
+                    for (caseSet.data.array.items) |case| {
                         Rml.interpreter.evaluation.debug("case {}", .{case});
                         const caseBlock = try interpreter.castObj(Rml.Block, case);
 
-                        const c = try Rml.procedure.Case.parse(interpreter, origin, caseBlock.data.array.items());
+                        const c = try Rml.procedure.Case.parse(interpreter, origin, caseBlock.data.array.items);
 
-                        try cases.append(rml, c);
+                        try cases.append(rml.blobAllocator(), c);
                     }
                 } else {
-                    Rml.interpreter.evaluation.debug("macro single case: {any}", .{caseSet.data.array.items()});
-                    const c = try Rml.procedure.Case.parse(interpreter, origin, caseSet.data.array.items());
+                    Rml.interpreter.evaluation.debug("isCases {}", .{isCases});
+                    Rml.interpreter.evaluation.debug("macro single case: {any}", .{caseSet.data.array.items});
+                    const c = try Rml.procedure.Case.parse(interpreter, origin, caseSet.data.array.items);
 
-                    try cases.append(rml, c);
+                    try cases.append(rml.blobAllocator(), c);
                 }
             } else {
                 Rml.interpreter.evaluation.debug("macro single case: {any}", .{args});
                 const c = try Rml.procedure.Case.parse(interpreter, origin, args);
-                try cases.append(rml, c);
+                try cases.append(rml.blobAllocator(), c);
             }
 
             const env = try interpreter.evaluation_env.data.clone(origin);
@@ -410,7 +413,7 @@ pub const macro = Rml.Procedure {
 };
 
 /// Print any number of arguments followed by a new line
-pub fn @"print-ln"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn @"print-ln"(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     const rml = getRml(interpreter);
 
     const stdout = std.io.getStdOut();
@@ -428,7 +431,7 @@ pub fn @"print-ln"(interpreter: ptr(Interpreter), origin: Origin, args: []const 
 
 
 /// Print any number of arguments
-pub fn print(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn print(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     const rml = getRml(interpreter);
 
     const stdout = std.io.getStdOut();
@@ -446,7 +449,7 @@ pub fn print(interpreter: ptr(Interpreter), origin: Origin, args: []const Object
 pub const add = @"+";
 /// Sum any number of arguments of type `int | float | char`;
 /// if only one argument is provided, return the argument's absolute value
-pub fn @"+"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn @"+"(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len == 0) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
 
     var sum: Object = args[0];
@@ -476,7 +479,7 @@ pub fn @"+"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object)
 pub const sub = @"-";
 /// Subtract any number of arguments of type `int | float | char`;
 /// if only one argument is provided, return the argument's negative value
-pub fn @"-"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn @"-"(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len == 0) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
 
     var sum: Object = args[0];
@@ -505,7 +508,7 @@ pub fn @"-"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object)
 pub const div = @"/";
 /// Divide any number of arguments of type `int | float | char`;
 /// it is an error to provide less than two arguments
-pub fn @"/"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn @"/"(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
     var sum: Object = args[0];
@@ -522,7 +525,7 @@ pub fn @"/"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object)
 pub const mul = @"*";
 /// Multiply any number of arguments of type `int | float | char`;
 /// it is an error to provide less than two arguments
-pub fn @"*"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn @"*"(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
     var sum: Object = args[0];
@@ -537,7 +540,7 @@ pub fn @"*"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object)
 
 /// remainder division on any number of arguments of type `int | float | char`;
 /// it is an error to provide less than two arguments
-pub fn @"rem"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn @"rem"(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
     var sum: Object = args[0];
@@ -552,7 +555,7 @@ pub fn @"rem"(interpreter: ptr(Interpreter), origin: Origin, args: []const Objec
 
 /// exponentiation on any number of arguments of type `int | float | char`;
 /// it is an error to provide less than two arguments
-pub fn pow(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn pow(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
     var sum: Object = args[0];
@@ -566,7 +569,7 @@ pub fn pow(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) 
 
 
 /// bitwise NOT on an argument of type `int | char`
-pub fn @"bit-not"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn @"bit-not"(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len != 1) try interpreter.abort(origin, error.InvalidArgumentCount, "expected 1 argument, found {}", .{args.len});
 
     if (castObj(Int, args[0])) |i| {
@@ -581,7 +584,7 @@ pub fn @"bit-not"(interpreter: ptr(Interpreter), origin: Origin, args: []const O
 
 /// bitwise AND on any number of arguments of type `int | char`;
 /// it is an error to provide less than two arguments
-pub fn @"bit-and"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn @"bit-and"(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
     var sum: Object = args[0];
@@ -594,7 +597,7 @@ pub fn @"bit-and"(interpreter: ptr(Interpreter), origin: Origin, args: []const O
 
 /// bitwise OR on any number of arguments of type `int | char`;
 /// it is an error to provide less than two arguments
-pub fn @"bit-or"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn @"bit-or"(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
     var sum: Object = args[0];
@@ -607,7 +610,7 @@ pub fn @"bit-or"(interpreter: ptr(Interpreter), origin: Origin, args: []const Ob
 
 /// bitwise XOR on any number of arguments of type `int | char`;
 /// it is an error to provide less than two arguments
-pub fn @"bit-xor"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn @"bit-xor"(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
 
     var sum: Object = args[0];
@@ -620,7 +623,7 @@ pub fn @"bit-xor"(interpreter: ptr(Interpreter), origin: Origin, args: []const O
 
 
 /// coerce an argument to type `bool`
-pub fn @"truthy?"(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn @"truthy?"(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len != 1) {
         try interpreter.abort(origin, error.InvalidArgumentCount, "expected 1 argument, found {}", .{args.len});
     }
@@ -629,7 +632,7 @@ pub fn @"truthy?"(interpreter: ptr(Interpreter), origin: Origin, args: []const O
 }
 
 /// logical NOT on an argument coerced to type `bool`
-pub fn not(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+pub fn not(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
     if (args.len != 1) {
         try interpreter.abort(origin, error.InvalidArgumentCount, "expected 1 argument, found {}", .{args.len});
     }
@@ -641,7 +644,7 @@ pub fn not(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) 
 /// returns the last succeeding argument or nil
 pub const @"and" = Rml.Procedure {
     .native_macro = &struct{
-        pub fn fun(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+        pub fn fun(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
             if (args.len == 0) return (try Obj(Rml.Nil).wrap(getRml(interpreter), origin, .{})).typeErase();
 
             var a = try interpreter.eval(args[0]);
@@ -667,7 +670,7 @@ pub const @"and" = Rml.Procedure {
 /// returns the first succeeding argument or nil
 pub const @"or" = Rml.Procedure {
     .native_macro = &struct{
-        pub fn fun(interpreter: ptr(Interpreter), origin: Origin, args: []const Object) Result! Object {
+        pub fn fun(interpreter: *Interpreter, origin: Origin, args: []const Object) Result! Object {
             for (args[0..]) |aN| {
                 const a = try interpreter.eval(aN);
 
@@ -681,7 +684,7 @@ pub const @"or" = Rml.Procedure {
 
 
 fn arithCastReduce(
-    interpreter: ptr(Interpreter),
+    interpreter: *Interpreter,
     origin: Origin, acc: *Object, args: []const Object,
     comptime Ops: type,
 ) Result! Object {

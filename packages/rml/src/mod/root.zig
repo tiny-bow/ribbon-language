@@ -38,11 +38,11 @@ pub const symbol = @import("symbol.zig");
 pub const writer = @import("writer.zig");
 
 pub const Nil = extern struct {
-    pub fn onFormat(_: ptr(Nil), w: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(_: *Nil, w: std.io.AnyWriter) anyerror! void {
         return w.print("nil", .{});
     }
 
-    pub fn onCompare(_: ptr(Nil), other: Object) Ordering {
+    pub fn onCompare(_: *Nil, other: Object) Ordering {
         return Rml.compare(TypeId.of(Nil), other.getTypeId());
     }
 };
@@ -79,8 +79,6 @@ pub const Map = map.Map;
 
 pub const NativeFunction = bindgen.NativeFunction;
 pub const Origin = source.Origin;
-pub const ptr = object.ptr;
-pub const const_ptr = object.const_ptr;
 pub const Obj = object.Obj;
 pub const ObjData = object.ObjData;
 pub const Object = object.Object;
@@ -278,12 +276,12 @@ pub fn expectedOutput(self: *Rml, comptime fmt: []const u8, args: anytype) void 
 
 
 pub fn beginBlob(self: *Rml) void {
-    log.info("beginBlob", .{});
+    log.debug("beginBlob", .{});
     self.storage.beginBlob();
 }
 
 pub fn endBlob(self: *Rml) Storage.Blob {
-    log.info("endBlob", .{});
+    log.debug("endBlob", .{});
     return self.storage.endBlob();
 }
 

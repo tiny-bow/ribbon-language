@@ -55,12 +55,12 @@ pub const Quote = struct {
     kind: QuoteKind,
     body: Object,
 
-    pub fn onInit(self: ptr(Quote), kind: QuoteKind, body: Object) void {
+    pub fn onInit(self: *Quote, kind: QuoteKind, body: Object) void {
         self.kind = kind;
         self.body = body;
     }
 
-    pub fn onCompare(self: ptr(Quote), other: Object) Ordering {
+    pub fn onCompare(self: *Quote, other: Object) Ordering {
         var ord = Rml.compare(getTypeId(self), other.getTypeId());
 
         if (ord == .Equal) {
@@ -76,12 +76,12 @@ pub const Quote = struct {
         return ord;
     }
 
-    pub fn onFormat(self: ptr(Quote), writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *Quote, writer: std.io.AnyWriter) anyerror! void {
         try writer.writeAll(self.kind.toStr());
         try self.body.onFormat(writer);
     }
 
-    pub fn run(self: ptr(Quote), interpreter: ptr(Interpreter)) Rml.Result! Object {
+    pub fn run(self: *Quote, interpreter: *Interpreter) Rml.Result! Object {
         switch (self.kind) {
             .basic => {
                 Rml.interpreter.evaluation.debug("evaluating basic quote {}", .{self});
@@ -109,7 +109,7 @@ pub const Quote = struct {
 };
 
 
-pub fn runQuasi(interpreter: ptr(Interpreter), body: Object, out: ?*Rml.array.ArrayUnmanaged) Rml.Result! Object {
+pub fn runQuasi(interpreter: *Interpreter, body: Object, out: ?*std.ArrayListUnmanaged(Object)) Rml.Result! Object {
     const rml = getRml(interpreter);
 
     if (Rml.castObj(Quote, body)) |quote| quote: {
@@ -141,22 +141,22 @@ pub fn runQuasi(interpreter: ptr(Interpreter), body: Object, out: ?*Rml.array.Ar
                         "unquote-splice expects an array-like, got {s}: {}", .{Rml.TypeId.name(ranBody.getTypeId()), ranBody});
 
                 for (arrBody.data.items()) |item| {
-                    try outArr.append(rml, item);
+                    try outArr.append(rml.blobAllocator(), item);
                 }
 
                 return (try Obj(Rml.Nil).wrap(rml, origin, .{})).typeErase();
             }
         }
     } else if (Rml.castObj(Rml.Block, body)) |block| {
-        var subOut: Rml.array.ArrayUnmanaged = .{};
+        var subOut: std.ArrayListUnmanaged(Object) = .{};
 
-        for (block.data.array.items()) |item| {
-            const len = subOut.length();
+        for (block.data.array.items) |item| {
+            const len = subOut.items.len;
 
             const ranItem = try runQuasi(interpreter, item, &subOut);
 
             // don't append if its the nil from unquote-splice
-            if (len == subOut.length()) try subOut.append(rml, ranItem)
+            if (len == subOut.items.len) try subOut.append(rml.blobAllocator(), ranItem)
             else {
                 std.debug.assert(Rml.isType(Rml.Nil, ranItem));
             }

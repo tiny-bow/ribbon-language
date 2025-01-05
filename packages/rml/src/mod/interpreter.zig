@@ -45,27 +45,27 @@ pub const Interpreter = struct {
         return .{.evaluation_env = try Obj(Env).wrap(rml, try .fromStr(rml, "system"), .{})};
     }
 
-    pub fn onCompare(a: ptr(Interpreter), other: Object) Ordering {
+    pub fn onCompare(a: *Interpreter, other: Object) Ordering {
         return Rml.compare(@intFromPtr(a), @intFromPtr(other.data));
     }
 
-    pub fn onFormat(self: ptr(Interpreter), writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *Interpreter, writer: std.io.AnyWriter) anyerror! void {
         return writer.print("Obj(Interpreter){x}", .{@intFromPtr(self)});
     }
 
-    pub fn reset(self: ptr(Interpreter)) OOM! void {
+    pub fn reset(self: *Interpreter) OOM! void {
         const rml = getRml(self);
         self.evaluation_env = try Obj(Env).wrap(rml, getHeader(self).origin, .{});
     }
 
-    pub fn castObj(self: ptr(Interpreter), comptime T: type, object: Object) Error! Obj(T) {
+    pub fn castObj(self: *Interpreter, comptime T: type, object: Object) Error! Obj(T) {
         if (Rml.castObj(T, object)) |x| return x
         else {
             try self.abort(object.getOrigin(), error.TypeError, "expected `{s}`, got `{s}`", .{@typeName(T), Rml.TypeId.name(object.getTypeId())});
         }
     }
 
-    pub fn abort(self: ptr(Interpreter), origin: Origin, err: Error, comptime fmt: []const u8, args: anytype) Error! noreturn {
+    pub fn abort(self: *Interpreter, origin: Origin, err: Error, comptime fmt: []const u8, args: anytype) Error! noreturn {
         const diagnostic = getRml(self).diagnostic orelse return err;
 
         var diag = Rml.Diagnostic {
@@ -85,26 +85,24 @@ pub const Interpreter = struct {
         return err;
     }
 
-    pub fn eval(self: ptr(Interpreter), expr: Object) Result! Object {
+    pub fn eval(self: *Interpreter, expr: Object) Result! Object {
         var offset: usize = 0;
         return self.evalCheck(expr.getOrigin(), false, &.{expr}, &offset, null);
     }
 
-    pub fn evalAll(self: ptr(Interpreter), exprs: []const Object) Result! Rml.array.ArrayUnmanaged {
-        const rml = getRml(self);
-
-        var results: Rml.array.ArrayUnmanaged = .{};
+    pub fn evalAll(self: *Interpreter, exprs: []const Object) Result! []Object {
+        var results: std.ArrayListUnmanaged(Object) = .{};
 
         for (exprs) |expr| {
             const value = try self.eval(expr);
 
-            try results.append(rml, value);
+            try results.append(getRml(self).blobAllocator(), value);
         }
 
-        return results;
+        return results.items;
     }
 
-    pub fn evalCheck(self: ptr(Interpreter), origin: Origin, shouldInvoke: bool, program: []const Object, offset: *usize, workDone: ?*bool) Result! Object {
+    pub fn evalCheck(self: *Interpreter, origin: Origin, shouldInvoke: bool, program: []const Object, offset: *usize, workDone: ?*bool) Result! Object {
         evaluation.debug("evalCheck {}:{any} @ {}", .{origin, program, offset.*});
 
         const expr = if (offset.* < program.len) expr: {
@@ -124,7 +122,7 @@ pub const Interpreter = struct {
                     try self.abort(origin, error.UnboundSymbol, "no symbol `{s}` in evaluation environment", .{symbol});
                 };
             } else if (Rml.castObj(Block, expr)) |block| {
-                if (block.data.array.length() == 0) {
+                if (block.data.length() == 0) {
                     evaluation.debug("empty block", .{});
                     break :value expr;
                 }
@@ -155,12 +153,12 @@ pub const Interpreter = struct {
         }
     }
 
-    pub fn lookup(self: ptr(Interpreter), symbol: Obj(Symbol)) ?Object {
+    pub fn lookup(self: *Interpreter, symbol: Obj(Symbol)) ?Object {
         return self.evaluation_env.data.get(symbol)
         orelse getRml(self).global_env.data.get(symbol);
     }
 
-    pub fn runProgram(self: ptr(Interpreter), origin: Origin, shouldInvoke: bool, program: []const Object) Result! Object {
+    pub fn runProgram(self: *Interpreter, origin: Origin, shouldInvoke: bool, program: []const Object) Result! Object {
         evaluation.debug("runProgram {}:{any}", .{origin, program});
 
 
@@ -180,7 +178,7 @@ pub const Interpreter = struct {
         return last;
     }
 
-    pub fn invoke(self: ptr(Interpreter), callOrigin: Origin, blame: Object, callable: Object, args: []const Object) Result! Object {
+    pub fn invoke(self: *Interpreter, callOrigin: Origin, blame: Object, callable: Object, args: []const Object) Result! Object {
         if (Rml.castObj(Rml.procedure.Procedure, callable)) |procedure| {
             return procedure.data.call(self, callOrigin, blame, args);
         } else {

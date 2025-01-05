@@ -31,7 +31,7 @@ pub const Domain = Rml.set.TypedSetUnmanaged(Symbol);
 pub const Env = struct {
     table: Rml.map.TypedMapUnmanaged(Rml.Symbol, Rml.Cell) = .{},
 
-    pub fn onCompare(a: ptr(Env), other: Object) Ordering {
+    pub fn onCompare(a: *Env, other: Object) Ordering {
         var ord = Rml.compare(getTypeId(a), other.getTypeId());
 
         if (ord == .Equal) {
@@ -42,11 +42,11 @@ pub const Env = struct {
         return ord;
     }
 
-    pub fn onFormat(self: ptr(Env), writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *Env, writer: std.io.AnyWriter) anyerror! void {
         return writer.print("{}", .{self.table});
     }
 
-    pub fn clone(self: ptr(Env), origin: ?Origin) OOM! Obj(Env) {
+    pub fn clone(self: *Env, origin: ?Origin) OOM! Obj(Env) {
         const table = try self.table.clone(getRml(self));
 
         return try .wrap(getRml(self), origin orelse Rml.getOrigin(self), .{.table = table});
@@ -58,7 +58,7 @@ pub const Env = struct {
     ///
     /// Returns an error if:
     /// * Rml is out of memory
-    pub fn rebind(self: ptr(Env), key: Obj(Symbol), val: Object) OOM! void {
+    pub fn rebind(self: *Env, key: Obj(Symbol), val: Object) OOM! void {
         const cell = try Obj(Rml.Cell).wrap(getRml(self), key.getOrigin(), .{.value = val});
 
         try self.table.set(getRml(self), key, cell);
@@ -69,7 +69,7 @@ pub const Env = struct {
     /// Returns an error if:
     /// * a value with the same name was already declared in this scope
     /// * Rml is out of memory
-    pub fn bind(self: ptr(Env), key: Obj(Symbol), val: Object) (OOM || SymbolAlreadyBound)! void {
+    pub fn bind(self: *Env, key: Obj(Symbol), val: Object) (OOM || SymbolAlreadyBound)! void {
         if (self.contains(key)) return error.SymbolAlreadyBound;
 
         return self.rebind(key, val);
@@ -79,14 +79,14 @@ pub const Env = struct {
     ///
     /// Returns an error if:
     /// * binding does not exist in this env
-    pub fn set(self: ptr(Env), key: Obj(Symbol), val: Object) UnboundSymbol! void {
+    pub fn set(self: *Env, key: Obj(Symbol), val: Object) UnboundSymbol! void {
         return if (self.table.native_map.getEntry(key)) |entry| {
             entry.value_ptr.data.set(val);
         } else error.UnboundSymbol;
     }
 
     /// Find the value bound to a symbol in the env
-    pub fn get(self: ptr(Env), key: Obj(Symbol)) ?Object {
+    pub fn get(self: *Env, key: Obj(Symbol)) ?Object {
         if (self.table.native_map.getEntry(key)) |entry| {
             return entry.value_ptr.data.get();
         }
@@ -95,29 +95,29 @@ pub const Env = struct {
     }
 
     /// Returns the number of bindings in the env
-    pub fn length(self: ptr(Env)) usize {
+    pub fn length(self: *Env) usize {
         return self.table.length();
     }
 
     /// Check whether a key is bound in the env
-    pub fn contains(self: ptr(Env), key: Obj(Symbol)) bool {
+    pub fn contains(self: *Env, key: Obj(Symbol)) bool {
         return self.table.contains(key);
     }
 
     /// Get a slice of the local keys of this Env
-    pub fn keys(self: ptr(Env)) []Obj(Symbol) {
+    pub fn keys(self: *Env) []Obj(Symbol) {
         return self.table.keys();
     }
 
 
-    pub fn copyFromEnv(self: ptr(Env), other: ptr(Env)) (OOM || SymbolAlreadyBound)! void {
+    pub fn copyFromEnv(self: *Env, other: *Env) (OOM || SymbolAlreadyBound)! void {
         var it = other.table.iter();
         while (it.next()) |entry| {
             try self.rebindCell(entry.key_ptr.*, entry.value_ptr.*);
         }
     }
 
-    pub fn copyFromTable(self: ptr(Env), table: *const Rml.map.TableUnmanaged) (OOM || SymbolAlreadyBound)! void {
+    pub fn copyFromTable(self: *Env, table: *const Rml.map.TableUnmanaged) (OOM || SymbolAlreadyBound)! void {
         var it = table.iter();
         while (it.next()) |entry| {
             try self.rebind(entry.key_ptr.*, entry.value_ptr.*);
@@ -130,7 +130,7 @@ pub const Env = struct {
     ///
     /// Returns an error if:
     /// * Rml is out of memory
-    pub fn rebindCell(self: ptr(Env), key: Obj(Symbol), cell: Obj(Rml.Cell)) OOM! void {
+    pub fn rebindCell(self: *Env, key: Obj(Symbol), cell: Obj(Rml.Cell)) OOM! void {
         try self.table.set(getRml(self), key, cell);
     }
 
@@ -139,13 +139,13 @@ pub const Env = struct {
     /// Returns an error if:
     /// * a value with the same name was already declared in this scope
     /// * Rml is out of memory
-    pub fn bindCell(self: ptr(Env), key: Obj(Symbol), cell: Obj(Rml.Cell)) (OOM || SymbolAlreadyBound)! void {
+    pub fn bindCell(self: *Env, key: Obj(Symbol), cell: Obj(Rml.Cell)) (OOM || SymbolAlreadyBound)! void {
         if (self.contains(key)) return error.SymbolAlreadyBound;
 
         try self.table.set(getRml(self), key, cell);
     }
 
-    pub fn bindNamespace(self: ptr(Env), namespace: anytype) OOM! void {
+    pub fn bindNamespace(self: *Env, namespace: anytype) OOM! void {
         const T = @TypeOf(namespace);
         const rml = getRml(self);
         const origin = Origin.fromComptimeStr("builtin-" ++ @typeName(T));

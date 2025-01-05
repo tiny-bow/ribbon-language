@@ -22,8 +22,6 @@ const Origin = Rml.Origin;
 pub const OBJ_ALIGN = 16;
 
 pub const ObjData = extern struct { data: u8 align(OBJ_ALIGN) };
-pub fn ptr(comptime T: type) type { return *align(OBJ_ALIGN) T; }
-pub fn const_ptr(comptime T: type) type { return *const align(OBJ_ALIGN) T; }
 
 pub const PropertySet = map.MapUnmanaged;
 
@@ -35,7 +33,7 @@ pub const Header = struct {
     origin: Origin,
     properties: PropertySet,
 
-    pub fn onInit(self: ptr(Header), comptime T: type, rml: *Rml, origin: Origin) void {
+    pub fn onInit(self: *Header, comptime T: type, rml: *Rml, origin: Origin) void {
         self.* = Header {
             .rml = rml,
             .blob_id = rml.blobId(),
@@ -46,24 +44,24 @@ pub const Header = struct {
         };
     }
 
-    pub fn onCompare(self: ptr(Header), other: ptr(Header)) Ordering {
+    pub fn onCompare(self: *Header, other: *Header) Ordering {
         const obj = other.getObject();
         return self.vtable.onCompare(self, obj);
     }
 
-    pub fn onFormat(self: ptr(Header), writer: std.io.AnyWriter) Error! void {
+    pub fn onFormat(self: *Header, writer: std.io.AnyWriter) Error! void {
         return self.vtable.onFormat(self, writer) catch |err| Rml.errorCast(err);
     }
 
-    pub fn getObject(self: ptr(Header)) Object {
+    pub fn getObject(self: *Header) Object {
         return getObj(self.getData());
     }
 
-    pub fn getObjMemory(self: ptr(Header)) *ObjMemory(ObjData) {
-        return @fieldParentPtr("header", @as(ptr(TypeUtils.ToBytes(Header)), @ptrCast(self)));
+    pub fn getObjMemory(self: *Header) *ObjMemory(ObjData) {
+        return @alignCast(@fieldParentPtr("header", @as(*TypeUtils.ToBytes(Header), @ptrCast(self))));
     }
 
-    pub fn getData(self: ptr(Header)) ptr(ObjData) {
+    pub fn getData(self: *Header) *ObjData {
         return self.getObjMemory().getData();
     }
 };
@@ -76,8 +74,8 @@ pub const VTable = struct {
     pub const ObjMemoryFunctions = struct { };
 
     pub const ObjDataFunctions = struct {
-        onCompare: ?*const fn (const_ptr(ObjData), Rml.Object) Ordering = null,
-        onFormat: ?*const fn (const_ptr(ObjData), std.io.AnyWriter) anyerror! void = null,
+        onCompare: ?*const fn (*const ObjData, Rml.Object) Ordering = null,
+        onFormat: ?*const fn (*const ObjData, std.io.AnyWriter) anyerror! void = null,
     };
 
     pub fn of(comptime T: type) *const VTable {
@@ -144,13 +142,13 @@ pub const VTable = struct {
         return &x.vtable;
     }
 
-    pub fn onCompare(self: *const VTable, header: ptr(Header), other: Object) Ordering {
+    pub fn onCompare(self: *const VTable, header: *Header, other: Object) Ordering {
         const data = header.getData();
         dispatch.debug("VTable/onCompare {s}", .{TypeId.name(header.type_id)});
         return self.obj_data.onCompare.?(data, other);
     }
 
-    pub fn onFormat(self: *const VTable, header: ptr(Header), writer: std.io.AnyWriter) Error! void {
+    pub fn onFormat(self: *const VTable, header: *Header, writer: std.io.AnyWriter) Error! void {
         const data = header.getData();
         // too noisy
         // dispatch.debug("VTable/onFormat {s}", .{TypeId.name(header.type_id)});
@@ -172,7 +170,7 @@ pub fn ObjMemory (comptime T: type) type {
             self.data = std.mem.toBytes(data);
         }
 
-        pub fn getHeader(self: *Self) ptr(Header) {
+        pub fn getHeader(self: *Self) *Header {
             return @ptrCast(&self.header);
         }
 
@@ -180,7 +178,7 @@ pub fn ObjMemory (comptime T: type) type {
             return self.getHeader().type_id;
         }
 
-        pub fn getData(self: ptr(Self)) ptr(T) {
+        pub fn getData(self: *Self) *T {
             return @ptrCast(&self.data);
         }
     };
@@ -200,7 +198,7 @@ pub fn Obj(comptime T: type) type {
     return struct {
         const Self = @This();
 
-        data: ptr(T),
+        data: *T,
 
         pub fn typeErase(self: Self) Object {
             return .{ .data = @alignCast(@ptrCast(self.data)) };
@@ -225,10 +223,10 @@ pub fn Obj(comptime T: type) type {
         }
 
         pub fn getMemory(self: Self) *ObjMemory(T) {
-            return @fieldParentPtr("data", @as(ptr(TypeUtils.ToBytes(T)), @ptrCast(self.data)));
+            return @alignCast(@fieldParentPtr("data", @as(*TypeUtils.ToBytes(T), @ptrCast(self.data))));
         }
 
-        pub fn getHeader(self: Self) ptr(Header) {
+        pub fn getHeader(self: Self) *Header {
             return @ptrCast(&getMemory(self).header);
         }
 
@@ -255,10 +253,10 @@ pub fn Obj(comptime T: type) type {
 }
 
 pub fn getObj(p: anytype) Obj(@typeInfo(@TypeOf(p)).pointer.child) {
-    return Obj(@typeInfo(@TypeOf(p)).pointer.child) { .data = p };
+    return Obj(@typeInfo(@TypeOf(p)).pointer.child) { .data = @constCast(p) };
 }
 
-pub fn getHeader(p: anytype) ptr(Header) {
+pub fn getHeader(p: anytype) *Header {
     return getObj(p).getHeader();
 }
 

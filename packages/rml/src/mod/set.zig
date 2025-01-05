@@ -27,7 +27,7 @@ pub fn TypedSet (comptime K: type) type {
         unmanaged: TypedSetUnmanaged (K) = .{},
 
 
-        pub fn onCompare(a: ptr(Self), other: Object) Ordering {
+        pub fn onCompare(a: *Self, other: Object) Ordering {
             var ord = Rml.compare(getTypeId(a), other.getTypeId());
             if (ord == .Equal) {
                 const b = forceObj(Self, other);
@@ -37,33 +37,33 @@ pub fn TypedSet (comptime K: type) type {
             return ord;
         }
 
-        pub fn onFormat(self: const_ptr(Self), writer: std.io.AnyWriter) anyerror! void {
+        pub fn onFormat(self: *const Self, writer: std.io.AnyWriter) anyerror! void {
             return writer.print("{}", .{self.unmanaged});
         }
 
         /// Set a key
-        pub fn set(self: ptr(Self), key: Obj(K)) OOM! void {
+        pub fn set(self: *Self, key: Obj(K)) OOM! void {
             return self.unmanaged.set(getRml(self), key);
         }
 
         /// Find a local copy matching a key
-        pub fn get(self: ptr(Self), key: Obj(K)) ?Obj(K) {
+        pub fn get(self: *Self, key: Obj(K)) ?Obj(K) {
             return self.unmanaged.get(key);
         }
 
         /// Returns the number of key-value pairs in the map
-        pub fn length(self: ptr(Self)) usize {
+        pub fn length(self: *Self) usize {
             return self.unmanaged.length();
         }
 
         /// Check whether a key is stored in the map
-        pub fn contains(self: ptr(Self), key: Obj(K)) bool {
+        pub fn contains(self: *Self, key: Obj(K)) bool {
             return self.unmanaged.contains(key);
         }
 
         /// Returns the backing array of keys in this map. Modifying the map may invalidate this array.
         /// Modifying this array in a way that changes key hashes or key equality puts the map into an unusable state until reIndex is called.
-        pub fn keys(self: ptr(Self)) []Object {
+        pub fn keys(self: *Self) []Object {
             return self.unmanaged.keys();
         }
 
@@ -71,17 +71,15 @@ pub fn TypedSet (comptime K: type) type {
         /// If the underlying keys have been modified directly,
         /// call this method to recompute the denormalized metadata
         /// necessary for the operation of the methods of this map that lookup entries by key.
-        pub fn reIndex(self: ptr(Self)) OOM! void {
+        pub fn reIndex(self: *Self) OOM! void {
             return self.unmanaged.reIndex(getRml(self));
         }
 
         /// Clones and returns the backing array of values in this map.
-        pub fn toArray(self: ptr(Self)) OOM! Obj(Rml.Array) {
+        pub fn toArray(self: *Self) OOM! Obj(Rml.Array) {
             const rml = getRml(self);
 
-            const array = try self.unmanaged.toArray(rml);
-
-            return Obj(Rml.Array).wrap(rml, getOrigin(self), .{ .unmanaged = array });
+            return self.unmanaged.toArray(rml);
         }
     };
 }
@@ -157,11 +155,11 @@ pub fn TypedSetUnmanaged  (comptime K: type) type {
         }
 
         /// Clones and returns the backing array of values in this map.
-        pub fn toArray(self: *Self, rml: *Rml) OOM! Rml.array.ArrayUnmanaged {
-            var array = Rml.array.ArrayUnmanaged {};
+        pub fn toArray(self: *Self, rml: *Rml) OOM! Obj(Rml.Array) {
+            var array = try Obj(Rml.Array).wrap(rml, getOrigin(self), .{.allocator = rml.blobAllocator()});
 
             for (self.keys()) |key| {
-                try array.append(rml, key.typeErase());
+                try array.data.append(key.typeErase());
             }
 
             return array;
