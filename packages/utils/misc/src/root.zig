@@ -525,9 +525,7 @@ pub fn compare(a: anytype, b: @TypeOf(a)) Ordering {
                             }
                             i += 1;
                         }
-                    } else {
-                        @compileError("Cannot do compare for type `" ++ @typeName(T) ++ "`, no length or sentinel for pointer");
-                    },
+                    } else return compare(@intFromPtr(a), @intFromPtr(b)),
             }
         },
         .array => |info| {

@@ -83,7 +83,6 @@ pub const Obj = object.Obj;
 pub const ObjData = object.ObjData;
 pub const Object = object.Object;
 pub const Header = object.Header;
-pub const ref = object.ref;
 pub const getObj = object.getObj;
 pub const getHeader = object.getHeader;
 pub const getOrigin = object.getOrigin;
@@ -180,7 +179,6 @@ pub const ATOM_TYPES = .{
     .Float = Float,
     .Char = Char,
     .String = String,
-
     .Symbol = Symbol,
 };
 
@@ -225,8 +223,8 @@ pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWrit
 
     log.debug("initializing interpreter ...", .{});
 
-    self.global_env = try Obj(Env).wrap(self, self.storage.origin, .{});
-    self.namespace_env = try Obj(Env).wrap(self, self.storage.origin, .{});
+    self.global_env = try Obj(Env).wrap(self, self.storage.origin, .{.allocator = self.storage.permanent.allocator()});
+    self.namespace_env = try Obj(Env).wrap(self, self.storage.origin, .{.allocator = self.storage.permanent.allocator()});
 
     bindgen.bindObjectNamespaces(self, self.namespace_env, BUILTIN_TYPES)
         catch |err| switch (err) {

@@ -47,7 +47,7 @@ pub const Case = union(enum) {
         var offset: usize = 1;
 
         const case = if (Rml.object.isExactSymbol("else", args[0])) elseCase: {
-            break :elseCase Rml.procedure.Case { .@"else" = try Obj(Rml.Block).wrap(getRml(interpreter), origin, .{}) };
+            break :elseCase Rml.procedure.Case { .@"else" = try Obj(Rml.Block).wrap(getRml(interpreter), origin, try .create(getRml(interpreter), .doc, &.{})) };
         } else patternCase: {
             var diag: ?Rml.Diagnostic = null;
             const parseResult = Rml.Pattern.parse(&diag, args)
@@ -72,7 +72,7 @@ pub const Case = union(enum) {
             break :patternCase Rml.procedure.Case {
                 .pattern = .{
                     .scrutinizer = parseResult.value,
-                    .body = try Obj(Rml.Block).wrap(getRml(interpreter), origin, .{}),
+                    .body = try Obj(Rml.Block).wrap(getRml(interpreter), origin, try .create(getRml(interpreter), .doc, &.{})),
                 },
             };
         };
@@ -137,7 +137,7 @@ pub const Procedure = union(ProcedureKind) {
 
                             interpreter.evaluation_env = env: {
                                 const env: Obj(Rml.Env) = try macro.env.data.clone(callOrigin);
-                                try env.data.copyFromTable(&tbl.data.unmanaged);
+                                try env.data.copyFromTable(&tbl.data.native_map);
 
                                 break :env env;
                             };
@@ -186,7 +186,7 @@ pub const Procedure = union(ProcedureKind) {
                             interpreter.evaluation_env = env: {
                                 const env: Obj(Rml.Env) = try func.env.data.clone(callOrigin);
 
-                                try env.data.copyFromTable(&res.data.unmanaged);
+                                try env.data.copyFromTable(&res.data.native_map);
 
                                 break :env env;
                             };

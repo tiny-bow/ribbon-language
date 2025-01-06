@@ -45,8 +45,7 @@ pub fn bindGlobals(rml: *Rml, env: Obj(Env), comptime globals: type) (OOM || Sym
 
 pub fn bindObjectNamespaces(rml: *Rml, env: Obj(Env), comptime namespaces: anytype) (OOM || SymbolAlreadyBound)! void {
     inline for (comptime std.meta.fields(@TypeOf(namespaces))) |field| {
-        const builtinEnv: Obj(Env) = try .wrap(rml, rml.storage.origin, .{});
-        // defer std.debug.assert(builtinEnv.getHeader().ref_count == 1);
+        const builtinEnv: Obj(Env) = try .wrap(rml, rml.storage.origin, .{.allocator = rml.blobAllocator()});
         const Ns = Namespace(@field(namespaces, field.name));
 
         const methods = try Ns.methods(rml, rml.storage.origin);
@@ -59,7 +58,7 @@ pub fn bindObjectNamespaces(rml: *Rml, env: Obj(Env), comptime namespaces: anyty
 }
 
 
-pub fn Support(comptime T: type) type {
+pub fn Support (comptime T: type) type {
     return struct {
         pub const onCompare = switch (@typeInfo(T)) {
             else => struct {
@@ -544,7 +543,7 @@ pub fn toObjectConst(rml: *Rml, origin: Origin, comptime value: anytype) OOM! Ob
                 else if (comptime info.alignment == Rml.object.OBJ_ALIGN) getObj(value)
                      else if (comptime info.size == .One and isBuiltinType(info.child)) Obj(info.child).wrap(rml, origin, value.*)
                         else x: { // TODO: remove compileLog when not frequently adding builtins
-                            @compileLog("not builtin type: " ++ @typeName(info.child));
+                            // @compileLog("not builtin type: " ++ @typeName(info.child));
                             break :x Obj(T).wrap(rml, origin, value);
                         },
 

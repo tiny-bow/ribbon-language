@@ -23,7 +23,7 @@ pub const OBJ_ALIGN = 16;
 
 pub const ObjData = extern struct { data: u8 align(OBJ_ALIGN) };
 
-pub const PropertySet = map.MapUnmanaged;
+pub const PropertySet = std.ArrayHashMapUnmanaged(Rml.Obj(Rml.Symbol), Rml.Obj(Rml.ObjData), MiscUtils.SimpleHashContext, true);
 
 pub const Header = struct {
     rml: *Rml,
@@ -181,13 +181,6 @@ pub fn ObjMemory (comptime T: type) type {
         pub fn getData(self: *Self) *T {
             return @ptrCast(&self.data);
         }
-    };
-}
-
-pub fn ref (comptime T: type) type {
-    return struct {
-        obj: Object,
-        data: if (@typeInfo(T) == .pointer) T else *T,
     };
 }
 

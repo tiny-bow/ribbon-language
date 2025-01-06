@@ -1,11 +1,11 @@
 const std = @import("std");
+const MiscUtils = @import("Utils").Misc;
 const TextUtils = @import("Utils").Text;
 
 const Rml = @import("root.zig");
 const Char = Rml.Char;
 const OOM = Rml.OOM;
 const Error = Rml.Error;
-const ptr = Rml.ptr;
 const Obj = Rml.Obj;
 const Object = Rml.Object;
 const Writer = Rml.Writer;
@@ -20,6 +20,17 @@ pub const String = struct {
         var self = String {};
         try self.unmanaged.appendSlice(rml, str);
         return self;
+    }
+
+    pub fn onCompare(self: *String, other: Object) MiscUtils.Ordering {
+        var ord = Rml.compare(Rml.TypeId.of(String), other.getTypeId());
+
+        if (ord == .Equal) {
+            const otherStr = Rml.forceObj(String, other);
+            ord = self.unmanaged.compare(otherStr.data.unmanaged);
+        }
+
+        return ord;
     }
 
     pub fn onFormat(self: *String, writer: std.io.AnyWriter) anyerror! void {
@@ -53,6 +64,10 @@ pub const NativeWriter = NativeString.Writer;
 
 pub const StringUnmanaged = struct {
     native_string: NativeString = .{},
+
+    pub fn compare(self: *StringUnmanaged, other: StringUnmanaged) MiscUtils.Ordering {
+        return Rml.compare(self.native_string.items, other.native_string.items);
+    }
 
 
     pub fn format(self: *const StringUnmanaged, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) Error! void {

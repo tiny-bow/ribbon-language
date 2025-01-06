@@ -66,13 +66,18 @@ pub const BlockKind = enum {
 };
 
 pub const Block = struct {
+    allocator: std.mem.Allocator,
     kind: BlockKind = .doc,
     array: std.ArrayListUnmanaged(Object) = .{},
 
     pub fn create(rml: *Rml, kind: BlockKind, initialItems: []const Object) OOM! Block {
+        const allocator = rml.blobAllocator();
+
         var array: std.ArrayListUnmanaged(Object) = .{};
-        try array.appendSlice(rml.blobAllocator(), initialItems);
+        try array.appendSlice(allocator, initialItems);
+
         return .{
+            .allocator = allocator,
             .kind = kind,
             .array = array,
         };
@@ -84,11 +89,17 @@ pub const Block = struct {
         if (ord == .Equal) {
             const b = forceObj(Block, other);
 
-            ord = Rml.compare(a.kind, b.data.kind);
+            ord = a.compare(b.data.*);
+        }
 
-            if (ord == .Equal) {
-                ord = Rml.compare(a.array, b.data.array);
-            }
+        return ord;
+    }
+
+    pub fn compare(self: Block, other: Block) Ordering {
+        var ord = BlockKind.compare(self.kind, other.kind);
+
+        if (ord == .Equal) {
+            ord = Rml.compare(self.array.items, other.array.items);
         }
 
         return ord;
@@ -128,14 +139,12 @@ pub const Block = struct {
     /// Allocates more memory as necessary.
     /// Invalidates element pointers if additional memory is needed.
     pub fn append(self: *Block, obj: Object) OOM! void {
-        const rml = getRml(self);
-        return self.array.append(rml.blobAllocator(), obj);
+        return self.array.append(self.allocator, obj);
     }
 
     /// Append the slice of items to the block. Allocates more memory as necessary.
     /// Invalidates element pointers if additional memory is needed.
     pub fn appendSlice(self: *Block, slice: []const Object) OOM! void {
-        const rml = getRml(self);
-        return self.array.appendSlice(rml.blobAllocator(), slice);
+        return self.array.appendSlice(self.allocator, slice);
     }
 };

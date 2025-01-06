@@ -40,12 +40,12 @@ pub fn TypedArray (comptime T: type) type {
             return ord;
         }
 
-        pub fn onFormat(self: *Self, writer: std.io.AnyWriter) anyerror! void {
-            try writer.print("{}", .{self});
-        }
-
         pub fn compare(self: Self, other: Self) Ordering {
             return Rml.compare(self.native_array.items, other.native_array.items);
+        }
+
+        pub fn onFormat(self: *Self, writer: std.io.AnyWriter) anyerror! void {
+            try writer.print("{}", .{self});
         }
 
         pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {

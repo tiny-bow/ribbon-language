@@ -37,9 +37,9 @@ pub const import = Rml.Procedure {
 
             const localEnv: *Rml.Env = interpreter.evaluation_env.data;
 
-            var it = env.data.table.iter();
+            var it = env.data.table.iterator();
             while (it.next()) |entry| {
-                const slashSym = slashSym: { // TODO: use frame allocator
+                const slashSym = slashSym: {
                     const slashStr = try std.fmt.allocPrint(getRml(interpreter).blobAllocator(), "{}/{}", .{namespaceSym, entry.key_ptr.*});
 
                     break :slashSym try Obj(Rml.Symbol).wrap(getRml(interpreter), origin, try .create(getRml(interpreter), slashStr));
@@ -144,7 +144,7 @@ pub const global = Rml.Procedure {
                 }
             };
 
-            var it = table.data.unmanaged.iter();
+            var it = table.data.native_map.iterator();
             while (it.next()) |entry| {
                 const sym = entry.key_ptr.*;
                 const val = entry.value_ptr.*;
@@ -253,7 +253,7 @@ pub const local = Rml.Procedure {
                 }
             };
 
-            var it = table.data.unmanaged.iter();
+            var it = table.data.native_map.iterator();
             while (it.next()) |entry| {
                 const sym = entry.key_ptr.*;
                 const val = entry.value_ptr.*;

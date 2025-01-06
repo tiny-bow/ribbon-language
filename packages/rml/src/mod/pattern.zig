@@ -228,7 +228,7 @@ pub fn runPattern(
     objects: []const Object,
     offset: *usize,
 ) Rml.Result! ?Obj(Table) {
-    const table: Obj(Table) = try .wrap(getRml(interpreter), origin, .{});
+    const table: Obj(Table) = try .wrap(getRml(interpreter), origin, .{.allocator = getRml(interpreter).blobAllocator(),});
 
     patternMatching.debug("runPattern `{} :: {?}` {any} {}", .{pattern, if (offset.* < objects.len) objects[offset.*] else null, objects, offset.*});
 
@@ -258,13 +258,13 @@ pub fn runPattern(
                     .doc => {
                         var newOffset: usize = 0;
                         const result = try runSequence(interpreter, diag, inputBlock.getOrigin(), patts, inputBlock.data.items(), &newOffset) orelse return null;
-                        try table.data.copyFrom(result);
+                        try table.data.copyFrom(result.data);
                     },
                     else =>
                         if (inputBlock.data.kind == block.data.kind) {
                             var newOffset: usize = 0;
                             const result = try runSequence(interpreter, diag, inputBlock.getOrigin(), patts, inputBlock.data.items(), &newOffset) orelse return null;
-                            try table.data.copyFrom(result);
+                            try table.data.copyFrom(result.data);
                         } else return patternAbort(
                             diag,
                             seqOrigin,
@@ -366,7 +366,7 @@ pub fn runPattern(
         .sequence => |sequence| {
             const subEnv = try runSequence(interpreter, diag, sequence.getOrigin(), sequence.data.items(), objects, offset) orelse return null;
 
-            try table.data.copyFrom(subEnv);
+            try table.data.copyFrom(subEnv.data);
         },
 
         .optional => |optional| {
@@ -381,7 +381,7 @@ pub fn runPattern(
             if (result) |res| {
                 offset.* = subOffset;
 
-                try table.data.copyFrom(res);
+                try table.data.copyFrom(res.data);
             } else {
                 try nilBinders(interpreter, table, origin, patt);
             }
@@ -514,7 +514,7 @@ pub fn runPattern(
                 if (result) |res| {
                     offset.* = subOffset;
 
-                    try table.data.copyFrom(res);
+                    try table.data.copyFrom(res.data);
 
                     break :loop;
                 } else if (newDiag) |dx| {
@@ -536,7 +536,7 @@ pub fn runPattern(
 
     patternMatching.debug("completed runPattern, got {}", .{table});
 
-    var it = table.data.unmanaged.iter();
+    var it = table.data.native_map.iterator();
     while (it.next()) |entry| {
         patternMatching.debug("{} :: {}", .{
             entry.key_ptr.*,
@@ -555,7 +555,7 @@ fn runSequence(
     objects: []const Object,
     offset: *usize,
 ) Rml.Result! ?Obj(Table) {
-    const table: Obj(Table) = try .wrap(getRml(interpreter), origin, .{});
+    const table: Obj(Table) = try .wrap(getRml(interpreter), origin, .{.allocator = getRml(interpreter).blobAllocator()});
 
     for (patterns, 0..) |patternObj, p| {
         _ = p;
@@ -567,7 +567,7 @@ fn runSequence(
 
         const result = try runPattern(interpreter, diag, origin, pattern, objects, offset) orelse return null;
 
-        try table.data.copyFrom(result);
+        try table.data.copyFrom(result.data);
     }
 
     if (offset.* < objects.len) return patternAbort(diag, origin, "unexpected input `{}`", .{objects[offset.*]});

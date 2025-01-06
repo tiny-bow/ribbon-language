@@ -42,7 +42,7 @@ pub const Interpreter = struct {
     evaluation_env: Obj(Env),
 
     pub fn create(rml: *Rml) OOM! Interpreter {
-        return .{.evaluation_env = try Obj(Env).wrap(rml, try .fromStr(rml, "system"), .{})};
+        return .{.evaluation_env = try Obj(Env).wrap(rml, try .fromStr(rml, "system"), .{.allocator = rml.blobAllocator()})};
     }
 
     pub fn onCompare(a: *Interpreter, other: Object) Ordering {
@@ -55,7 +55,7 @@ pub const Interpreter = struct {
 
     pub fn reset(self: *Interpreter) OOM! void {
         const rml = getRml(self);
-        self.evaluation_env = try Obj(Env).wrap(rml, getHeader(self).origin, .{});
+        self.evaluation_env = try Obj(Env).wrap(rml, getHeader(self).origin, .{.allocator = rml.blobAllocator()});
     }
 
     pub fn castObj(self: *Interpreter, comptime T: type, object: Object) Error! Obj(T) {

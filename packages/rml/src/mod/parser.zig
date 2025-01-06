@@ -104,7 +104,10 @@ pub const Parser = struct {
         }
 
         const obj = try self.parseObject() orelse return null;
-        try obj.getHeader().properties.copyFrom(rml, &properties);
+        var it = properties.iterator();
+        while (it.next()) |entry| {
+            try obj.getHeader().properties.put(rml.blobAllocator(), entry.key_ptr.*, entry.value_ptr.*);
+        }
 
         peek_cache.* = obj;
 
@@ -320,7 +323,7 @@ pub const Parser = struct {
 
             switch (heuristic) {
                 .domain => {
-                    const firstLine = try Rml.Obj(Rml.Block).wrap(getRml(self), blobOrigin, .{ .kind = .doc, .array = array });
+                    const firstLine = try Rml.Obj(Rml.Block).wrap(getRml(self), blobOrigin, try .create(getRml(self), .doc, array.items));
 
                     var allDocBlock = true;
                     for (newBlob) |item| {
@@ -374,7 +377,7 @@ pub const Parser = struct {
             }
 
             if (try self.parseBlockClosing(blockKind)) {
-                tailProperties = try properties.clone(rml);
+                tailProperties = try properties.clone(rml.blobAllocator());
                 break;
             }
 
@@ -392,7 +395,7 @@ pub const Parser = struct {
                 properties = props;
             } else { // require whitespace between objects
                 if (try self.parseBlockClosing(blockKind)) {
-                    tailProperties = try properties.clone(rml);
+                    tailProperties = try properties.clone(rml.blobAllocator());
                     break;
                 } else {
                     try self.failed(self.getOrigin(self.buffer_pos, null), "expected space or `{s}`", .{blockKind.toCloseStr()});
@@ -414,19 +417,20 @@ pub const Parser = struct {
                 }
             }
 
-            break :block try .wrap(rml, origin, .{
-                .kind = blockKind,
-                .array = array
-            });
+            break :block try .wrap(rml, origin, try .create(
+                rml,
+                blockKind,
+                array.items,
+            ));
         };
 
-        if (tailProperties.length() > 0) {
+        if (tailProperties.count() > 0) {
             const sym: Obj(Symbol) = try .wrap(rml, origin, try .create(rml, "tail"));
 
-            const map: Obj(Map) = try .wrap(rml, origin, .{ .unmanaged = tailProperties });
+            const map: Obj(Map) = try .wrap(rml, origin, .{ .allocator = rml.blobAllocator(), .native_map = @as(*Map.NativeMap, @ptrCast(&tailProperties)).* });
             tailDeinit = false;
 
-            try block.getHeader().properties.set(rml, sym.typeErase(), map.typeErase());
+            try block.getHeader().properties.put(rml.blobAllocator(), sym, map.typeErase());
         }
 
         return block;
@@ -898,7 +902,7 @@ pub const Parser = struct {
                         const string: Obj(String) = try .wrap(rml, origin, try .create(rml, self.input.data.text()[state[1]..self.buffer_pos.offset]));
 
                         // FIXME: this is overwriting, should concat
-                        try propertySet.set(rml, sym.typeErase(), string.typeErase());
+                        try propertySet.put(rml.blobAllocator(), sym, string.typeErase());
                     }
 
                     try self.advChar();

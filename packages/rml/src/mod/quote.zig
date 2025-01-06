@@ -162,7 +162,7 @@ pub fn runQuasi(interpreter: *Interpreter, body: Object, out: ?*std.ArrayListUnm
             }
         }
 
-        return (try Obj(Rml.Block).wrap(rml, block.getOrigin(), .{.kind = block.data.kind, .array = subOut})).typeErase();
+        return (try Obj(Rml.Block).wrap(rml, block.getOrigin(), try .create(getRml(interpreter), block.data.kind, subOut.items))).typeErase();
     }
 
     return body;
