@@ -26,7 +26,7 @@ pub const SymbolError  = UnboundSymbol || SymbolAlreadyBound;
 pub const UnboundSymbol = error {UnboundSymbol};
 pub const SymbolAlreadyBound = error {SymbolAlreadyBound};
 
-pub const Domain = Rml.set.TypedSetUnmanaged(Symbol);
+pub const Domain = std.ArrayHashMapUnmanaged(Obj(Symbol), void, MiscUtils.SimpleHashContext, true);
 
 pub const CellTable = std.ArrayHashMapUnmanaged(Rml.Obj(Rml.Symbol), Rml.Obj(Rml.Cell), MiscUtils.SimpleHashContext, true);
 pub const Table = std.ArrayHashMapUnmanaged(Rml.Obj(Rml.Symbol), Rml.Obj(Rml.ObjData), MiscUtils.SimpleHashContext, true);

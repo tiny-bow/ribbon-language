@@ -4,8 +4,6 @@ const Rml = @import("root.zig");
 const Error = Rml.Error;
 const Ordering = Rml.Ordering;
 const OOM = Rml.OOM;
-const const_ptr = Rml.const_ptr;
-const ptr = Rml.ptr;
 const Obj = Rml.Obj;
 const Object = Rml.Object;
 const Block = Rml.Block;
@@ -117,9 +115,9 @@ pub const Procedure = union(ProcedureKind) {
             .macro => |macro| {
                 Rml.interpreter.evaluation.debug("calling macro {}", .{macro});
 
-                var errors: Rml.string.StringUnmanaged = .{};
+                var errors: Rml.String = try .create(getRml(self), "");
 
-                const writer = errors.writer(getRml(self));
+                const writer = errors.writer();
 
                 var result: ?Object = null;
 
@@ -165,9 +163,9 @@ pub const Procedure = union(ProcedureKind) {
                 Rml.interpreter.evaluation.debug("calling func {}", .{func});
 
                 const eArgs = try interpreter.evalAll(args);
-                var errors: Rml.string.StringUnmanaged = .{};
+                var errors: Rml.string.String = try .create(getRml(self), "");
 
-                const writer = errors.writer(getRml(self));
+                const writer = errors.writer();
 
                 Rml.interpreter.evaluation.debug("calling func {any}", .{func.cases});
                 for (func.cases.items) |case| switch (case) {

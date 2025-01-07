@@ -18,13 +18,24 @@ const forceObj = Rml.forceObj;
 
 
 pub const Set = TypedSet(Rml.object.ObjData);
-pub const SetUnmanaged = TypedSetUnmanaged(Rml.object.ObjData);
 
 pub fn TypedSet (comptime K: type) type {
     return struct {
         const Self = @This();
 
-        unmanaged: TypedSetUnmanaged (K) = .{},
+        pub const NativeIter = NativeSet.Iterator;
+        pub const NativeSet = std.ArrayHashMapUnmanaged(Obj(K), void, Rml.SimpleHashContext, true);
+
+
+        allocator: std.mem.Allocator,
+        native_set: NativeSet = .{},
+
+
+        pub fn create(rml: *Rml, initialKeys: []const Obj(K)) OOM! Self {
+            var self = Self { .allocator = rml.blobAllocator() };
+            for (initialKeys) |k| try self.native_set.put(rml.blobAllocator(), k, {});
+            return self;
+        }
 
 
         pub fn onCompare(a: *Self, other: Object) Ordering {
@@ -32,66 +43,10 @@ pub fn TypedSet (comptime K: type) type {
             if (ord == .Equal) {
                 const b = forceObj(Self, other);
 
-                ord = a.unmanaged.compare(b.data.unmanaged);
+                ord = a.compare(b.data.*);
             }
             return ord;
         }
-
-        pub fn onFormat(self: *const Self, writer: std.io.AnyWriter) anyerror! void {
-            return writer.print("{}", .{self.unmanaged});
-        }
-
-        /// Set a key
-        pub fn set(self: *Self, key: Obj(K)) OOM! void {
-            return self.unmanaged.set(getRml(self), key);
-        }
-
-        /// Find a local copy matching a key
-        pub fn get(self: *Self, key: Obj(K)) ?Obj(K) {
-            return self.unmanaged.get(key);
-        }
-
-        /// Returns the number of key-value pairs in the map
-        pub fn length(self: *Self) usize {
-            return self.unmanaged.length();
-        }
-
-        /// Check whether a key is stored in the map
-        pub fn contains(self: *Self, key: Obj(K)) bool {
-            return self.unmanaged.contains(key);
-        }
-
-        /// Returns the backing array of keys in this map. Modifying the map may invalidate this array.
-        /// Modifying this array in a way that changes key hashes or key equality puts the map into an unusable state until reIndex is called.
-        pub fn keys(self: *Self) []Object {
-            return self.unmanaged.keys();
-        }
-
-        /// Recomputes stored hashes and rebuilds the key indexes.
-        /// If the underlying keys have been modified directly,
-        /// call this method to recompute the denormalized metadata
-        /// necessary for the operation of the methods of this map that lookup entries by key.
-        pub fn reIndex(self: *Self) OOM! void {
-            return self.unmanaged.reIndex(getRml(self));
-        }
-
-        /// Clones and returns the backing array of values in this map.
-        pub fn toArray(self: *Self) OOM! Obj(Rml.Array) {
-            const rml = getRml(self);
-
-            return self.unmanaged.toArray(rml);
-        }
-    };
-}
-
-pub fn TypedSetUnmanaged  (comptime K: type) type {
-    return struct {
-        const Self = @This();
-
-        native_map: NativeSet = .{},
-
-        pub const NativeIter = NativeSet.Iterator;
-        pub const NativeSet = std.ArrayHashMapUnmanaged(Obj(K), void, Rml.SimpleHashContext, true);
 
         pub fn compare(self: Self, other: Self) Ordering {
             var ord = Rml.compare(self.keys().len, other.keys().len);
@@ -101,6 +56,10 @@ pub fn TypedSetUnmanaged  (comptime K: type) type {
             }
 
             return ord;
+        }
+
+        pub fn onFormat(self: *const Self, writer: std.io.AnyWriter) anyerror! void {
+            return writer.print("{}", .{self.native_set});
         }
 
         pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) Error! void {
@@ -117,46 +76,46 @@ pub fn TypedSetUnmanaged  (comptime K: type) type {
 
 
         /// Set a key
-        pub fn set(self: *Self, rml: *Rml, key: Obj(K)) OOM! void {
-            if (self.native_map.getEntry(key)) |entry| {
+        pub fn set(self: *Self, key: Obj(K)) OOM! void {
+            if (self.native_set.getEntry(key)) |entry| {
                 entry.key_ptr.* = key;
             } else {
-                try self.native_map.put(rml.blobAllocator(), key, {});
+                try self.native_set.put(self.allocator, key, {});
             }
         }
 
         /// Find a local copy matching a given key
         pub fn get(self: *const Self, key: Obj(K)) ?Obj(K) {
-            return if (self.native_map.getEntry(key)) |entry| entry.key_ptr.* else null;
+            return if (self.native_set.getEntry(key)) |entry| entry.key_ptr.* else null;
         }
 
         /// Returns the number of key-value pairs in the map
         pub fn length(self: *const Self) usize {
-            return self.native_map.count();
+            return self.native_set.count();
         }
 
         /// Check whether a key is stored in the map
         pub fn contains(self: *const Self, key: Obj(K)) bool {
-            return self.native_map.contains(key);
+            return self.native_set.contains(key);
         }
 
         /// Returns the backing array of keys in this map. Modifying the map may invalidate this array.
         /// Modifying this array in a way that changes key hashes or key equality puts the map into an unusable state until reIndex is called.
         pub fn keys(self: *const Self) []Obj(K) {
-            return self.native_map.keys();
+            return self.native_set.keys();
         }
 
         /// Recomputes stored hashes and rebuilds the key indexes.
         /// If the underlying keys have been modified directly,
         /// call this method to recompute the denormalized metadata
         /// necessary for the operation of the methods of this map that lookup entries by key.
-        pub fn reIndex(self: *Self, rml: *Rml) OOM! void {
-            return self.native_map.reIndex(rml.blobAllocator());
+        pub fn reIndex(self: *Self) OOM! void {
+            return self.native_set.reIndex(self.allocator);
         }
 
         /// Clones and returns the backing array of values in this map.
-        pub fn toArray(self: *Self, rml: *Rml) OOM! Obj(Rml.Array) {
-            var array = try Obj(Rml.Array).wrap(rml, getOrigin(self), .{.allocator = rml.blobAllocator()});
+        pub fn toArray(self: *Self) OOM! Obj(Rml.Array) {
+            var array = try Obj(Rml.Array).wrap(getRml(self), getOrigin(self), .{.allocator = self.allocator});
 
             for (self.keys()) |key| {
                 try array.data.append(key.typeErase());
@@ -165,13 +124,13 @@ pub fn TypedSetUnmanaged  (comptime K: type) type {
             return array;
         }
 
-        pub fn clone(self: *Self, rml: *Rml) OOM! Self {
-            return Self { .native_map = try self.native_map.clone(rml.blobAllocator()) };
+        pub fn clone(self: *Self) OOM! Self {
+            return Self { .allocator = self.allocator, .native_set = try self.native_set.clone(self.allocator) };
         }
 
-        pub fn copyFrom(self: *Self, rml: *Rml, other: *const Self) OOM! void {
+        pub fn copyFrom(self: *Self, other: *const Self) OOM! void {
             for (other.keys()) |key| {
-                try self.set(rml, key);
+                try self.set(key);
             }
         }
     };

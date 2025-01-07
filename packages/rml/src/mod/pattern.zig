@@ -155,33 +155,43 @@ pub fn patternBinders(patternObj: Object) (OOM || error{BadDomain})! Rml.env.Dom
         .quote,
             => {},
 
-        .symbol => |symbol| try domain.set(rml, symbol),
+        .symbol => |symbol| try domain.put(rml.blobAllocator(), symbol, {}),
 
         .block => |block| for (block.data.items()) |item| {
             const subDomain = try patternBinders(item);
-            try domain.copyFrom(rml, &subDomain);
+            for (subDomain.keys()) |key| {
+                try domain.put(rml.blobAllocator(), key, {});
+            }
         },
 
-        .alias => |alias| try domain.set(rml, alias.sym),
+        .alias => |alias| try domain.put(rml.blobAllocator(), alias.sym, {}),
 
         .sequence => |sequence| for (sequence.data.items()) |item| {
             const subDomain = try patternBinders(item);
-            try domain.copyFrom(rml, &subDomain);
+            for (subDomain.keys()) |key| {
+                try domain.put(rml.blobAllocator(), key, {});
+            }
         },
 
         .optional => |optional| {
             const subDomain = try patternBinders(optional);
-            try domain.copyFrom(rml, &subDomain);
+            for (subDomain.keys()) |key| {
+                try domain.put(rml.blobAllocator(), key, {});
+            }
         },
 
         .zero_or_more => |zero_or_more| {
             const subDomain = try patternBinders(zero_or_more);
-            try domain.copyFrom(rml, &subDomain);
+            for (subDomain.keys()) |key| {
+                try domain.put(rml.blobAllocator(), key, {});
+            }
         },
 
         .one_or_more => |one_or_more| {
             const subDomain = try patternBinders(one_or_more);
-            try domain.copyFrom(rml, &subDomain);
+            for (subDomain.keys()) |key| {
+                try domain.put(rml.blobAllocator(), key, {});
+            }
         },
 
         .alternation => |alternation| {
@@ -191,7 +201,9 @@ pub fn patternBinders(patternObj: Object) (OOM || error{BadDomain})! Rml.env.Dom
 
                 if (referenceSubDomain) |refDomain| {
                     if (Rml.equal(refDomain, subDomain)) {
-                        try domain.copyFrom(rml, &subDomain);
+                        for (subDomain.keys()) |key| {
+                            try domain.put(rml.blobAllocator(), key, {});
+                        }
                     } else {
                         return error.BadDomain;
                     }
@@ -495,9 +507,9 @@ pub fn runPattern(
 
         .alternation => |alternation| {
             const pattObjs = alternation.data.items();
-            var errs: Rml.string.StringUnmanaged = .{};
+            var errs: Rml.string.String = try .create(getRml(interpreter), "");
 
-            const errWriter = errs.writer(getRml(interpreter));
+            const errWriter = errs.writer();
 
             loop: for (pattObjs) |pattObj| {
                 const patt = Rml.castObj(Rml.Pattern, pattObj) orelse {

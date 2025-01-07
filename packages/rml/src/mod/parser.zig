@@ -678,7 +678,7 @@ pub const Parser = struct {
             return null;
         }
 
-        var textBuffer: Rml.string.StringUnmanaged = .{};
+        var textBuffer: String = try .create(rml, "");
 
         while (try self.peekChar()) |ch| {
             if (ch == '"') {
@@ -686,7 +686,7 @@ pub const Parser = struct {
 
                 parsing.debug("parseString result: {s}", .{textBuffer.text()});
 
-                return try Obj(String).wrap(rml, self.getOrigin(start, self.buffer_pos), .{ .unmanaged = textBuffer });
+                return try Obj(String).wrap(rml, self.getOrigin(start, self.buffer_pos), textBuffer);
             }
 
             const i =
@@ -694,7 +694,7 @@ pub const Parser = struct {
                 else if (!TextUtils.isControl(ch)) try self.nextChar() orelse return error.UnexpectedEOF
                 else return error.UnexpectedInput;
 
-            try textBuffer.append(rml, i);
+            try textBuffer.append(i);
         }
 
         return error.UnexpectedEOF;
