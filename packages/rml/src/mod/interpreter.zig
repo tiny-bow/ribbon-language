@@ -87,7 +87,7 @@ pub const Interpreter = struct {
 
     pub fn eval(self: *Interpreter, expr: Object) Result! Object {
         var offset: usize = 0;
-        return self.evalCheck(expr.getOrigin(), false, &.{expr}, &offset, null);
+        return self.evalCheck(false, &.{expr}, &offset, null);
     }
 
     pub fn evalAll(self: *Interpreter, exprs: []const Object) Result! []Object {
@@ -102,14 +102,16 @@ pub const Interpreter = struct {
         return results.items;
     }
 
-    pub fn evalCheck(self: *Interpreter, origin: Origin, shouldInvoke: bool, program: []const Object, offset: *usize, workDone: ?*bool) Result! Object {
-        evaluation.debug("evalCheck {}:{any} @ {}", .{origin, program, offset.*});
+    pub fn evalCheck(self: *Interpreter, shouldInvoke: bool, program: []const Object, offset: *usize, workDone: ?*bool) Result! Object {
+        evaluation.debug("evalCheck {any} @ {}", .{program, offset.*});
+
+        const blob = program[offset.*..];
 
         const expr = if (offset.* < program.len) expr: {
             const out = program[offset.*];
             offset.* += 1;
             break :expr out;
-        } else (try Obj(Rml.Nil).wrap(getRml(self), origin, .{})).typeErase();
+        } else (try Obj(Rml.Nil).wrap(getRml(self), Rml.source.blobOrigin(blob), .{})).typeErase();
 
         const value = value: {
             if (Rml.castObj(Symbol, expr)) |symbol| {
@@ -119,7 +121,7 @@ pub const Interpreter = struct {
                 evaluation.debug("looking up symbol {}", .{symbol});
 
                 break :value self.lookup(symbol) orelse {
-                    try self.abort(origin, error.UnboundSymbol, "no symbol `{s}` in evaluation environment", .{symbol});
+                    try self.abort(expr.getOrigin(), error.UnboundSymbol, "no symbol `{s}` in evaluation environment", .{symbol});
                 };
             } else if (Rml.castObj(Block, expr)) |block| {
                 if (block.data.length() == 0) {
@@ -130,7 +132,7 @@ pub const Interpreter = struct {
                 if (workDone) |x| x.* = true;
 
                 evaluation.debug("running block", .{});
-                break :value try self.runProgram(block.getOrigin(), block.data.kind == .paren, block.data.items());
+                break :value try self.runProgram(block.data.kind == .paren, block.data.items());
             } else if (Rml.castObj(Rml.Quote, expr)) |quote| {
                 if (workDone) |x| x.* = true;
 
@@ -147,7 +149,7 @@ pub const Interpreter = struct {
             const args = program[offset.*..];
             offset.* = program.len;
 
-            return self.invoke(origin, expr, value, args);
+            return self.invoke(Rml.source.blobOrigin(blob), expr, value, args);
         } else {
             return value;
         }
@@ -158,17 +160,17 @@ pub const Interpreter = struct {
         orelse getRml(self).global_env.data.get(symbol);
     }
 
-    pub fn runProgram(self: *Interpreter, origin: Origin, shouldInvoke: bool, program: []const Object) Result! Object {
-        evaluation.debug("runProgram {}:{any}", .{origin, program});
+    pub fn runProgram(self: *Interpreter, shouldInvoke: bool, program: []const Object) Result! Object {
+        evaluation.debug("runProgram {}:{any}", .{program});
 
 
-        var last: Object = (try Obj(Rml.Nil).wrap(getRml(self), origin, .{})).typeErase();
+        var last: Object = (try Obj(Rml.Nil).wrap(getRml(self), Rml.source.blobOrigin(program), .{})).typeErase();
 
         evaluation.debug("runProgram - begin loop", .{});
 
         var offset: usize = 0;
         while (offset < program.len) {
-            const value = try self.evalCheck(origin, shouldInvoke, program, &offset, null);
+            const value = try self.evalCheck(shouldInvoke, program, &offset, null);
 
             last = value;
         }

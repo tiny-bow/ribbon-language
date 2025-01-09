@@ -6,9 +6,28 @@ const OOM = Rml.OOM;
 const Ordering = Rml.Ordering;
 
 
+pub fn blobOrigin (blob: []const Rml.Object) Origin {
+    if (blob.len == 0) return Origin { .filename = "system" };
+
+    var origin = blob[0].getOrigin();
+
+    for (blob[1..]) |obj| {
+        origin = origin.merge(obj.getOrigin()) orelse return Origin { .filename = "multiple" };
+    }
+
+    return origin;
+}
+
 pub const Origin = struct {
     filename: []const u8,
     range: ?Range = null,
+
+    pub fn merge(self: Origin, other: Origin) ?Origin {
+        return if (std.mem.eql(u8, self.filename, other.filename)) Origin {
+            .filename = self.filename,
+            .range = rangeMerge(self.range, other.range),
+        } else null;
+    }
 
     pub fn fromStr(rml: *Rml, str: []const u8) OOM! Origin {
         return Origin { .filename = try rml.storage.intern(str) };
@@ -47,6 +66,30 @@ pub const Origin = struct {
         Rml.hashWith(hasher, self.range);
     }
 };
+
+pub fn rangeMerge(a: ?Range, b: ?Range) ?Range {
+    if (a == null or b == null) return null;
+    const x = a.?;
+    const y = b.?;
+    return Range {
+        .start = posMin(x.start, y.start),
+        .end = posMax(x.end, y.end),
+    };
+}
+
+pub fn posMin(a: ?Pos, b: ?Pos) ?Pos {
+    if (a == null) return b;
+    if (b == null) return a;
+    return if (a.?.offset < b.?.offset) a
+    else b;
+}
+
+pub fn posMax(a: ?Pos, b: ?Pos) ?Pos {
+    if (a == null) return b;
+    if (b == null) return a;
+    return if (a.?.offset > b.?.offset) a
+    else b;
+}
 
 pub const Range = struct {
     start: ?Pos = null,

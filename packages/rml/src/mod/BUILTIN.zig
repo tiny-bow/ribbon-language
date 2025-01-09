@@ -117,14 +117,13 @@ pub const global = Rml.Procedure {
                     if (body.len == 1) {
                         if (Rml.castObj(Rml.Block, body[0])) |bod| {
                             break :obj try interpreter.runProgram(
-                                origin,
                                 bod.data.kind == .paren,
                                 bod.data.items(),
                             );
                         }
                     }
 
-                    break :obj try interpreter.runProgram(origin, false, body);
+                    break :obj try interpreter.runProgram(false, body);
                 };
 
             Rml.interpreter.evaluation.debug("evaluating global variable {} = {}", .{patt, obj});
@@ -226,14 +225,13 @@ pub const local = Rml.Procedure {
                     if (body.len == 1) {
                         if (Rml.castObj(Rml.Block, body[0])) |bod| {
                             break :obj try interpreter.runProgram(
-                                origin,
                                 bod.data.kind == .paren,
                                 bod.data.items(),
                             );
                         }
                     }
 
-                    break :obj try interpreter.runProgram(origin, false, body);
+                    break :obj try interpreter.runProgram(false, body);
                 };
 
             Rml.interpreter.evaluation.debug("evaluating local variable {} = {}", .{patt, obj});

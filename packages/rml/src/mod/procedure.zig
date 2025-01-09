@@ -123,7 +123,7 @@ pub const Procedure = union(ProcedureKind) {
 
                 for (macro.cases.items) |case| switch (case) {
                     .@"else" => |caseData| {
-                        result = try interpreter.runProgram(caseData.getOrigin(), false, caseData.data.items());
+                        result = try interpreter.runProgram(false, caseData.data.items());
                         break;
                     },
                     .pattern => |caseData| {
@@ -140,7 +140,7 @@ pub const Procedure = union(ProcedureKind) {
                                 break :env env;
                             };
 
-                            result = try interpreter.runProgram(caseData.body.getOrigin(), false, caseData.body.data.items());
+                            result = try interpreter.runProgram(false, caseData.body.data.items());
                             break;
                         } else if (diag) |d| {
                             writer.print("failed to match; {} vs {any}:\n\t{}", .{ caseData.scrutinizer, args, d.formatter(error.PatternError)})
@@ -171,7 +171,7 @@ pub const Procedure = union(ProcedureKind) {
                 for (func.cases.items) |case| switch (case) {
                     .@"else" => |caseData| {
                         Rml.interpreter.evaluation.debug("calling else case {}", .{caseData});
-                        return interpreter.runProgram(caseData.getOrigin(), false, caseData.data.items());
+                        return interpreter.runProgram(false, caseData.data.items());
                     },
                     .pattern => |caseData| {
                         Rml.interpreter.evaluation.debug("calling pattern case {}", .{caseData});
@@ -189,7 +189,7 @@ pub const Procedure = union(ProcedureKind) {
                                 break :env env;
                             };
 
-                            return interpreter.runProgram(caseData.body.getOrigin(), false, caseData.body.data.items());
+                            return interpreter.runProgram(false, caseData.body.data.items());
                         } else if (diag) |d| {
                             writer.print("failed to match; {} vs {any}:\n\t{}", .{ caseData.scrutinizer, eArgs, d.formatter(error.PatternError)})
                                 catch |err| return Rml.errorCast(err);

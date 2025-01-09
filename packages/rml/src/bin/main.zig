@@ -83,10 +83,9 @@ pub fn main () !void {
             return err;
         } orelse break;
 
-        log.debug("blob: {any}", .{blob});
+        log.info("blob: {any}", .{blob});
 
-        // FIXME: parser.getOrigin() is not correct
-        if (rml.main_interpreter.data.runProgram(parser.getOrigin(), false, blob)) |result| {
+        if (rml.main_interpreter.data.runProgram(false, blob)) |result| {
             if (!Rml.isType(Rml.Nil, result)) {
                 log.info("result: {}", .{result});
             }
