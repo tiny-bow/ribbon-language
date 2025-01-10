@@ -1,18 +1,7 @@
 const std = @import("std");
 
 const Rml = @import("root.zig");
-const Error = Rml.Error;
-const Ordering = Rml.Ordering;
-const OOM = Rml.OOM;
-const Obj = Rml.Obj;
-const Object = Rml.Object;
-const Block = Rml.Block;
-const Pattern = Rml.Pattern;
-const Writer = Rml.Writer;
-const getHeader = Rml.getHeader;
-const getObj = Rml.getObj;
-const getRml = Rml.getRml;
-const forceObj = Rml.forceObj;
+
 
 pub const ProcedureKind = enum {
     macro,
@@ -22,21 +11,21 @@ pub const ProcedureKind = enum {
 };
 
 pub const Case = union(enum) {
-    @"else": Obj(Rml.Block),
+    @"else": Rml.Obj(Rml.Block),
 
     pattern: struct {
-        scrutinizer: Obj(Pattern),
-        body: Obj(Rml.Block),
+        scrutinizer: Rml.Obj(Rml.Pattern),
+        body: Rml.Obj(Rml.Block),
     },
 
-    pub fn body(self: Case) Obj(Rml.Block) {
+    pub fn body(self: Case) Rml.Obj(Rml.Block) {
         return switch (self) {
             .@"else" => |block| block,
             .pattern => |pat| pat.body,
         };
     }
 
-    pub fn parse(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Object) Rml.Result! Case {
+    pub fn parse(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Case {
         Rml.parser.parsing.debug("parseCase {}:{any}", .{origin,args});
 
         if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount,
@@ -45,7 +34,7 @@ pub const Case = union(enum) {
         var offset: usize = 1;
 
         const case = if (Rml.object.isExactSymbol("else", args[0])) elseCase: {
-            break :elseCase Rml.procedure.Case { .@"else" = try Obj(Rml.Block).wrap(getRml(interpreter), origin, try .create(getRml(interpreter), .doc, &.{})) };
+            break :elseCase Rml.procedure.Case { .@"else" = try Rml.Obj(Rml.Block).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), .doc, &.{})) };
         } else patternCase: {
             var diag: ?Rml.Diagnostic = null;
             const parseResult = Rml.Pattern.parse(&diag, args)
@@ -70,7 +59,7 @@ pub const Case = union(enum) {
             break :patternCase Rml.procedure.Case {
                 .pattern = .{
                     .scrutinizer = parseResult.value,
-                    .body = try Obj(Rml.Block).wrap(getRml(interpreter), origin, try .create(getRml(interpreter), .doc, &.{})),
+                    .body = try Rml.Obj(Rml.Block).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), .doc, &.{})),
                 },
             };
         };
@@ -88,7 +77,7 @@ pub const Case = union(enum) {
 };
 
 pub const ProcedureBody = struct {
-    env: Obj(Rml.Env),
+    env: Rml.Obj(Rml.Env),
     cases: std.ArrayListUnmanaged(Case),
 };
 
@@ -98,28 +87,28 @@ pub const Procedure = union(ProcedureKind) {
     native_macro: Rml.bindgen.NativeFunction,
     native_function: Rml.bindgen.NativeFunction,
 
-    pub fn onInit(_: *Procedure) OOM! void {
+    pub fn onInit(_: *Procedure) Rml.OOM! void {
         return;
     }
 
-    pub fn onCompare(self: *Procedure, other: Object) Ordering {
-        return Rml.compare(getHeader(self).type_id, other.getTypeId());
+    pub fn onCompare(self: *Procedure, other: Rml.Object) Rml.Ordering {
+        return Rml.compare(Rml.getHeader(self).type_id, other.getTypeId());
     }
 
     pub fn onFormat(self: *Procedure, writer: std.io.AnyWriter) anyerror! void {
         return writer.print("[{s}-{x}]", .{@tagName(self.*), @intFromPtr(self)});
     }
 
-    pub fn call(self: *Procedure, interpreter: *Rml.Interpreter, callOrigin: Rml.Origin, blame: Object, args: []const Object) Rml.Result! Object {
+    pub fn call(self: *Procedure, interpreter: *Rml.Interpreter, callOrigin: Rml.Origin, blame: Rml.Object, args: []const Rml.Object) Rml.Result! Rml.Object {
         switch (self.*) {
             .macro => |macro| {
                 Rml.interpreter.evaluation.debug("calling macro {}", .{macro});
 
-                var errors: Rml.String = try .create(getRml(self), "");
+                var errors: Rml.String = try .create(Rml.getRml(self), "");
 
                 const writer = errors.writer();
 
-                var result: ?Object = null;
+                var result: ?Rml.Object = null;
 
                 for (macro.cases.items) |case| switch (case) {
                     .@"else" => |caseData| {
@@ -128,13 +117,13 @@ pub const Procedure = union(ProcedureKind) {
                     },
                     .pattern => |caseData| {
                         var diag: ?Rml.Diagnostic = null;
-                        const table: ?Obj(Rml.map.Table) = try caseData.scrutinizer.data.run(interpreter, &diag, callOrigin, args);
+                        const table: ?Rml.Obj(Rml.map.Table) = try caseData.scrutinizer.data.run(interpreter, &diag, callOrigin, args);
                         if (table) |tbl| {
                             const oldEnv = interpreter.evaluation_env;
                             defer interpreter.evaluation_env = oldEnv;
 
                             interpreter.evaluation_env = env: {
-                                const env: Obj(Rml.Env) = try macro.env.data.clone(callOrigin);
+                                const env: Rml.Obj(Rml.Env) = try macro.env.data.clone(callOrigin);
                                 try env.data.copyFromTable(&tbl.data.native_map);
 
                                 break :env env;
@@ -163,7 +152,7 @@ pub const Procedure = union(ProcedureKind) {
                 Rml.interpreter.evaluation.debug("calling func {}", .{func});
 
                 const eArgs = try interpreter.evalAll(args);
-                var errors: Rml.string.String = try .create(getRml(self), "");
+                var errors: Rml.string.String = try .create(Rml.getRml(self), "");
 
                 const writer = errors.writer();
 
@@ -176,13 +165,13 @@ pub const Procedure = union(ProcedureKind) {
                     .pattern => |caseData| {
                         Rml.interpreter.evaluation.debug("calling pattern case {}", .{caseData});
                         var diag: ?Rml.Diagnostic = null;
-                        const result: ?Obj(Rml.map.Table) = try caseData.scrutinizer.data.run(interpreter, &diag, callOrigin, eArgs);
+                        const result: ?Rml.Obj(Rml.map.Table) = try caseData.scrutinizer.data.run(interpreter, &diag, callOrigin, eArgs);
                         if (result) |res| {
                             const oldEnv = interpreter.evaluation_env;
                             defer interpreter.evaluation_env = oldEnv;
 
                             interpreter.evaluation_env = env: {
-                                const env: Obj(Rml.Env) = try func.env.data.clone(callOrigin);
+                                const env: Rml.Obj(Rml.Env) = try func.env.data.clone(callOrigin);
 
                                 try env.data.copyFromTable(&res.data.native_map);
 

@@ -1,23 +1,11 @@
 const std = @import("std");
 
 const Rml = @import("root.zig");
-const Ordering = Rml.Ordering;
-const Error = Rml.Error;
-const OOM = Rml.OOM;
-const ptr = Rml.ptr;
-const const_ptr = Rml.const_ptr;
-const Obj = Rml.Obj;
-const Object = Rml.Object;
-const Writer = Rml.Writer;
-const getObj = Rml.getObj;
-const getTypeId = Rml.getTypeId;
-const getRml = Rml.getRml;
-const forceObj = Rml.forceObj;
 
 pub const Array = TypedArray(Rml.object.ObjData);
 
 pub fn TypedArray (comptime T: type) type {
-    const NativeArray = std.ArrayListUnmanaged(Obj(T));
+    const NativeArray = std.ArrayListUnmanaged(Rml.Obj(T));
 
     return struct {
         const Self = @This();
@@ -25,22 +13,22 @@ pub fn TypedArray (comptime T: type) type {
         allocator: std.mem.Allocator,
         native_array: NativeArray = .{},
 
-        pub fn create(allocator: std.mem.Allocator, values: []const Obj(T)) OOM! Self {
+        pub fn create(allocator: std.mem.Allocator, values: []const Rml.Obj(T)) Rml.OOM! Self {
             var self = Self{.allocator = allocator};
             try self.native_array.appendSlice(allocator, values);
             return self;
         }
 
-        pub fn onCompare(self: *Self, other: Object) Ordering {
-            var ord = Rml.compare(getTypeId(self), other.getTypeId());
+        pub fn onCompare(self: *Self, other: Rml.Object) Rml.Ordering {
+            var ord = Rml.compare(Rml.getTypeId(self), other.getTypeId());
             if (ord == .Equal) {
-                const otherObj = forceObj(Self, other);
+                const otherObj = Rml.forceObj(Self, other);
                 ord = self.compare(otherObj.data.*);
             }
             return ord;
         }
 
-        pub fn compare(self: Self, other: Self) Ordering {
+        pub fn compare(self: Self, other: Self) Rml.Ordering {
             return Rml.compare(self.native_array.items, other.native_array.items);
         }
 
@@ -57,7 +45,7 @@ pub fn TypedArray (comptime T: type) type {
             writer.writeAll("}") catch |err| return Rml.errorCast(err);
         }
 
-        pub fn clone(self: *const Self) OOM! Self {
+        pub fn clone(self: *const Self) Rml.OOM! Self {
             const arr = try self.native_array.clone(self.allocator);
             return Self{.allocator = self.allocator, .native_array = arr};
         }
@@ -74,18 +62,18 @@ pub fn TypedArray (comptime T: type) type {
         /// Contents of the array.
         /// Pointers to elements in this slice are invalidated by various functions of this ArrayList in accordance with the respective documentation.
         /// In all cases, "invalidated" means that the memory has been passed to an allocator's resize or free function.
-        pub fn items(self: *const Self) []Obj(T) {
+        pub fn items(self: *const Self) []Rml.Obj(T) {
             return self.native_array.items;
         }
 
         /// Get the last element of the array.
-        pub fn last(self: *const Self) ?Obj(T) {
+        pub fn last(self: *const Self) ?Rml.Obj(T) {
             return if (self.native_array.items.len > 0) self.native_array.items[self.native_array.items.len - 1]
             else null;
         }
 
         /// Get an element of the array.
-        pub fn get(self: *const Self, index: usize) ?Obj(T) {
+        pub fn get(self: *const Self, index: usize) ?Rml.Obj(T) {
             return if (index < self.native_array.items.len) self.native_array.items[index]
             else null;
         }
@@ -94,7 +82,7 @@ pub fn TypedArray (comptime T: type) type {
         /// Moves list[0 .. list.len] to higher indices to make room.
         /// This operation is O(N).
         /// Invalidates element pointers.
-        pub fn prepend(self: *Self, val: Obj(T)) OOM! void {
+        pub fn prepend(self: *Self, val: Rml.Obj(T)) Rml.OOM! void {
             try self.native_array.insert(self.allocator, 0, val);
         }
 
@@ -102,20 +90,20 @@ pub fn TypedArray (comptime T: type) type {
         /// Moves list[i .. list.len] to higher indices to make room.
         /// This operation is O(N).
         /// Invalidates element pointers.
-        pub fn insert(self: *Self, index: usize, val: Obj(T)) OOM! void {
+        pub fn insert(self: *Self, index: usize, val: Rml.Obj(T)) Rml.OOM! void {
             try self.native_array.insert(self.allocator, index, val);
         }
 
         /// Extend the array by 1 element.
         /// Allocates more memory as necessary.
         /// Invalidates element pointers if additional memory is needed.
-        pub fn append(self: *Self, val: Obj(T)) OOM! void {
+        pub fn append(self: *Self, val: Rml.Obj(T)) Rml.OOM! void {
             try self.native_array.append(self.allocator, val);
         }
 
         /// Append the slice of items to the array. Allocates more memory as necessary.
         /// Invalidates element pointers if additional memory is needed.
-        pub fn appendSlice(self: *Self, slice: []const Obj(T)) OOM! void {
+        pub fn appendSlice(self: *Self, slice: []const Rml.Obj(T)) Rml.OOM! void {
             try self.native_array.appendSlice(self.allocator, slice);
         }
     };

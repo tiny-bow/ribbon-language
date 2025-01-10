@@ -1,20 +1,6 @@
 const std = @import("std");
 
 const Rml = @import("root.zig");
-const Error = Rml.Error;
-const Ordering = Rml.Ordering;
-const OOM = Rml.OOM;
-const const_ptr = Rml.const_ptr;
-const ptr = Rml.ptr;
-const Obj = Rml.Obj;
-const Object = Rml.Object;
-const Writer = Rml.Writer;
-const getHeader = Rml.getHeader;
-const getOrigin = Rml.getOrigin;
-const getTypeId = Rml.getTypeId;
-const getObj = Rml.getObj;
-const getRml = Rml.getRml;
-const forceObj = Rml.forceObj;
 
 
 pub const Table = TypedMap(Rml.Symbol, Rml.ObjData);
@@ -26,22 +12,22 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
         const Self = @This();
 
         pub const NativeIter = NativeMap.Iterator;
-        pub const NativeMap = std.ArrayHashMapUnmanaged(Obj(K), Obj(V), Rml.SimpleHashContext, true);
+        pub const NativeMap = std.ArrayHashMapUnmanaged(Rml.Obj(K), Rml.Obj(V), Rml.SimpleHashContext, true);
 
         allocator: std.mem.Allocator,
         native_map: NativeMap = .{},
 
 
-        pub fn onCompare(a: *Self, other: Object) Ordering {
-            var ord = Rml.compare(getTypeId(a), other.getTypeId());
+        pub fn onCompare(a: *Self, other: Rml.Object) Rml.Ordering {
+            var ord = Rml.compare(Rml.getTypeId(a), other.getTypeId());
             if (ord == .Equal) {
-                const b = forceObj(Self, other);
+                const b = Rml.forceObj(Self, other);
                 ord = a.compare(b.data.*);
             }
             return ord;
         }
 
-        pub fn compare(self: Self, other: Self) Ordering {
+        pub fn compare(self: Self, other: Self) Rml.Ordering {
             var ord = Rml.compare(self.keys().len, other.keys().len);
 
             if (ord == .Equal) {
@@ -59,25 +45,25 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
             return writer.print("{}", .{self});
         }
 
-        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) Error! void {
-            writer.writeAll("map{") catch |err| return Rml.errorCast(err);
+        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+            try writer.writeAll("map{");
 
             var it = self.native_map.iterator();
             while (it.next()) |entry| {
-                writer.print("({} {})", .{entry.key_ptr.*, entry.value_ptr.*}) catch |err| return Rml.errorCast(err);
+                try writer.print("({} {})", .{entry.key_ptr.*, entry.value_ptr.*});
                 if (it.index < it.len) {
-                    writer.writeAll(" ") catch |err| return Rml.errorCast(err);
+                    try writer.writeAll(" ");
                 }
             }
 
-            writer.writeAll("}") catch |err| return Rml.errorCast(err);
+            try writer.writeAll("}");
         }
 
 
 
 
         /// Set the value associated with a key
-        pub fn set(self: *Self, key: Obj(K), val: Obj(V)) OOM! void {
+        pub fn set(self: *Self, key: Rml.Obj(K), val: Rml.Obj(V)) Rml.OOM! void {
             if (self.native_map.getEntry(key)) |entry| {
                 entry.key_ptr.* = key;
                 entry.value_ptr.* = val;
@@ -87,7 +73,7 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
         }
 
         /// Find the value associated with a key
-        pub fn get(self: *const Self, key: Obj(K)) ?Obj(V) {
+        pub fn get(self: *const Self, key: Rml.Obj(K)) ?Rml.Obj(V) {
             return self.native_map.get(key);
         }
 
@@ -97,7 +83,7 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
         }
 
         /// Check whether a key is stored in the map
-        pub fn contains(self: *const Self, key: Obj(K)) bool {
+        pub fn contains(self: *const Self, key: Rml.Obj(K)) bool {
             return self.native_map.contains(key);
         }
 
@@ -108,14 +94,14 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
 
         /// Returns the backing array of keys in this map. Modifying the map may invalidate this array.
         /// Modifying this array in a way that changes key hashes or key equality puts the map into an unusable state until reIndex is called.
-        pub fn keys(self: *const Self) []Obj(K) {
+        pub fn keys(self: *const Self) []Rml.Obj(K) {
             return self.native_map.keys();
         }
 
         /// Returns the backing array of values in this map.
         /// Modifying the map may invalidate this array.
         /// It is permitted to modify the values in this array.
-        pub fn values(self: *const Self) []Obj(V) {
+        pub fn values(self: *const Self) []Rml.Obj(V) {
             return self.native_map.values();
         }
 
@@ -123,19 +109,19 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
         /// If the underlying keys have been modified directly,
         /// call this method to recompute the denormalized metadata
         /// necessary for the operation of the methods of this map that lookup entries by key.
-        pub fn reIndex(self: *Self, rml: *Rml) OOM! void {
+        pub fn reIndex(self: *Self, rml: *Rml) Rml.OOM! void {
             return self.native_map.reIndex(rml.blobAllocator());
         }
 
         /// Convert a map to an array of key-value pairs.
-        pub fn toArray(self: *Self) OOM! Obj(Rml.Array) {
-            const rml = getRml(self);
+        pub fn toArray(self: *Self) Rml.OOM! Rml.Obj(Rml.Array) {
+            const rml = Rml.getRml(self);
             var it = self.native_map.iterator();
 
-            var out: Obj(Rml.Array) = try .wrap(rml, getOrigin(self), .{.allocator = rml.blobAllocator()});
+            var out: Rml.Obj(Rml.Array) = try .wrap(rml, Rml.getOrigin(self), .{.allocator = rml.blobAllocator()});
 
             while (it.next()) |entry| {
-                var pair: Obj(Rml.Array) = try .wrap(rml, getOrigin(self), try .create(rml.blobAllocator(), &.{
+                var pair: Rml.Obj(Rml.Array) = try .wrap(rml, Rml.getOrigin(self), try .create(rml.blobAllocator(), &.{
                     entry.key_ptr.typeErase(),
                     entry.value_ptr.typeErase(),
                 }));
@@ -146,12 +132,12 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
             return out;
         }
 
-        pub fn clone(self: *Self) OOM! Self {
+        pub fn clone(self: *Self) Rml.OOM! Self {
             const newMap = Self { .allocator = self.allocator, .native_map = try self.native_map.clone(self.allocator) };
             return newMap;
         }
 
-        pub fn copyFrom(self: *Self, other: *Self) OOM! void {
+        pub fn copyFrom(self: *Self, other: *Self) Rml.OOM! void {
             var it = other.native_map.iterator();
             while (it.next()) |entry| {
                 try self.set(entry.key_ptr.*, entry.value_ptr.*);

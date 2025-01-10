@@ -1,30 +1,21 @@
 const std = @import("std");
 
 const Rml = @import("root.zig");
-const Ordering = Rml.Ordering;
-const OOM = Rml.OOM;
-const Error = Rml.Error;
-const ptr = Rml.ptr;
-const Obj = Rml.Obj;
-const Object = Rml.Object;
-const Writer = Rml.Writer;
-const getHeader = Rml.getHeader;
-const forceObj = Rml.forceObj;
-const getObj = Rml.getObj;
-const getRml = Rml.getRml;
+
+
 
 pub const Symbol = struct {
     str: Rml.str,
 
-    pub fn create(rml: *Rml, str: []const u8) OOM! Symbol {
+    pub fn create(rml: *Rml, str: []const u8) Rml.OOM! Symbol {
         return .{ .str = try rml.storage.intern(str) };
     }
 
-    pub fn onCompare(self: *Symbol, other: Object) Ordering {
-        var ord = Rml.compare(getHeader(self).type_id, other.getTypeId());
+    pub fn onCompare(self: *Symbol, other: Rml.Object) Rml.Ordering {
+        var ord = Rml.compare(Rml.getHeader(self).type_id, other.getTypeId());
 
         if (ord == .Equal) {
-            const b = forceObj(Symbol, other);
+            const b = Rml.forceObj(Symbol, other);
 
             ord = Rml.compare(@intFromPtr(self.str.ptr), @intFromPtr(b.data.str.ptr));
             if (ord == .Equal) {

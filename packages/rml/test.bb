@@ -31,7 +31,6 @@ print-ln `(1 2 3)
 print-ln `(1 2 ,(foo 2))
 print-ln `(1 2 ,@'(3 4))
 
-
 local incrBy = fun x
     fun y
         + x
@@ -41,11 +40,8 @@ local incr = incrBy 2
 print-ln (incr 1)
 print-ln (incr 2)
 
-
 local mac = macro x `(print-ln ,x)
 mac 1003
-
-
 
 local closure = fun x
     local a = fun y + x y
@@ -55,22 +51,16 @@ local closure = fun x
 local (a b) = closure 1
 
 a 1
-
 b 2
-
 a 1
-
 
 local check-self = fun()
     print-ln "check-self " check-self
 
 (check-self)
 
-
 global one-hundred = 100
 print-ln one-hundred
-
-
 
 import type
 

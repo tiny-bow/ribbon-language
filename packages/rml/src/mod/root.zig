@@ -79,6 +79,8 @@ pub const Map = map.Map;
 
 pub const NativeFunction = bindgen.NativeFunction;
 pub const Origin = source.Origin;
+pub const Range = source.Range;
+pub const Pos = source.Pos;
 pub const Obj = object.Obj;
 pub const ObjData = object.ObjData;
 pub const Object = object.Object;
@@ -135,8 +137,8 @@ pub const Diagnostic = struct {
             logger.err("{s} {}: {s}", .{@errorName(self.err), self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len]});
         }
 
-        pub fn format(self: Formatter, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) Error! void {
-            w.print("{s} {}: {s}", .{@errorName(self.err), self.diag.error_origin,self. diag.message_mem[0..self.diag.message_len]}) catch |err| return Rml.errorCast(err);
+        pub fn format(self: Formatter, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror! void {
+            return w.print("{s} {}: {s}", .{@errorName(self.err), self.diag.error_origin,self. diag.message_mem[0..self.diag.message_len]});
         }
     };
 };

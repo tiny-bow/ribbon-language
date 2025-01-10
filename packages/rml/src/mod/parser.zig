@@ -1,65 +1,38 @@
 const std = @import("std");
-const MiscUtils = @import("Utils").Misc;
 const TextUtils = @import("Utils").Text;
 
 const Rml = @import("root.zig");
-const Ordering = Rml.Ordering;
-const Error = Rml.Error;
-const OOM = Rml.OOM;
-const log = Rml.log;
-const Object = Rml.Object;
-const Obj = Rml.Obj;
-const ptr = Rml.ptr;
-const getObj = Rml.getObj;
-const getTypeId = Rml.getTypeId;
-const getRml = Rml.getRml;
-const castObj = Rml.castObj;
-const forceObj = Rml.forceObj;
-const String = Rml.String;
-const Symbol = Rml.Symbol;
-const Quote = Rml.Quote;
-const Map = Rml.Map;
-const Array = Rml.Array;
-const Writer = Rml.Writer;
-const PropertySet = Rml.object.PropertySet;
-const Origin = Rml.source.Origin;
-const Range = Rml.source.Range;
-const Pos = Rml.source.Pos;
-const str = Rml.str;
-const Int = Rml.Int;
-const Float = Rml.Float;
-const Char = Rml.Char;
 
 
 pub const parsing = std.log.scoped(.parsing);
 
 
-pub const SyntaxError = error{ SyntaxError, UnexpectedInput, UnexpectedEOF } || TextUtils.Error;
+pub const SyntaxError = error{ SyntaxError, UnexpectedInput, UnexpectedEOF, BadEncoding };
 
 pub const Parser = struct {
-    input: Obj(String),
-    filename: str,
-    buffer_pos: Pos,
-    rel_offset: Pos,
-    peek_cache: ?Object,
-    char_peek_cache: ?Char,
+    input: Rml.Obj(Rml.String),
+    filename: Rml.str,
+    buffer_pos: Rml.Pos,
+    rel_offset: Rml.Pos,
+    peek_cache: ?Rml.Object,
+    char_peek_cache: ?Rml.Char,
 
-    pub fn create(filename: str, input: Obj(String)) Parser {
+    pub fn create(filename: Rml.str, input: Rml.Obj(Rml.String)) Parser {
         return .{
             .input = input,
             .filename = filename,
-            .buffer_pos = Pos { .line = 0, .column = 0, .offset = 0, .indentation = 0 },
-            .rel_offset = Pos { .line = 1, .column = 1, .offset = 0, .indentation = 0 },
+            .buffer_pos = Rml.Pos { .line = 0, .column = 0, .offset = 0, .indentation = 0 },
+            .rel_offset = Rml.Pos { .line = 1, .column = 1, .offset = 0, .indentation = 0 },
             .peek_cache = null,
             .char_peek_cache = null,
         };
     }
 
-    pub fn onCompare(a: *Parser, other: Object) Ordering {
-        var ord = Rml.compare(getTypeId(a), other.getTypeId());
+    pub fn onCompare(a: *Parser, other: Rml.Object) Rml.Ordering {
+        var ord = Rml.compare(Rml.getTypeId(a), other.getTypeId());
 
         if (ord == .Equal) {
-            const b = forceObj(Parser, other);
+            const b = Rml.forceObj(Parser, other);
             ord = Rml.compare(@intFromPtr(a), @intFromPtr(b.data));
         }
 
@@ -70,11 +43,11 @@ pub const Parser = struct {
         return writer.print("Parser{x}", .{@intFromPtr(self)});
     }
 
-    pub fn peek(self: *Parser) Error! ?Object {
+    pub fn peek(self: *Parser) Rml.Error! ?Rml.Object {
         return self.peekWith(&self.peek_cache);
     }
 
-    pub fn offsetPos(self: *Parser, pos: Pos) Pos {
+    pub fn offsetPos(self: *Parser, pos: Rml.Pos) Rml.Pos {
         return .{
             .line = pos.line + self.rel_offset.line,
             .column = pos.column + self.rel_offset.column,
@@ -83,11 +56,11 @@ pub const Parser = struct {
         };
     }
 
-    pub fn getOffsetPos(self: *Parser) Pos {
+    pub fn getOffsetPos(self: *Parser) Rml.Pos {
         return self.offsetPos(self.buffer_pos);
     }
 
-    pub fn peekWith(self: *Parser, peek_cache: *?Object) Error! ?Object {
+    pub fn peekWith(self: *Parser, peek_cache: *?Rml.Object) Rml.Error! ?Rml.Object {
         if (peek_cache.*) |cachedObject| {
             parsing.debug("peek: using cached object", .{});
             return cachedObject;
@@ -95,9 +68,9 @@ pub const Parser = struct {
 
         parsing.debug("peek: parsing object", .{});
 
-        const rml = getRml(self);
+        const rml = Rml.getRml(self);
 
-        var properties = try self.scan() orelse PropertySet{};
+        var properties = try self.scan() orelse Rml.object.PropertySet{};
 
         if (try self.parseAnyBlockClosing()) {
             return null;
@@ -114,11 +87,11 @@ pub const Parser = struct {
         return obj;
     }
 
-    pub fn next(self: *Parser) Error! ?Object {
+    pub fn next(self: *Parser) Rml.Error! ?Rml.Object {
         return self.nextWith(&self.peek_cache);
     }
 
-    pub fn nextWith(self: *Parser, peek_cache: *?Object) Error! ?Object {
+    pub fn nextWith(self: *Parser, peek_cache: *?Rml.Object) Rml.Error! ?Rml.Object {
         const result = try self.peekWith(peek_cache) orelse return null;
 
         peek_cache.* = null;
@@ -127,29 +100,29 @@ pub const Parser = struct {
     }
 
 
-    pub fn setOffset(self: *Parser, offset: Pos) void {
+    pub fn setOffset(self: *Parser, offset: Rml.Pos) void {
         self.rel_offset = offset;
     }
 
     pub fn clearOffset(self: *Parser) void {
-        self.rel_offset = Pos { .line = 1, .column = 1, .offset = 0 };
+        self.rel_offset = Rml.Pos { .line = 1, .column = 1, .offset = 0 };
     }
 
-    pub fn getOrigin(self: *Parser, start: ?Pos, end: ?Pos) Origin {
+    pub fn getOrigin(self: *Parser, start: ?Rml.Pos, end: ?Rml.Pos) Rml.Origin {
         return self.getOffsetOrigin(
             if (start) |x| self.offsetPos(x) else null,
             if (end) |x| self.offsetPos(x) else null,
         );
     }
 
-    pub fn getOffsetOrigin(self: *Parser, start: ?Pos, end: ?Pos) Origin {
-        return Origin {
+    pub fn getOffsetOrigin(self: *Parser, start: ?Rml.Pos, end: ?Rml.Pos) Rml.Origin {
+        return Rml.Origin {
             .filename = self.filename,
-            .range = Range { .start = start, .end = end },
+            .range = Rml.Range { .start = start, .end = end },
         };
     }
 
-    pub fn parseObject(self: *Parser) Error! ?Object {
+    pub fn parseObject(self: *Parser) Rml.Error! ?Rml.Object {
         parsing.debug("parseObject {?u}", .{self.peekChar() catch null});
         errdefer parsing.debug("parseObject failed", .{});
 
@@ -163,7 +136,7 @@ pub const Parser = struct {
         return result;
     }
 
-    pub fn parseAtom(self: *Parser) Error! ?Object {
+    pub fn parseAtom(self: *Parser) Rml.Error! ?Rml.Object {
         parsing.debug("parseAtom", .{});
         errdefer parsing.debug("parseAtom failed", .{});
 
@@ -179,11 +152,11 @@ pub const Parser = struct {
         return result;
     }
 
-    pub fn parseQuote(self: *Parser, quoteKind: Rml.quote.QuoteKind) Error! ?Obj(Rml.Quote) {
+    pub fn parseQuote(self: *Parser, quoteKind: Rml.quote.QuoteKind) Rml.Error! ?Rml.Obj(Rml.Quote) {
         parsing.debug("parseQuote", .{});
         errdefer parsing.debug("parseQuote failed", .{});
 
-        const rml = getRml(self);
+        const rml = Rml.getRml(self);
         const start = self.buffer_pos;
 
         if (!try self.parseQuoteOpening(quoteKind)) {
@@ -195,18 +168,18 @@ pub const Parser = struct {
             try self.failed(self.getOrigin(self.buffer_pos, null),
                 "expected an object to follow quote operator `{s}`", .{quoteKind.toStr()});
 
-        const result: Obj(Quote) = try .wrap(rml, self.getOrigin(start, self.buffer_pos), .{ .kind = quoteKind, .body = body });
+        const result: Rml.Obj(Rml.Quote) = try .wrap(rml, self.getOrigin(start, self.buffer_pos), .{ .kind = quoteKind, .body = body });
 
         parsing.debug("parseQuote result: {?}", .{result});
 
         return result;
     }
 
-    pub fn parseAnyQuote(self: *Parser) Error! ?Obj(Rml.Quote) {
+    pub fn parseAnyQuote(self: *Parser) Rml.Error! ?Rml.Obj(Rml.Quote) {
         parsing.debug("parseQuote", .{});
         errdefer parsing.debug("parseQuote failed", .{});
 
-        const rml = getRml(self);
+        const rml = Rml.getRml(self);
         const start = self.buffer_pos;
 
         const quoteKind = try self.parseAnyQuoteOpening() orelse return null;
@@ -217,14 +190,14 @@ pub const Parser = struct {
             try self.failed(self.getOrigin(self.buffer_pos, null),
                 "expected an object to follow quote operator `{s}`", .{quoteKind.toStr()});
 
-        const result: Obj(Quote) = try .wrap(rml, self.getOrigin(start, self.buffer_pos), .{ .kind = quoteKind, .body = body });
+        const result: Rml.Obj(Rml.Quote) = try .wrap(rml, self.getOrigin(start, self.buffer_pos), .{ .kind = quoteKind, .body = body });
 
         parsing.debug("parseQuote result: {?}", .{result});
 
         return result;
     }
 
-    pub fn parseBlock(self: *Parser, blockKind: Rml.block.BlockKind) Error! ?Obj(Rml.Block) {
+    pub fn parseBlock(self: *Parser, blockKind: Rml.block.BlockKind) Rml.Error! ?Rml.Obj(Rml.Block) {
         parsing.debug("parseBlock", .{});
         errdefer parsing.debug("parseBlock failed", .{});
 
@@ -241,7 +214,7 @@ pub const Parser = struct {
         return result;
     }
 
-    pub fn parseAnyBlock(self: *Parser) Error! ?Obj(Rml.Block) {
+    pub fn parseAnyBlock(self: *Parser) Rml.Error! ?Rml.Obj(Rml.Block) {
         parsing.debug("parseBlock", .{});
         errdefer parsing.debug("parseBlock failed", .{});
 
@@ -258,12 +231,12 @@ pub const Parser = struct {
         return result;
     }
 
-    pub fn nextBlob(self: *Parser) Error! ?[]Object {
+    pub fn nextBlob(self: *Parser) Rml.Error! ?[]Rml.Object {
         return self.nextBlobWith(&self.peek_cache);
     }
 
-    pub fn nextBlobWith(self: *Parser, peekCache: *?Object) Error! ?[]Object {
-        var blob: std.ArrayListUnmanaged(Object) = .{};
+    pub fn nextBlobWith(self: *Parser, peekCache: *?Rml.Object) Rml.Error! ?[]Rml.Object {
+        var blob: std.ArrayListUnmanaged(Rml.Object) = .{};
 
         const first = try self.peekWith(peekCache) orelse {
             return null;
@@ -275,7 +248,7 @@ pub const Parser = struct {
             break :next nxt;
         }) |sourceExpr| {
             {
-                try blob.append(getRml(self).blobAllocator(), sourceExpr);
+                try blob.append(Rml.getRml(self).blobAllocator(), sourceExpr);
             }
 
             const nxt: Rml.Object = try self.peekWith(peekCache) orelse break :blob;
@@ -288,13 +261,13 @@ pub const Parser = struct {
         return try self.blobify(.same_indent, start, blob.items);
     }
 
-    pub fn blobify(self: *Parser, heuristic: enum {same_indent, domain}, start: Pos, blob: []Object) Error! []Object {
+    pub fn blobify(self: *Parser, heuristic: enum {same_indent, domain}, start: Rml.Pos, blob: []Rml.Object) Rml.Error! []Rml.Object {
         const end = blob[blob.len - 1].getOrigin().range.?.end.?;
         const blobOrigin = self.getOffsetOrigin(start, end);
 
         parsing.debug("blobify: {any}", .{blob});
 
-        var array: std.ArrayListUnmanaged(Object) = .{};
+        var array: std.ArrayListUnmanaged(Rml.Object) = .{};
 
         var i: usize = 0;
         for (blob) |item| {
@@ -305,7 +278,7 @@ pub const Parser = struct {
                 .domain => if (!isIndentationDomain(start, pos)) break,
             }
 
-            try array.append(getRml(self).blobAllocator(), item);
+            try array.append(Rml.getRml(self).blobAllocator(), item);
             i += 1;
         }
 
@@ -323,7 +296,7 @@ pub const Parser = struct {
 
             switch (heuristic) {
                 .domain => {
-                    const firstLine = try Rml.Obj(Rml.Block).wrap(getRml(self), blobOrigin, try .create(getRml(self), .doc, array.items));
+                    const firstLine = try Rml.Obj(Rml.Block).wrap(Rml.getRml(self), blobOrigin, try .create(Rml.getRml(self), .doc, array.items));
 
                     var allDocBlock = true;
                     for (newBlob) |item| {
@@ -340,36 +313,36 @@ pub const Parser = struct {
 
                     if (allDocBlock) {
                         parsing.debug("concat", .{});
-                        return std.mem.concat(getRml(self).blobAllocator(), Object, &.{&.{firstLine.typeErase()}, newBlob});
+                        return std.mem.concat(Rml.getRml(self).blobAllocator(), Rml.Object, &.{&.{firstLine.typeErase()}, newBlob});
                     } else {
                         parsing.debug("append first line, wrap", .{});
-                        var newArr: std.ArrayListUnmanaged(Object) = .{};
-                        try newArr.append(getRml(self).blobAllocator(), firstLine.typeErase());
-                        try newArr.append(getRml(self).blobAllocator(), (try Rml.Obj(Rml.Block).wrap(getRml(self), blobOrigin, try .create(getRml(self), .doc, newBlob))).typeErase());
+                        var newArr: std.ArrayListUnmanaged(Rml.Object) = .{};
+                        try newArr.append(Rml.getRml(self).blobAllocator(), firstLine.typeErase());
+                        try newArr.append(Rml.getRml(self).blobAllocator(), (try Rml.Obj(Rml.Block).wrap(Rml.getRml(self), blobOrigin, try .create(Rml.getRml(self), .doc, newBlob))).typeErase());
 
                         return newArr.items;
                     }
                 },
                 .same_indent => {
                     parsing.debug("append", .{});
-                    try array.append(getRml(self).blobAllocator(), (try Rml.Obj(Rml.Block).wrap(getRml(self), blobOrigin, try .create(getRml(self), .doc, newBlob))).typeErase());
+                    try array.append(Rml.getRml(self).blobAllocator(), (try Rml.Obj(Rml.Block).wrap(Rml.getRml(self), blobOrigin, try .create(Rml.getRml(self), .doc, newBlob))).typeErase());
                     return array.items;
                 }
             }
         }
     }
 
-    fn parseBlockTail(self: *Parser, start: Pos, blockKind: Rml.block.BlockKind) Error! Obj(Rml.Block) {
-        const rml = getRml(self);
+    fn parseBlockTail(self: *Parser, start: Rml.Pos, blockKind: Rml.block.BlockKind) Rml.Error! Rml.Obj(Rml.Block) {
+        const rml = Rml.getRml(self);
 
-        var array: std.ArrayListUnmanaged(Object) = .{};
+        var array: std.ArrayListUnmanaged(Rml.Object) = .{};
 
-        var properties = try self.scan() orelse PropertySet{};
+        var properties = try self.scan() orelse Rml.object.PropertySet{};
 
         var tailDeinit = true;
         var tailProperties: Rml.object.PropertySet = .{};
 
-        var peekCache: ?Object = null;
+        var peekCache: ?Rml.Object = null;
 
         while (true) {
             if (self.isEof() and blockKind != .doc) {
@@ -388,7 +361,7 @@ pub const Parser = struct {
 
                 const blobOrigin = self.getOffsetOrigin(blob[0].getOrigin().range.?.start.?, blob[blob.len - 1].getOrigin().range.?.end.?);
 
-                try array.append(rml.blobAllocator(), (try Rml.Obj(Rml.Block).wrap(getRml(self), blobOrigin, try .create(getRml(self), .doc, blob))).typeErase());
+                try array.append(rml.blobAllocator(), (try Rml.Obj(Rml.Block).wrap(Rml.getRml(self), blobOrigin, try .create(Rml.getRml(self), .doc, blob))).typeErase());
             }
 
             if (try self.scan()) |props| {
@@ -405,7 +378,7 @@ pub const Parser = struct {
 
         const origin = self.getOrigin(start, self.buffer_pos);
 
-        const block: Obj(Rml.Block) = block: {
+        const block: Rml.Obj(Rml.Block) = block: {
             if (array.items.len == 1) {
                 const item = array.items[0];
                 if (Rml.castObj(Rml.Block, item)) |x| {
@@ -425,9 +398,9 @@ pub const Parser = struct {
         };
 
         if (tailProperties.count() > 0) {
-            const sym: Obj(Symbol) = try .wrap(rml, origin, try .create(rml, "tail"));
+            const sym: Rml.Obj(Rml.Symbol) = try .wrap(rml, origin, try .create(rml, "tail"));
 
-            const map: Obj(Map) = try .wrap(rml, origin, .{ .allocator = rml.blobAllocator(), .native_map = @as(*Map.NativeMap, @ptrCast(&tailProperties)).* });
+            const map: Rml.Obj(Rml.Map) = try .wrap(rml, origin, .{ .allocator = rml.blobAllocator(), .native_map = @as(*Rml.Map.NativeMap, @ptrCast(&tailProperties)).* });
             tailDeinit = false;
 
             try block.getHeader().properties.put(rml.blobAllocator(), sym, map.typeErase());
@@ -436,7 +409,7 @@ pub const Parser = struct {
         return block;
     }
 
-    pub fn parseQuoteOpening(self: *Parser, kind : Rml.quote.QuoteKind) Error! bool {
+    pub fn parseQuoteOpening(self: *Parser, kind : Rml.quote.QuoteKind) Rml.Error! bool {
         const openStr = kind.toStr();
 
         std.debug.assert(!std.mem.eql(u8, openStr, ""));
@@ -444,7 +417,7 @@ pub const Parser = struct {
         return try self.expectSlice(openStr);
     }
 
-    pub fn parseAnyQuoteOpening(self: *Parser) Error! ?Rml.quote.QuoteKind {
+    pub fn parseAnyQuoteOpening(self: *Parser) Rml.Error! ?Rml.quote.QuoteKind {
         inline for (comptime std.meta.fieldNames(Rml.quote.QuoteKind)) |quoteKindName| {
             const quoteKind = @field(Rml.quote.QuoteKind, quoteKindName);
             const openStr = comptime quoteKind.toStr();
@@ -460,7 +433,7 @@ pub const Parser = struct {
         return null;
     }
 
-    pub fn parseBlockOpening(self: *Parser, kind: Rml.block.BlockKind) Error! bool {
+    pub fn parseBlockOpening(self: *Parser, kind: Rml.block.BlockKind) Rml.Error! bool {
         const openStr = kind.toOpenStr();
 
         if (std.mem.eql(u8, openStr, "")) {
@@ -476,7 +449,7 @@ pub const Parser = struct {
         }
     }
 
-    pub fn parseAnyBlockOpening(self: *Parser) Error! ?Rml.block.BlockKind {
+    pub fn parseAnyBlockOpening(self: *Parser) Rml.Error! ?Rml.block.BlockKind {
         inline for (comptime std.meta.fieldNames(Rml.block.BlockKind)) |blockKindName| {
             const blockKind = @field(Rml.block.BlockKind, blockKindName);
             const openStr = comptime blockKind.toOpenStr();
@@ -492,7 +465,7 @@ pub const Parser = struct {
         return null;
     }
 
-    pub fn parseBlockClosing(self: *Parser, kind: Rml.block.BlockKind) Error! bool {
+    pub fn parseBlockClosing(self: *Parser, kind: Rml.block.BlockKind) Rml.Error! bool {
         const closeStr = kind.toCloseStr();
 
         if (std.mem.eql(u8, closeStr, "")) {
@@ -508,7 +481,7 @@ pub const Parser = struct {
         }
     }
 
-    pub fn parseAnyBlockClosing(self: *Parser) Error! bool {
+    pub fn parseAnyBlockClosing(self: *Parser) Rml.Error! bool {
         inline for (comptime std.meta.fieldNames(Rml.block.BlockKind)) |blockKindName| {
             const blockKind = @field(Rml.block.BlockKind, blockKindName);
             const closeStr = comptime blockKind.toCloseStr();
@@ -527,11 +500,11 @@ pub const Parser = struct {
         }
     }
 
-    pub fn parseInt(self: *Parser) Error! ?Obj(Rml.Int) {
+    pub fn parseInt(self: *Parser) Rml.Error! ?Rml.Obj(Rml.Int) {
         parsing.debug("parseInt {?u}", .{self.peekChar() catch null});
         errdefer parsing.debug("parseInt failed", .{});
 
-        const rml = getRml(self);
+        const rml = Rml.getRml(self);
         const start = self.buffer_pos;
 
         var int: Rml.Int = 0;
@@ -554,18 +527,18 @@ pub const Parser = struct {
             return null;
         }
 
-        const result: Obj(Rml.Int) = try .wrap(rml, self.getOrigin(start, self.buffer_pos), int * sign);
+        const result: Rml.Obj(Rml.Int) = try .wrap(rml, self.getOrigin(start, self.buffer_pos), int * sign);
 
         parsing.debug("parseInt result: {}", .{result});
 
         return result;
     }
 
-    pub fn parseFloat(self: *Parser) Error! ?Obj(Rml.Float) {
+    pub fn parseFloat(self: *Parser) Rml.Error! ?Rml.Obj(Rml.Float) {
         parsing.debug("parseFloat {?u}", .{self.peekChar() catch null});
         errdefer parsing.debug("parseFloat failed", .{});
 
-        const rml = getRml(self);
+        const rml = Rml.getRml(self);
         const start = self.buffer_pos;
 
         var int: Rml.Float = 0;
@@ -619,18 +592,18 @@ pub const Parser = struct {
             return null;
         }
 
-        const result = try Rml.Obj(Float).wrap(rml, self.getOrigin(start, self.buffer_pos), (int + frac) * sign * std.math.pow(Rml.Float, 10.0, exp));
+        const result = try Rml.Obj(Rml.Float).wrap(rml, self.getOrigin(start, self.buffer_pos), (int + frac) * sign * std.math.pow(Rml.Float, 10.0, exp));
 
         parsing.debug("parseFloat result: {}", .{result});
 
         return result;
     }
 
-    pub fn parseChar(self: *Parser) Error! ?Obj(Char) {
+    pub fn parseChar(self: *Parser) Rml.Error! ?Rml.Obj(Rml.Char) {
         parsing.debug("parseChar {?u}", .{self.peekChar() catch null});
         errdefer parsing.debug("parseChar failed", .{});
 
-        const rml = getRml(self);
+        const rml = Rml.getRml(self);
         const start = self.buffer_pos;
 
         if (!try self.expectChar('\'')) {
@@ -641,7 +614,7 @@ pub const Parser = struct {
         const ch = ch: {
             if (try self.peekChar()) |ch| {
                 if (ch == '\\') {
-                    break :ch try self.require(Char, expectEscape, .{});
+                    break :ch try self.require(Rml.Char, expectEscape, .{});
                 } else if (ch != '\'' and !TextUtils.isControl(ch)) {
                     try self.advChar();
                     break :ch ch;
@@ -659,18 +632,18 @@ pub const Parser = struct {
             return null;
         }
 
-        const result: Obj(Char) = try .wrap(rml, self.getOrigin(start, self.buffer_pos), ch);
+        const result: Rml.Obj(Rml.Char) = try .wrap(rml, self.getOrigin(start, self.buffer_pos), ch);
 
         parsing.debug("parseChar result: {}", .{result});
 
         return result;
     }
 
-    pub fn parseString(self: *Parser) Error! ?Obj(String) {
+    pub fn parseString(self: *Parser) Rml.Error! ?Rml.Obj(Rml.String) {
         parsing.debug("parseString {?u}", .{self.peekChar() catch null});
         errdefer parsing.debug("parseString failed", .{});
 
-        const rml = getRml(self);
+        const rml = Rml.getRml(self);
         const start = self.buffer_pos;
 
         if (!try self.expectChar('"')) {
@@ -678,7 +651,7 @@ pub const Parser = struct {
             return null;
         }
 
-        var textBuffer: String = try .create(rml, "");
+        var textBuffer: Rml.String = try .create(rml, "");
 
         while (try self.peekChar()) |ch| {
             if (ch == '"') {
@@ -686,11 +659,11 @@ pub const Parser = struct {
 
                 parsing.debug("parseString result: {s}", .{textBuffer.text()});
 
-                return try Obj(String).wrap(rml, self.getOrigin(start, self.buffer_pos), textBuffer);
+                return try Rml.Obj(Rml.String).wrap(rml, self.getOrigin(start, self.buffer_pos), textBuffer);
             }
 
             const i =
-                if (ch == '\\') try self.require(Char, expectEscape, .{})
+                if (ch == '\\') try self.require(Rml.Char, expectEscape, .{})
                 else if (!TextUtils.isControl(ch)) try self.nextChar() orelse return error.UnexpectedEOF
                 else return error.UnexpectedInput;
 
@@ -700,7 +673,7 @@ pub const Parser = struct {
         return error.UnexpectedEOF;
     }
 
-    pub fn parseSymbolic(self: *Parser) Error! ?Object {
+    pub fn parseSymbolic(self: *Parser) Rml.Error! ?Rml.Object {
         const sym = try self.parseSymbol() orelse return null;
 
         const BUILTIN_SYMS = .{
@@ -715,7 +688,7 @@ pub const Parser = struct {
 
         inline for (comptime std.meta.fieldNames(@TypeOf(BUILTIN_SYMS))) |builtinSym| {
             if (std.mem.eql(u8, builtinSym, sym.data.str)) {
-                const obj = try Rml.bindgen.toObjectConst(getRml(self), sym.getOrigin(), @field(BUILTIN_SYMS, builtinSym));
+                const obj = try Rml.bindgen.toObjectConst(Rml.getRml(self), sym.getOrigin(), @field(BUILTIN_SYMS, builtinSym));
 
                 return obj.typeErase();
             }
@@ -724,8 +697,8 @@ pub const Parser = struct {
         return sym.typeErase();
     }
 
-    pub fn parseSymbol(self: *Parser) Error! ?Obj(Symbol) {
-        const rml = getRml(self);
+    pub fn parseSymbol(self: *Parser) Rml.Error! ?Rml.Obj(Rml.Symbol) {
+        const rml = Rml.getRml(self);
 
         const start = self.buffer_pos;
 
@@ -744,14 +717,14 @@ pub const Parser = struct {
             return null;
         }
 
-        const result: Obj(Symbol) = try .wrap(rml, self.getOrigin(start, self.buffer_pos), try .create(rml, self.input.data.text()[start.offset..self.buffer_pos.offset]));
+        const result: Rml.Obj(Rml.Symbol) = try .wrap(rml, self.getOrigin(start, self.buffer_pos), try .create(rml, self.input.data.text()[start.offset..self.buffer_pos.offset]));
 
         parsing.debug("parseSymbol result: {s}", .{result});
 
         return result;
     }
 
-    pub fn expectChar(self: *Parser, ch: Char) Error! bool {
+    pub fn expectChar(self: *Parser, ch: Rml.Char) Rml.Error! bool {
         if (try self.peekChar() == ch) {
             try self.advChar();
             return true;
@@ -760,7 +733,7 @@ pub const Parser = struct {
         return false;
     }
 
-    pub fn expectAnyChar(self: *Parser, chars: []const Char) Error! ?Char {
+    pub fn expectAnyChar(self: *Parser, chars: []const Rml.Char) Rml.Error! ?Rml.Char {
         if (try self.peekChar()) |ch| {
             for (chars) |c| {
                 if (ch == c) {
@@ -773,7 +746,7 @@ pub const Parser = struct {
         return null;
     }
 
-    pub fn expectAnySlice(self: *Parser, slices: []const []const u8) Error! ?[]const u8 {
+    pub fn expectAnySlice(self: *Parser, slices: []const []const u8) Rml.Error! ?[]const u8 {
         const start = self.buffer_pos;
 
         slices: for (slices) |slice| {
@@ -792,7 +765,7 @@ pub const Parser = struct {
         return null;
     }
 
-    pub fn expectSlice(self: *Parser, slice: []const u8) Error! bool {
+    pub fn expectSlice(self: *Parser, slice: []const u8) Rml.Error! bool {
         const start = self.buffer_pos;
 
         for (slice) |ch| {
@@ -807,7 +780,7 @@ pub const Parser = struct {
         return true;
     }
 
-    pub fn expectEscape(self: *Parser) Error! ?Char {
+    pub fn expectEscape(self: *Parser) Rml.Error! ?Rml.Char {
         const start = self.buffer_pos;
 
         if (!try self.expectChar('\\')) {
@@ -815,7 +788,7 @@ pub const Parser = struct {
         }
 
         if (try self.nextChar()) |ch| ch: {
-            const x: Char = switch (ch) {
+            const x: Rml.Char = switch (ch) {
                 '0' => '\x00',
                 'n' => '\n',
                 'r' => '\r',
@@ -834,7 +807,7 @@ pub const Parser = struct {
         return null;
     }
 
-    pub fn expectDecimalDigit(self: *Parser) Error! ?u8 {
+    pub fn expectDecimalDigit(self: *Parser) Rml.Error! ?u8 {
         if (try self.peekChar()) |ch| {
             if (TextUtils.decimalValue(ch)) |value| {
                 try self.advChar();
@@ -846,7 +819,7 @@ pub const Parser = struct {
     }
 
 
-    pub fn expectOptionalSign(self: *Parser, comptime T: type) Error! ?T {
+    pub fn expectOptionalSign(self: *Parser, comptime T: type) Rml.Error! ?T {
         if (try self.peekChar()) |ch| {
             if (ch == '-') {
                 try self.advChar();
@@ -861,13 +834,13 @@ pub const Parser = struct {
         return null;
     }
 
-    pub fn scan(self: *Parser) Error! ?PropertySet {
-        const rml = getRml(self);
+    pub fn scan(self: *Parser) Rml.Error! ?Rml.object.PropertySet {
+        const rml = Rml.getRml(self);
         var propertyState: union(enum) { none, start, inside: struct { []const u8, u32 } } = .none;
 
-        var propertySet: PropertySet = .{};
+        var propertySet: Rml.object.PropertySet = .{};
 
-        var start: Pos = undefined;
+        var start: Rml.Pos = undefined;
 
         while (try self.peekChar()) |ch| {
             switch (propertyState) {
@@ -898,8 +871,8 @@ pub const Parser = struct {
 
                         const origin = self.getOrigin(start, self.buffer_pos);
 
-                        const sym: Obj(Symbol) = try .wrap(rml, origin, try .create(rml, state[0]));
-                        const string: Obj(String) = try .wrap(rml, origin, try .create(rml, self.input.data.text()[state[1]..self.buffer_pos.offset]));
+                        const sym: Rml.Obj(Rml.Symbol) = try .wrap(rml, origin, try .create(rml, state[0]));
+                        const string: Rml.Obj(Rml.String) = try .wrap(rml, origin, try .create(rml, self.input.data.text()[state[1]..self.buffer_pos.offset]));
 
                         // FIXME: this is overwriting, should concat
                         try propertySet.put(rml.blobAllocator(), sym, string.typeErase());
@@ -915,15 +888,15 @@ pub const Parser = struct {
         return propertySet;
     }
 
-    pub fn reset(self: *Parser, pos: Pos) void {
+    pub fn reset(self: *Parser, pos: Rml.Pos) void {
         self.buffer_pos = pos;
         self.char_peek_cache = null;
     }
 
-    pub fn failed(self: *Parser, origin: Origin, comptime fmt: []const u8, args: anytype) Error! noreturn {
+    pub fn failed(self: *Parser, origin: Rml.Origin, comptime fmt: []const u8, args: anytype) Rml.Error! noreturn {
         const err = if (self.isEof()) error.UnexpectedEOF else error.UnexpectedInput;
 
-        const diagnostic = getRml(self).diagnostic orelse return err;
+        const diagnostic = Rml.getRml(self).diagnostic orelse return err;
 
         var diag = Rml.Diagnostic {
             .error_origin = origin,
@@ -956,7 +929,7 @@ pub const Parser = struct {
         return self.buffer_pos.offset >= self.input.data.text().len;
     }
 
-    pub fn peekChar(self: *Parser) Error! ?Char {
+    pub fn peekChar(self: *Parser) Rml.Error! ?Rml.Char {
         if (self.isEof()) {
             return null;
         }
@@ -974,7 +947,7 @@ pub const Parser = struct {
         }
     }
 
-    pub fn nextChar(self: *Parser) Error! ?Char {
+    pub fn nextChar(self: *Parser) Rml.Error! ?Rml.Char {
         if (self.peek_cache != null) {
             parsing.err("Parser.nextChar: peek_cache is not null", .{});
             return error.Unexpected;
@@ -1003,11 +976,11 @@ pub const Parser = struct {
         }
     }
 
-    pub fn advChar(self: *Parser) Error! void {
+    pub fn advChar(self: *Parser) Rml.Error! void {
         _ = try self.nextChar();
     }
 
-    pub fn consumeIndent(self: *Parser) Error! void {
+    pub fn consumeIndent(self: *Parser) Rml.Error! void {
         while (try self.peekChar()) |ch| {
             if (TextUtils.isSpace(ch)) {
                 self.buffer_pos.indentation += 1;
@@ -1020,20 +993,20 @@ pub const Parser = struct {
 };
 
 
-pub fn isIndentationDomain(start: Pos, pos: Pos) bool {
-    log.debug("isIndentationDomain? {} {}", .{ start, pos });
+pub fn isIndentationDomain(start: Rml.Pos, pos: Rml.Pos) bool {
+    parsing.debug("isIndentationDomain? {} {}", .{ start, pos });
     const value = ( pos.line == start.line
         and pos.column >= start.column
     ) or ( pos.line > start.line
         and pos.indentation > start.indentation
     );
-    log.debug("isIndentationDomain: {}", .{ value });
+    parsing.debug("isIndentationDomain: {}", .{ value });
     return value;
 }
 
-pub fn isSameLine(start: Pos, pos: Pos) bool {
-    log.debug("isSameLine? {} {}", .{ start, pos });
+pub fn isSameLine(start: Rml.Pos, pos: Rml.Pos) bool {
+    parsing.debug("isSameLine? {} {}", .{ start, pos });
     const value = pos.line == start.line;
-    log.debug("isSameLine: {}", .{ value });
+    parsing.debug("isSameLine: {}", .{ value });
     return value;
 }

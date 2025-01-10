@@ -2,21 +2,7 @@ const std = @import("std");
 const MiscUtils = @import("Utils").Misc;
 const TypeUtils = @import("Utils").Type;
 
-const dispatch = std.log.scoped(.@"object-dispatch");
-
 const Rml = @import("root.zig");
-const Nil = Rml.Nil;
-const Bool = Rml.Bool;
-const bindgen = Rml.bindgen;
-const Error = Rml.Error;
-const Ordering = Rml.Ordering;
-const OOM = Rml.OOM;
-const log = Rml.log;
-const TypeId = Rml.TypeId;
-const map = Rml.map;
-const Writer = Rml.Writer;
-const Symbol = Rml.Symbol;
-const Origin = Rml.Origin;
 
 
 pub const OBJ_ALIGN = 16;
@@ -28,29 +14,29 @@ pub const PropertySet = std.ArrayHashMapUnmanaged(Rml.Obj(Rml.Symbol), Rml.Obj(R
 pub const Header = struct {
     rml: *Rml,
     blob_id: Rml.Storage.BlobId,
-    type_id: TypeId,
+    type_id: Rml.TypeId,
     vtable: *const VTable,
-    origin: Origin,
+    origin: Rml.Origin,
     properties: PropertySet,
 
-    pub fn onInit(self: *Header, comptime T: type, rml: *Rml, origin: Origin) void {
+    pub fn onInit(self: *Header, comptime T: type, rml: *Rml, origin: Rml.Origin) void {
         self.* = Header {
             .rml = rml,
             .blob_id = rml.blobId(),
-            .type_id = TypeId.of(T),
+            .type_id = Rml.TypeId.of(T),
             .vtable = VTable.of(T),
             .origin = origin,
             .properties = .{},
         };
     }
 
-    pub fn onCompare(self: *Header, other: *Header) Ordering {
+    pub fn onCompare(self: *Header, other: *Header) Rml.Ordering {
         const obj = other.getObject();
         return self.vtable.onCompare(self, obj);
     }
 
-    pub fn onFormat(self: *Header, writer: std.io.AnyWriter) Error! void {
-        return self.vtable.onFormat(self, writer) catch |err| Rml.errorCast(err);
+    pub fn onFormat(self: *Header, writer: std.io.AnyWriter) anyerror! void {
+        return self.vtable.onFormat(self, writer);
     }
 
     pub fn getObject(self: *Header) Object {
@@ -74,7 +60,7 @@ pub const VTable = struct {
     pub const ObjMemoryFunctions = struct { };
 
     pub const ObjDataFunctions = struct {
-        onCompare: ?*const fn (*const ObjData, Rml.Object) Ordering = null,
+        onCompare: ?*const fn (*const ObjData, Rml.Object) Rml.Ordering = null,
         onFormat: ?*const fn (*const ObjData, std.io.AnyWriter) anyerror! void = null,
     };
 
@@ -108,7 +94,7 @@ pub const VTable = struct {
                 .obj_data = obj_data: {
                     var functionSet: ObjDataFunctions = .{};
 
-                    const support = bindgen.Support(T);
+                    const support = Rml.bindgen.Support(T);
                     for (std.meta.fields(ObjDataFunctions)) |field| {
                         const funcName = field.name;
 
@@ -126,10 +112,18 @@ pub const VTable = struct {
                         }
                         const fInfo = @typeInfo(F).@"fn";
 
-                        std.debug.assert(!fInfo.is_generic);
-                        std.debug.assert(!fInfo.is_var_args);
-                        std.debug.assert(fInfo.return_type.? == gInfo.return_type.?);
-                        std.debug.assert(fInfo.params.len == gInfo.params.len);
+                        if (fInfo.is_generic) {
+                            @compileError("expected non-generic function: " ++ @typeName(T) ++ "." ++ funcName);
+                        }
+                        if (fInfo.is_var_args) {
+                            @compileError("expected non-variadic function: " ++ @typeName(T) ++ "." ++ funcName);
+                        }
+                        if (fInfo.return_type.? != gInfo.return_type.?) {
+                            @compileError("expected return type: " ++ @typeName(T) ++ "." ++ funcName  ++ ": " ++ @typeName(gInfo.return_type.?) ++ ", got " ++ @typeName(fInfo.return_type.?));
+                        }
+                        if (fInfo.params.len != gInfo.params.len) {
+                            @compileError("invalid param count: " ++ @typeName(T) ++ "." ++ funcName);
+                        }
 
                         @field(functionSet, funcName) = @ptrCast(def);
                     }
@@ -142,16 +136,13 @@ pub const VTable = struct {
         return &x.vtable;
     }
 
-    pub fn onCompare(self: *const VTable, header: *Header, other: Object) Ordering {
+    pub fn onCompare(self: *const VTable, header: *Header, other: Object) Rml.Ordering {
         const data = header.getData();
-        dispatch.debug("VTable/onCompare {s}", .{TypeId.name(header.type_id)});
         return self.obj_data.onCompare.?(data, other);
     }
 
-    pub fn onFormat(self: *const VTable, header: *Header, writer: std.io.AnyWriter) Error! void {
+    pub fn onFormat(self: *const VTable, header: *Header, writer: std.io.AnyWriter) Rml.Error! void {
         const data = header.getData();
-        // too noisy
-        // dispatch.debug("VTable/onFormat {s}", .{TypeId.name(header.type_id)});
         return self.obj_data.onFormat.?(data, writer) catch |err| Rml.errorCast(err);
     }
 };
@@ -165,7 +156,7 @@ pub fn ObjMemory (comptime T: type) type {
         header: TypeUtils.ToBytes(Header) align(OBJ_ALIGN),
         data: TypeUtils.ToBytes(T) align(OBJ_ALIGN),
 
-        pub fn onInit(self: *Self, rml: *Rml, origin: Origin, data: T) void {
+        pub fn onInit(self: *Self, rml: *Rml, origin: Rml.Origin, data: T) void {
             Header.onInit(@ptrCast(&self.header), T, rml, origin);
             self.data = std.mem.toBytes(data);
         }
@@ -174,7 +165,7 @@ pub fn ObjMemory (comptime T: type) type {
             return @ptrCast(&self.header);
         }
 
-        pub fn getTypeId(self: *Self) TypeId {
+        pub fn getTypeId(self: *Self) Rml.TypeId {
             return self.getHeader().type_id;
         }
 
@@ -197,7 +188,7 @@ pub fn Obj(comptime T: type) type {
             return .{ .data = @alignCast(@ptrCast(self.data)) };
         }
 
-        pub fn wrap(rml: *Rml, origin: Origin, val: T) OOM! Self {
+        pub fn wrap(rml: *Rml, origin: Rml.Origin, val: T) Rml.OOM! Self {
             const memory = try rml.blobAllocator().create(ObjMemory(T));
 
             memory.onInit(rml, origin, val);
@@ -205,7 +196,7 @@ pub fn Obj(comptime T: type) type {
             return Self { .data = memory.getData() };
         }
 
-        pub fn compare(self: Self, other: Obj(T)) Ordering {
+        pub fn compare(self: Self, other: Obj(T)) Rml.Ordering {
             return self.getHeader().onCompare(other.getHeader());
         }
 
@@ -223,11 +214,11 @@ pub fn Obj(comptime T: type) type {
             return @ptrCast(&getMemory(self).header);
         }
 
-        pub fn getTypeId(self: Self) TypeId {
+        pub fn getTypeId(self: Self) Rml.TypeId {
             return self.getHeader().type_id;
         }
 
-        pub fn getOrigin(self: Self) Origin {
+        pub fn getOrigin(self: Self) Rml.Origin {
             return self.getHeader().origin;
         }
 
@@ -235,11 +226,11 @@ pub fn Obj(comptime T: type) type {
             return self.getHeader().rml;
         }
 
-        pub fn onCompare(self: Self, other: Object) Ordering {
+        pub fn onCompare(self: Self, other: Object) Rml.Ordering {
             return self.getHeader().onCompare(other.getHeader());
         }
 
-        pub fn onFormat(self: Self, writer: std.io.AnyWriter) Error! void {
+        pub fn onFormat(self: Self, writer: std.io.AnyWriter) anyerror! void {
             return self.getHeader().onFormat(writer);
         }
     };
@@ -253,11 +244,11 @@ pub fn getHeader(p: anytype) *Header {
     return getObj(p).getHeader();
 }
 
-pub fn getOrigin(p: anytype) Origin {
+pub fn getOrigin(p: anytype) Rml.Origin {
     return getHeader(p).origin;
 }
 
-pub fn getTypeId(p: anytype) TypeId {
+pub fn getTypeId(p: anytype) Rml.TypeId {
     return getHeader(p).type_id;
 }
 
@@ -270,7 +261,7 @@ pub fn castObj(comptime T: type, obj: Object) ?Obj(T) {
 }
 
 pub fn isType(comptime T: type, obj: Object) bool {
-    return MiscUtils.equal(obj.getTypeId(), TypeId.of(T));
+    return MiscUtils.equal(obj.getTypeId(), Rml.TypeId.of(T));
 }
 
 pub fn isUserdata(obj: Object) bool {
@@ -279,10 +270,10 @@ pub fn isUserdata(obj: Object) bool {
 
 pub fn isBuiltinType(comptime T: type) bool {
     return comptime {
-        const typeId = TypeId.of(T);
+        const typeId = Rml.TypeId.of(T);
 
         for (std.meta.fields(@TypeOf(Rml.BUILTIN_TYPES))) |builtin| {
-            if (Rml.equal(typeId, TypeId.of(@field(Rml.BUILTIN_TYPES, builtin.name)))) return true;
+            if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.BUILTIN_TYPES, builtin.name)))) return true;
         }
 
         return false;
@@ -293,7 +284,7 @@ pub fn isBuiltin(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.BUILTIN_TYPES))) |builtin| {
-        if (Rml.equal(typeId, TypeId.of(@field(Rml.BUILTIN_TYPES, builtin.name)))) return true;
+        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.BUILTIN_TYPES, builtin.name)))) return true;
     }
 
     return false;
@@ -303,7 +294,7 @@ pub fn isValue(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.VALUE_TYPES))) |value| {
-        if (Rml.equal(typeId, TypeId.of(@field(Rml.VALUE_TYPES, value.name)))) return true;
+        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.VALUE_TYPES, value.name)))) return true;
     }
 
     return false;
@@ -313,7 +304,7 @@ pub fn isAtom(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.ATOM_TYPES))) |atom| {
-        if (Rml.equal(typeId, TypeId.of(@field(Rml.ATOM_TYPES, atom.name)))) return true;
+        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.ATOM_TYPES, atom.name)))) return true;
     }
 
     return false;
@@ -323,7 +314,7 @@ pub fn isData(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.DATA_TYPES))) |data| {
-        if (Rml.equal(typeId, TypeId.of(@field(Rml.DATA_TYPES, data.name)))) return true;
+        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.DATA_TYPES, data.name)))) return true;
     }
 
     return false;
@@ -333,7 +324,7 @@ pub fn isObject(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.OBJECT_TYPES))) |object| {
-        if (Rml.equal(typeId, TypeId.of(@field(Rml.OBJECT_TYPES, object.name)))) return true;
+        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.OBJECT_TYPES, object.name)))) return true;
     }
 
     return false;
@@ -343,7 +334,7 @@ pub fn isSource(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.SOURCE_TYPES))) |source| {
-        if (Rml.equal(typeId, TypeId.of(@field(Rml.SOURCE_TYPES, source.name)))) return true;
+        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.SOURCE_TYPES, source.name)))) return true;
     }
 
     return false;
@@ -353,17 +344,17 @@ pub fn isCollection(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.COLLECTION_TYPES))) |collection| {
-        if (Rml.equal(typeId, TypeId.of(@field(Rml.COLLECTION_TYPES, collection.name)))) return true;
+        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.COLLECTION_TYPES, collection.name)))) return true;
     }
 
     return false;
 }
 
 pub fn isObjectType(comptime T: type) bool {
-    const typeId = TypeId.of(T);
+    const typeId = Rml.TypeId.of(T);
 
     inline for (comptime std.meta.fields(Rml.OBJECT_TYPES)) |field| {
-        if (Rml.equal(typeId, TypeId.of(@field(Rml.COLLECTION_TYPES, field.name)))) return true;
+        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.COLLECTION_TYPES, field.name)))) return true;
     }
 
     return false;
@@ -374,17 +365,17 @@ pub fn forceObj(comptime T: type, obj: Object) Obj(T) {
 }
 
 
-pub fn coerceBool(obj: Object) Bool {
-    if (castObj(Bool, obj)) |b| {
+pub fn coerceBool(obj: Object) Rml.Bool {
+    if (castObj(Rml.Bool, obj)) |b| {
         return b.data.*;
-    } else if (isType(Nil, obj)) {
+    } else if (isType(Rml.Nil, obj)) {
         return false;
     } else {
         return true;
     }
 }
 
-pub fn coerceArray(obj: Object) OOM! ?Obj(Rml.Array) {
+pub fn coerceArray(obj: Object) Rml.OOM! ?Obj(Rml.Array) {
     if (castObj(Rml.Array, obj)) |x| return x
     else if (castObj(Rml.Map, obj)) |x| {
         return try x.data.toArray();
@@ -413,7 +404,7 @@ pub fn isExactString(name: []const u8, obj: Object) bool {
 }
 
 pub fn isExactSymbol(name: []const u8, obj: Object) bool {
-    if (castObj(Symbol, obj)) |sym| {
+    if (castObj(Rml.Symbol, obj)) |sym| {
         return std.mem.eql(u8, sym.data.text(), name);
     } else {
         return false;

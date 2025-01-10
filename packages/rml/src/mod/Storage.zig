@@ -2,9 +2,9 @@ const std = @import("std");
 const MiscUtils = @import("Utils").Misc;
 
 const Rml = @import("root.zig");
-const OOM = Rml.OOM;
 
 const Storage = @This();
+
 
 
 long_term: std.mem.Allocator,
@@ -13,7 +13,7 @@ permanent: std.heap.ArenaAllocator,
 blob: ?Blob = null,
 _fresh: usize = 0,
 /// callback should use rml.storage.blob for return allocator
-read_file_callback: ?*const fn (rml: *Rml, []const u8) (Rml.IOError || OOM)![]const u8 = null,
+read_file_callback: ?*const fn (rml: *Rml, []const u8) (Rml.IOError || Rml.OOM)![]const u8 = null,
 userstate: *anyopaque = undefined,
 origin: Rml.Origin = undefined,
 
@@ -38,7 +38,7 @@ pub const BlobId = enum(usize) {
 };
 
 
-pub fn init(long_term: std.mem.Allocator) OOM! Storage {
+pub fn init(long_term: std.mem.Allocator) Rml.OOM! Storage {
     return .{
         .long_term = long_term,
         .map = .{},
@@ -103,7 +103,7 @@ pub fn getNoAlloc(self: *const Storage, key: []const u8) ?Rml.str {
     return null;
 }
 
-pub fn intern(self: *Storage, key: []const u8) OOM! Rml.str {
+pub fn intern(self: *Storage, key: []const u8) Rml.OOM! Rml.str {
     return self.getNoAlloc(key) orelse {
         const ownedKey = try self.permanent.allocator().dupe(u8, key);
         try self.map.put(self.long_term, ownedKey, {});

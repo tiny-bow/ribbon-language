@@ -1,22 +1,6 @@
 const std = @import("std");
-const MiscUtils = @import("Utils").Misc;
-
 
 const Rml = @import("root.zig");
-const Ordering = Rml.Ordering;
-const Error = Rml.Error;
-const OOM = Rml.OOM;
-const ptr = Rml.ptr;
-const Obj = Rml.Obj;
-const ObjData = Rml.ObjData;
-const Object = Rml.Object;
-const Writer = Rml.Writer;
-const Interpreter = Rml.Interpreter;
-const getObj = Rml.getObj;
-const getTypeId = Rml.getTypeId;
-const forceObj = Rml.forceObj;
-const getRml = Rml.getRml;
-const isAtom = Rml.isAtom;
 
 
 pub const QuoteKind = enum {
@@ -53,18 +37,18 @@ pub const QuoteKind = enum {
 
 pub const Quote = struct {
     kind: QuoteKind,
-    body: Object,
+    body: Rml.Object,
 
-    pub fn onInit(self: *Quote, kind: QuoteKind, body: Object) void {
+    pub fn onInit(self: *Quote, kind: QuoteKind, body: Rml.Object) void {
         self.kind = kind;
         self.body = body;
     }
 
-    pub fn onCompare(self: *Quote, other: Object) Ordering {
-        var ord = Rml.compare(getTypeId(self), other.getTypeId());
+    pub fn onCompare(self: *Quote, other: Rml.Object) Rml.Ordering {
+        var ord = Rml.compare(Rml.getTypeId(self), other.getTypeId());
 
         if (ord == .Equal) {
-            const other_quote = forceObj(Quote, other);
+            const other_quote = Rml.forceObj(Quote, other);
 
             ord = Rml.compare(self.kind, other_quote.data.kind);
 
@@ -81,7 +65,7 @@ pub const Quote = struct {
         try self.body.onFormat(writer);
     }
 
-    pub fn run(self: *Quote, interpreter: *Interpreter) Rml.Result! Object {
+    pub fn run(self: *Quote, interpreter: *Rml.Interpreter) Rml.Result! Rml.Object {
         switch (self.kind) {
             .basic => {
                 Rml.interpreter.evaluation.debug("evaluating basic quote {}", .{self});
@@ -94,12 +78,12 @@ pub const Quote = struct {
             .to_quote => {
                 Rml.interpreter.evaluation.debug("evaluating to_quote quote {}", .{self});
                 const val = try interpreter.eval(self.body);
-                return (try Obj(Quote).wrap(getRml(self), self.body.getOrigin(), .{.kind = .basic, .body = val})).typeErase();
+                return (try Rml.Obj(Quote).wrap(Rml.getRml(self), self.body.getOrigin(), .{.kind = .basic, .body = val})).typeErase();
             },
             .to_quasi => {
                 Rml.interpreter.evaluation.debug("evaluating to_quasi quote {}", .{self});
                 const val = try interpreter.eval(self.body);
-                return (try Obj(Quote).wrap(getRml(self), self.body.getOrigin(), .{.kind = .quasi, .body = val})).typeErase();
+                return (try Rml.Obj(Quote).wrap(Rml.getRml(self), self.body.getOrigin(), .{.kind = .quasi, .body = val})).typeErase();
             },
             else => {
                 try interpreter.abort(Rml.getOrigin(self), error.TypeError, "unexpected {s}", .{@tagName(self.kind)});
@@ -109,8 +93,8 @@ pub const Quote = struct {
 };
 
 
-pub fn runQuasi(interpreter: *Interpreter, body: Object, out: ?*std.ArrayListUnmanaged(Object)) Rml.Result! Object {
-    const rml = getRml(interpreter);
+pub fn runQuasi(interpreter: *Rml.Interpreter, body: Rml.Object, out: ?*std.ArrayListUnmanaged(Rml.Object)) Rml.Result! Rml.Object {
+    const rml = Rml.getRml(interpreter);
 
     if (Rml.castObj(Quote, body)) |quote| quote: {
         const origin = quote.getOrigin();
@@ -120,11 +104,11 @@ pub fn runQuasi(interpreter: *Interpreter, body: Object, out: ?*std.ArrayListUnm
             .quasi => break :quote,
             .to_quote => {
                 const ranBody = try runQuasi(interpreter, quote.data.body, null);
-                return (try Obj(Quote).wrap(rml, origin, .{.kind = .basic, .body = ranBody})).typeErase();
+                return (try Rml.Obj(Quote).wrap(rml, origin, .{.kind = .basic, .body = ranBody})).typeErase();
             },
             .to_quasi => {
                 const ranBody = try runQuasi(interpreter, quote.data.body, null);
-                return (try Obj(Quote).wrap(rml, origin, .{.kind = .quasi, .body = ranBody})).typeErase();
+                return (try Rml.Obj(Quote).wrap(rml, origin, .{.kind = .quasi, .body = ranBody})).typeErase();
             },
             .unquote => {
                 return interpreter.eval(quote.data.body);
@@ -144,11 +128,11 @@ pub fn runQuasi(interpreter: *Interpreter, body: Object, out: ?*std.ArrayListUnm
                     try outArr.append(rml.blobAllocator(), item);
                 }
 
-                return (try Obj(Rml.Nil).wrap(rml, origin, .{})).typeErase();
+                return (try Rml.Obj(Rml.Nil).wrap(rml, origin, .{})).typeErase();
             }
         }
     } else if (Rml.castObj(Rml.Block, body)) |block| {
-        var subOut: std.ArrayListUnmanaged(Object) = .{};
+        var subOut: std.ArrayListUnmanaged(Rml.Object) = .{};
 
         for (block.data.array.items) |item| {
             const len = subOut.items.len;
@@ -162,7 +146,7 @@ pub fn runQuasi(interpreter: *Interpreter, body: Object, out: ?*std.ArrayListUnm
             }
         }
 
-        return (try Obj(Rml.Block).wrap(rml, block.getOrigin(), try .create(getRml(interpreter), block.data.kind, subOut.items))).typeErase();
+        return (try Rml.Obj(Rml.Block).wrap(rml, block.getOrigin(), try .create(Rml.getRml(interpreter), block.data.kind, subOut.items))).typeErase();
     }
 
     return body;

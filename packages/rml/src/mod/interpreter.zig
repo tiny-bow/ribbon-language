@@ -1,34 +1,12 @@
 const std = @import("std");
-const MiscUtils = @import("Utils").Misc;
 
 const Rml = @import("root.zig");
-const Ordering = Rml.Ordering;
-const Error = Rml.Error;
-const OOM = Rml.OOM;
-const log = Rml.log;
-const Object = Rml.Object;
-const Origin = Rml.Origin;
-const Obj = Rml.Obj;
-const ptr = Rml.ptr;
-const Nil = Rml.Nil;
-const Env = Rml.Env;
-const Symbol = Rml.Symbol;
-const Block = Rml.Block;
-const Quote = Rml.Quote;
-const Writer = Rml.Writer;
-const getObj = Rml.getObj;
-const getHeader = Rml.getHeader;
-const getTypeId = Rml.getTypeId;
-const getRml = Rml.getRml;
-const castObj = Rml.castObj;
-const forceObj = Rml.forceObj;
-const downgradeCast = Rml.downgradeCast;
 
 
 pub const evaluation = std.log.scoped(.evaluation);
 
 
-pub const Result = Signal || Error || Rml.parser.SyntaxError;
+pub const Result = Signal || Rml.Error;
 pub const Signal = error { Terminate };
 pub const EvalError = error {
     TypeError,
@@ -39,34 +17,34 @@ pub const EvalError = error {
 };
 
 pub const Interpreter = struct {
-    evaluation_env: Obj(Env),
+    evaluation_env: Rml.Obj(Rml.Env),
 
-    pub fn create(rml: *Rml) OOM! Interpreter {
-        return .{.evaluation_env = try Obj(Env).wrap(rml, try .fromStr(rml, "system"), .{.allocator = rml.blobAllocator()})};
+    pub fn create(rml: *Rml) Rml.OOM! Interpreter {
+        return .{.evaluation_env = try Rml.Obj(Rml.Env).wrap(rml, try .fromStr(rml, "system"), .{.allocator = rml.blobAllocator()})};
     }
 
-    pub fn onCompare(a: *Interpreter, other: Object) Ordering {
+    pub fn onCompare(a: *Interpreter, other: Rml.Object) Rml.Ordering {
         return Rml.compare(@intFromPtr(a), @intFromPtr(other.data));
     }
 
     pub fn onFormat(self: *Interpreter, writer: std.io.AnyWriter) anyerror! void {
-        return writer.print("Obj(Interpreter){x}", .{@intFromPtr(self)});
+        return writer.print("Rml.Obj(Interpreter){x}", .{@intFromPtr(self)});
     }
 
-    pub fn reset(self: *Interpreter) OOM! void {
-        const rml = getRml(self);
-        self.evaluation_env = try Obj(Env).wrap(rml, getHeader(self).origin, .{.allocator = rml.blobAllocator()});
+    pub fn reset(self: *Interpreter) Rml.OOM! void {
+        const rml = Rml.getRml(self);
+        self.evaluation_env = try Rml.Obj(Rml.Env).wrap(rml, Rml.getHeader(self).origin, .{.allocator = rml.blobAllocator()});
     }
 
-    pub fn castObj(self: *Interpreter, comptime T: type, object: Object) Error! Obj(T) {
+    pub fn castObj(self: *Interpreter, comptime T: type, object: Rml.Object) Rml.Error! Rml.Obj(T) {
         if (Rml.castObj(T, object)) |x| return x
         else {
             try self.abort(object.getOrigin(), error.TypeError, "expected `{s}`, got `{s}`", .{@typeName(T), Rml.TypeId.name(object.getTypeId())});
         }
     }
 
-    pub fn abort(self: *Interpreter, origin: Origin, err: Error, comptime fmt: []const u8, args: anytype) Error! noreturn {
-        const diagnostic = getRml(self).diagnostic orelse return err;
+    pub fn abort(self: *Interpreter, origin: Rml.Origin, err: Rml.Error, comptime fmt: []const u8, args: anytype) Rml.Error! noreturn {
+        const diagnostic = Rml.getRml(self).diagnostic orelse return err;
 
         var diag = Rml.Diagnostic {
             .error_origin = origin,
@@ -75,7 +53,7 @@ pub const Interpreter = struct {
         // the error produced is only NoSpaceLeft, if the buffer is too small, so give the length of the buffer
         diag.message_len = len: {
             break :len (std.fmt.bufPrintZ(&diag.message_mem, fmt, args) catch {
-                log.warn("Diagnostic message too long, truncating", .{});
+                evaluation.warn("Diagnostic message too long, truncating", .{});
                 break :len Rml.Diagnostic.MAX_LENGTH;
             }).len;
         };
@@ -85,24 +63,24 @@ pub const Interpreter = struct {
         return err;
     }
 
-    pub fn eval(self: *Interpreter, expr: Object) Result! Object {
+    pub fn eval(self: *Interpreter, expr: Rml.Object) Result! Rml.Object {
         var offset: usize = 0;
         return self.evalCheck(false, &.{expr}, &offset, null);
     }
 
-    pub fn evalAll(self: *Interpreter, exprs: []const Object) Result! []Object {
-        var results: std.ArrayListUnmanaged(Object) = .{};
+    pub fn evalAll(self: *Interpreter, exprs: []const Rml.Object) Result! []Rml.Object {
+        var results: std.ArrayListUnmanaged(Rml.Object) = .{};
 
         for (exprs) |expr| {
             const value = try self.eval(expr);
 
-            try results.append(getRml(self).blobAllocator(), value);
+            try results.append(Rml.getRml(self).blobAllocator(), value);
         }
 
         return results.items;
     }
 
-    pub fn evalCheck(self: *Interpreter, shouldInvoke: bool, program: []const Object, offset: *usize, workDone: ?*bool) Result! Object {
+    pub fn evalCheck(self: *Interpreter, shouldInvoke: bool, program: []const Rml.Object, offset: *usize, workDone: ?*bool) Result! Rml.Object {
         evaluation.debug("evalCheck {any} @ {}", .{program, offset.*});
 
         const blob = program[offset.*..];
@@ -111,10 +89,10 @@ pub const Interpreter = struct {
             const out = program[offset.*];
             offset.* += 1;
             break :expr out;
-        } else (try Obj(Rml.Nil).wrap(getRml(self), Rml.source.blobOrigin(blob), .{})).typeErase();
+        } else (try Rml.Obj(Rml.Nil).wrap(Rml.getRml(self), Rml.source.blobOrigin(blob), .{})).typeErase();
 
         const value = value: {
-            if (Rml.castObj(Symbol, expr)) |symbol| {
+            if (Rml.castObj(Rml.Symbol, expr)) |symbol| {
 
                 if (workDone) |x| x.* = true;
 
@@ -123,7 +101,7 @@ pub const Interpreter = struct {
                 break :value self.lookup(symbol) orelse {
                     try self.abort(expr.getOrigin(), error.UnboundSymbol, "no symbol `{s}` in evaluation environment", .{symbol});
                 };
-            } else if (Rml.castObj(Block, expr)) |block| {
+            } else if (Rml.castObj(Rml.Block, expr)) |block| {
                 if (block.data.length() == 0) {
                     evaluation.debug("empty block", .{});
                     break :value expr;
@@ -155,16 +133,16 @@ pub const Interpreter = struct {
         }
     }
 
-    pub fn lookup(self: *Interpreter, symbol: Obj(Symbol)) ?Object {
+    pub fn lookup(self: *Interpreter, symbol: Rml.Obj(Rml.Symbol)) ?Rml.Object {
         return self.evaluation_env.data.get(symbol)
-        orelse getRml(self).global_env.data.get(symbol);
+        orelse Rml.getRml(self).global_env.data.get(symbol);
     }
 
-    pub fn runProgram(self: *Interpreter, shouldInvoke: bool, program: []const Object) Result! Object {
+    pub fn runProgram(self: *Interpreter, shouldInvoke: bool, program: []const Rml.Object) Result! Rml.Object {
         evaluation.debug("runProgram {}:{any}", .{program});
 
 
-        var last: Object = (try Obj(Rml.Nil).wrap(getRml(self), Rml.source.blobOrigin(program), .{})).typeErase();
+        var last: Rml.Object = (try Rml.Obj(Rml.Nil).wrap(Rml.getRml(self), Rml.source.blobOrigin(program), .{})).typeErase();
 
         evaluation.debug("runProgram - begin loop", .{});
 
@@ -180,7 +158,7 @@ pub const Interpreter = struct {
         return last;
     }
 
-    pub fn invoke(self: *Interpreter, callOrigin: Origin, blame: Object, callable: Object, args: []const Object) Result! Object {
+    pub fn invoke(self: *Interpreter, callOrigin: Rml.Origin, blame: Rml.Object, callable: Rml.Object, args: []const Rml.Object) Result! Rml.Object {
         if (Rml.castObj(Rml.procedure.Procedure, callable)) |procedure| {
             return procedure.data.call(self, callOrigin, blame, args);
         } else {

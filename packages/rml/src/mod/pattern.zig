@@ -1,31 +1,14 @@
 const std = @import("std");
-const MiscUtils = @import("Utils").Misc;
+
+const Rml = @import("root.zig");
+
 
 const patternMatching = std.log.scoped(.@"pattern-matching");
 
-const Rml = @import("root.zig");
-const Error = Rml.Error;
-const Ordering = Rml.Ordering;
-const OOM = Rml.OOM;
-const const_ptr = Rml.const_ptr;
-const ptr = Rml.ptr;
-const Obj = Rml.Obj;
-const Object = Rml.Object;
-const Procedure = Rml.Procedure;
-const Char = Rml.Char;
-const String = Rml.String;
-const Array = Rml.Array;
-const Symbol = Rml.Symbol;
-const getHeader = Rml.getHeader;
-const getOrigin = Rml.getOrigin;
-const getObj = Rml.getObj;
-const getRml = Rml.getRml;
-const forceObj = Rml.forceObj;
-const coerceBool = Rml.coerceBool;
 
 pub const Alias = struct {
-    sym: Obj(Symbol),
-    sub: Object,
+    sym: Rml.Obj(Rml.Symbol),
+    sub: Rml.Object,
 };
 
 
@@ -34,40 +17,40 @@ pub const Pattern = union(enum) {
     wildcard: void,
 
     // x                    ;variable
-    symbol: Obj(Symbol),
+    symbol: Rml.Obj(Rml.Symbol),
 
     // () [] {}             ;interchangeable block syntax
     // ~() ~[] ~{}          ;literal block syntax
-    block: Obj(Rml.Block),
+    block: Rml.Obj(Rml.Block),
 
     // nil true 1 'c' "foo" ;literal
-    value_literal: Object,
+    value_literal: Rml.Object,
 
     // *(foo?) *(@foo x y)  ;procedural literal syntax
-    procedure: Object,
+    procedure: Rml.Object,
 
     // 'foo '(foo)          ;value-wise quotation
     // `foo `(foo)          ;pattern-wise quotation
     // ,foo ,@foo           ;unquote, unquote-splicing
-    quote: Obj(Rml.Quote),
+    quote: Rml.Obj(Rml.Quote),
 
     // (as symbol patt)     ;aliasing ;outer block is not-a-block
     alias: Alias,
 
     // x y z                ;bare sequence
-    sequence: Obj(Array),
+    sequence: Rml.Obj(Rml.Array),
 
     // (? patt)             ;optional ;outer block is not-a-block
-    optional: Object,
+    optional: Rml.Object,
 
     // (* patt)             ;zero or more ;outer block is not-a-block
-    zero_or_more: Object,
+    zero_or_more: Rml.Object,
 
     // (+ patt)             ;one or more ;outer block is not-a-block
-    one_or_more: Object,
+    one_or_more: Rml.Object,
 
     // (| patt patt)        ;alternation ;outer block is not-a-block
-    alternation: Obj(Array),
+    alternation: Rml.Obj(Rml.Array),
 
 
     pub fn onFormat (self: *Pattern, writer: std.io.AnyWriter) anyerror! void {
@@ -87,8 +70,8 @@ pub const Pattern = union(enum) {
         }
     }
 
-    pub fn run(self: *Pattern, interpreter: *Rml.Interpreter, diag: ?*?Rml.Diagnostic, origin: Rml.Origin, input: []const Object) Rml.Result! ?Obj(Table) {
-        const obj = getObj(self);
+    pub fn run(self: *Pattern, interpreter: *Rml.Interpreter, diag: ?*?Rml.Diagnostic, origin: Rml.Origin, input: []const Rml.Object) Rml.Result! ?Rml.Obj(Table) {
+        const obj = Rml.getObj(self);
 
         patternMatching.debug("Pattern.run `{} :: {any}` @ {}", .{obj, input, origin});
 
@@ -122,7 +105,7 @@ pub const Pattern = union(enum) {
         return out;
     }
 
-    pub fn parse(diag: ?*?Rml.Diagnostic, input: []const Object) (OOM || Rml.SyntaxError)! ParseResult(Pattern) {
+    pub fn parse(diag: ?*?Rml.Diagnostic, input: []const Rml.Object) (Rml.OOM || Rml.SyntaxError)! ParseResult(Pattern) {
         var offset: usize = 0;
         const pattern = try parsePattern(diag, input, &offset);
         return .{
@@ -134,14 +117,14 @@ pub const Pattern = union(enum) {
 
 pub fn ParseResult(comptime T: type) type {
     return struct {
-        value: Obj(T),
+        value: Rml.Obj(T),
         offset: usize,
     };
 }
 
-pub const Table = Rml.map.TypedMap(Symbol, Rml.ObjData);
+pub const Table = Rml.map.TypedMap(Rml.Symbol, Rml.ObjData);
 
-pub fn patternBinders(patternObj: Object) (OOM || error{BadDomain})! Rml.env.Domain {
+pub fn patternBinders(patternObj: Rml.Object) (Rml.OOM || error{BadDomain})! Rml.env.Domain {
     const rml = patternObj.getRml();
 
     const pattern = Rml.castObj(Pattern, patternObj) orelse return .{};
@@ -218,14 +201,14 @@ pub fn patternBinders(patternObj: Object) (OOM || error{BadDomain})! Rml.env.Dom
 }
 
 
-pub fn nilBinders (interpreter: *Rml.Interpreter, table: Obj(Table), origin: Rml.Origin, patt: Obj(Pattern)) Rml.Result! void {
+pub fn nilBinders (interpreter: *Rml.Interpreter, table: Rml.Obj(Table), origin: Rml.Origin, patt: Rml.Obj(Pattern)) Rml.Result! void {
     var binders = patternBinders(patt.typeErase()) catch |err| switch (err) {
         error.BadDomain => try interpreter.abort(patt.getOrigin(), error.PatternError,
             "bad domain in pattern `{}`", .{patt}),
         error.OutOfMemory => return error.OutOfMemory,
     };
 
-    const nil = (try Obj(Rml.Nil).wrap(getRml(interpreter), origin, .{})).typeErase();
+    const nil = (try Rml.Obj(Rml.Nil).wrap(Rml.getRml(interpreter), origin, .{})).typeErase();
 
     for (binders.keys()) |key| {
         try table.data.set(key, nil);
@@ -236,11 +219,11 @@ pub fn runPattern(
     interpreter: *Rml.Interpreter,
     diag: ?*?Rml.Diagnostic,
     origin: Rml.Origin,
-    pattern: Obj(Pattern),
-    objects: []const Object,
+    pattern: Rml.Obj(Pattern),
+    objects: []const Rml.Object,
     offset: *usize,
-) Rml.Result! ?Obj(Table) {
-    const table: Obj(Table) = try .wrap(getRml(interpreter), origin, .{.allocator = getRml(interpreter).blobAllocator(),});
+) Rml.Result! ?Rml.Obj(Table) {
+    const table: Rml.Obj(Table) = try .wrap(Rml.getRml(interpreter), origin, .{.allocator = Rml.getRml(interpreter).blobAllocator(),});
 
     patternMatching.debug("runPattern `{} :: {?}` {any} {}", .{pattern, if (offset.* < objects.len) objects[offset.*] else null, objects, offset.*});
 
@@ -319,7 +302,7 @@ pub fn runPattern(
             offset.* += 1;
 
             const result = try interpreter.invoke(input.getOrigin(), pattern.typeErase(), procedure, &.{input});
-            if (!coerceBool(result))
+            if (!Rml.coerceBool(result))
                 return patternAbort(diag, input.getOrigin(),
                     "expected a truthy value, got `{}`", .{input});
         },
@@ -343,13 +326,13 @@ pub fn runPattern(
                 },
                 .to_quote => {
                     const v = try interpreter.eval(quote.data.body);
-                    const q = try Obj(Rml.Quote).wrap(getRml(interpreter), quote.getOrigin(), .{ .kind = .basic, .body = v});
+                    const q = try Rml.Obj(Rml.Quote).wrap(Rml.getRml(interpreter), quote.getOrigin(), .{ .kind = .basic, .body = v});
                     if (q.onCompare(input) != .Equal) return patternAbort(diag, input.getOrigin(),
                         "expected `{}`, got `{}`", .{q, input});
                 },
                 .to_quasi => {
                     const v = try interpreter.eval(quote.data.body);
-                    const q = try Obj(Rml.Quote).wrap(getRml(interpreter), quote.getOrigin(), .{ .kind = .quasi, .body = v});
+                    const q = try Rml.Obj(Rml.Quote).wrap(Rml.getRml(interpreter), quote.getOrigin(), .{ .kind = .quasi, .body = v});
                     if (q.onCompare(input) != .Equal) return patternAbort(diag, input.getOrigin(),
                         "expected `{}`, got `{}`", .{q, input});
                 },
@@ -359,7 +342,7 @@ pub fn runPattern(
         },
 
         .alias => |alias| {
-            const sub: Obj(Pattern) = Rml.castObj(Pattern, alias.sub) orelse {
+            const sub: Rml.Obj(Pattern) = Rml.castObj(Pattern, alias.sub) orelse {
                 try interpreter.abort(alias.sub.getOrigin(), error.UnexpectedInput,
                     "alias syntax expects a pattern in this context, found `{}`", .{alias.sub});
             };
@@ -370,7 +353,7 @@ pub fn runPattern(
                 if (offset.* < objects.len) {
                     try table.data.set(alias.sym, objects[offset.*]);
                 } else {
-                    try table.data.set(alias.sym, (try Obj(Rml.Nil).wrap(getRml(interpreter), origin, .{})).typeErase());
+                    try table.data.set(alias.sym, (try Rml.Obj(Rml.Nil).wrap(Rml.getRml(interpreter), origin, .{})).typeErase());
                 }
             }
         },
@@ -416,7 +399,7 @@ pub fn runPattern(
             for (binders.keys()) |key| {
                 const k = key;
 
-                const obj = try Obj(Rml.Array).wrap(getRml(interpreter), origin, .{.allocator = getRml(interpreter).blobAllocator()});
+                const obj = try Rml.Obj(Rml.Array).wrap(Rml.getRml(interpreter), origin, .{.allocator = Rml.getRml(interpreter).blobAllocator()});
 
                 try table.data.set(k, obj.typeErase());
             }
@@ -463,7 +446,7 @@ pub fn runPattern(
             for (binders.keys()) |key| {
                 const k = key;
 
-                const obj = try Obj(Rml.Array).wrap(getRml(interpreter), origin, .{.allocator = getRml(interpreter).blobAllocator()});
+                const obj = try Rml.Obj(Rml.Array).wrap(Rml.getRml(interpreter), origin, .{.allocator = Rml.getRml(interpreter).blobAllocator()});
 
                 try table.data.set(k, obj.typeErase());
             }
@@ -507,7 +490,7 @@ pub fn runPattern(
 
         .alternation => |alternation| {
             const pattObjs = alternation.data.items();
-            var errs: Rml.string.String = try .create(getRml(interpreter), "");
+            var errs: Rml.String = try .create(Rml.getRml(interpreter), "");
 
             const errWriter = errs.writer();
 
@@ -563,11 +546,11 @@ fn runSequence(
     interpreter: *Rml.Interpreter,
     diag: ?*?Rml.Diagnostic,
     origin: Rml.Origin,
-    patterns: []const Object,
-    objects: []const Object,
+    patterns: []const Rml.Object,
+    objects: []const Rml.Object,
     offset: *usize,
-) Rml.Result! ?Obj(Table) {
-    const table: Obj(Table) = try .wrap(getRml(interpreter), origin, .{.allocator = getRml(interpreter).blobAllocator()});
+) Rml.Result! ?Rml.Obj(Table) {
+    const table: Rml.Obj(Table) = try .wrap(Rml.getRml(interpreter), origin, .{.allocator = Rml.getRml(interpreter).blobAllocator()});
 
     for (patterns, 0..) |patternObj, p| {
         _ = p;
@@ -587,7 +570,7 @@ fn runSequence(
     return table;
 }
 
-fn patternAbort(diagnostic: ?*?Rml.Diagnostic, origin: Rml.Origin, comptime fmt: []const u8, args: anytype) ?Obj(Table) {
+fn patternAbort(diagnostic: ?*?Rml.Diagnostic, origin: Rml.Origin, comptime fmt: []const u8, args: anytype) ?Rml.Obj(Table) {
     const diagPtr = diagnostic orelse return null;
 
     var diag = Rml.Diagnostic {
@@ -608,7 +591,7 @@ fn patternAbort(diagnostic: ?*?Rml.Diagnostic, origin: Rml.Origin, comptime fmt:
 }
 
 
-fn abortParse(diagnostic: ?*?Rml.Diagnostic, origin: Rml.Origin, err: (OOM || Rml.SyntaxError), comptime fmt: []const u8, args: anytype) (OOM || Rml.SyntaxError)! noreturn {
+fn abortParse(diagnostic: ?*?Rml.Diagnostic, origin: Rml.Origin, err: (Rml.OOM || Rml.SyntaxError), comptime fmt: []const u8, args: anytype) (Rml.OOM || Rml.SyntaxError)! noreturn {
     const diagPtr = diagnostic orelse return err;
 
     var diag = Rml.Diagnostic {
@@ -628,9 +611,9 @@ fn abortParse(diagnostic: ?*?Rml.Diagnostic, origin: Rml.Origin, err: (OOM || Rm
     return err;
 }
 
-fn parseSequence(rml: *Rml, diag: ?*?Rml.Diagnostic, objects: []const Object, offset: *usize) (OOM || Rml.SyntaxError)! []Obj(Pattern) {
+fn parseSequence(rml: *Rml, diag: ?*?Rml.Diagnostic, objects: []const Rml.Object, offset: *usize) (Rml.OOM || Rml.SyntaxError)! []Rml.Obj(Pattern) {
     patternMatching.debug("parseSequence {any} {}", .{objects, offset.*});
-    var output: std.ArrayListUnmanaged(Obj(Pattern)) = .{};
+    var output: std.ArrayListUnmanaged(Rml.Obj(Pattern)) = .{};
 
     while (offset.* < objects.len) {
         const patt = try parsePattern(diag, objects, offset);
@@ -641,7 +624,7 @@ fn parseSequence(rml: *Rml, diag: ?*?Rml.Diagnostic, objects: []const Object, of
     return output.items;
 }
 
-fn parsePattern(diag: ?*?Rml.Diagnostic, objects: []const Object, offset: *usize) (OOM || Rml.SyntaxError)! Obj(Pattern) {
+fn parsePattern(diag: ?*?Rml.Diagnostic, objects: []const Rml.Object, offset: *usize) (Rml.OOM || Rml.SyntaxError)! Rml.Obj(Pattern) {
     const input = objects[offset.*];
     offset.* += 1;
 
@@ -680,33 +663,33 @@ fn parsePattern(diag: ?*?Rml.Diagnostic, objects: []const Object, offset: *usize
                 }
 
                 var subOffset: usize = 0;
-                const seq: []Obj(Pattern) = try parseSequence(rml, diag, block.data.items(), &subOffset);
+                const seq: []Rml.Obj(Pattern) = try parseSequence(rml, diag, block.data.items(), &subOffset);
 
-                break :block Pattern { .block = try Obj(Rml.Block).wrap(rml, input.getOrigin(), try .create(rml, .doc, @ptrCast(seq))) };
+                break :block Pattern { .block = try Rml.Obj(Rml.Block).wrap(rml, input.getOrigin(), try .create(rml, .doc, @ptrCast(seq))) };
             }
             else {
                 try abortParse(diag, input.getOrigin(), error.SyntaxError,
                     "`{}` is not a valid pattern", .{input});
             };
 
-        return Obj(Rml.Pattern).wrap(rml, input.getOrigin(), body);
+        return Rml.Obj(Rml.Pattern).wrap(rml, input.getOrigin(), body);
     }
 }
 
 const BUILTIN_SYMBOLS = struct {
-    fn matchText(text: []const u8) ?*const fn (?*?Rml.Diagnostic, Object, []const Object, *usize) (OOM || Rml.SyntaxError)! Obj(Pattern) {
+    fn matchText(text: []const u8) ?*const fn (?*?Rml.Diagnostic, Rml.Object, []const Rml.Object, *usize) (Rml.OOM || Rml.SyntaxError)! Rml.Obj(Pattern) {
         inline for (comptime std.meta.declarations(BUILTIN_SYMBOLS)) |decl| {
             if (std.mem.eql(u8, decl.name, text)) return @field(BUILTIN_SYMBOLS, decl.name);
         }
         return null;
     }
 
-    pub fn @"_"(_: ?*?Rml.Diagnostic, input: Object, _: []const Object, _: *usize) (OOM || Rml.SyntaxError)! Obj(Pattern) {
-        return Obj(Pattern).wrap(input.getRml(), input.getOrigin(), .wildcard);
+    pub fn @"_"(_: ?*?Rml.Diagnostic, input: Rml.Object, _: []const Rml.Object, _: *usize) (Rml.OOM || Rml.SyntaxError)! Rml.Obj(Pattern) {
+        return Rml.Obj(Pattern).wrap(input.getRml(), input.getOrigin(), .wildcard);
     }
 
     /// literal block syntax; expect a block, return that exact block kind (do not change to doc like default)
-    pub fn @"~"(diag: ?*?Rml.Diagnostic, input: Object, objects: []const Object, offset: *usize) (OOM || Rml.SyntaxError)! Obj(Pattern) {
+    pub fn @"~"(diag: ?*?Rml.Diagnostic, input: Rml.Object, objects: []const Rml.Object, offset: *usize) (Rml.OOM || Rml.SyntaxError)! Rml.Obj(Pattern) {
         const rml = input.getRml();
         const origin = input.getOrigin();
 
@@ -720,12 +703,12 @@ const BUILTIN_SYMBOLS = struct {
         var subOffset: usize = 0;
         const body = try parseSequence(rml, diag, block.data.items(), &subOffset);
 
-        const patternBlock = try Obj(Rml.Block).wrap(rml, origin, try .create(rml, block.data.kind, @ptrCast(body)));
+        const patternBlock = try Rml.Obj(Rml.Block).wrap(rml, origin, try .create(rml, block.data.kind, @ptrCast(body)));
 
-        return Obj(Pattern).wrap(rml, origin, .{.block = patternBlock});
+        return Rml.Obj(Pattern).wrap(rml, origin, .{.block = patternBlock});
     }
 
-    pub fn @"$"(diag: ?*?Rml.Diagnostic, input: Object, objects: []const Object, offset: *usize) (OOM || Rml.SyntaxError)! Obj(Pattern) {
+    pub fn @"$"(diag: ?*?Rml.Diagnostic, input: Rml.Object, objects: []const Rml.Object, offset: *usize) (Rml.OOM || Rml.SyntaxError)! Rml.Obj(Pattern) {
         const rml = input.getRml();
         const origin = input.getOrigin();
 
@@ -738,17 +721,17 @@ const BUILTIN_SYMBOLS = struct {
         const seq = seq: {
             const items = try block.data.array.clone(input.getRml().blobAllocator());
 
-            break :seq try Obj(Rml.Array).wrap(rml, origin, .{ .allocator = input.getRml().blobAllocator(), .native_array = items });
+            break :seq try Rml.Obj(Rml.Array).wrap(rml, origin, .{ .allocator = input.getRml().blobAllocator(), .native_array = items });
         };
 
-        return Obj(Pattern).wrap(rml, origin, .{.sequence = seq});
+        return Rml.Obj(Pattern).wrap(rml, origin, .{.sequence = seq});
     }
 };
 
 const NOT_A_BLOCK = struct {
-    fn recursive(comptime name: []const u8) *const fn (?*?Rml.Diagnostic, Object, []const Object, *usize) (OOM || Rml.SyntaxError)! Obj(Pattern) {
+    fn recursive(comptime name: []const u8) *const fn (?*?Rml.Diagnostic, Rml.Object, []const Rml.Object, *usize) (Rml.OOM || Rml.SyntaxError)! Rml.Obj(Pattern) {
         return &struct {
-            pub fn fun(diag: ?*?Rml.Diagnostic, obj: Object, objects: []const Object, offset: *usize) (OOM || Rml.SyntaxError)! Obj(Pattern) {
+            pub fn fun(diag: ?*?Rml.Diagnostic, obj: Rml.Object, objects: []const Rml.Object, offset: *usize) (Rml.OOM || Rml.SyntaxError)! Rml.Obj(Pattern) {
                 patternMatching.debug("recursive-{s} `{}` {any} {}", .{name, obj, objects, offset.*});
                 const rml = obj.getRml();
 
@@ -761,7 +744,7 @@ const NOT_A_BLOCK = struct {
                 const array = array: {
                     const seq = try parseSequence(rml, diag, objects, offset);
 
-                    break :array try Obj(Rml.Array).wrap(rml, obj.getOrigin(), try .create(rml.blobAllocator(), @ptrCast(seq)));
+                    break :array try Rml.Obj(Rml.Array).wrap(rml, obj.getOrigin(), try .create(rml.blobAllocator(), @ptrCast(seq)));
                 };
 
                 const sub = switch (array.data.length()) {
@@ -770,10 +753,10 @@ const NOT_A_BLOCK = struct {
                         const singleObj = array.data.get(0).?;
                         break :one Rml.object.castObj(Pattern, singleObj).?;
                     },
-                    else => try Obj(Pattern).wrap(obj.getRml(), obj.getOrigin(), .{.sequence = array}),
+                    else => try Rml.Obj(Pattern).wrap(obj.getRml(), obj.getOrigin(), .{.sequence = array}),
                 };
 
-                return Obj(Pattern).wrap(obj.getRml(), obj.getOrigin(), @unionInit(Pattern, name, sub.typeErase()));
+                return Rml.Obj(Pattern).wrap(obj.getRml(), obj.getOrigin(), @unionInit(Pattern, name, sub.typeErase()));
             }
         }.fun;
     }
@@ -782,7 +765,7 @@ const NOT_A_BLOCK = struct {
     pub const @"*" = recursive("zero_or_more");
     pub const @"+" = recursive("one_or_more");
 
-    pub fn @"|"(diag: ?*?Rml.Diagnostic, input: Object, objects: []const Object, offset: *usize) (OOM || Rml.SyntaxError)! Obj(Pattern) {
+    pub fn @"|"(diag: ?*?Rml.Diagnostic, input: Rml.Object, objects: []const Rml.Object, offset: *usize) (Rml.OOM || Rml.SyntaxError)! Rml.Obj(Pattern) {
         if (offset.* != 1)
             try abortParse(diag, input.getOrigin(), error.SyntaxError, "alternation-syntax should be at start of expression", .{});
 
@@ -795,9 +778,9 @@ const NOT_A_BLOCK = struct {
         const array = array: {
             const seq = try parseSequence(rml, diag, objects, offset);
 
-            break :array try Obj(Rml.Array).wrap(rml, origin, try .create(rml.blobAllocator(), @ptrCast(seq)));
+            break :array try Rml.Obj(Rml.Array).wrap(rml, origin, try .create(rml.blobAllocator(), @ptrCast(seq)));
         };
 
-        return Obj(Pattern).wrap(rml, origin, .{.alternation = array});
+        return Rml.Obj(Pattern).wrap(rml, origin, .{.alternation = array});
     }
 };

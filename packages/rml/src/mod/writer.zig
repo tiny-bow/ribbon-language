@@ -1,16 +1,7 @@
 const std = @import("std");
 
 const Rml = @import("root.zig");
-const Ordering = Rml.Ordering;
-const Error = Rml.Error;
-const OOM = Rml.OOM;
-const ptr = Rml.ptr;
-const Obj = Rml.Obj;
-const ref = Rml.ref;
-const Object = Rml.Object;
-const getHeader = Rml.getHeader;
-const getObj = Rml.getObj;
-const forceObj = Rml.forceObj;
+
 
 
 pub const Native = std.io.AnyWriter;
@@ -22,10 +13,10 @@ pub const Writer = struct {
         return Writer { .native = native_writer };
     }
 
-    pub fn onCompare(self: *Writer, other: Object) Ordering {
-        var ord = Rml.compare(getHeader(self).type_id, other.getTypeId());
+    pub fn onCompare(self: *Writer, other: Rml.Object) Rml.Ordering {
+        var ord = Rml.compare(Rml.getHeader(self).type_id, other.getTypeId());
         if (ord == .Equal) {
-            ord = Rml.compare(self.native, forceObj(Writer, other).data.native);
+            ord = Rml.compare(self.native, Rml.forceObj(Writer, other).data.native);
         }
         return ord;
     }
@@ -34,15 +25,15 @@ pub const Writer = struct {
         try writer.print("{}", .{self.native});
     }
 
-    pub fn print(self: *Writer, comptime fmt: []const u8, args: anytype) Error! void {
+    pub fn print(self: *Writer, comptime fmt: []const u8, args: anytype) Rml.Error! void {
         return self.native.print(fmt, args) catch |err| return Rml.errorCast(err);
     }
 
-    pub fn write(self: *Writer, val: []const u8) Error! usize {
+    pub fn write(self: *Writer, val: []const u8) Rml.Error! usize {
         return self.native.write(val) catch |err| return Rml.errorCast(err);
     }
 
-    pub fn writeAll(self: *Writer, val: []const u8) Error! void {
+    pub fn writeAll(self: *Writer, val: []const u8) Rml.Error! void {
         return self.native.writeAll(val) catch |err| return Rml.errorCast(err);
     }
 };
