@@ -3,6 +3,7 @@ const std = @import("std");
 const Rml = @import("root.zig");
 
 
+
 pub const ProcedureKind = enum {
     macro,
     function,
@@ -26,7 +27,7 @@ pub const Case = union(enum) {
     }
 
     pub fn parse(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Case {
-        Rml.parser.parsing.debug("parseCase {}:{any}", .{origin,args});
+        Rml.log.parser.debug("parseCase {}:{any}", .{origin,args});
 
         if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount,
             "expected at least 2 arguments, found {}", .{args.len});
@@ -44,7 +45,7 @@ pub const Case = union(enum) {
                             try interpreter.abort(origin, error.PatternError,
                                 "cannot parse pattern starting with syntax object `{}`: {}", .{args[0], d.formatter(error.SyntaxError)});
                         } else {
-                            Rml.parser.parsing.err("requested pattern parse diagnostic is null", .{});
+                            Rml.log.parser.err("requested pattern parse diagnostic is null", .{});
                             try interpreter.abort(origin, error.PatternError,
                                 "cannot parse pattern `{}`", .{args[0]});
                         }
@@ -53,7 +54,7 @@ pub const Case = union(enum) {
                     return err;
                 };
 
-            Rml.parser.parsing.debug("pattern parse result: {}", .{parseResult});
+            Rml.log.parser.debug("pattern parse result: {}", .{parseResult});
             offset = parseResult.offset;
 
             break :patternCase Rml.procedure.Case {
@@ -70,7 +71,7 @@ pub const Case = union(enum) {
             try content.data.append(arg);
         }
 
-        Rml.interpreter.evaluation.debug("case body: {any}", .{content});
+        Rml.log.interpreter.debug("case body: {any}", .{content});
 
         return case;
     }
@@ -102,7 +103,7 @@ pub const Procedure = union(ProcedureKind) {
     pub fn call(self: *Procedure, interpreter: *Rml.Interpreter, callOrigin: Rml.Origin, blame: Rml.Object, args: []const Rml.Object) Rml.Result! Rml.Object {
         switch (self.*) {
             .macro => |macro| {
-                Rml.interpreter.evaluation.debug("calling macro {}", .{macro});
+                Rml.log.interpreter.debug("calling macro {}", .{macro});
 
                 var errors: Rml.String = try .create(Rml.getRml(self), "");
 
@@ -135,7 +136,7 @@ pub const Procedure = union(ProcedureKind) {
                             writer.print("failed to match; {} vs {any}:\n\t{}", .{ caseData.scrutinizer, args, d.formatter(error.PatternError)})
                                 catch |err| return Rml.errorCast(err);
                         } else {
-                            Rml.interpreter.evaluation.err("requested pattern diagnostic is null", .{});
+                            Rml.log.interpreter.err("requested pattern diagnostic is null", .{});
                             writer.print("failed to match; {} vs {any}", .{ caseData.scrutinizer, args})
                                 catch |err| return Rml.errorCast(err);
                         }
@@ -149,21 +150,21 @@ pub const Procedure = union(ProcedureKind) {
                 }
             },
             .function => |func| {
-                Rml.interpreter.evaluation.debug("calling func {}", .{func});
+                Rml.log.interpreter.debug("calling func {}", .{func});
 
                 const eArgs = try interpreter.evalAll(args);
                 var errors: Rml.string.String = try .create(Rml.getRml(self), "");
 
                 const writer = errors.writer();
 
-                Rml.interpreter.evaluation.debug("calling func {any}", .{func.cases});
+                Rml.log.interpreter.debug("calling func {any}", .{func.cases});
                 for (func.cases.items) |case| switch (case) {
                     .@"else" => |caseData| {
-                        Rml.interpreter.evaluation.debug("calling else case {}", .{caseData});
+                        Rml.log.interpreter.debug("calling else case {}", .{caseData});
                         return interpreter.runProgram(false, caseData.data.items());
                     },
                     .pattern => |caseData| {
-                        Rml.interpreter.evaluation.debug("calling pattern case {}", .{caseData});
+                        Rml.log.interpreter.debug("calling pattern case {}", .{caseData});
                         var diag: ?Rml.Diagnostic = null;
                         const result: ?Rml.Obj(Rml.map.Table) = try caseData.scrutinizer.data.run(interpreter, &diag, callOrigin, eArgs);
                         if (result) |res| {
@@ -183,7 +184,7 @@ pub const Procedure = union(ProcedureKind) {
                             writer.print("failed to match; {} vs {any}:\n\t{}", .{ caseData.scrutinizer, eArgs, d.formatter(error.PatternError)})
                                 catch |err| return Rml.errorCast(err);
                         } else {
-                            Rml.interpreter.evaluation.err("requested pattern diagnostic is null", .{});
+                            Rml.log.interpreter.err("requested pattern diagnostic is null", .{});
                             writer.print("failed to match; {} vs {any}", .{ caseData.scrutinizer, eArgs})
                                 catch |err| return Rml.errorCast(err);
                         }
@@ -193,12 +194,12 @@ pub const Procedure = union(ProcedureKind) {
                 try interpreter.abort(callOrigin, error.PatternError, "{} failed; no matching case found for input {any}", .{blame, eArgs});
             },
             .native_macro => |func| {
-                Rml.interpreter.evaluation.debug("calling native macro {x}", .{@intFromPtr(func)});
+                Rml.log.interpreter.debug("calling native macro {x}", .{@intFromPtr(func)});
 
                 return func(interpreter, callOrigin, args);
             },
             .native_function => |func| {
-                Rml.interpreter.evaluation.debug("calling native func {x}", .{@intFromPtr(func)});
+                Rml.log.interpreter.debug("calling native func {x}", .{@intFromPtr(func)});
 
                 const eArgs = try interpreter.evalAll(args);
 

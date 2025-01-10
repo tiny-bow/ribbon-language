@@ -3,6 +3,7 @@ const std = @import("std");
 const Rml = @import("root.zig");
 
 
+
 pub const QuoteKind = enum {
     // these need to be ordered length-wise if they use the same prefix
     // (e.g. unquote_splice must come before unquote)
@@ -68,20 +69,20 @@ pub const Quote = struct {
     pub fn run(self: *Quote, interpreter: *Rml.Interpreter) Rml.Result! Rml.Object {
         switch (self.kind) {
             .basic => {
-                Rml.interpreter.evaluation.debug("evaluating basic quote {}", .{self});
+                Rml.log.interpreter.debug("evaluating basic quote {}", .{self});
                 return self.body;
             },
             .quasi => {
-                Rml.interpreter.evaluation.debug("evaluating quasi quote {}", .{self});
+                Rml.log.interpreter.debug("evaluating quasi quote {}", .{self});
                 return runQuasi(interpreter, self.body, null);
             },
             .to_quote => {
-                Rml.interpreter.evaluation.debug("evaluating to_quote quote {}", .{self});
+                Rml.log.interpreter.debug("evaluating to_quote quote {}", .{self});
                 const val = try interpreter.eval(self.body);
                 return (try Rml.Obj(Quote).wrap(Rml.getRml(self), self.body.getOrigin(), .{.kind = .basic, .body = val})).typeErase();
             },
             .to_quasi => {
-                Rml.interpreter.evaluation.debug("evaluating to_quasi quote {}", .{self});
+                Rml.log.interpreter.debug("evaluating to_quasi quote {}", .{self});
                 const val = try interpreter.eval(self.body);
                 return (try Rml.Obj(Quote).wrap(Rml.getRml(self), self.body.getOrigin(), .{.kind = .quasi, .body = val})).typeErase();
             },

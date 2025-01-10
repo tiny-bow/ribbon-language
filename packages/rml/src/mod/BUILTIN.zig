@@ -39,7 +39,7 @@ pub const import = Rml.Procedure {
 pub const global = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun (interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
-            Rml.interpreter.evaluation.debug("global {}: {any}", .{origin, args});
+            Rml.log.interpreter.debug("global {}: {any}", .{origin, args});
 
             if (args.len < 1)
                 try interpreter.abort(origin, error.InvalidArgumentCount,
@@ -70,7 +70,7 @@ pub const global = Rml.Procedure {
                 break :parse .{parseResult.value, parseResult.offset};
             };
 
-            Rml.parser.parsing.debug("global variable pattern: {}", .{patt});
+            Rml.log.parser.debug("global variable pattern: {}", .{patt});
 
             const dom = Rml.pattern.patternBinders(patt.typeErase())
                 catch |err| switch (err) {
@@ -82,7 +82,7 @@ pub const global = Rml.Procedure {
                 };
 
             for (dom.keys()) |sym| {
-                Rml.interpreter.evaluation.debug("rebinding global variable {} = nil", .{sym});
+                Rml.log.interpreter.debug("rebinding global variable {} = nil", .{sym});
                 try Rml.getRml(interpreter).global_env.data.rebind(sym, nilObj.typeErase());
             }
 
@@ -108,7 +108,7 @@ pub const global = Rml.Procedure {
                     break :obj try interpreter.runProgram(false, body);
                 };
 
-            Rml.interpreter.evaluation.debug("evaluating global variable {} = {}", .{patt, obj});
+            Rml.log.interpreter.debug("evaluating global variable {} = {}", .{patt, obj});
 
             const table = table: {
                 var diag: ?Rml.Diagnostic = null;
@@ -119,7 +119,7 @@ pub const global = Rml.Procedure {
                         "failed to match; {} vs {}:\n\t{}",
                         .{patt, obj, d.formatter(error.PatternError)});
                 } else {
-                    Rml.interpreter.evaluation.err("requested pattern diagnostic is null", .{});
+                    Rml.log.interpreter.err("requested pattern diagnostic is null", .{});
                     try interpreter.abort(origin, error.PatternError,
                         "failed to match; {} vs {}", .{patt, obj});
                 }
@@ -130,7 +130,7 @@ pub const global = Rml.Procedure {
                 const sym = entry.key_ptr.*;
                 const val = entry.value_ptr.*;
 
-                Rml.interpreter.evaluation.debug("setting global variable {} = {}", .{ sym, val });
+                Rml.log.interpreter.debug("setting global variable {} = {}", .{ sym, val });
 
                 // TODO: deep copy into long term memory
 
@@ -147,7 +147,7 @@ pub const global = Rml.Procedure {
 pub const local = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
-            Rml.interpreter.evaluation.debug("local {}: {any}", .{origin, args});
+            Rml.log.interpreter.debug("local {}: {any}", .{origin, args});
 
             if (args.len < 1)
                 try interpreter.abort(origin, error.InvalidArgumentCount,
@@ -178,7 +178,7 @@ pub const local = Rml.Procedure {
                 break :parse .{parseResult.value, parseResult.offset};
             };
 
-            Rml.parser.parsing.debug("local variable pattern: {}", .{patt});
+            Rml.log.parser.debug("local variable pattern: {}", .{patt});
 
             const dom = Rml.pattern.patternBinders(patt.typeErase())
                 catch |err| switch (err) {
@@ -190,7 +190,7 @@ pub const local = Rml.Procedure {
                 };
 
             for (dom.keys()) |sym| {
-                Rml.interpreter.evaluation.debug("rebinding local variable {} = nil", .{sym});
+                Rml.log.interpreter.debug("rebinding local variable {} = nil", .{sym});
                 try interpreter.evaluation_env.data.rebind(sym, nilObj.typeErase());
             }
 
@@ -216,7 +216,7 @@ pub const local = Rml.Procedure {
                     break :obj try interpreter.runProgram(false, body);
                 };
 
-            Rml.interpreter.evaluation.debug("evaluating local variable {} = {}", .{patt, obj});
+            Rml.log.interpreter.debug("evaluating local variable {} = {}", .{patt, obj});
 
             const table = table: {
                 var diag: ?Rml.Diagnostic = null;
@@ -227,7 +227,7 @@ pub const local = Rml.Procedure {
                         "failed to match; {} vs {}:\n\t{}",
                         .{patt, obj, d.formatter(error.PatternError)});
                 } else {
-                    Rml.interpreter.evaluation.err("requested pattern diagnostic is null", .{});
+                    Rml.log.interpreter.err("requested pattern diagnostic is null", .{});
                     try interpreter.abort(origin, error.PatternError,
                         "failed to match; {} vs {}", .{patt, obj});
                 }
@@ -238,7 +238,7 @@ pub const local = Rml.Procedure {
                 const sym = entry.key_ptr.*;
                 const val = entry.value_ptr.*;
 
-                Rml.interpreter.evaluation.debug("setting local variable {} = {}", .{ sym, val });
+                Rml.log.interpreter.debug("setting local variable {} = {}", .{ sym, val });
 
                 try interpreter.evaluation_env.data.set(sym, val);
             }
@@ -270,7 +270,7 @@ pub const @"set!" = Rml.Procedure {
 pub const fun = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
-            Rml.parser.parsing.debug("fun {}: {any}", .{origin, args});
+            Rml.log.parser.debug("fun {}: {any}", .{origin, args});
 
             if (args.len == 0) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
 
@@ -279,9 +279,9 @@ pub const fun = Rml.Procedure {
             var cases: std.ArrayListUnmanaged(Rml.procedure.Case) = .{};
 
             if (args.len == 1) {
-                Rml.parser.parsing.debug("case fun", .{});
+                Rml.log.parser.debug("case fun", .{});
                 const caseSet: Rml.Obj(Rml.Block) = try interpreter.castObj(Rml.Block, args[0]);
-                Rml.parser.parsing.debug("case set {}", .{caseSet});
+                Rml.log.parser.debug("case set {}", .{caseSet});
 
                 var isCases = true;
                 for (caseSet.data.items()) |obj| {
@@ -292,9 +292,9 @@ pub const fun = Rml.Procedure {
                 }
 
                 if (isCases) {
-                    Rml.parser.parsing.debug("isCases {any}", .{caseSet.data.array.items});
+                    Rml.log.parser.debug("isCases {any}", .{caseSet.data.array.items});
                     for (caseSet.data.array.items) |case| {
-                        Rml.parser.parsing.debug("case {}", .{case});
+                        Rml.log.parser.debug("case {}", .{case});
                         const caseBlock = try interpreter.castObj(Rml.Block, case);
 
                         const c = try Rml.procedure.Case.parse(interpreter, caseBlock.getOrigin(), caseBlock.data.array.items);
@@ -302,13 +302,13 @@ pub const fun = Rml.Procedure {
                         try cases.append(rml.blobAllocator(), c);
                     }
                 } else {
-                    Rml.parser.parsing.debug("fun single case: {any}", .{caseSet.data.array.items});
+                    Rml.log.parser.debug("fun single case: {any}", .{caseSet.data.array.items});
                     const c = try Rml.procedure.Case.parse(interpreter, caseSet.getOrigin(), caseSet.data.array.items);
 
                     try cases.append(rml.blobAllocator(), c);
                 }
             } else {
-                Rml.parser.parsing.debug("fun single case: {any}", .{args});
+                Rml.log.parser.debug("fun single case: {any}", .{args});
                 const c = try Rml.procedure.Case.parse(interpreter, origin, args);
 
                 try cases.append(rml.blobAllocator(), c);
@@ -323,7 +323,7 @@ pub const fun = Rml.Procedure {
                 },
             });
 
-            Rml.parser.parsing.debug("fun done: {}", .{out});
+            Rml.log.parser.debug("fun done: {}", .{out});
 
             return out.typeErase();
         }
@@ -334,7 +334,7 @@ pub const fun = Rml.Procedure {
 pub const macro = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
-            Rml.interpreter.evaluation.debug("macro {}: {any}", .{origin, args});
+            Rml.log.interpreter.debug("macro {}: {any}", .{origin, args});
 
             if (args.len == 0) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
 
@@ -343,9 +343,9 @@ pub const macro = Rml.Procedure {
             var cases: std.ArrayListUnmanaged(Rml.procedure.Case) = .{};
 
             if (args.len == 1) {
-                Rml.interpreter.evaluation.debug("case macro", .{});
+                Rml.log.interpreter.debug("case macro", .{});
                 const caseSet: Rml.Obj(Rml.Block) = try interpreter.castObj(Rml.Block, args[0]);
-                Rml.interpreter.evaluation.debug("case set {}", .{caseSet});
+                Rml.log.interpreter.debug("case set {}", .{caseSet});
 
                 var isCases = true;
                 for (caseSet.data.items()) |obj| {
@@ -356,9 +356,9 @@ pub const macro = Rml.Procedure {
                 }
 
                 if (isCases) {
-                    Rml.interpreter.evaluation.debug("isCases {}", .{isCases});
+                    Rml.log.interpreter.debug("isCases {}", .{isCases});
                     for (caseSet.data.array.items) |case| {
-                        Rml.interpreter.evaluation.debug("case {}", .{case});
+                        Rml.log.interpreter.debug("case {}", .{case});
                         const caseBlock = try interpreter.castObj(Rml.Block, case);
 
                         const c = try Rml.procedure.Case.parse(interpreter, origin, caseBlock.data.array.items);
@@ -366,14 +366,14 @@ pub const macro = Rml.Procedure {
                         try cases.append(rml.blobAllocator(), c);
                     }
                 } else {
-                    Rml.interpreter.evaluation.debug("isCases {}", .{isCases});
-                    Rml.interpreter.evaluation.debug("macro single case: {any}", .{caseSet.data.array.items});
+                    Rml.log.interpreter.debug("isCases {}", .{isCases});
+                    Rml.log.interpreter.debug("macro single case: {any}", .{caseSet.data.array.items});
                     const c = try Rml.procedure.Case.parse(interpreter, origin, caseSet.data.array.items);
 
                     try cases.append(rml.blobAllocator(), c);
                 }
             } else {
-                Rml.interpreter.evaluation.debug("macro single case: {any}", .{args});
+                Rml.log.interpreter.debug("macro single case: {any}", .{args});
                 const c = try Rml.procedure.Case.parse(interpreter, origin, args);
                 try cases.append(rml.blobAllocator(), c);
             }

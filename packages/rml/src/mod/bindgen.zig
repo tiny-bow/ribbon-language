@@ -5,6 +5,7 @@ const TypeUtils = @import("Utils").Type;
 const Rml = @import("root.zig");
 
 
+
 pub fn bindGlobals(rml: *Rml, env: Rml.Obj(Rml.Env), comptime globals: type) (Rml.OOM || Rml.SymbolAlreadyBound)! void {
     inline for (comptime std.meta.declarations(globals)) |field| {
         const symbol: Rml.Obj(Rml.Symbol) = try .wrap(rml, rml.storage.origin, try .create(rml, field.name));

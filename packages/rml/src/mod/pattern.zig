@@ -3,8 +3,6 @@ const std = @import("std");
 const Rml = @import("root.zig");
 
 
-const patternMatching = std.log.scoped(.@"pattern-matching");
-
 
 pub const Alias = struct {
     sym: Rml.Obj(Rml.Symbol),
@@ -73,28 +71,28 @@ pub const Pattern = union(enum) {
     pub fn run(self: *Pattern, interpreter: *Rml.Interpreter, diag: ?*?Rml.Diagnostic, origin: Rml.Origin, input: []const Rml.Object) Rml.Result! ?Rml.Obj(Table) {
         const obj = Rml.getObj(self);
 
-        patternMatching.debug("Pattern.run `{} :: {any}` @ {}", .{obj, input, origin});
+        Rml.log.match.debug("Pattern.run `{} :: {any}` @ {}", .{obj, input, origin});
 
         var offset: usize = 0;
 
         const out = try out: {
             if (self.* == .block) {
                 if (input.len == 1 and Rml.isArrayLike(input[0])) {
-                    patternMatching.debug("block pattern with array-like input", .{});
+                    Rml.log.match.debug("block pattern with array-like input", .{});
                     const inner = try Rml.coerceArray(input[0])
                         orelse @panic("array-like object is not an array");
 
                     break :out runSequence(interpreter, diag, origin, self.block.data.items(), inner.data.items(), &offset);
                 } else {
-                    patternMatching.debug("block pattern with input stream", .{});
+                    Rml.log.match.debug("block pattern with input stream", .{});
                     break :out runSequence(interpreter, diag, origin, self.block.data.items(), input, &offset);
                 }
             } else {
-                patternMatching.debug("non-block pattern with input stream", .{});
+                Rml.log.match.debug("non-block pattern with input stream", .{});
                 break :out runPattern(interpreter, diag, origin, obj, input, &offset);
             }
         } orelse {
-            patternMatching.debug("Pattern.run failed", .{});
+            Rml.log.match.debug("Pattern.run failed", .{});
             return null;
         };
 
@@ -225,23 +223,23 @@ pub fn runPattern(
 ) Rml.Result! ?Rml.Obj(Table) {
     const table: Rml.Obj(Table) = try .wrap(Rml.getRml(interpreter), origin, .{.allocator = Rml.getRml(interpreter).blobAllocator(),});
 
-    patternMatching.debug("runPattern `{} :: {?}` {any} {}", .{pattern, if (offset.* < objects.len) objects[offset.*] else null, objects, offset.*});
+    Rml.log.match.debug("runPattern `{} :: {?}` {any} {}", .{pattern, if (offset.* < objects.len) objects[offset.*] else null, objects, offset.*});
 
     switch (pattern.data.*) {
         .wildcard => {},
 
         .symbol => |symbol| {
-            patternMatching.debug("match symbol {}", .{symbol});
+            Rml.log.match.debug("match symbol {}", .{symbol});
             if (offset.* >= objects.len) return patternAbort(diag, origin, "unexpected end of input", .{});
             const input = objects[offset.*];
             offset.* += 1;
-            patternMatching.debug("input {}", .{input});
+            Rml.log.match.debug("input {}", .{input});
             try table.data.set(symbol, input);
-            patternMatching.debug("bound", .{});
+            Rml.log.match.debug("bound", .{});
         },
 
         .block => |block| {
-            patternMatching.debug("match block {}", .{block});
+            Rml.log.match.debug("match block {}", .{block});
             const patts = block.data.items();
             if (offset.* >= objects.len) return patternAbort(diag, origin, "expected {}, got end of input", .{block});
 
@@ -281,7 +279,7 @@ pub fn runPattern(
         },
 
         .value_literal => |value_literal| {
-            patternMatching.debug("match value {}", .{value_literal});
+            Rml.log.match.debug("match value {}", .{value_literal});
 
             if (offset.* >= objects.len) return patternAbort(diag, origin, "expected {}, got end of input", .{value_literal});
 
@@ -294,7 +292,7 @@ pub fn runPattern(
         },
 
         .procedure => |procedure| {
-            patternMatching.debug("match procedure call {}", .{procedure});
+            Rml.log.match.debug("match procedure call {}", .{procedure});
 
             if (offset.* >= objects.len) return patternAbort(diag, origin, "expected a procedure, got end of input", .{});
 
@@ -406,7 +404,7 @@ pub fn runPattern(
 
             while (offset.* < objects.len) {
                 var subOffset = offset.*;
-                patternMatching.debug("*{} `{} :: {}`", .{i, patt, objects[subOffset]});
+                Rml.log.match.debug("*{} `{} :: {}`", .{i, patt, objects[subOffset]});
                 const result = try runPattern(interpreter, null, origin, patt, objects, &subOffset);
                 if (result) |res| {
                     i += 1;
@@ -456,11 +454,11 @@ pub fn runPattern(
 
             while (offset.* < objects.len) {
                 var subOffset = offset.* ;
-                patternMatching.debug("+{} `{} :: {}`", .{i, patt, objects[subOffset]});
+                Rml.log.match.debug("+{} `{} :: {}`", .{i, patt, objects[subOffset]});
                 const result = try runPattern(interpreter, null, origin, patt, objects, &subOffset);
-                patternMatching.debug("✓", .{});
+                Rml.log.match.debug("✓", .{});
                 if (result) |res| {
-                    patternMatching.debug("matched `{} :: {}`", .{patt, objects[offset.*]});
+                    Rml.log.match.debug("matched `{} :: {}`", .{patt, objects[offset.*]});
 
                     i += 1;
 
@@ -529,11 +527,11 @@ pub fn runPattern(
         }
     }
 
-    patternMatching.debug("completed runPattern, got {}", .{table});
+    Rml.log.match.debug("completed runPattern, got {}", .{table});
 
     var it = table.data.native_map.iterator();
     while (it.next()) |entry| {
-        patternMatching.debug("{} :: {}", .{
+        Rml.log.match.debug("{} :: {}", .{
             entry.key_ptr.*,
             entry.value_ptr.*,
         });
@@ -612,7 +610,7 @@ fn abortParse(diagnostic: ?*?Rml.Diagnostic, origin: Rml.Origin, err: (Rml.OOM |
 }
 
 fn parseSequence(rml: *Rml, diag: ?*?Rml.Diagnostic, objects: []const Rml.Object, offset: *usize) (Rml.OOM || Rml.SyntaxError)! []Rml.Obj(Pattern) {
-    patternMatching.debug("parseSequence {any} {}", .{objects, offset.*});
+    Rml.log.match.debug("parseSequence {any} {}", .{objects, offset.*});
     var output: std.ArrayListUnmanaged(Rml.Obj(Pattern)) = .{};
 
     while (offset.* < objects.len) {
@@ -631,13 +629,13 @@ fn parsePattern(diag: ?*?Rml.Diagnostic, objects: []const Rml.Object, offset: *u
     const rml = input.getRml();
 
     if (Rml.castObj(Pattern, input)) |patt| {
-        patternMatching.debug("parsePattern got existing pattern `{}`", .{patt});
+        Rml.log.match.debug("parsePattern got existing pattern `{}`", .{patt});
         return patt;
     } else {
-        patternMatching.debug("parsePattern {}:`{}` {any} {}", .{input.getOrigin(), input, objects, offset.*});
+        Rml.log.match.debug("parsePattern {}:`{}` {any} {}", .{input.getOrigin(), input, objects, offset.*});
         const body: Pattern =
             if (Rml.castObj(Rml.Symbol, input)) |sym| sym: {
-                patternMatching.debug("parsePattern symbol", .{});
+                Rml.log.match.debug("parsePattern symbol", .{});
 
                 break :sym if (BUILTIN_SYMBOLS.matchText(sym.data.text())) |fun| {
                     return fun(diag, input, objects, offset);
@@ -646,7 +644,7 @@ fn parsePattern(diag: ?*?Rml.Diagnostic, objects: []const Rml.Object, offset: *u
             else if (Rml.isAtom(input)) .{.value_literal = input}
             else if (Rml.castObj(Rml.Quote, input)) |quote| .{.quote = quote}
             else if (Rml.castObj(Rml.Block, input)) |block| block: {
-                patternMatching.debug("parsePattern block", .{});
+                Rml.log.match.debug("parsePattern block", .{});
 
                 if (block.data.length() > 0) not_a_block: {
                     const items = block.data.items();
@@ -655,7 +653,7 @@ fn parsePattern(diag: ?*?Rml.Diagnostic, objects: []const Rml.Object, offset: *u
 
                     inline for (comptime std.meta.declarations(NOT_A_BLOCK)) |decl| {
                         if (std.mem.eql(u8, decl.name, symbol.data.text())) {
-                            patternMatching.debug("using {} as a not-a-block pattern", .{symbol});
+                            Rml.log.match.debug("using {} as a not-a-block pattern", .{symbol});
                             var subOffset: usize = 1;
                             return @field(NOT_A_BLOCK, decl.name)(diag, input, block.data.items(), &subOffset);
                         }
@@ -732,7 +730,7 @@ const NOT_A_BLOCK = struct {
     fn recursive(comptime name: []const u8) *const fn (?*?Rml.Diagnostic, Rml.Object, []const Rml.Object, *usize) (Rml.OOM || Rml.SyntaxError)! Rml.Obj(Pattern) {
         return &struct {
             pub fn fun(diag: ?*?Rml.Diagnostic, obj: Rml.Object, objects: []const Rml.Object, offset: *usize) (Rml.OOM || Rml.SyntaxError)! Rml.Obj(Pattern) {
-                patternMatching.debug("recursive-{s} `{}` {any} {}", .{name, obj, objects, offset.*});
+                Rml.log.match.debug("recursive-{s} `{}` {any} {}", .{name, obj, objects, offset.*});
                 const rml = obj.getRml();
 
                 if (offset.* != 1)

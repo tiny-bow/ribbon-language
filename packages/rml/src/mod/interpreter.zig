@@ -3,8 +3,6 @@ const std = @import("std");
 const Rml = @import("root.zig");
 
 
-pub const evaluation = std.log.scoped(.evaluation);
-
 
 pub const Result = Signal || Rml.Error;
 pub const Signal = error { Terminate };
@@ -53,7 +51,7 @@ pub const Interpreter = struct {
         // the error produced is only NoSpaceLeft, if the buffer is too small, so give the length of the buffer
         diag.message_len = len: {
             break :len (std.fmt.bufPrintZ(&diag.message_mem, fmt, args) catch {
-                evaluation.warn("Diagnostic message too long, truncating", .{});
+                Rml.log.interpreter.warn("Diagnostic message too long, truncating", .{});
                 break :len Rml.Diagnostic.MAX_LENGTH;
             }).len;
         };
@@ -81,7 +79,7 @@ pub const Interpreter = struct {
     }
 
     pub fn evalCheck(self: *Interpreter, shouldInvoke: bool, program: []const Rml.Object, offset: *usize, workDone: ?*bool) Result! Rml.Object {
-        evaluation.debug("evalCheck {any} @ {}", .{program, offset.*});
+        Rml.log.interpreter.debug("evalCheck {any} @ {}", .{program, offset.*});
 
         const blob = program[offset.*..];
 
@@ -96,29 +94,29 @@ pub const Interpreter = struct {
 
                 if (workDone) |x| x.* = true;
 
-                evaluation.debug("looking up symbol {}", .{symbol});
+                Rml.log.interpreter.debug("looking up symbol {}", .{symbol});
 
                 break :value self.lookup(symbol) orelse {
                     try self.abort(expr.getOrigin(), error.UnboundSymbol, "no symbol `{s}` in evaluation environment", .{symbol});
                 };
             } else if (Rml.castObj(Rml.Block, expr)) |block| {
                 if (block.data.length() == 0) {
-                    evaluation.debug("empty block", .{});
+                    Rml.log.interpreter.debug("empty block", .{});
                     break :value expr;
                 }
 
                 if (workDone) |x| x.* = true;
 
-                evaluation.debug("running block", .{});
+                Rml.log.interpreter.debug("running block", .{});
                 break :value try self.runProgram(block.data.kind == .paren, block.data.items());
             } else if (Rml.castObj(Rml.Quote, expr)) |quote| {
                 if (workDone) |x| x.* = true;
 
-                evaluation.debug("running quote", .{});
+                Rml.log.interpreter.debug("running quote", .{});
                 break :value try quote.data.run(self);
             }
 
-            evaluation.debug("cannot evaluate further: {}", .{expr});
+            Rml.log.interpreter.debug("cannot evaluate further: {}", .{expr});
 
             break :value expr;
         };
@@ -139,12 +137,12 @@ pub const Interpreter = struct {
     }
 
     pub fn runProgram(self: *Interpreter, shouldInvoke: bool, program: []const Rml.Object) Result! Rml.Object {
-        evaluation.debug("runProgram {}:{any}", .{program});
+        Rml.log.interpreter.debug("runProgram {}:{any}", .{program});
 
 
         var last: Rml.Object = (try Rml.Obj(Rml.Nil).wrap(Rml.getRml(self), Rml.source.blobOrigin(program), .{})).typeErase();
 
-        evaluation.debug("runProgram - begin loop", .{});
+        Rml.log.interpreter.debug("runProgram - begin loop", .{});
 
         var offset: usize = 0;
         while (offset < program.len) {
@@ -153,7 +151,7 @@ pub const Interpreter = struct {
             last = value;
         }
 
-        evaluation.debug("runProgram - end loop: {}", .{last});
+        Rml.log.interpreter.debug("runProgram - end loop: {}", .{last});
 
         return last;
     }

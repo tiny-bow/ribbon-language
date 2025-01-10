@@ -5,7 +5,12 @@ const MiscUtils = @import("Utils").Misc;
 const TypeUtils = @import("Utils").Type;
 const TextUtils = @import("Utils").Text;
 
-pub const log = std.log.scoped(.rml);
+pub const log = struct {
+    pub usingnamespace std.log.scoped(.rml);
+    pub const interpreter = std.log.scoped(.@"rml/interpreter");
+    pub const parser = std.log.scoped(.@"rml/parser");
+    pub const match = std.log.scoped(.@"rml/match");
+};
 
 const Rml = @This();
 
