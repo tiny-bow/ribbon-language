@@ -157,7 +157,7 @@ pub const Interpreter = struct {
     }
 
     pub fn invoke(self: *Interpreter, callOrigin: Rml.Origin, blame: Rml.Object, callable: Rml.Object, args: []const Rml.Object) Result! Rml.Object {
-        if (Rml.castObj(Rml.procedure.Procedure, callable)) |procedure| {
+        if (Rml.castObj(Rml.Procedure, callable)) |procedure| {
             return procedure.data.call(self, callOrigin, blame, args);
         } else {
             try self.abort(callOrigin, error.TypeError, "expected a procedure, got {s}: {s}", .{Rml.TypeId.name(callable.getTypeId()), callable});

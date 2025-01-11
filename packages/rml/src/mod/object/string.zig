@@ -1,7 +1,7 @@
 const std = @import("std");
 const TextUtils = @import("Utils").Text;
 
-const Rml = @import("root.zig");
+const Rml = @import("../root.zig");
 
 
 
@@ -60,7 +60,7 @@ pub const String = struct {
     }
 
     pub fn makeInternedSlice(self: *String, rml: *Rml) Rml.OOM! []const u8 {
-        return try rml.storage.intern(self.native_string.items);
+        return try rml.data.intern(self.native_string.items);
     }
 
     pub fn writer(self: *String) NativeWriter {

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Rml = @import("root.zig");
+const Rml = @import("../root.zig");
 
 
 
@@ -8,7 +8,7 @@ pub const Symbol = struct {
     str: Rml.str,
 
     pub fn create(rml: *Rml, str: []const u8) Rml.OOM! Symbol {
-        return .{ .str = try rml.storage.intern(str) };
+        return .{ .str = try rml.data.intern(str) };
     }
 
     pub fn onCompare(self: *Symbol, other: Rml.Object) Rml.Ordering {

@@ -67,17 +67,18 @@ fn getData() *Data {
     return getDataImpl() catch unreachable;
 }
 
+pub const GeneralCategory = GenCatData.Gc;
 
-pub fn generalCategory(c: Char) GenCatData.Gc { return getData().genCat.gc(c); }
+pub fn generalCategory(c: Char) GeneralCategory { return getData().genCat.gc(c); }
 
-pub fn generalCategoryFromName(name: []const u8) ?GenCatData.Gc {
-    inline for (comptime std.meta.fieldNames(GenCatData.Gc)) |field| {
-        if (std.mem.eql(u8, field, name)) return @field(GenCatData.Gc, field);
+pub fn generalCategoryFromName(name: []const u8) ?GeneralCategory {
+    inline for (comptime std.meta.fieldNames(GeneralCategory)) |field| {
+        if (std.mem.eql(u8, field, name)) return @field(GeneralCategory, field);
     }
     return null;
 }
 
-pub fn describeGeneralCategory(cat: GenCatData.Gc) []const u8 {
+pub fn describeGeneralCategory(cat: GeneralCategory) []const u8 {
     return switch(cat) {
         .Cc => "Other, Control",
         .Cf => "Other, Format",

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Rml = @import("root.zig");
+const Rml = @import("../root.zig");
 
 
 pub const Set = TypedSet(Rml.object.ObjData);

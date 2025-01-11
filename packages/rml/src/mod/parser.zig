@@ -149,7 +149,7 @@ pub const Parser = struct {
         return result;
     }
 
-    pub fn parseQuote(self: *Parser, quoteKind: Rml.quote.QuoteKind) Rml.Error! ?Rml.Obj(Rml.Quote) {
+    pub fn parseQuote(self: *Parser, quoteKind: Rml.object.quote.QuoteKind) Rml.Error! ?Rml.Obj(Rml.Quote) {
         Rml.log.parser.debug("parseQuote", .{});
         errdefer Rml.log.parser.debug("parseQuote failed", .{});
 
@@ -194,7 +194,7 @@ pub const Parser = struct {
         return result;
     }
 
-    pub fn parseBlock(self: *Parser, blockKind: Rml.block.BlockKind) Rml.Error! ?Rml.Obj(Rml.Block) {
+    pub fn parseBlock(self: *Parser, blockKind: Rml.object.block.BlockKind) Rml.Error! ?Rml.Obj(Rml.Block) {
         Rml.log.parser.debug("parseBlock", .{});
         errdefer Rml.log.parser.debug("parseBlock failed", .{});
 
@@ -329,7 +329,7 @@ pub const Parser = struct {
         }
     }
 
-    fn parseBlockTail(self: *Parser, start: Rml.Pos, blockKind: Rml.block.BlockKind) Rml.Error! Rml.Obj(Rml.Block) {
+    fn parseBlockTail(self: *Parser, start: Rml.Pos, blockKind: Rml.object.block.BlockKind) Rml.Error! Rml.Obj(Rml.Block) {
         const rml = Rml.getRml(self);
 
         var array: std.ArrayListUnmanaged(Rml.Object) = .{};
@@ -406,7 +406,7 @@ pub const Parser = struct {
         return block;
     }
 
-    pub fn parseQuoteOpening(self: *Parser, kind : Rml.quote.QuoteKind) Rml.Error! bool {
+    pub fn parseQuoteOpening(self: *Parser, kind : Rml.object.quote.QuoteKind) Rml.Error! bool {
         const openStr = kind.toStr();
 
         std.debug.assert(!std.mem.eql(u8, openStr, ""));
@@ -414,9 +414,9 @@ pub const Parser = struct {
         return try self.expectSlice(openStr);
     }
 
-    pub fn parseAnyQuoteOpening(self: *Parser) Rml.Error! ?Rml.quote.QuoteKind {
-        inline for (comptime std.meta.fieldNames(Rml.quote.QuoteKind)) |quoteKindName| {
-            const quoteKind = @field(Rml.quote.QuoteKind, quoteKindName);
+    pub fn parseAnyQuoteOpening(self: *Parser) Rml.Error! ?Rml.object.quote.QuoteKind {
+        inline for (comptime std.meta.fieldNames(Rml.object.quote.QuoteKind)) |quoteKindName| {
+            const quoteKind = @field(Rml.object.quote.QuoteKind, quoteKindName);
             const openStr = comptime quoteKind.toStr();
 
             if (comptime std.mem.eql(u8, openStr, "")) @compileError("QuoteKind." ++ quoteKindName ++ ".toStr() must not return an empty string");
@@ -430,7 +430,7 @@ pub const Parser = struct {
         return null;
     }
 
-    pub fn parseBlockOpening(self: *Parser, kind: Rml.block.BlockKind) Rml.Error! bool {
+    pub fn parseBlockOpening(self: *Parser, kind: Rml.object.block.BlockKind) Rml.Error! bool {
         const openStr = kind.toOpenStr();
 
         if (std.mem.eql(u8, openStr, "")) {
@@ -446,9 +446,9 @@ pub const Parser = struct {
         }
     }
 
-    pub fn parseAnyBlockOpening(self: *Parser) Rml.Error! ?Rml.block.BlockKind {
-        inline for (comptime std.meta.fieldNames(Rml.block.BlockKind)) |blockKindName| {
-            const blockKind = @field(Rml.block.BlockKind, blockKindName);
+    pub fn parseAnyBlockOpening(self: *Parser) Rml.Error! ?Rml.object.block.BlockKind {
+        inline for (comptime std.meta.fieldNames(Rml.object.block.BlockKind)) |blockKindName| {
+            const blockKind = @field(Rml.object.block.BlockKind, blockKindName);
             const openStr = comptime blockKind.toOpenStr();
 
             if (comptime std.mem.eql(u8, openStr, "")) continue;
@@ -462,7 +462,7 @@ pub const Parser = struct {
         return null;
     }
 
-    pub fn parseBlockClosing(self: *Parser, kind: Rml.block.BlockKind) Rml.Error! bool {
+    pub fn parseBlockClosing(self: *Parser, kind: Rml.object.block.BlockKind) Rml.Error! bool {
         const closeStr = kind.toCloseStr();
 
         if (std.mem.eql(u8, closeStr, "")) {
@@ -479,8 +479,8 @@ pub const Parser = struct {
     }
 
     pub fn parseAnyBlockClosing(self: *Parser) Rml.Error! bool {
-        inline for (comptime std.meta.fieldNames(Rml.block.BlockKind)) |blockKindName| {
-            const blockKind = @field(Rml.block.BlockKind, blockKindName);
+        inline for (comptime std.meta.fieldNames(Rml.object.block.BlockKind)) |blockKindName| {
+            const blockKind = @field(Rml.object.block.BlockKind, blockKindName);
             const closeStr = comptime blockKind.toCloseStr();
 
             if (comptime std.mem.eql(u8, closeStr, "")) {

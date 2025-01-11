@@ -39,8 +39,8 @@ pub const TypeId = struct {
         return TypeId { .typename = @typeName(T).ptr };
     }
 
-    pub fn name(self: TypeId) [*:0]const u8 {
-        return self.typename;
+    pub fn name(self: TypeId) []const u8 {
+        return std.mem.span(self.typename);
     }
 };
 

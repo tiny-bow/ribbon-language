@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Rml = @import("root.zig");
+const Rml = @import("../root.zig");
 
 
 /// import a namespace into the current environment
@@ -35,7 +35,7 @@ pub const import = Rml.Procedure {
     }.fun,
 };
 
-/// Create a global variable binding
+/// create a global variable binding
 pub const global = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun (interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -72,7 +72,7 @@ pub const global = Rml.Procedure {
 
             Rml.log.parser.debug("global variable pattern: {}", .{patt});
 
-            const dom = Rml.pattern.patternBinders(patt.typeErase())
+            const dom = Rml.object.pattern.patternBinders(patt.typeErase())
                 catch |err| switch (err) {
                     error.BadDomain => {
                         try interpreter.abort(origin, error.SyntaxError,
@@ -143,7 +143,7 @@ pub const global = Rml.Procedure {
 };
 
 
-/// Create a local variable binding
+/// create a local variable binding
 pub const local = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -180,7 +180,7 @@ pub const local = Rml.Procedure {
 
             Rml.log.parser.debug("local variable pattern: {}", .{patt});
 
-            const dom = Rml.pattern.patternBinders(patt.typeErase())
+            const dom = patt.data.binders()
                 catch |err| switch (err) {
                     error.BadDomain => {
                         try interpreter.abort(origin, error.SyntaxError,
@@ -248,7 +248,7 @@ pub const local = Rml.Procedure {
     }.fun,
 };
 
-/// Set the value of a variable associated with an existing binding in the current environment
+/// set the value of a variable associated with an existing binding in the current environment
 pub const @"set!" = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun (interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -266,7 +266,7 @@ pub const @"set!" = Rml.Procedure {
     }.fun,
 };
 
-/// Create a function closure
+/// create a function closure
 pub const fun = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -276,7 +276,7 @@ pub const fun = Rml.Procedure {
 
             const rml = Rml.getRml(interpreter);
 
-            var cases: std.ArrayListUnmanaged(Rml.procedure.Case) = .{};
+            var cases: std.ArrayListUnmanaged(Rml.object.procedure.Case) = .{};
 
             if (args.len == 1) {
                 Rml.log.parser.debug("case fun", .{});
@@ -297,19 +297,19 @@ pub const fun = Rml.Procedure {
                         Rml.log.parser.debug("case {}", .{case});
                         const caseBlock = try interpreter.castObj(Rml.Block, case);
 
-                        const c = try Rml.procedure.Case.parse(interpreter, caseBlock.getOrigin(), caseBlock.data.array.items);
+                        const c = try Rml.object.procedure.Case.parse(interpreter, caseBlock.getOrigin(), caseBlock.data.array.items);
 
                         try cases.append(rml.blobAllocator(), c);
                     }
                 } else {
                     Rml.log.parser.debug("fun single case: {any}", .{caseSet.data.array.items});
-                    const c = try Rml.procedure.Case.parse(interpreter, caseSet.getOrigin(), caseSet.data.array.items);
+                    const c = try Rml.object.procedure.Case.parse(interpreter, caseSet.getOrigin(), caseSet.data.array.items);
 
                     try cases.append(rml.blobAllocator(), c);
                 }
             } else {
                 Rml.log.parser.debug("fun single case: {any}", .{args});
-                const c = try Rml.procedure.Case.parse(interpreter, origin, args);
+                const c = try Rml.object.procedure.Case.parse(interpreter, origin, args);
 
                 try cases.append(rml.blobAllocator(), c);
             }
@@ -330,7 +330,7 @@ pub const fun = Rml.Procedure {
     }.fun,
 };
 
-/// Create a macro closure
+/// create a macro closure
 pub const macro = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -340,7 +340,7 @@ pub const macro = Rml.Procedure {
 
             const rml = Rml.getRml(interpreter);
 
-            var cases: std.ArrayListUnmanaged(Rml.procedure.Case) = .{};
+            var cases: std.ArrayListUnmanaged(Rml.object.procedure.Case) = .{};
 
             if (args.len == 1) {
                 Rml.log.interpreter.debug("case macro", .{});
@@ -361,20 +361,20 @@ pub const macro = Rml.Procedure {
                         Rml.log.interpreter.debug("case {}", .{case});
                         const caseBlock = try interpreter.castObj(Rml.Block, case);
 
-                        const c = try Rml.procedure.Case.parse(interpreter, origin, caseBlock.data.array.items);
+                        const c = try Rml.object.procedure.Case.parse(interpreter, origin, caseBlock.data.array.items);
 
                         try cases.append(rml.blobAllocator(), c);
                     }
                 } else {
                     Rml.log.interpreter.debug("isCases {}", .{isCases});
                     Rml.log.interpreter.debug("macro single case: {any}", .{caseSet.data.array.items});
-                    const c = try Rml.procedure.Case.parse(interpreter, origin, caseSet.data.array.items);
+                    const c = try Rml.object.procedure.Case.parse(interpreter, origin, caseSet.data.array.items);
 
                     try cases.append(rml.blobAllocator(), c);
                 }
             } else {
                 Rml.log.interpreter.debug("macro single case: {any}", .{args});
-                const c = try Rml.procedure.Case.parse(interpreter, origin, args);
+                const c = try Rml.object.procedure.Case.parse(interpreter, origin, args);
                 try cases.append(rml.blobAllocator(), c);
             }
 
@@ -392,7 +392,7 @@ pub const macro = Rml.Procedure {
     }.fun,
 };
 
-/// Print any number of arguments followed by a new line
+/// print any number of arguments followed by a new line
 pub fn @"print-ln"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
     const rml = Rml.getRml(interpreter);
 
@@ -413,7 +413,7 @@ pub fn @"print-ln"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []co
 
 
 
-/// Print any number of arguments
+/// print any number of arguments
 pub fn print(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
     const rml = Rml.getRml(interpreter);
 
@@ -430,9 +430,9 @@ pub fn print(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rm
 
 
 
-/// Alias for `+`
+/// alias for `+`
 pub const add = @"+";
-/// Sum any number of arguments of type `int | float | char`;
+/// sum any number of arguments of type `int | float | char`;
 /// if only one argument is provided, return the argument's absolute value
 pub fn @"+"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
     if (args.len == 0) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
@@ -460,9 +460,9 @@ pub fn @"+"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml
 
 
 
-/// Alias for `-`
+/// alias for `-`
 pub const sub = @"-";
-/// Subtract any number of arguments of type `int | float | char`;
+/// subtract any number of arguments of type `int | float | char`;
 /// if only one argument is provided, return the argument's negative value
 pub fn @"-"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
     if (args.len == 0) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found 0", .{});
@@ -489,9 +489,9 @@ pub fn @"-"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml
 }
 
 
-/// Alias for `/`
+/// alias for `/`
 pub const div = @"/";
-/// Divide any number of arguments of type `int | float | char`;
+/// divide any number of arguments of type `int | float | char`;
 /// it is an error to provide less than two arguments
 pub fn @"/"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
@@ -506,9 +506,9 @@ pub fn @"/"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml
 }
 
 
-/// Alias for `*`
+/// alias for `*`
 pub const mul = @"*";
-/// Multiply any number of arguments of type `int | float | char`;
+/// multiply any number of arguments of type `int | float | char`;
 /// it is an error to provide less than two arguments
 pub fn @"*"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
     if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
@@ -606,6 +606,30 @@ pub fn @"bit-xor"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []con
     });
 }
 
+/// bitwise right shift on two arguments of type `int | char`
+pub fn @"bit-rshift"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+    if (args.len != 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected 2 arguments, found {}", .{args.len});
+
+    var sum: Rml.Object = args[0];
+
+    return arithCastReduce(interpreter, origin, &sum, args[1..], struct {
+        pub fn int(a: Rml.Int, b: Rml.Int) Rml.Int { return a >> @intCast(b); }
+        pub fn char(a: Rml.Char, b: Rml.Char) Rml.Char { return a >> @intCast(b); }
+    });
+}
+
+/// bitwise left shift on two arguments of type `int | char`
+pub fn @"bit-lshift"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+    if (args.len != 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected 2 arguments, found {}", .{args.len});
+
+    var sum: Rml.Object = args[0];
+
+    return arithCastReduce(interpreter, origin, &sum, args[1..], struct {
+        pub fn int(a: Rml.Int, b: Rml.Int) Rml.Int { return a << @intCast(b); }
+        pub fn char(a: Rml.Char, b: Rml.Char) Rml.Char { return a << @intCast(b); }
+    });
+}
+
 
 /// coerce an argument to type `bool`
 pub fn @"truthy?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -625,7 +649,7 @@ pub fn not(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.
     return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, !Rml.coerceBool(args[0]))).typeErase();
 }
 
-/// Short-circuiting logical AND on any number of arguments of any type;
+/// short-circuiting logical AND on any number of arguments of any type;
 /// returns the last succeeding argument or nil
 pub const @"and" = Rml.Procedure {
     .native_macro = &struct{
@@ -651,7 +675,7 @@ pub const @"and" = Rml.Procedure {
     }.fun,
 };
 
-/// Short-circuiting logical OR on any number of arguments of any type;
+/// short-circuiting logical OR on any number of arguments of any type;
 /// returns the first succeeding argument or nil
 pub const @"or" = Rml.Procedure {
     .native_macro = &struct{
@@ -666,6 +690,177 @@ pub const @"or" = Rml.Procedure {
         }
     }.fun,
 };
+
+/// alias for `==`
+pub const @"eq?" = @"==";
+/// determine if any number of values are equal; uses structural comparison
+/// it is an error to provide less than two arguments
+pub fn @"=="(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+    if (args.len < 2)
+        try interpreter.abort(origin, error.InvalidArgumentCount,
+        "expected at least 2 arguments, found {}", .{args.len});
+
+    const a = args[0];
+
+    for (args[1..]) |aN| {
+        const b = aN;
+
+        if (!Rml.equal(a, b)) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+    }
+
+    return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, true)).typeErase();
+}
+
+/// alias for `!=`
+pub const @"ne?" = @"!=";
+/// determine if any number of values are not equal; uses structural comparison
+/// it is an error to provide less than two arguments
+pub fn @"!="(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+    if (args.len < 2)
+        try interpreter.abort(origin, error.InvalidArgumentCount,
+        "expected at least 2 arguments, found {}", .{args.len});
+
+    const a = args[0];
+
+    for (args[1..]) |aN| {
+        const b = aN;
+
+        if (Rml.equal(a, b)) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+    }
+
+    return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, true)).typeErase();
+}
+
+
+/// alias for `<`
+pub const @"lt?" = @"<";
+/// determine if any number of values are in strictly increasing order
+/// it is an error to provide less than two arguments
+pub fn @"<"(
+    interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object,
+) Rml.Result! Rml.Object {
+    if (args.len < 2)
+        try interpreter.abort(origin, error.InvalidArgumentCount,
+        "expected at least 2 arguments, found {}", .{args.len});
+
+    var a = args[0];
+
+    for (args[1..]) |aN| {
+        const b = aN;
+
+        if (Rml.compare(a, b) != .Less) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+
+        a = b;
+    }
+
+    return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, true)).typeErase();
+}
+
+/// alias for `<=`
+pub const @"le?" = @"<=";
+/// determine if any number of values are in increasing order, allowing for equality on adjacent values
+/// it is an error to provide less than two arguments
+pub fn @"<="(
+    interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object,
+) Rml.Result! Rml.Object {
+    if (args.len < 2)
+        try interpreter.abort(origin, error.InvalidArgumentCount,
+        "expected at least 2 arguments, found {}", .{args.len});
+
+    var a = args[0];
+
+    for (args[1..]) |aN| {
+        const b = aN;
+
+        if (Rml.compare(a, b) == .Greater) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+
+        a = b;
+    }
+
+    return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, true)).typeErase();
+}
+
+/// alias for `>`
+pub const @"gt?" = @">";
+/// determine if any number of values are in strictly decreasing order
+/// it is an error to provide less than two arguments
+pub fn @">"(
+    interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object,
+) Rml.Result! Rml.Object {
+    if (args.len < 2)
+        try interpreter.abort(origin, error.InvalidArgumentCount,
+        "expected at least 2 arguments, found {}", .{args.len});
+
+    var a = args[0];
+
+    for (args[1..]) |aN| {
+        const b = aN;
+
+        if (Rml.compare(a, b) != .Greater) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+
+        a = b;
+    }
+
+    return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, true)).typeErase();
+}
+
+/// alias for `>=`
+pub const @"ge?" = @">=";
+/// determine if any number of values are in decreasing order, allowing for equality on adjacent values
+/// it is an error to provide less than two arguments
+pub fn @">="(
+    interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object,
+) Rml.Result! Rml.Object {
+    if (args.len < 2)
+        try interpreter.abort(origin, error.InvalidArgumentCount,
+        "expected at least 2 arguments, found {}", .{args.len});
+
+    var a = args[0];
+
+    for (args[1..]) |aN| {
+        const b = aN;
+
+        if (Rml.compare(a, b) == .Less) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+
+        a = b;
+    }
+
+    return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, true)).typeErase();
+}
+
+
+/// calls a function with a list of arguments
+pub const @"apply" = Rml.Procedure {
+    .native_macro = &struct {
+        pub fn fun (interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+            if (args.len != 2)
+                try interpreter.abort(origin, error.InvalidArgumentCount,
+                "expected 2 arguments, found {}", .{args.len});
+
+            const proc = try interpreter.castObj(Rml.Procedure, try interpreter.eval(args[0]));
+            const argsArr = try Rml.coerceArray(try interpreter.eval(args[1]))
+                orelse try interpreter.abort(origin, error.TypeError,
+                    "expected array, found {s}", .{Rml.TypeId.name(args[1].getTypeId())});
+
+            return proc.data.call(interpreter, origin, args[0], argsArr.data.items());
+        }
+    }.fun
+};
+
+/// generates a unique Symbol
+pub fn gensym(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+    if (args.len != 0) {
+        try interpreter.abort(origin, error.InvalidArgumentCount, "expected 0 arguments, found {}", .{args.len});
+    }
+
+    const rml = Rml.getRml(interpreter);
+
+    const sym = try rml.data.gensym(origin);
+
+    return (try Rml.Obj(Rml.Symbol).wrap(rml, origin, .{.str = sym})).typeErase();
+}
+
+
 
 
 fn arithCastReduce(

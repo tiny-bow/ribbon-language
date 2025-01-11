@@ -23,24 +23,14 @@ pub const compare = MiscUtils.compare;
 pub const equal = MiscUtils.equal;
 pub const hashWith = MiscUtils.hashWith;
 
-pub const array = @import("array.zig");
 pub const bindgen = @import("bindgen.zig");
-pub const block = @import("block.zig");
-pub const cell = @import("cell.zig");
-pub const env = @import("env.zig");
+pub const builtin = @import("builtin.zig");
 pub const interpreter = @import("interpreter.zig");
-pub const map = @import("map.zig");
 pub const object = @import("object.zig");
 pub const parser = @import("parser.zig");
-pub const pattern = @import("pattern.zig");
-pub const procedure = @import("procedure.zig");
-pub const quote = @import("quote.zig");
-pub const set = @import("set.zig");
 pub const source = @import("source.zig");
-pub const Storage = @import("Storage.zig");
-pub const string = @import("string.zig");
-pub const symbol = @import("symbol.zig");
-pub const writer = @import("writer.zig");
+pub const storage = @import("storage.zig");
+pub const Storage = storage.Storage;
 
 pub const Nil = extern struct {
     pub fn onFormat(_: *Nil, w: std.io.AnyWriter) anyerror! void {
@@ -64,23 +54,11 @@ pub const SyntaxError = parser.SyntaxError;
 pub const OOM = error{OutOfMemory};
 pub const MemoryLeak = error{MemoryLeak};
 pub const Unexpected = error{Unexpected};
-pub const SymbolAlreadyBound = env.SymbolAlreadyBound;
 pub const Error = IOError || OOM || EvalError || SyntaxError || Unexpected;
+pub const SymbolAlreadyBound = object.SymbolAlreadyBound;
 
-pub const Writer = writer.Writer;
-pub const Array = array.Array;
-pub const Block = block.Block;
-pub const Cell = cell.Cell;
-pub const Env = env.Env;
 pub const Interpreter = interpreter.Interpreter;
 pub const Parser = parser.Parser;
-pub const Pattern = pattern.Pattern;
-pub const Procedure = procedure.Procedure;
-pub const Quote = quote.Quote;
-pub const Set = set.Set;
-pub const String = string.String;
-pub const Symbol = symbol.Symbol;
-pub const Map = map.Map;
 
 pub const NativeFunction = bindgen.NativeFunction;
 pub const Origin = source.Origin;
@@ -90,6 +68,18 @@ pub const Obj = object.Obj;
 pub const ObjData = object.ObjData;
 pub const Object = object.Object;
 pub const Header = object.Header;
+pub const Writer = object.Writer;
+pub const Array = object.Array;
+pub const Block = object.Block;
+pub const Cell = object.Cell;
+pub const Env = object.Env;
+pub const Pattern = object.Pattern;
+pub const Procedure = object.Procedure;
+pub const Quote = object.Quote;
+pub const Set = object.Set;
+pub const String = object.String;
+pub const Symbol = object.Symbol;
+pub const Map = object.Map;
 pub const getObj = object.getObj;
 pub const getHeader = object.getHeader;
 pub const getOrigin = object.getOrigin;
@@ -110,7 +100,7 @@ test {
 }
 
 
-storage: Storage,
+data: Storage,
 cwd: ?std.fs.Dir,
 out: ?std.io.AnyWriter,
 namespace_env: Obj(Env) = undefined,
@@ -149,69 +139,6 @@ pub const Diagnostic = struct {
 };
 
 
-pub const BUILTIN = @import("BUILTIN.zig");
-
-pub const BUILTIN_NAMESPACES = .{
-    .type = struct {
-        pub fn @"nil?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Nil)); }
-        pub fn @"bool?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Bool)); }
-        pub fn @"int?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Int)); }
-        pub fn @"float?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Float)); }
-        pub fn @"char?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Char)); }
-        pub fn @"string?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(String)); }
-        pub fn @"symbol?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Symbol)); }
-        pub fn @"procedure?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Procedure)); }
-        pub fn @"interpreter?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Interpreter)); }
-        pub fn @"parser?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Parser)); }
-        pub fn @"pattern?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Pattern)); }
-        pub fn @"writer?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Writer)); }
-        pub fn @"cell?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Cell)); }
-        pub fn @"block?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Block)); }
-        pub fn @"quote?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Quote)); }
-        pub fn @"env?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Env)); }
-        pub fn @"map?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Map)); }
-        pub fn @"set?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Set)); }
-        pub fn @"array?"(obj: Object) Bool { return equal(obj.getTypeId(), TypeId.of(Array)); }
-    },
-};
-
-pub const BUILTIN_TYPES = TypeUtils.structConcat(.{VALUE_TYPES, OBJECT_TYPES});
-
-pub const VALUE_TYPES = TypeUtils.structConcat(.{ATOM_TYPES, DATA_TYPES});
-
-pub const ATOM_TYPES = .{
-    .Nil = Nil,
-    .Bool = Bool,
-    .Int = Int,
-    .Float = Float,
-    .Char = Char,
-    .String = String,
-    .Symbol = Symbol,
-};
-
-pub const DATA_TYPES = .{
-    .Procedure = Procedure,
-    .Interpreter = Interpreter,
-    .Parser = Parser,
-    .Pattern = Pattern,
-    .Writer = Writer,
-    .Cell = Cell,
-};
-
-pub const OBJECT_TYPES = TypeUtils.structConcat(.{SOURCE_TYPES, COLLECTION_TYPES});
-
-pub const SOURCE_TYPES = .{
-    .Block = Block,
-    .Quote = Quote,
-};
-
-pub const COLLECTION_TYPES = .{
-    .Env = Env,
-    .Map = Map,
-    .Set = Set,
-    .Array = Array,
-};
-
 
 /// caller must close cwd and out
 pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWriter, diagnostic: ?*?Diagnostic, args: []const []const u8) OOM! *Rml {
@@ -219,33 +146,33 @@ pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWrit
     errdefer allocator.destroy(self);
 
     self.* = Rml {
-        .storage = try Storage.init(allocator),
+        .data = try Storage.init(allocator),
         .cwd = cwd,
         .out = out,
         .diagnostic = diagnostic,
     };
-    errdefer self.storage.deinit();
+    errdefer self.data.deinit();
 
-    self.storage.origin = try Origin.fromStr(self, "system");
+    self.data.origin = try Origin.fromStr(self, "system");
 
     log.debug("initializing interpreter ...", .{});
 
-    self.global_env = try Obj(Env).wrap(self, self.storage.origin, .{.allocator = self.storage.permanent.allocator()});
-    self.namespace_env = try Obj(Env).wrap(self, self.storage.origin, .{.allocator = self.storage.permanent.allocator()});
+    self.global_env = try Obj(Env).wrap(self, self.data.origin, .{.allocator = self.data.permanent.allocator()});
+    self.namespace_env = try Obj(Env).wrap(self, self.data.origin, .{.allocator = self.data.permanent.allocator()});
 
-    bindgen.bindObjectNamespaces(self, self.namespace_env, BUILTIN_TYPES)
+    bindgen.bindObjectNamespaces(self, self.namespace_env, builtin.types)
         catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => @panic(@errorName(err)),
         };
 
-    bindgen.bindObjectNamespaces(self, self.namespace_env, BUILTIN_NAMESPACES)
+    bindgen.bindObjectNamespaces(self, self.namespace_env, builtin.namespaces)
         catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => @panic(@errorName(err)),
         };
 
-    bindgen.bindGlobals(self, self.global_env, BUILTIN)
+    bindgen.bindGlobals(self, self.global_env, builtin.global)
         catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => @panic(@errorName(err)),
@@ -254,7 +181,7 @@ pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWrit
     // TODO args
     _ = args;
 
-    if (Obj(Interpreter).wrap(self, self.storage.origin, try .create(self))) |x| {
+    if (Obj(Interpreter).wrap(self, self.data.origin, try .create(self))) |x| {
         log.debug("... interpreter ready", .{});
         self.main_interpreter = x;
         return self;
@@ -267,9 +194,9 @@ pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWrit
 pub fn deinit(self: *Rml) MemoryLeak! void {
     log.debug("deinitializing Rml", .{});
 
-    self.storage.deinit();
+    self.data.deinit();
 
-    self.storage.long_term.destroy(self);
+    self.data.long_term.destroy(self);
 }
 
 pub fn expectedOutput(self: *Rml, comptime fmt: []const u8, args: anytype) void {
@@ -282,20 +209,20 @@ pub fn expectedOutput(self: *Rml, comptime fmt: []const u8, args: anytype) void 
 
 pub fn beginBlob(self: *Rml) void {
     log.debug("beginBlob", .{});
-    self.storage.beginBlob();
+    self.data.beginBlob();
 }
 
-pub fn endBlob(self: *Rml) Storage.Blob {
+pub fn endBlob(self: *Rml) storage.Blob {
     log.debug("endBlob", .{});
-    return self.storage.endBlob();
+    return self.data.endBlob();
 }
 
-pub fn blobId(self: *Rml) Storage.BlobId {
-    return self.storage.blobId();
+pub fn blobId(self: *Rml) storage.BlobId {
+    return self.data.blobId();
 }
 
 pub fn blobAllocator(self: *Rml) std.mem.Allocator {
-    return self.storage.blobAllocator();
+    return self.data.blobAllocator();
 }
 
 // TODO run
@@ -315,7 +242,7 @@ pub fn runFile(self: *Rml, fileName: []const u8) Error! Object {
 
 pub fn readFile(self: *Rml, fileName: []const u8) Error! []const u8 {
     log.info("reading [{s}] ...", .{fileName});
-    return if (self.storage.read_file_callback) |cb| try cb(self, fileName)
+    return if (self.data.read_file_callback) |cb| try cb(self, fileName)
         else error.AccessDenied;
 }
 

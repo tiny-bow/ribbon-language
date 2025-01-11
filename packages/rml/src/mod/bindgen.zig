@@ -8,8 +8,8 @@ const Rml = @import("root.zig");
 
 pub fn bindGlobals(rml: *Rml, env: Rml.Obj(Rml.Env), comptime globals: type) (Rml.OOM || Rml.SymbolAlreadyBound)! void {
     inline for (comptime std.meta.declarations(globals)) |field| {
-        const symbol: Rml.Obj(Rml.Symbol) = try .wrap(rml, rml.storage.origin, try .create(rml, field.name));
-        const object = try toObjectConst(rml, rml.storage.origin, &@field(globals, field.name));
+        const symbol: Rml.Obj(Rml.Symbol) = try .wrap(rml, rml.data.origin, try .create(rml, field.name));
+        const object = try toObjectConst(rml, rml.data.origin, &@field(globals, field.name));
 
         try env.data.bind(symbol, object.typeErase());
     }
@@ -18,13 +18,13 @@ pub fn bindGlobals(rml: *Rml, env: Rml.Obj(Rml.Env), comptime globals: type) (Rm
 
 pub fn bindObjectNamespaces(rml: *Rml, env: Rml.Obj(Rml.Env), comptime namespaces: anytype) (Rml.OOM || Rml.SymbolAlreadyBound)! void {
     inline for (comptime std.meta.fields(@TypeOf(namespaces))) |field| {
-        const builtinEnv: Rml.Obj(Rml.Env) = try .wrap(rml, rml.storage.origin, .{.allocator = rml.blobAllocator()});
+        const builtinEnv: Rml.Obj(Rml.Env) = try .wrap(rml, rml.data.origin, .{.allocator = rml.blobAllocator()});
         const Ns = Namespace(@field(namespaces, field.name));
 
-        const methods = try Ns.methods(rml, rml.storage.origin);
+        const methods = try Ns.methods(rml, rml.data.origin);
 
         try builtinEnv.data.bindNamespace(methods);
-        const sym: Rml.Obj(Rml.Symbol) = try .wrap(rml, rml.storage.origin, try .create(rml, field.name));
+        const sym: Rml.Obj(Rml.Symbol) = try .wrap(rml, rml.data.origin, try .create(rml, field.name));
 
         try env.data.bind(sym, builtinEnv.typeErase());
     }
@@ -538,12 +538,14 @@ pub fn toObjectConst(rml: *Rml, origin: Rml.Origin, comptime value: anytype) Rml
 }
 
 
-pub fn wrapNativeFunction(rml: *Rml, origin: Rml.Origin, comptime value: anytype) Rml.OOM! Rml.Obj(Rml.Procedure) {
-    const T = @typeInfo(@TypeOf(value)).pointer.child;
+pub fn wrapNativeFunction(rml: *Rml, origin: Rml.Origin, comptime nativeFunc: anytype) Rml.OOM! Rml.Obj(Rml.Procedure) {
+    const T = @typeInfo(@TypeOf(nativeFunc)).pointer.child;
     const info = @typeInfo(T).@"fn";
 
-    return Rml.Obj(Rml.Procedure).wrap(rml, origin, .{ .native_function = struct {
+    return Rml.Obj(Rml.Procedure).wrap(rml, origin, .{ .native_function = &struct {
         pub fn method (interpreter: *Rml.Interpreter, callOrigin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+            // Rml.log.debug("native wrapper", .{});
+
             if (args.len != info.params.len) {
                 try interpreter.abort(callOrigin, error.InvalidArgumentCount, "expected {} arguments, got {}", .{info.params.len, args.len});
             }
@@ -557,9 +559,12 @@ pub fn wrapNativeFunction(rml: *Rml, origin: Rml.Origin, comptime value: anytype
             }
 
             const nativeResult = nativeResult: {
-                const r = @call(.auto, value, nativeArgs);
+                // Rml.log.debug("calling native function", .{});
+                const r = @call(.auto, nativeFunc, nativeArgs);
                 break :nativeResult if (comptime TypeUtils.causesErrors(T)) try r else r;
             };
+
+            // Rml.log.debug("native function returned {any}", .{nativeResult});
 
             const objWrapper = toObject(Rml.getRml(interpreter), callOrigin, nativeResult) catch |err| {
                 try interpreter.abort(callOrigin, err, "failed to convert result from native to rml", .{});

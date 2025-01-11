@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Rml = @import("root.zig");
+const Rml = @import("../root.zig");
 
 
 
@@ -68,6 +68,10 @@ pub const Pattern = union(enum) {
         }
     }
 
+    pub fn binders(self: *Pattern) (Rml.OOM || error{BadDomain})! Rml.object.env.Domain {
+        return patternBinders(Rml.getObj(self).typeErase());
+    }
+
     pub fn run(self: *Pattern, interpreter: *Rml.Interpreter, diag: ?*?Rml.Diagnostic, origin: Rml.Origin, input: []const Rml.Object) Rml.Result! ?Rml.Obj(Table) {
         const obj = Rml.getObj(self);
 
@@ -120,14 +124,14 @@ pub fn ParseResult(comptime T: type) type {
     };
 }
 
-pub const Table = Rml.map.TypedMap(Rml.Symbol, Rml.ObjData);
+pub const Table = Rml.object.map.TypedMap(Rml.Symbol, Rml.ObjData);
 
-pub fn patternBinders(patternObj: Rml.Object) (Rml.OOM || error{BadDomain})! Rml.env.Domain {
+pub fn patternBinders(patternObj: Rml.Object) (Rml.OOM || error{BadDomain})! Rml.object.env.Domain {
     const rml = patternObj.getRml();
 
     const pattern = Rml.castObj(Pattern, patternObj) orelse return .{};
 
-    var domain: Rml.env.Domain = .{};
+    var domain: Rml.object.env.Domain = .{};
 
     switch (pattern.data.*) {
         .wildcard,
@@ -176,7 +180,7 @@ pub fn patternBinders(patternObj: Rml.Object) (Rml.OOM || error{BadDomain})! Rml
         },
 
         .alternation => |alternation| {
-            var referenceSubDomain: ?Rml.env.Domain = null;
+            var referenceSubDomain: ?Rml.object.env.Domain = null;
             for (alternation.data.items()) |item| {
                 var subDomain = try patternBinders(item);
 
@@ -318,7 +322,7 @@ pub fn runPattern(
                         "expected `{}`, got `{}`", .{patt, input});
                 },
                 .quasi => {
-                    const w = try Rml.quote.runQuasi(interpreter, quote.data.body, null);
+                    const w = try Rml.object.quote.runQuasi(interpreter, quote.data.body, null);
                     if (w.onCompare(input) != .Equal) return patternAbort(diag, input.getOrigin(),
                         "expected `{}`, got `{}`", .{w, input});
                 },

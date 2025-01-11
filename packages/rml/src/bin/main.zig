@@ -57,8 +57,8 @@ pub fn main () !void {
     log.debug("evaluation_env: {}", .{rml.main_interpreter.data.evaluation_env});
 
     try rml.main_interpreter.data.evaluation_env.data.bind(
-        try Rml.Obj(Rml.Symbol).wrap(rml, rml.storage.origin, try .create(rml,"print-int")),
-        (try Rml.bindgen.toObjectConst(rml, rml.storage.origin, &struct{
+        try Rml.Obj(Rml.Symbol).wrap(rml, rml.data.origin, try .create(rml,"print-int")),
+        (try Rml.bindgen.toObjectConst(rml, rml.data.origin, &struct{
             pub fn func(int: Rml.Int) void {
                 log.info("print-int: {}", .{int});
             }
@@ -68,7 +68,7 @@ pub fn main () !void {
 
     const srcText: []const u8 = try std.fs.cwd().readFileAlloc(rml.blobAllocator(), "test.bb", std.math.maxInt(u16));
 
-    const parser: Rml.Obj(Rml.Parser) = try .wrap(rml, rml.storage.origin, .create("test.bb", try Rml.Obj(Rml.String).wrap(rml, rml.storage.origin, try .create(rml, srcText))));
+    const parser: Rml.Obj(Rml.Parser) = try .wrap(rml, rml.data.origin, .create("test.bb", try Rml.Obj(Rml.String).wrap(rml, rml.data.origin, try .create(rml, srcText))));
 
     while (true) {
         const blob = parser.data.nextBlob() catch |err| {
@@ -83,7 +83,7 @@ pub fn main () !void {
             return err;
         } orelse break;
 
-        log.info("blob: {any}", .{blob});
+        log.debug("blob: {any}", .{blob});
 
         if (rml.main_interpreter.data.runProgram(false, blob)) |result| {
             if (!Rml.isType(Rml.Nil, result)) {

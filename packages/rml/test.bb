@@ -1,8 +1,25 @@
 print-ln "hello world"
+
 local foo = 1
 local var = fun() nil
 local jazz = "test"
 local (x y) = '(1 2)
+print-ln (== foo 1)
+print-ln (== jazz "test")
+print-ln (== jazz "t3st")
+print-ln (== x 1)
+print-ln (== y 2)
+print-ln (== var nil)
+print-ln (> 1 2 3 4)
+print-ln (< 1 2 3 4)
+print-ln (<= 1 1 2 2 3 4)
+print-ln (> 4 3 2 1)
+print-ln (< 4 3 2 1)
+
+apply print-ln '(1 2 3 4 5)
+
+print-ln (gensym)
+print-ln (== (gensym) (gensym))
 
 local check = fun{* args} print-ln args
 check 1 2 3 4 5
@@ -73,3 +90,12 @@ print-ln (type/string? 1)
 import String
 
 print-ln (String/length "test")
+
+import text
+
+print-ln (text/category 't')
+
+print-ln (type/of (type/of 0))
+print-ln (type/of 0)
+print-ln (type/of 't')
+print-ln (type/of (text/category 't'))

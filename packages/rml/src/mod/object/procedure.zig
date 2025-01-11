@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Rml = @import("root.zig");
+const Rml = @import("../root.zig");
 
 
 
@@ -35,7 +35,7 @@ pub const Case = union(enum) {
         var offset: usize = 1;
 
         const case = if (Rml.object.isExactSymbol("else", args[0])) elseCase: {
-            break :elseCase Rml.procedure.Case { .@"else" = try Rml.Obj(Rml.Block).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), .doc, &.{})) };
+            break :elseCase Rml.object.procedure.Case { .@"else" = try Rml.Obj(Rml.Block).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), .doc, &.{})) };
         } else patternCase: {
             var diag: ?Rml.Diagnostic = null;
             const parseResult = Rml.Pattern.parse(&diag, args)
@@ -57,7 +57,7 @@ pub const Case = union(enum) {
             Rml.log.parser.debug("pattern parse result: {}", .{parseResult});
             offset = parseResult.offset;
 
-            break :patternCase Rml.procedure.Case {
+            break :patternCase Case {
                 .pattern = .{
                     .scrutinizer = parseResult.value,
                     .body = try Rml.Obj(Rml.Block).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), .doc, &.{})),
@@ -118,7 +118,7 @@ pub const Procedure = union(ProcedureKind) {
                     },
                     .pattern => |caseData| {
                         var diag: ?Rml.Diagnostic = null;
-                        const table: ?Rml.Obj(Rml.map.Table) = try caseData.scrutinizer.data.run(interpreter, &diag, callOrigin, args);
+                        const table: ?Rml.Obj(Rml.object.map.Table) = try caseData.scrutinizer.data.run(interpreter, &diag, callOrigin, args);
                         if (table) |tbl| {
                             const oldEnv = interpreter.evaluation_env;
                             defer interpreter.evaluation_env = oldEnv;
@@ -153,7 +153,7 @@ pub const Procedure = union(ProcedureKind) {
                 Rml.log.interpreter.debug("calling func {}", .{func});
 
                 const eArgs = try interpreter.evalAll(args);
-                var errors: Rml.string.String = try .create(Rml.getRml(self), "");
+                var errors: Rml.object.string.String = try .create(Rml.getRml(self), "");
 
                 const writer = errors.writer();
 
@@ -166,7 +166,7 @@ pub const Procedure = union(ProcedureKind) {
                     .pattern => |caseData| {
                         Rml.log.interpreter.debug("calling pattern case {}", .{caseData});
                         var diag: ?Rml.Diagnostic = null;
-                        const result: ?Rml.Obj(Rml.map.Table) = try caseData.scrutinizer.data.run(interpreter, &diag, callOrigin, eArgs);
+                        const result: ?Rml.Obj(Rml.object.map.Table) = try caseData.scrutinizer.data.run(interpreter, &diag, callOrigin, eArgs);
                         if (result) |res| {
                             const oldEnv = interpreter.evaluation_env;
                             defer interpreter.evaluation_env = oldEnv;
