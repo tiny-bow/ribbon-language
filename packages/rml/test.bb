@@ -94,6 +94,10 @@ print-ln (String/length "test")
 import text
 
 print-ln (text/category 't')
+print-ln (text/lowercase "TEST")
+print-ln (text/uppercase "test")
+print-ln (text/lowercase? 't')
+print-ln (text/lowercase? 'T')
 
 print-ln (type/of (type/of 0))
 print-ln (type/of 0)

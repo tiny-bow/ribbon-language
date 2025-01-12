@@ -539,6 +539,10 @@ pub fn toObjectConst(rml: *Rml, origin: Rml.Origin, comptime value: anytype) Rml
 
 
 pub fn wrapNativeFunction(rml: *Rml, origin: Rml.Origin, comptime nativeFunc: anytype) Rml.OOM! Rml.Obj(Rml.Procedure) {
+    if (@TypeOf(nativeFunc) == NativeFunction) {
+        return Rml.Obj(Rml.Procedure).wrap(rml, origin, .{.native_function = nativeFunc});
+    }
+
     const T = @typeInfo(@TypeOf(nativeFunc)).pointer.child;
     const info = @typeInfo(T).@"fn";
 

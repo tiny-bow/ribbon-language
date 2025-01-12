@@ -42,6 +42,10 @@ pub const TypeId = struct {
     pub fn name(self: TypeId) []const u8 {
         return std.mem.span(self.typename);
     }
+
+    pub fn format(self: TypeId, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror!void {
+        try w.print("{s}", .{self.name()});
+    }
 };
 
 pub fn isString(comptime T: type) bool {

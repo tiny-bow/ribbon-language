@@ -113,10 +113,10 @@ pub fn describeGeneralCategory(cat: GeneralCategory) []const u8 {
     };
 }
 
-inline fn strPredicate(str: []const u8, comptime f: fn (c: Char) bool) Error!bool {
+inline fn strPredicate(str: []const u8, comptime f: fn (c: Char) bool) bool {
     var i: usize = 0;
     while (i < str.len) {
-        const dec = try decode1(str[i..]);
+        const dec = decode1(str[i..]) catch return false;
         if (!@call(.always_inline, f, .{dec.ch})) return false;
         i += dec.len;
     }
@@ -131,13 +131,13 @@ pub fn isPunctuation(c: Char) bool { return getData().genCat.isPunctuation(c); }
 pub fn isSeparator(c: Char) bool { return getData().genCat.isSeparator(c); }
 pub fn isSymbol(c: Char) bool { return getData().genCat.isSymbol(c); }
 
-pub fn isControlStr(str: []const u8) Error!bool { return strPredicate(str, isControl); }
-pub fn isLetterStr(str: []const u8) Error!bool { return strPredicate(str, isLetter); }
-pub fn isMarkStr(str: []const u8) Error!bool { return strPredicate(str, isMark); }
-pub fn isNumberStr(str: []const u8) Error!bool { return strPredicate(str, isNumber); }
-pub fn isPunctuationStr(str: []const u8) Error!bool { return strPredicate(str, isPunctuation); }
-pub fn isSeparatorStr(str: []const u8) Error!bool { return strPredicate(str, isSeparator); }
-pub fn isSymbolStr(str: []const u8) Error!bool { return strPredicate(str, isSymbol); }
+pub fn isControlStr(str: []const u8) bool { return strPredicate(str, isControl); }
+pub fn isLetterStr(str: []const u8) bool { return strPredicate(str, isLetter); }
+pub fn isMarkStr(str: []const u8) bool { return strPredicate(str, isMark); }
+pub fn isNumberStr(str: []const u8) bool { return strPredicate(str, isNumber); }
+pub fn isPunctuationStr(str: []const u8) bool { return strPredicate(str, isPunctuation); }
+pub fn isSeparatorStr(str: []const u8) bool { return strPredicate(str, isSeparator); }
+pub fn isSymbolStr(str: []const u8) bool { return strPredicate(str, isSymbol); }
 
 pub fn isMath(c: Char) bool { return getData().props.isMath(c); }
 pub fn isAlphabetic(c: Char) bool { return getData().props.isAlphabetic(c); }
@@ -152,26 +152,26 @@ pub fn isNumeric(c: Char) bool { return getData().props.isNumeric(c); }
 pub fn isDigit(c: Char) bool { return getData().props.isDigit(c); }
 pub fn isDecimal(c: Char) bool { return getData().props.isDecimal(c); }
 
-pub fn isMathStr(str: []const u8) Error!bool { return strPredicate(str, isMath); }
-pub fn isAlphabeticStr(str: []const u8) Error!bool { return strPredicate(str, isAlphabetic); }
-pub fn isIdStartStr(str: []const u8) Error!bool { return strPredicate(str, isIdStart); }
-pub fn isIdContinueStr(str: []const u8) Error!bool { return strPredicate(str, isIdContinue); }
-pub fn isXidStartStr(str: []const u8) Error!bool { return strPredicate(str, isXidStart); }
-pub fn isXidContinueStr(str: []const u8) Error!bool { return strPredicate(str, isXidContinue); }
-pub fn isSpaceStr(str: []const u8) Error!bool { return strPredicate(str, isSpace); }
-pub fn isHexDigitStr(str: []const u8) Error!bool { return strPredicate(str, isHexDigit); }
-pub fn isDiacriticStr(str: []const u8) Error!bool { return strPredicate(str, isDiacritic); }
-pub fn isNumericStr(str: []const u8) Error!bool { return strPredicate(str, isNumeric); }
-pub fn isDigitStr(str: []const u8) Error!bool { return strPredicate(str, isDigit); }
-pub fn isDecimalStr(str: []const u8) Error!bool { return strPredicate(str, isDecimal); }
+pub fn isMathStr(str: []const u8) bool { return strPredicate(str, isMath); }
+pub fn isAlphabeticStr(str: []const u8) bool { return strPredicate(str, isAlphabetic); }
+pub fn isIdStartStr(str: []const u8) bool { return strPredicate(str, isIdStart); }
+pub fn isIdContinueStr(str: []const u8) bool { return strPredicate(str, isIdContinue); }
+pub fn isXidStartStr(str: []const u8) bool { return strPredicate(str, isXidStart); }
+pub fn isXidContinueStr(str: []const u8) bool { return strPredicate(str, isXidContinue); }
+pub fn isSpaceStr(str: []const u8) bool { return strPredicate(str, isSpace); }
+pub fn isHexDigitStr(str: []const u8) bool { return strPredicate(str, isHexDigit); }
+pub fn isDiacriticStr(str: []const u8) bool { return strPredicate(str, isDiacritic); }
+pub fn isNumericStr(str: []const u8) bool { return strPredicate(str, isNumeric); }
+pub fn isDigitStr(str: []const u8) bool { return strPredicate(str, isDigit); }
+pub fn isDecimalStr(str: []const u8) bool { return strPredicate(str, isDecimal); }
 
 pub fn isCased(c: Char) bool { return getData().case.isCased(c); }
 
-pub fn isCasedStr(str: []const u8) Error!bool {
+pub fn isCasedStr(str: []const u8) bool {
     var is = false;
     var i: usize = 0;
     while (i < str.len) {
-        const dec = try decode1(str[i..]);
+        const dec = decode1(str[i..]) catch return false;
         is = is || isCased(dec.ch);
         i += dec.len;
     }
