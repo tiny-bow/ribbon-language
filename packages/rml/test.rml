@@ -1,9 +1,9 @@
 print-ln "hello world"
 
 local foo = 1
-local var = fun() nil
+local var = fun => nil
 local jazz = "test"
-local (x y) = '(1 2)
+local {x y} = '(1 2)
 print-ln (== foo 1)
 print-ln (== jazz "test")
 print-ln (== jazz "t3st")
@@ -21,22 +21,22 @@ apply print-ln '(1 2 3 4 5)
 print-ln (gensym)
 print-ln (== (gensym) (gensym))
 
-local check = fun{* args} print-ln args
+local check = fun{* args} => print-ln args
 check 1 2 3 4 5
 check 1 2
 check 1
 (check)
 
 local check2 = fun
-    (1 2) print-ln "let me see u one, two step"
-    {+ args} print-ln args
+    (1 2) => print-ln "let me see u one, two step"
+    {+ args} => print-ln args
     else print-ln "no args"
 check2 1 2 3 4 5
 check2 1 2
 check2 1
 (check2)
 
-local foo = fun x
+local foo = fun x =>
     print-ln x
     + x 1
 
@@ -48,21 +48,20 @@ print-ln `(1 2 3)
 print-ln `(1 2 ,(foo 2))
 print-ln `(1 2 ,@'(3 4))
 
-local incrBy = fun x
-    fun y
-        + x
-          y
+local incrBy = fun x =>
+    fun y =>
+        + x y
 local incr = incrBy 2
 
 print-ln (incr 1)
 print-ln (incr 2)
 
-local mac = macro x `(print-ln ,x)
+local mac = macro x => `(print-ln ,x)
 mac 1003
 
-local closure = fun x
-    local a = fun y + x y
-    local b = fun y set! x y
+local closure = fun x =>
+    local a = fun y => + x y
+    local b = fun y => set! x y
     `(,a ,b)
 
 local (a b) = closure 1
@@ -71,7 +70,7 @@ a 1
 b 2
 a 1
 
-local check-self = fun()
+local check-self = fun =>
     print-ln "check-self " check-self
 
 (check-self)
@@ -103,3 +102,17 @@ print-ln (type/of (type/of 0))
 print-ln (type/of 0)
 print-ln (type/of 't')
 print-ln (type/of (text/category 't'))
+
+local fail-tester = fun x =>
+    print-ln "this should print, but then we fail " x
+    fail 'failure-sym
+
+with (fail = cancel)
+    fail-tester "test"
+    print-ln "this shouldn't print"
+
+with {
+    fail = fun msg =>
+        print-ln "fail: " msg
+        cancel 'failure-sym
+} fail "test"

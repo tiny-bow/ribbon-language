@@ -5,28 +5,6 @@ const log = std.log.scoped(.main);
 
 pub const std_options = std.Options {
     .log_level = .info,
-    // .log_scope_levels = &.{
-    //     std.log.ScopeLevel {
-    //         .level = .info,
-    //         .scope = .refcount,
-    //     },
-    //     std.log.ScopeLevel {
-    //         .level = .info,
-    //         .scope = .@"object-dispatch",
-    //     },
-    // },
-    // .log_scope_levels = &.{
-    //     std.log.ScopeLevel {
-    //         .level = .debug,
-    //         .scope = .parsing,
-    //     }
-    // },
-    // .log_scope_levels = &.{
-    //     std.log.ScopeLevel {
-    //         .level = .debug,
-    //         .scope = .evaluation,
-    //     }
-    // },
 };
 
 pub fn main () !void {
@@ -66,9 +44,9 @@ pub fn main () !void {
     );
 
 
-    const srcText: []const u8 = try std.fs.cwd().readFileAlloc(rml.blobAllocator(), "test.bb", std.math.maxInt(u16));
+    const srcText: []const u8 = try std.fs.cwd().readFileAlloc(rml.blobAllocator(), "test.rml", std.math.maxInt(u16));
 
-    const parser: Rml.Obj(Rml.Parser) = try .wrap(rml, rml.data.origin, .create("test.bb", try Rml.Obj(Rml.String).wrap(rml, rml.data.origin, try .create(rml, srcText))));
+    const parser: Rml.Obj(Rml.Parser) = try .wrap(rml, rml.data.origin, .create("test.rml", try Rml.Obj(Rml.String).wrap(rml, rml.data.origin, try .create(rml, srcText))));
 
     while (true) {
         const blob = parser.data.nextBlob() catch |err| {
@@ -84,6 +62,7 @@ pub fn main () !void {
         } orelse break;
 
         log.debug("blob: {any}", .{blob});
+        log.debug("peek: {?}", .{parser.data.obj_peek_cache});
 
         if (rml.main_interpreter.data.runProgram(false, blob)) |result| {
             if (!Rml.isType(Rml.Nil, result)) {

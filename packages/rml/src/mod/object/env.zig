@@ -4,11 +4,6 @@ const MiscUtils = @import("Utils").Misc;
 const Rml = @import("../root.zig");
 
 
-
-pub const SymbolError  = UnboundSymbol || SymbolAlreadyBound;
-pub const UnboundSymbol = error {UnboundSymbol};
-pub const SymbolAlreadyBound = error {SymbolAlreadyBound};
-
 pub const Domain = std.ArrayHashMapUnmanaged(Rml.Obj(Rml.Symbol), void, MiscUtils.SimpleHashContext, true);
 
 pub const CellTable = std.ArrayHashMapUnmanaged(Rml.Obj(Rml.Symbol), Rml.Obj(Rml.Cell), MiscUtils.SimpleHashContext, true);
@@ -84,7 +79,7 @@ pub const Env = struct {
     /// Returns an error if:
     /// * a value with the same name was already declared in this scope
     /// * Rml is out of memory
-    pub fn bind(self: *Env, key: Rml.Obj(Rml.Symbol), val: Rml.Object) (Rml.OOM || SymbolAlreadyBound)! void {
+    pub fn bind(self: *Env, key: Rml.Obj(Rml.Symbol), val: Rml.Object) (Rml.OOM || Rml.SymbolAlreadyBound)! void {
         if (self.contains(key)) return error.SymbolAlreadyBound;
 
         return self.rebind(key, val);
@@ -94,7 +89,7 @@ pub const Env = struct {
     ///
     /// Returns an error if:
     /// * binding does not exist in this env
-    pub fn set(self: *Env, key: Rml.Obj(Rml.Symbol), val: Rml.Object) UnboundSymbol! void {
+    pub fn set(self: *Env, key: Rml.Obj(Rml.Symbol), val: Rml.Object) Rml.UnboundSymbol! void {
         return if (self.table.getEntry(key)) |entry| {
             entry.value_ptr.data.set(val);
         } else error.UnboundSymbol;
@@ -125,14 +120,14 @@ pub const Env = struct {
     }
 
 
-    pub fn copyFromEnv(self: *Env, other: *Env) (Rml.OOM || SymbolAlreadyBound)! void {
+    pub fn copyFromEnv(self: *Env, other: *Env) (Rml.OOM || Rml.SymbolAlreadyBound)! void {
         var it = other.table.iterator();
         while (it.next()) |entry| {
             try self.rebindCell(entry.key_ptr.*, entry.value_ptr.*);
         }
     }
 
-    pub fn copyFromTable(self: *Env, table: *const Table) (Rml.OOM || SymbolAlreadyBound)! void {
+    pub fn copyFromTable(self: *Env, table: *const Table) (Rml.OOM || Rml.SymbolAlreadyBound)! void {
         var it = table.iterator();
         while (it.next()) |entry| {
             try self.rebind(entry.key_ptr.*, entry.value_ptr.*);
@@ -154,7 +149,7 @@ pub const Env = struct {
     /// Returns an error if:
     /// * a value with the same name was already declared in this scope
     /// * Rml is out of memory
-    pub fn bindCell(self: *Env, key: Rml.Obj(Rml.Symbol), cell: Rml.Obj(Rml.Cell)) (Rml.OOM || SymbolAlreadyBound)! void {
+    pub fn bindCell(self: *Env, key: Rml.Obj(Rml.Symbol), cell: Rml.Obj(Rml.Cell)) (Rml.OOM || Rml.SymbolAlreadyBound)! void {
         if (self.contains(key)) return error.SymbolAlreadyBound;
 
         try self.table.put(self.allocator, key, cell);

@@ -18,7 +18,6 @@ pub const string = @import("object/string.zig");
 pub const symbol = @import("object/symbol.zig");
 pub const writer = @import("object/writer.zig");
 
-pub const SymbolAlreadyBound = env.SymbolAlreadyBound;
 pub const Writer = writer.Writer;
 pub const Array = array.Array;
 pub const Block = block.Block;

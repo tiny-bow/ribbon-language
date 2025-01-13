@@ -48,22 +48,47 @@ pub const Char = TextUtils.Char;
 
 pub const str = []const u8;
 
-pub const Result = interpreter.Result;
-pub const EvalError = interpreter.EvalError;
-pub const SyntaxError = parser.SyntaxError;
-pub const OOM = error{OutOfMemory};
-pub const MemoryLeak = error{MemoryLeak};
-pub const Unexpected = error{Unexpected};
+pub const Result = Signal || Error;
 pub const Error = IOError || OOM || EvalError || SyntaxError || Unexpected;
-pub const SymbolAlreadyBound = object.SymbolAlreadyBound;
+pub const Signal = error { Cancel };
+
+pub const EvalError = error {
+    TypeError,
+    PatternFailed,
+    UnboundSymbol,
+    SymbolAlreadyBound,
+    InvalidArgumentCount,
+};
+
+pub const SyntaxError = error {
+    Sentinel,
+    UnexpectedInput,
+    UnexpectedEOF,
+    BadEncoding,
+};
+
+pub fn isSyntaxError(err: anyerror) bool {
+    return TypeUtils.isInErrorSet(SyntaxError, err);
+}
+
+pub const OOM = error { OutOfMemory };
+pub const MemoryLeak = error { MemoryLeak };
+pub const Unexpected = error { Unexpected };
+
+pub const SymbolError  = UnboundSymbol || SymbolAlreadyBound;
+pub const UnboundSymbol = error { UnboundSymbol };
+pub const SymbolAlreadyBound = error { SymbolAlreadyBound };
 
 pub const Interpreter = interpreter.Interpreter;
+pub const WithId = interpreter.WithId;
 pub const Parser = parser.Parser;
 
 pub const NativeFunction = bindgen.NativeFunction;
+
 pub const Origin = source.Origin;
 pub const Range = source.Range;
 pub const Pos = source.Pos;
+
 pub const Obj = object.Obj;
 pub const ObjData = object.ObjData;
 pub const Object = object.Object;
@@ -117,7 +142,7 @@ pub const Diagnostic = struct {
     message_len: usize = 0,
     message_mem: [MAX_LENGTH]u8 = std.mem.zeroes([MAX_LENGTH]u8),
 
-    pub fn formatter(self: Diagnostic, err: anyerror) Formatter {
+    pub fn formatter(self: Diagnostic, err: ?anyerror) Formatter {
         return .{
             .err = err,
             .diag = self,
@@ -125,15 +150,23 @@ pub const Diagnostic = struct {
     }
 
     pub const Formatter = struct {
-        err: anyerror,
+        err: ?anyerror,
         diag: Diagnostic,
 
         pub fn log(self: Formatter, logger: anytype) void {
-            logger.err("{s} {}: {s}", .{@errorName(self.err), self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len]});
+            if (self.err) |err| {
+                logger.err("{s} {}: {s}", .{@errorName(err), self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len]});
+            } else {
+                logger.err("{}: {s}", .{self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len]});
+            }
         }
 
         pub fn format(self: Formatter, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror! void {
-            return w.print("{s} {}: {s}", .{@errorName(self.err), self.diag.error_origin,self. diag.message_mem[0..self.diag.message_len]});
+            if (self.err) |err| {
+                return w.print("{s} {}: {s}", .{@errorName(err), self.diag.error_origin,self. diag.message_mem[0..self.diag.message_len]});
+            } else {
+                return w.print("{}: {s}", .{self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len]});
+            }
         }
     };
 };

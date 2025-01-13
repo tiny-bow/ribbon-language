@@ -2,6 +2,7 @@ const std = @import("std");
 
 const Rml = @import("../root.zig");
 
+const ASSIGNMENT_OPERATOR = "=";
 
 /// import a namespace into the current environment
 pub const import = Rml.Procedure {
@@ -46,7 +47,7 @@ pub const global = Rml.Procedure {
                     "expected at least a name for global variable", .{});
 
             const nilObj = try Rml.Obj(Rml.Nil).wrap(Rml.getRml(interpreter), origin, .{});
-            const equalSym = try Rml.Obj(Rml.Symbol).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), "="));
+            const equalSym = try Rml.Obj(Rml.Symbol).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), ASSIGNMENT_OPERATOR));
 
             const patt, const offset = parse: {
                 var diag: ?Rml.Diagnostic = null;
@@ -54,17 +55,21 @@ pub const global = Rml.Procedure {
                     catch |err| {
                         if (err == error.SyntaxError) {
                             if (diag) |d| {
-                                try interpreter.abort(origin, error.PatternError,
+                                try interpreter.abort(origin, error.PatternFailed,
                                     "cannot parse global variable pattern: {}",
                                     .{d.formatter(error.SyntaxError)});
                             } else {
                                 Rml.log.err("requested pattern parse diagnostic is null", .{});
-                                try interpreter.abort(origin, error.PatternError,
+                                try interpreter.abort(origin, error.PatternFailed,
                                     "cannot parse global variable pattern `{}`", .{args[0]});
                             }
                         }
 
                         return err;
+                    }
+                    orelse {
+                        try interpreter.abort(origin, error.UnexpectedInput,
+                            "cannot parse global variable pattern `{}`", .{args[0]});
                     };
 
                 break :parse .{parseResult.value, parseResult.offset};
@@ -75,7 +80,7 @@ pub const global = Rml.Procedure {
             const dom = Rml.object.pattern.patternBinders(patt.typeErase())
                 catch |err| switch (err) {
                     error.BadDomain => {
-                        try interpreter.abort(origin, error.SyntaxError,
+                        try interpreter.abort(origin, error.PatternFailed,
                             "bad domain in pattern `{}`", .{patt});
                     },
                     error.OutOfMemory => return error.OutOfMemory,
@@ -90,7 +95,7 @@ pub const global = Rml.Procedure {
                 if (args.len - offset == 0) nilObj.typeErase()
                 else obj: {
                     if (!Rml.equal(args[offset], equalSym.typeErase())) {
-                        try interpreter.abort(origin, error.SyntaxError,
+                        try interpreter.abort(origin, error.UnexpectedInput,
                             "expected `=` after global variable pattern", .{});
                     }
 
@@ -115,12 +120,12 @@ pub const global = Rml.Procedure {
                 if (try patt.data.run(interpreter, &diag, origin, &.{obj})) |m| break :table m;
 
                 if (diag) |d| {
-                    try interpreter.abort(origin, error.PatternError,
+                    try interpreter.abort(origin, error.PatternFailed,
                         "failed to match; {} vs {}:\n\t{}",
-                        .{patt, obj, d.formatter(error.PatternError)});
+                        .{patt, obj, d.formatter(error.PatternFailed)});
                 } else {
                     Rml.log.interpreter.err("requested pattern diagnostic is null", .{});
-                    try interpreter.abort(origin, error.PatternError,
+                    try interpreter.abort(origin, error.PatternFailed,
                         "failed to match; {} vs {}", .{patt, obj});
                 }
             };
@@ -154,7 +159,7 @@ pub const local = Rml.Procedure {
                     "expected at least a name for local variable", .{});
 
             const nilObj = try Rml.Obj(Rml.Nil).wrap(Rml.getRml(interpreter), origin, .{});
-            const equalSym = try Rml.Obj(Rml.Symbol).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), "="));
+            const equalSym = try Rml.Obj(Rml.Symbol).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), ASSIGNMENT_OPERATOR));
 
             const patt, const offset = parse: {
                 var diag: ?Rml.Diagnostic = null;
@@ -162,17 +167,21 @@ pub const local = Rml.Procedure {
                     catch |err| {
                         if (err == error.SyntaxError) {
                             if (diag) |d| {
-                                try interpreter.abort(origin, error.PatternError,
+                                try interpreter.abort(origin, error.PatternFailed,
                                     "cannot parse local variable pattern: {}",
                                     .{d.formatter(error.SyntaxError)});
                             } else {
                                 Rml.log.err("requested pattern parse diagnostic is null", .{});
-                                try interpreter.abort(origin, error.PatternError,
+                                try interpreter.abort(origin, error.PatternFailed,
                                     "cannot parse local variable pattern `{}`", .{args[0]});
                             }
                         }
 
                         return err;
+                    }
+                    orelse {
+                        try interpreter.abort(origin, error.UnexpectedInput,
+                            "cannot parse local variable pattern `{}`", .{args[0]});
                     };
 
                 break :parse .{parseResult.value, parseResult.offset};
@@ -183,7 +192,7 @@ pub const local = Rml.Procedure {
             const dom = patt.data.binders()
                 catch |err| switch (err) {
                     error.BadDomain => {
-                        try interpreter.abort(origin, error.SyntaxError,
+                        try interpreter.abort(origin, error.PatternFailed,
                             "bad domain in pattern `{}`", .{patt});
                     },
                     error.OutOfMemory => return error.OutOfMemory,
@@ -198,7 +207,7 @@ pub const local = Rml.Procedure {
                 if (args.len - offset == 0) nilObj.typeErase()
                 else obj: {
                     if (!Rml.equal(args[offset], equalSym.typeErase())) {
-                        try interpreter.abort(origin, error.SyntaxError,
+                        try interpreter.abort(origin, error.UnexpectedInput,
                             "expected `=` after local variable pattern", .{});
                     }
 
@@ -223,12 +232,12 @@ pub const local = Rml.Procedure {
                 if (try patt.data.run(interpreter, &diag, origin, &.{obj})) |m| break :table m;
 
                 if (diag) |d| {
-                    try interpreter.abort(origin, error.PatternError,
+                    try interpreter.abort(origin, error.PatternFailed,
                         "failed to match; {} vs {}:\n\t{}",
-                        .{patt, obj, d.formatter(error.PatternError)});
+                        .{patt, obj, d.formatter(error.PatternFailed)});
                 } else {
                     Rml.log.interpreter.err("requested pattern diagnostic is null", .{});
-                    try interpreter.abort(origin, error.PatternError,
+                    try interpreter.abort(origin, error.PatternFailed,
                         "failed to match; {} vs {}", .{patt, obj});
                 }
             };
@@ -262,6 +271,94 @@ pub const @"set!" = Rml.Procedure {
 
             const nil = try Rml.Obj(Rml.Nil).wrap(Rml.getRml(interpreter), origin, .{});
             return nil.typeErase();
+        }
+    }.fun,
+};
+
+
+/// bind an effect handler
+pub const with = Rml.Procedure {
+    .native_macro = &struct {
+        pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+            if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 2 arguments, found {}", .{args.len});
+
+            const context = (Rml.castObj(Rml.Block, args[0]) orelse {
+                try interpreter.abort(args[0].getOrigin(), error.TypeError, "expected a context block for with-syntax, found {s}", .{Rml.TypeId.name(args[0].getTypeId())});
+            });
+
+            const body = args[1..];
+
+            const newEvidence = try interpreter.evidence_env.data.clone(origin);
+
+            const cancellation = try interpreter.freshCancellation(origin);
+
+            var isCases = true;
+            for (context.data.items()) |obj| {
+                if (!Rml.isType(Rml.Block, obj)) {
+                    isCases = false;
+                    break;
+                }
+            }
+
+            const cases: []const Rml.Obj(Rml.Block) =
+                if (isCases) @as([*]const Rml.Obj(Rml.Block), @ptrCast(context.data.items().ptr))[0..context.data.length()]
+                else &.{context};
+
+            for (cases) |caseBlock| {
+                const case = caseBlock.data.items();
+                const effectSym = Rml.castObj(Rml.Symbol, case[0]) orelse {
+                    try interpreter.abort(case[0].getOrigin(), error.TypeError,
+                        "expected a symbol for the effect handler in with-syntax case block, found {s}",
+                        .{Rml.TypeId.name(case[0].getTypeId())});
+                };
+
+                const sepSym = Rml.castObj(Rml.Symbol, case[1]) orelse {
+                    try interpreter.abort(case[1].getOrigin(), error.TypeError,
+                        "expected {s} in with-syntax context block, found {}",
+                        .{ASSIGNMENT_OPERATOR, case[1]});
+                };
+
+                if (!std.mem.eql(u8, ASSIGNMENT_OPERATOR, sepSym.data.text())) {
+                    try interpreter.abort(sepSym.getOrigin(), error.TypeError,
+                        "expected {s} in with-syntax context block, found {s}",
+                        .{ASSIGNMENT_OPERATOR, sepSym.data.text()});
+                }
+
+                const handlerBody = case[2..];
+
+                const handler = handler: {
+                    const cancelerSym = try Rml.Obj(Rml.Symbol).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), "cancel"));
+
+                    const oldEnv = interpreter.evaluation_env;
+                    defer interpreter.evaluation_env = oldEnv;
+                    interpreter.evaluation_env = try oldEnv.data.clone(origin);
+                    try interpreter.evaluation_env.data.rebind(cancelerSym, cancellation.typeErase());
+
+                    break :handler try interpreter.runProgram(false, handlerBody);
+                };
+
+
+                try newEvidence.data.rebind(effectSym, handler);
+            }
+
+            const oldEvidence = interpreter.evidence_env;
+            defer interpreter.evidence_env = oldEvidence;
+            interpreter.evidence_env = newEvidence;
+
+            return interpreter.runProgram(false, body) catch |sig| {
+                if (sig == Rml.Signal.Cancel) {
+                    const currentCancellation = interpreter.cancellation
+                        orelse @panic("cancellation signal received without a cancellation context");
+
+                    if (currentCancellation.with_id == cancellation.data.cancellation) {
+                        defer interpreter.cancellation = null;
+
+                        return currentCancellation.output;
+                    }
+                }
+
+                return sig;
+            };
         }
     }.fun,
 };

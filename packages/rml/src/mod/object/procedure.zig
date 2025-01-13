@@ -4,11 +4,14 @@ const Rml = @import("../root.zig");
 
 
 
+pub const CASE_SEP_SYM = "=>";
+
 pub const ProcedureKind = enum {
     macro,
     function,
     native_macro,
     native_function,
+    cancellation,
 };
 
 pub const Case = union(enum) {
@@ -27,35 +30,60 @@ pub const Case = union(enum) {
     }
 
     pub fn parse(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Case {
-        Rml.log.parser.debug("parseCase {}:{any}", .{origin,args});
+        Rml.log.parser.debug("parseCase {}:{any}", .{origin, args});
 
-        if (args.len < 2) try interpreter.abort(origin, error.InvalidArgumentCount,
-            "expected at least 2 arguments, found {}", .{args.len});
+        if (args.len < 2) {
+            try interpreter.abort(origin, error.InvalidArgumentCount,
+                "expected at least 2 arguments, found {}", .{args.len});
+        }
 
         var offset: usize = 1;
 
-        const case = if (Rml.object.isExactSymbol("else", args[0])) elseCase: {
-            break :elseCase Rml.object.procedure.Case { .@"else" = try Rml.Obj(Rml.Block).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), .doc, &.{})) };
+        const case = if (Rml.object.isExactSymbol("else", args[0])
+                     or  Rml.object.isExactSymbol(CASE_SEP_SYM, args[0])) elseCase: {
+            break :elseCase Rml.object.procedure.Case { .@"else" =
+                try Rml.Obj(Rml.Block).wrap(Rml.getRml(interpreter), origin, try .create(Rml.getRml(interpreter), .doc, &.{}))
+            };
         } else patternCase: {
             var diag: ?Rml.Diagnostic = null;
             const parseResult = Rml.Pattern.parse(&diag, args)
                 catch |err| {
-                    if (err == error.SyntaxError) {
+                    if (Rml.isSyntaxError(err)) {
                         if (diag) |d| {
-                            try interpreter.abort(origin, error.PatternError,
-                                "cannot parse pattern starting with syntax object `{}`: {}", .{args[0], d.formatter(error.SyntaxError)});
+                            try interpreter.abort(args[0].getOrigin(), err,
+                                "cannot parse pattern starting with syntax object `{}`:\n\t{}", .{args[0], d.formatter(null)});
                         } else {
                             Rml.log.parser.err("requested pattern parse diagnostic is null", .{});
-                            try interpreter.abort(origin, error.PatternError,
+                            try interpreter.abort(args[0].getOrigin(), error.UnexpectedInput,
                                 "cannot parse pattern `{}`", .{args[0]});
                         }
                     }
 
                     return err;
-                };
+                }
+                orelse try interpreter.abort(args[0].getOrigin(), error.UnexpectedInput,
+                    "expected a pattern, got `{}`", .{args[0]});
 
             Rml.log.parser.debug("pattern parse result: {}", .{parseResult});
             offset = parseResult.offset;
+
+            if (offset + 2 > args.len) try interpreter.abort(parseResult.value.getOrigin(), error.UnexpectedEOF,
+                "expected {s} and a body to follow case scrutinizer pattern",
+                .{Rml.object.procedure.CASE_SEP_SYM});
+
+            const sepSym = Rml.castObj(Rml.Symbol, args[offset]) orelse {
+                try interpreter.abort(args[offset].getOrigin(), error.UnexpectedInput,
+                    "expected {s} to follow case scrutinizer pattern, found {}",
+                    .{Rml.object.procedure.CASE_SEP_SYM, args[offset]});
+            };
+
+            offset += 1;
+
+            if (!std.mem.eql(u8, sepSym.data.text(), Rml.object.procedure.CASE_SEP_SYM)) {
+                try interpreter.abort(sepSym.getOrigin(), error.UnexpectedInput,
+                    "expected {s} to follow case scrutinizer pattern, found {}",
+                    .{Rml.object.procedure.CASE_SEP_SYM, sepSym});
+            }
 
             break :patternCase Case {
                 .pattern = .{
@@ -87,6 +115,7 @@ pub const Procedure = union(ProcedureKind) {
     function: ProcedureBody,
     native_macro: Rml.bindgen.NativeFunction,
     native_function: Rml.bindgen.NativeFunction,
+    cancellation: Rml.WithId,
 
     pub fn onInit(_: *Procedure) Rml.OOM! void {
         return;
@@ -102,6 +131,23 @@ pub const Procedure = union(ProcedureKind) {
 
     pub fn call(self: *Procedure, interpreter: *Rml.Interpreter, callOrigin: Rml.Origin, blame: Rml.Object, args: []const Rml.Object) Rml.Result! Rml.Object {
         switch (self.*) {
+            .cancellation => |cancellation| {
+                Rml.log.interpreter.debug("calling cancellation {}", .{cancellation});
+
+                std.debug.assert(interpreter.cancellation == null);
+
+                const eArgs = try interpreter.evalAll(args);
+
+                interpreter.cancellation = .{
+                    .with_id = cancellation,
+                    .output =
+                        if (eArgs.items.len == 0) (try Rml.Obj(Rml.Nil).wrap(Rml.getRml(interpreter), callOrigin, .{})).typeErase()
+                        else if (eArgs.items.len == 1) eArgs.items[0]
+                        else (try Rml.Obj(Rml.Array).wrap(Rml.getRml(interpreter), callOrigin, .{.allocator = Rml.getRml(interpreter).blobAllocator(), .native_array = eArgs})).typeErase()
+                };
+
+                return Rml.Signal.Cancel;
+            },
             .macro => |macro| {
                 Rml.log.interpreter.debug("calling macro {}", .{macro});
 
@@ -133,7 +179,7 @@ pub const Procedure = union(ProcedureKind) {
                             result = try interpreter.runProgram(false, caseData.body.data.items());
                             break;
                         } else if (diag) |d| {
-                            writer.print("failed to match; {} vs {any}:\n\t{}", .{ caseData.scrutinizer, args, d.formatter(error.PatternError)})
+                            writer.print("failed to match; {} vs {any}:\n\t{}", .{ caseData.scrutinizer, args, d.formatter(error.PatternFailed)})
                                 catch |err| return Rml.errorCast(err);
                         } else {
                             Rml.log.interpreter.err("requested pattern diagnostic is null", .{});
@@ -146,13 +192,13 @@ pub const Procedure = union(ProcedureKind) {
                 if (result) |res| {
                     return try interpreter.eval(res);
                 } else {
-                    try interpreter.abort(callOrigin, error.PatternError, "{} failed; no matching case found for input {any}", .{blame, args});
+                    try interpreter.abort(callOrigin, error.PatternFailed, "{} failed; no matching case found for input {any}", .{blame, args});
                 }
             },
             .function => |func| {
                 Rml.log.interpreter.debug("calling func {}", .{func});
 
-                const eArgs = try interpreter.evalAll(args);
+                const eArgs = (try interpreter.evalAll(args)).items;
                 var errors: Rml.object.string.String = try .create(Rml.getRml(self), "");
 
                 const writer = errors.writer();
@@ -181,7 +227,7 @@ pub const Procedure = union(ProcedureKind) {
 
                             return interpreter.runProgram(false, caseData.body.data.items());
                         } else if (diag) |d| {
-                            writer.print("failed to match; {} vs {any}:\n\t{}", .{ caseData.scrutinizer, eArgs, d.formatter(error.PatternError)})
+                            writer.print("failed to match; {} vs {any}:\n\t{}", .{ caseData.scrutinizer, eArgs, d.formatter(error.PatternFailed)})
                                 catch |err| return Rml.errorCast(err);
                         } else {
                             Rml.log.interpreter.err("requested pattern diagnostic is null", .{});
@@ -191,7 +237,7 @@ pub const Procedure = union(ProcedureKind) {
                     },
                 };
 
-                try interpreter.abort(callOrigin, error.PatternError, "{} failed; no matching case found for input {any}", .{blame, eArgs});
+                try interpreter.abort(callOrigin, error.PatternFailed, "{} failed; no matching case found for input {any}", .{blame, eArgs});
             },
             .native_macro => |func| {
                 Rml.log.interpreter.debug("calling native macro {x}", .{@intFromPtr(func)});
@@ -203,7 +249,7 @@ pub const Procedure = union(ProcedureKind) {
 
                 const eArgs = try interpreter.evalAll(args);
 
-                return func(interpreter, callOrigin, eArgs);
+                return func(interpreter, callOrigin, eArgs.items);
             },
         }
     }

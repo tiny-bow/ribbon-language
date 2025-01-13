@@ -4,14 +4,12 @@ const TextUtils = @import("Utils").Text;
 const Rml = @import("root.zig");
 
 
-pub const SyntaxError = error{ SyntaxError, UnexpectedInput, UnexpectedEOF, BadEncoding };
-
 pub const Parser = struct {
     input: Rml.Obj(Rml.String),
     filename: Rml.str,
     buffer_pos: Rml.Pos,
     rel_offset: Rml.Pos,
-    peek_cache: ?Rml.Object,
+    obj_peek_cache: ?Rml.Object,
     char_peek_cache: ?Rml.Char,
 
     pub fn create(filename: Rml.str, input: Rml.Obj(Rml.String)) Parser {
@@ -20,7 +18,7 @@ pub const Parser = struct {
             .filename = filename,
             .buffer_pos = Rml.Pos { .line = 0, .column = 0, .offset = 0, .indentation = 0 },
             .rel_offset = Rml.Pos { .line = 1, .column = 1, .offset = 0, .indentation = 0 },
-            .peek_cache = null,
+            .obj_peek_cache = null,
             .char_peek_cache = null,
         };
     }
@@ -41,7 +39,7 @@ pub const Parser = struct {
     }
 
     pub fn peek(self: *Parser) Rml.Error! ?Rml.Object {
-        return self.peekWith(&self.peek_cache);
+        return self.peekWith(&self.obj_peek_cache);
     }
 
     pub fn offsetPos(self: *Parser, pos: Rml.Pos) Rml.Pos {
@@ -85,7 +83,7 @@ pub const Parser = struct {
     }
 
     pub fn next(self: *Parser) Rml.Error! ?Rml.Object {
-        return self.nextWith(&self.peek_cache);
+        return self.nextWith(&self.obj_peek_cache);
     }
 
     pub fn nextWith(self: *Parser, peek_cache: *?Rml.Object) Rml.Error! ?Rml.Object {
@@ -229,16 +227,19 @@ pub const Parser = struct {
     }
 
     pub fn nextBlob(self: *Parser) Rml.Error! ?[]Rml.Object {
-        return self.nextBlobWith(&self.peek_cache);
+        return self.nextBlobWith(&self.obj_peek_cache);
     }
 
     pub fn nextBlobWith(self: *Parser, peekCache: *?Rml.Object) Rml.Error! ?[]Rml.Object {
         var blob: std.ArrayListUnmanaged(Rml.Object) = .{};
 
+        const start = self.buffer_pos;
+
         const first = try self.peekWith(peekCache) orelse {
             return null;
         };
-        const start = first.getOrigin().range.?.start.?;
+
+        var last = first.getOrigin().range.?.end.?;
 
         blob: while (next: {
             const nxt = try self.nextWith(peekCache);
@@ -249,13 +250,16 @@ pub const Parser = struct {
             }
 
             const nxt: Rml.Object = try self.peekWith(peekCache) orelse break :blob;
+            const range = nxt.getOrigin().range.?;
 
-            if (!isIndentationDomain(start, nxt.getOrigin().range.?.start.?)) {
+            if (!isIndentationDomain(start, last, range.start.?)) {
                 break :blob;
             }
+
+            last = range.end.?;
         }
 
-        return try self.blobify(.same_indent, start, blob.items);
+        return try self.blobify(.same_indent, first.getOrigin().range.?.end.?, blob.items);
     }
 
     pub fn blobify(self: *Parser, heuristic: enum {same_indent, domain}, start: Rml.Pos, blob: []Rml.Object) Rml.Error! []Rml.Object {
@@ -266,16 +270,19 @@ pub const Parser = struct {
 
         var array: std.ArrayListUnmanaged(Rml.Object) = .{};
 
+        var last = start;
+
         var i: usize = 0;
         for (blob) |item| {
-            const pos = item.getOrigin().range.?.start.?;
+            const range = item.getOrigin().range.?;
 
             switch (heuristic) {
-                .same_indent => if (start.indentation != pos.indentation) break,
-                .domain => if (!isIndentationDomain(start, pos)) break,
+                .same_indent => if (start.indentation != range.start.?.indentation) break,
+                .domain => if (!isIndentationDomain(start, last, range.start.?)) break,
             }
 
             try array.append(Rml.getRml(self).blobAllocator(), item);
+            last = range.end.?;
             i += 1;
         }
 
@@ -945,7 +952,7 @@ pub const Parser = struct {
     }
 
     pub fn nextChar(self: *Parser) Rml.Error! ?Rml.Char {
-        if (self.peek_cache != null) {
+        if (self.obj_peek_cache != null) {
             Rml.log.parser.err("Parser.nextChar: peek_cache is not null", .{});
             return error.Unexpected;
         }
@@ -990,12 +997,15 @@ pub const Parser = struct {
 };
 
 
-pub fn isIndentationDomain(start: Rml.Pos, pos: Rml.Pos) bool {
+pub fn isIndentationDomain(start: Rml.Pos, last: Rml.Pos, pos: Rml.Pos) bool {
     Rml.log.parser.debug("isIndentationDomain? {} {}", .{ start, pos });
     const value = ( pos.line == start.line
         and pos.column >= start.column
     ) or ( pos.line > start.line
         and pos.indentation > start.indentation
+    ) or ( pos.line > start.line
+        and pos.indentation >= start.indentation
+        and last.line == pos.line
     );
     Rml.log.parser.debug("isIndentationDomain: {}", .{ value });
     return value;

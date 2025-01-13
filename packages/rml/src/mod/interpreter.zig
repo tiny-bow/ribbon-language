@@ -4,21 +4,23 @@ const Rml = @import("root.zig");
 
 
 
-pub const Result = Signal || Rml.Error;
-pub const Signal = error { Terminate };
-pub const EvalError = error {
-    TypeError,
-    PatternError,
-    UnboundSymbol,
-    SymbolAlreadyBound,
-    InvalidArgumentCount,
+pub const WithId = enum(usize) {_};
+
+pub const Cancellation = struct {
+    with_id: WithId,
+    output: Rml.Object,
 };
 
 pub const Interpreter = struct {
     evaluation_env: Rml.Obj(Rml.Env),
+    evidence_env: Rml.Obj(Rml.Env),
+    cancellation: ?Cancellation = null,
 
     pub fn create(rml: *Rml) Rml.OOM! Interpreter {
-        return .{.evaluation_env = try Rml.Obj(Rml.Env).wrap(rml, try .fromStr(rml, "system"), .{.allocator = rml.blobAllocator()})};
+        return Interpreter {
+            .evaluation_env = try Rml.Obj(Rml.Env).wrap(rml, try .fromStr(rml, "system"), .{.allocator = rml.blobAllocator()}),
+            .evidence_env = try Rml.Obj(Rml.Env).wrap(rml, try .fromStr(rml, "system"), .{.allocator = rml.blobAllocator()}),
+        };
     }
 
     pub fn onCompare(a: *Interpreter, other: Rml.Object) Rml.Ordering {
@@ -41,6 +43,11 @@ pub const Interpreter = struct {
         }
     }
 
+    pub fn freshCancellation(self: *Interpreter, origin: Rml.Origin) Rml.OOM! Rml.Obj(Rml.Procedure) {
+        const withId = Rml.getRml(self).data.fresh(WithId);
+        return Rml.Obj(Rml.Procedure).wrap(Rml.getRml(self), origin, Rml.Procedure { .cancellation = withId });
+    }
+
     pub fn abort(self: *Interpreter, origin: Rml.Origin, err: Rml.Error, comptime fmt: []const u8, args: anytype) Rml.Error! noreturn {
         const diagnostic = Rml.getRml(self).diagnostic orelse return err;
 
@@ -61,12 +68,12 @@ pub const Interpreter = struct {
         return err;
     }
 
-    pub fn eval(self: *Interpreter, expr: Rml.Object) Result! Rml.Object {
+    pub fn eval(self: *Interpreter, expr: Rml.Object) Rml.Result! Rml.Object {
         var offset: usize = 0;
         return self.evalCheck(false, &.{expr}, &offset, null);
     }
 
-    pub fn evalAll(self: *Interpreter, exprs: []const Rml.Object) Result! []Rml.Object {
+    pub fn evalAll(self: *Interpreter, exprs: []const Rml.Object) Rml.Result! std.ArrayListUnmanaged(Rml.Object) {
         var results: std.ArrayListUnmanaged(Rml.Object) = .{};
 
         for (exprs) |expr| {
@@ -75,10 +82,10 @@ pub const Interpreter = struct {
             try results.append(Rml.getRml(self).blobAllocator(), value);
         }
 
-        return results.items;
+        return results;
     }
 
-    pub fn evalCheck(self: *Interpreter, shouldInvoke: bool, program: []const Rml.Object, offset: *usize, workDone: ?*bool) Result! Rml.Object {
+    pub fn evalCheck(self: *Interpreter, shouldInvoke: bool, program: []const Rml.Object, offset: *usize, workDone: ?*bool) Rml.Result! Rml.Object {
         Rml.log.interpreter.debug("evalCheck {any} @ {}", .{program, offset.*});
 
         const blob = program[offset.*..];
@@ -133,11 +140,12 @@ pub const Interpreter = struct {
 
     pub fn lookup(self: *Interpreter, symbol: Rml.Obj(Rml.Symbol)) ?Rml.Object {
         return self.evaluation_env.data.get(symbol)
+        orelse self.evidence_env.data.get(symbol)
         orelse Rml.getRml(self).global_env.data.get(symbol);
     }
 
-    pub fn runProgram(self: *Interpreter, shouldInvoke: bool, program: []const Rml.Object) Result! Rml.Object {
-        Rml.log.interpreter.debug("runProgram {}:{any}", .{program});
+    pub fn runProgram(self: *Interpreter, shouldInvoke: bool, program: []const Rml.Object) Rml.Result! Rml.Object {
+        Rml.log.interpreter.debug("runProgram {any}", .{program});
 
 
         var last: Rml.Object = (try Rml.Obj(Rml.Nil).wrap(Rml.getRml(self), Rml.source.blobOrigin(program), .{})).typeErase();
@@ -156,7 +164,7 @@ pub const Interpreter = struct {
         return last;
     }
 
-    pub fn invoke(self: *Interpreter, callOrigin: Rml.Origin, blame: Rml.Object, callable: Rml.Object, args: []const Rml.Object) Result! Rml.Object {
+    pub fn invoke(self: *Interpreter, callOrigin: Rml.Origin, blame: Rml.Object, callable: Rml.Object, args: []const Rml.Object) Rml.Result! Rml.Object {
         if (Rml.castObj(Rml.Procedure, callable)) |procedure| {
             return procedure.data.call(self, callOrigin, blame, args);
         } else {

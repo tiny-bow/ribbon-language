@@ -116,7 +116,7 @@ pub fn runQuasi(interpreter: *Rml.Interpreter, body: Rml.Object, out: ?*std.Arra
             },
             .unquote_splice => {
                 const outArr = out
-                    orelse try interpreter.abort(body.getOrigin(), error.SyntaxError,
+                    orelse try interpreter.abort(body.getOrigin(), error.UnexpectedInput,
                         "unquote-splice is not allowed here", .{});
 
                 const ranBody = try interpreter.eval(quote.data.body);
