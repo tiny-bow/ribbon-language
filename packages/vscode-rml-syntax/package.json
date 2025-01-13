@@ -1,0 +1,54 @@
+{ "name": "rml-syntax"
+, "displayName": "Rml Syntax"
+, "description": "Syntax highlighting extension for Ribbon Meta Language"
+, "icon": "images/emblem.png"
+, "galleryBanner":
+    { "color": "#fad0f4"
+    , "theme": "light"
+    }
+, "version": "0.1.0"
+, "publisher": "rml-lang"
+, "license": "Apache-2.0"
+, "repository":
+    { "type": "git"
+    , "url": "https://github.com/ribbon-lang"
+    }
+, "engines":
+    { "vscode": "^1.22.0" }
+, "categories":
+    [ "Programming Languages" ]
+, "contributes":
+    { "languages":
+        [ { "id": "rml"
+          , "aliases":
+            [ "Rml", "rml" ]
+          , "extensions":
+            [ ".rml" ]
+          , "configuration": "./dist/rml.config.json"
+          , "firstLine": "^#!\\s*/.*\\brmli[0-9.-]*\\b"
+          }
+        ]
+    , "grammars":
+        [ { "language": "rml"
+          , "scopeName": "source.rml"
+          , "path": "./dist/rml.tmLanguage.json"
+          }
+        , { "scopeName": "markdown.rml.codeblock"
+          , "path": "./dist/rml_codeblock.json"
+          , "injectTo": [ "text.html.markdown" ]
+          , "embeddedLanguages": { "meta.embedded.block.rml": "rml" }
+          }
+        ]
+    }
+, "type": "module"
+, "scripts":
+    { "build": "vscgb --name rml ./src"
+    , "package": "vsce package"
+    , "install-extension": "vscgi"
+    }
+, "devDependencies":
+    { "@types/vscode-grammar": "github:noxabellus/vscode-grammar-types"
+    , "vscode-grammar-builder": "github:noxabellus/vscode-grammar-builder"
+    , "typescript": "^5.3.3"
+    }
+}

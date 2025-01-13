@@ -1,0 +1,16 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"sourceMap": true,
+		"strict": false,
+		"lib": ["ESNext"],
+		"typeRoots": ["node_modules/@types"],
+        "allowJs": true,
+	},
+    "ts-node": {
+        "esm": true,
+        "skipIgnore": true,
+    }
+}
