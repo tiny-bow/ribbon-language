@@ -51,20 +51,39 @@ pub const Pattern = union(enum) {
     alternation: Rml.Obj(Rml.Array),
 
 
-    pub fn onFormat (self: *Pattern, writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat (self: *Pattern, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
         switch (self.*) {
             .wildcard => try writer.writeAll("_"),
-            .symbol => try writer.print("{}", .{self.symbol}),
-            .block => try writer.print("{}", .{self.block}),
-            .value_literal => try writer.print("{}", .{self.value_literal}),
-            .procedure => try writer.print("{}", .{self.procedure}),
-            .quote => try writer.print("{}", .{self.quote}),
-            .alias => try writer.print("{{as {} {}}}", .{self.alias.sym, self.alias.sub}),
-            .sequence => try writer.print("{s}", .{self.sequence}),
-            .optional => try writer.print("{{? {s}}}", .{self.optional}),
-            .zero_or_more => try writer.print("{{* {s}}}", .{self.zero_or_more}),
-            .one_or_more => try writer.print("{{+ {s}}}", .{self.one_or_more}),
-            .alternation => try writer.print("{{| {s}}}", .{self.alternation}),
+            .symbol => |x| try x.onFormat(fmt, writer),
+            .block => |x| try x.onFormat(fmt, writer),
+            .value_literal => |x| try x.onFormat(fmt, writer),
+            .procedure => |x| try x.onFormat(fmt, writer),
+            .quote => |x| try x.onFormat(fmt, writer),
+            .sequence => {
+                try writer.writeAll("${");
+                try self.sequence.onFormat(fmt, writer);
+                try writer.writeAll("}");
+            },
+            .alias => |alias| {
+                try writer.writeAll("{as ");
+                try writer.print("{} {}}}", .{alias.sym, alias.sub});
+            },
+            .optional => |optional| {
+                try writer.writeAll("{? ");
+                try writer.print("{s}}}", .{optional});
+            },
+            .zero_or_more => |zero_or_more| {
+                try writer.writeAll("{* ");
+                try writer.print("{s}}}", .{zero_or_more});
+            },
+            .one_or_more => |one_or_more| {
+                try writer.writeAll("{+ ");
+                try writer.print("{s}}}", .{one_or_more});
+            },
+            .alternation => |alternation| {
+                try writer.writeAll("{| ");
+                try writer.print("{s}}}", .{alternation});
+            },
         }
     }
 

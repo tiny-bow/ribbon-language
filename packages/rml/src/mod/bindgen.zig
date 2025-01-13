@@ -50,29 +50,39 @@ pub fn Support (comptime T: type) type {
 
         pub const onFormat = switch (T) {
             Rml.Char => struct {
-                pub fn onFormat(self: *T, writer: std.io.AnyWriter) anyerror! void {
-                    var buf = [1]u8{0} ** 4;
-                    const len = TextUtils.encode(self.*, buf[0..]) catch 0;
-                    try writer.print("'{s}'", .{buf[0..len]});
+                pub fn onFormat(self: *T, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+                    switch (fmt) {
+                        .message => try writer.print("{u}", .{self.*}),
+                        inline else => {
+                            var buf = [1]u8{0} ** 4;
+                            const out = TextUtils.escape(self.*, .Single, &buf) catch "[@INVALID BYTE@]";
+                            try writer.print("'{s}'", .{out});
+                        }
+                    }
                 }
             },
             else => switch(@typeInfo(T)) {
                 .pointer => |info| if (@typeInfo(info.child) == .@"fn") struct {
-                    pub fn onFormat(self: *T, writer: std.io.AnyWriter) anyerror! void {
+                    pub fn onFormat(self: *T, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
                         try writer.print("[native-function {s} {x}]", .{fmtNativeType(T), @intFromPtr(self)});
                     }
                 } else struct {
-                    pub fn onFormat(self: *T, writer: std.io.AnyWriter) anyerror! void {
+                    pub fn onFormat(self: *T, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
                         try writer.print("[native-{s} {x}]", .{@typeName(T), @intFromPtr(self)});
                     }
                 },
-                .array => struct {
-                    pub fn onFormat(self: *T, writer: std.io.AnyWriter) anyerror! void {
-                        try writer.print("{any}", .{self.*});
+                .array => |info| struct {
+                    pub fn onFormat(self: *T, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+                        try writer.writeAll("{");
+                        for (self, 0..) |elem, i| {
+                            try elem.onFormat(fmt, writer);
+                            if (i < info.len - 1) try writer.writeAll("  ");
+                        }
+                        try writer.writeAll("}");
                     }
                 },
                 else => struct {
-                    pub fn onFormat(self: *T, writer: std.io.AnyWriter) anyerror! void {
+                    pub fn onFormat(self: *T, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
                         try writer.print("{}", .{self.*});
                     }
                 },

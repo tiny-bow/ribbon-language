@@ -17,7 +17,7 @@ pub const String = struct {
         return self;
     }
 
-    pub fn onCompare(self: *String, other: Rml.Object) Rml.Ordering {
+    pub fn onCompare(self: *const String, other: Rml.Object) Rml.Ordering {
         var ord = Rml.compare(Rml.TypeId.of(String), other.getTypeId());
 
         if (ord == .Equal) {
@@ -28,25 +28,31 @@ pub const String = struct {
         return ord;
     }
 
-    pub fn compare(self: *String, other: String) Rml.Ordering {
-        return Rml.compare(self.native_string.items, other.native_string.items);
+    pub fn compare(self: String, other: String) Rml.Ordering {
+        return Rml.compare(self.text(), other.text());
     }
 
-    pub fn onFormat(self: *String, w: std.io.AnyWriter) anyerror! void {
-        try w.print("{}", .{self});
+    pub fn onFormat(self: *const String, fmt: Rml.Format, w: std.io.AnyWriter) anyerror! void {
+        switch (fmt) {
+            .message => try w.print("{s}", .{self.text()}),
+            inline else => {
+                try w.writeAll("\"");
+                try TextUtils.escapeStrWrite(w, self.text(), .Double);
+                try w.writeAll("\"");
+            }
+        }
     }
 
-    pub fn format(self: *const String, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror! void {
-        // TODO: escape non-ascii & control etc Chars
-        try w.print("\"{s}\"", .{self.native_string.items});
+    pub fn format(self: *const String, comptime fmt: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror! void {
+        return self.onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(w) == std.io.AnyWriter) w else w.any());
     }
 
-    pub fn text(self: *String) []const u8 {
+    pub fn text(self: *const String) []const u8 {
         return self.native_string.items;
     }
 
-    pub fn length(self: *String) usize {
-        return self.native_string.items.len;
+    pub fn length(self: *const String) Rml.Int {
+        return @intCast(self.text().len);
     }
 
     pub fn append(self: *String, ch: Rml.Char) Rml.OOM! void {
@@ -59,8 +65,8 @@ pub const String = struct {
         return self.native_string.appendSlice(self.allocator, str);
     }
 
-    pub fn makeInternedSlice(self: *String, rml: *Rml) Rml.OOM! []const u8 {
-        return try rml.data.intern(self.native_string.items);
+    pub fn makeInternedSlice(self: *const String) Rml.OOM! []const u8 {
+        return try Rml.getRml(self).data.intern(self.text());
     }
 
     pub fn writer(self: *String) NativeWriter {

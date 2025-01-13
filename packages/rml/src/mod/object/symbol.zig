@@ -1,4 +1,5 @@
 const std = @import("std");
+const TextUtils = @import("Utils").Text;
 
 const Rml = @import("../root.zig");
 
@@ -11,28 +12,21 @@ pub const Symbol = struct {
         return .{ .str = try rml.data.intern(str) };
     }
 
-    pub fn onCompare(self: *Symbol, other: Rml.Object) Rml.Ordering {
-        var ord = Rml.compare(Rml.getHeader(self).type_id, other.getTypeId());
 
-        if (ord == .Equal) {
-            const b = Rml.forceObj(Symbol, other);
-
-            ord = Rml.compare(@intFromPtr(self.str.ptr), @intFromPtr(b.data.str.ptr));
-            if (ord == .Equal) {
-                ord = Rml.compare(self.str.len, b.data.str.len);
-            }
-        }
-
-        return ord;
+    pub fn onFormat(self: *const Symbol, _: Rml.Format, w: std.io.AnyWriter) anyerror! void {
+        try w.print("{s}", .{self.text()});
     }
 
-    pub fn onFormat(self: *Symbol, writer: std.io.AnyWriter) anyerror! void {
-        // TODO: escape non-ascii & control etc chars
-        try writer.print("{s}", .{self.str});
+    pub fn format(self: *const Symbol, comptime fmt: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror! void {
+        return self.onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(w) == std.io.AnyWriter) w else w.any());
     }
 
-    pub fn text(self: *Symbol) Rml.str {
+    pub fn text(self: *const Symbol) Rml.str {
         return self.str;
+    }
+
+    pub fn length(self: *const Symbol) Rml.Int {
+        return @intCast(self.str.len);
     }
 };
 

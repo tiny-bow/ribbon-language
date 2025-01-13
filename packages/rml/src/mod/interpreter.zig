@@ -27,7 +27,7 @@ pub const Interpreter = struct {
         return Rml.compare(@intFromPtr(a), @intFromPtr(other.data));
     }
 
-    pub fn onFormat(self: *Interpreter, writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *Interpreter, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
         return writer.print("Rml.Obj(Interpreter){x}", .{@intFromPtr(self)});
     }
 

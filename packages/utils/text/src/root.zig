@@ -483,6 +483,30 @@ pub const EscapeFormatter = struct {
     }
 };
 
+pub fn escapeStr(allocator: std.mem.Allocator, str: []const u8, quoteMode: QuoteMode) ![]u8 {
+    var mem = std.ArrayList(u8).init(allocator);
+    var i: usize = 0;
+    var buf = [1]u8{0} ** 4;
+    while (i < str.len) {
+        const dec = try decode1(str[i..]);
+        const escBytes = try escape(dec.ch, quoteMode, &buf);
+        try mem.appendSlice(escBytes);
+        i += dec.len;
+    }
+    return try mem.toOwnedSlice();
+}
+
+pub fn escapeStrWrite(writer: std.io.AnyWriter, str: []const u8, quoteMode: QuoteMode) !void {
+    var i: usize = 0;
+    var buf = [1]u8{0} ** 4;
+    while (i < str.len) {
+        const dec = try decode1(str[i..]);
+        const escBytes = try escape(dec.ch, quoteMode, &buf);
+        try writer.writeAll(escBytes);
+        i += dec.len;
+    }
+}
+
 pub fn escape(c: Char, quoteMode: QuoteMode, out: []u8) ![]u8 {
     if (c < 32) {
         const entry = escapeTable[c];

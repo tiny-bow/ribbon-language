@@ -21,7 +21,7 @@ pub fn TypedArray (comptime T: type) type {
             return self;
         }
 
-        pub fn onCompare(self: *Self, other: Rml.Object) Rml.Ordering {
+        pub fn onCompare(self: *const Self, other: Rml.Object) Rml.Ordering {
             var ord = Rml.compare(Rml.getTypeId(self), other.getTypeId());
             if (ord == .Equal) {
                 const otherObj = Rml.forceObj(Self, other);
@@ -34,17 +34,17 @@ pub fn TypedArray (comptime T: type) type {
             return Rml.compare(self.native_array.items, other.native_array.items);
         }
 
-        pub fn onFormat(self: *Self, writer: std.io.AnyWriter) anyerror! void {
-            try writer.print("{}", .{self});
+        pub fn onFormat(self: *const Self, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+            try writer.print("array[{}]{{ ", .{self.native_array.items.len});
+            for (self.native_array.items) |obj| {
+                try obj.onFormat(fmt, writer);
+                try writer.writeAll(" ");
+            }
+            try writer.writeAll("}");
         }
 
-        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
-            writer.print("array[{}]{{", .{self.native_array.items.len}) catch |err| return Rml.errorCast(err);
-            for (self.native_array.items, 0..) |obj, i| {
-                try obj.onFormat(writer);
-                if (i < self.native_array.items.len - 1) writer.writeAll(" ") catch |err| return Rml.errorCast(err);
-            }
-            writer.writeAll("}") catch |err| return Rml.errorCast(err);
+        pub fn format(self: *const Self, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+            return self.onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any());
         }
 
         pub fn clone(self: *const Self) Rml.OOM! Self {
@@ -57,8 +57,8 @@ pub fn TypedArray (comptime T: type) type {
         }
 
         /// Length of the array.
-        pub fn length(self: *const Self) usize {
-            return self.native_array.items.len;
+        pub fn length(self: *const Self) Rml.Int {
+            return @intCast(self.native_array.items.len);
         }
 
         /// Contents of the array.

@@ -25,15 +25,15 @@ pub const hashWith = MiscUtils.hashWith;
 
 pub const bindgen = @import("bindgen.zig");
 pub const builtin = @import("builtin.zig");
+pub const format = @import("format.zig");
 pub const interpreter = @import("interpreter.zig");
 pub const object = @import("object.zig");
 pub const parser = @import("parser.zig");
 pub const source = @import("source.zig");
 pub const storage = @import("storage.zig");
-pub const Storage = storage.Storage;
 
 pub const Nil = extern struct {
-    pub fn onFormat(_: *Nil, w: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(_: *Nil, _: Format, w: std.io.AnyWriter) anyerror! void {
         return w.print("nil", .{});
     }
 
@@ -53,6 +53,7 @@ pub const Error = IOError || OOM || EvalError || SyntaxError || Unexpected;
 pub const Signal = error { Cancel };
 
 pub const EvalError = error {
+    Panic,
     TypeError,
     PatternFailed,
     UnboundSymbol,
@@ -79,15 +80,19 @@ pub const SymbolError  = UnboundSymbol || SymbolAlreadyBound;
 pub const UnboundSymbol = error { UnboundSymbol };
 pub const SymbolAlreadyBound = error { SymbolAlreadyBound };
 
+pub const NativeFunction = bindgen.NativeFunction;
+
+pub const Format = format.Format;
+
 pub const Interpreter = interpreter.Interpreter;
 pub const WithId = interpreter.WithId;
 pub const Parser = parser.Parser;
 
-pub const NativeFunction = bindgen.NativeFunction;
-
 pub const Origin = source.Origin;
 pub const Range = source.Range;
 pub const Pos = source.Pos;
+
+pub const Storage = storage.Storage;
 
 pub const Obj = object.Obj;
 pub const ObjData = object.ObjData;

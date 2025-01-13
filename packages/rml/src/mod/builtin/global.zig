@@ -4,7 +4,98 @@ const Rml = @import("../root.zig");
 
 const ASSIGNMENT_OPERATOR = "=";
 
-/// import a namespace into the current environment
+/// Creates a string from any sequence of objects. If there are no objects, the string will be empty.
+///
+/// Each object will be evaluated, and stringified with message formatting.
+/// The resulting strings will be concatenated to form the final string.
+pub fn format(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+    const allocator = Rml.getRml(interpreter).blobAllocator();
+
+    var out = Rml.object.string.NativeString {};
+
+    try out.writer(allocator).print("{message}", .{Rml.format.slice(args)});
+
+    return (try Rml.Obj(Rml.String).wrap(Rml.getRml(interpreter), origin, .{
+        .allocator = allocator,
+        .native_string = out
+    })).typeErase();
+}
+
+/// Forces the Rml runtime to abort evaluation with `EvalError.Panic`, and a message.
+///
+/// The message can be derived from any sequence of objects. If there are no objects, the panic message will be empty.
+///
+/// Each object will be evaluated, stringified with message formatting,
+/// and the resulting strings will be concatenated to form the final abort message.
+///
+/// Note that the resulting message will only be seen if the interpreter has an `Rml.Diagnostic` output bound to it.
+pub fn panic(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+    try interpreter.abort(origin, error.Panic, "{message}", .{Rml.format.slice(args)});
+}
+
+/// Evaluates the first argument, and coerces it to a bool.
+///
+/// + **If the coerced bool is true**:
+/// Returns the un-coerced, evaluated value. Any remaining arguments are left un-evaluated.
+/// + **Otherwise**: Triggers a panic.
+/// Any remaining arguments are passed as the arguments to panic; or if there were no remaining arguments,
+/// the panic message will be the string representation of the value in un-evaluated and evaluated (but un-coerced) forms.
+/// Note that the resulting message will only be seen if the interpreter has an `Rml.Diagnostic` output bound to it.
+pub const assert = Rml.Procedure {
+    .native_macro = &struct {
+        pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+            if (args.len == 0) try interpreter.abort(origin, error.InvalidArgumentCount, "expected at least 1 argument, found {}", .{args.len});
+
+            const cond = try interpreter.eval(args[0]);
+
+            if (Rml.coerceBool(cond)) {
+                return cond;
+            } else if (args.len > 1) {
+                const eArgs = try interpreter.evalAll(args[1..]);
+                try interpreter.abort(origin, error.Panic, "Assertion failed: {message}", .{Rml.format.slice(eArgs.items)});
+            } else {
+                try interpreter.abort(origin, error.Panic, "Assertion failed: {source} ({message})", .{args[0], cond});
+            }
+        }
+    }.fun,
+};
+
+/// Evaluates the first two arguments, and compares them.
+///
+/// + **If the two values are equal**:
+/// Returns the first value. Any remaining arguments are left un-evaluated.
+/// + **Otherwise**: Triggers a panic.
+/// Any remaining arguments are passed as the arguments to panic; or if there were no remaining arguments,
+/// the panic message will be a string representation of the comparison in un-evaluated and evaluated forms.
+/// Note that the resulting message will only be seen if the interpreter has an `Rml.Diagnostic` output bound to it.
+pub const @"assert-eq" = Rml.Procedure {
+    .native_macro = &struct {
+        pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+            if (args.len != 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected 2 arguments, found {}", .{args.len});
+
+            const a = try interpreter.eval(args[0]);
+            const b = try interpreter.eval(args[1]);
+
+            if (Rml.equal(a, b)) {
+                return a;
+            } else if (args.len > 2) {
+                try interpreter.abort(origin, error.Panic, "Assertion failed: {message}", .{Rml.format.slice(args[2..])});
+            } else {
+                try interpreter.abort(origin, error.Panic, "Assertion failed: {source} ({message}) (of type {}) is not equal to {source} ({message}) (of type {})", .{args[0], a, a.getTypeId(), args[1], b, b.getTypeId()});
+            }
+        }
+    }.fun,
+};
+
+/// # `import` Syntax
+///
+/// Imports a namespace into the current environment
+///
+/// ## Example
+/// ```rml
+/// import text
+/// assert (text/lowercase? 't')
+/// ```
 pub const import = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -148,7 +239,18 @@ pub const global = Rml.Procedure {
 };
 
 
-/// create a local variable binding
+/// # `local` Syntax
+///
+/// Creates a local variable binding
+///
+/// ## Example
+/// ```rml
+/// local x = 1
+/// local (y z) = '(2 3)
+/// assert-eq x 1
+/// assert-eq y 2
+/// assert-eq z 3
+/// ```
 pub const local = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -257,10 +359,14 @@ pub const local = Rml.Procedure {
     }.fun,
 };
 
-/// set the value of a variable associated with an existing binding in the current environment
+/// Sets the value of a variable associated with an existing binding in the current environment
+///
+/// E.g. `(set! x 42)` will set the value of the variable `x` to `42`.
 pub const @"set!" = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun (interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+            if (args.len != 2) try interpreter.abort(origin, error.InvalidArgumentCount, "expected 2 arguments, found {}", .{args.len});
+
             const sym = Rml.castObj(Rml.Symbol, args[0])
                 orelse try interpreter.abort(origin, error.TypeError,
                     "expected symbol, found {s}", .{Rml.TypeId.name(args[0].getTypeId())});
@@ -276,7 +382,31 @@ pub const @"set!" = Rml.Procedure {
 };
 
 
-/// bind an effect handler
+/// # `with` Syntax
+///
+/// Binds provided effect handlers to the evidence environment, then evaluates its body.
+///
+/// Effect handlers bound this way have access to the Syntax `cancel`, which can be used to escape the with block.
+///
+/// ## Example
+/// ```rml
+/// local x = 0
+/// with {
+///     fresh = fun =>
+///         local out = x
+///         set! x (+ x 1)
+///         out
+/// }
+///     local a = (fresh)
+///     local b = (fresh)
+///     assert-eq a 0
+///     assert-eq b 1
+/// ```
+///
+/// ## Example
+/// ```rml
+/// assert-eq 'failed (with (fail = fun => cancel 'failed) (fail))
+/// ```
 pub const with = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -301,7 +431,7 @@ pub const with = Rml.Procedure {
             }
 
             const cases: []const Rml.Obj(Rml.Block) =
-                if (isCases) @as([*]const Rml.Obj(Rml.Block), @ptrCast(context.data.items().ptr))[0..context.data.length()]
+                if (isCases) @as([*]const Rml.Obj(Rml.Block), @ptrCast(context.data.items().ptr))[0..@intCast(context.data.length())]
                 else &.{context};
 
             for (cases) |caseBlock| {
@@ -363,7 +493,9 @@ pub const with = Rml.Procedure {
     }.fun,
 };
 
-/// create a function closure
+/// # `fun` Syntax
+///
+/// Creates a function closure
 pub const fun = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -427,7 +559,9 @@ pub const fun = Rml.Procedure {
     }.fun,
 };
 
-/// create a macro closure
+/// # `macro` Syntax
+///
+/// Creates a macro closure
 pub const macro = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -489,41 +623,44 @@ pub const macro = Rml.Procedure {
     }.fun,
 };
 
-/// print any number of arguments followed by a new line
+
+/// Prints a message followed by a new line. (To skip the new line, use `print`)
+///
+/// The message can be derived from any sequence of objects. If there are no objects, the message will be empty.
+///
+/// Each object will be evaluated, stringified with message formatting,
+/// and the resulting strings will be concatenated to form the final message.
 pub fn @"print-ln"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
     const rml = Rml.getRml(interpreter);
 
     const stdout = std.io.getStdOut();
-    const nativeWriter = stdout.writer();
 
-    nativeWriter.print("{}: ", .{origin}) catch |err| return Rml.errorCast(err);
-
-    for (args) |arg| {
-        arg.getHeader().onFormat(nativeWriter.any())
-            catch |err| return Rml.errorCast(err);
-    }
-
-    nativeWriter.writeAll("\n") catch |err| return Rml.errorCast(err);
+    stdout.writer().print("{}: {message}\n", .{origin, Rml.format.slice(args)}) catch |err| return Rml.errorCast(err);
 
     return (try Rml.Obj(Rml.Nil).wrap(rml, origin, .{})).typeErase();
 }
 
 
 
-/// print any number of arguments
+
+/// Prints a message. (To append a new line to the message, use `print-ln`)
+///
+/// The message can be derived from any sequence of objects. If there are no objects, the message will be empty.
+///
+/// Each object will be evaluated, stringified with message formatting,
+/// and the resulting strings will be concatenated to form the final message.
 pub fn print(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
     const rml = Rml.getRml(interpreter);
 
     const stdout = std.io.getStdOut();
-    const nativeWriter = stdout.writer();
 
-    for (args) |arg| {
-        arg.getHeader().onFormat(nativeWriter.any())
-            catch |err| return Rml.errorCast(err);
-    }
+    stdout.writer().print("{}: {message}", .{origin, Rml.format.slice(args)}) catch |err| return Rml.errorCast(err);
 
     return (try Rml.Obj(Rml.Nil).wrap(rml, origin, .{})).typeErase();
 }
+
+
+
 
 
 

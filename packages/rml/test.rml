@@ -4,22 +4,23 @@ local foo = 1
 local var = fun => nil
 local jazz = "test"
 local {x y} = '(1 2)
-print-ln (== foo 1)
-print-ln (== jazz "test")
-print-ln (== jazz "t3st")
-print-ln (== x 1)
-print-ln (== y 2)
-print-ln (== var nil)
-print-ln (> 1 2 3 4)
-print-ln (< 1 2 3 4)
-print-ln (<= 1 1 2 2 3 4)
-print-ln (> 4 3 2 1)
-print-ln (< 4 3 2 1)
+assert (== foo 1)
+assert (== jazz "test")
+assert (not (== jazz "t3st"))
+assert (== x 1)
+assert (== y 2)
+assert (not (== var nil))
+assert ((== (var) nil))
+assert (not (> 1 2 3 4))
+assert (< 1 2 3 4)
+assert (<= 1 1 2 2 3 4)
+assert (> 4 3 2 1)
+assert (not (< 4 3 2 1))
 
-apply print-ln '(1 2 3 4 5)
+assert-eq 15 (apply + '(1 2 3 4 5))
 
 print-ln (gensym)
-print-ln (== (gensym) (gensym))
+assert (!= (gensym) (gensym))
 
 local check = fun{* args} => print-ln args
 check 1 2 3 4 5
@@ -53,8 +54,8 @@ local incrBy = fun x =>
         + x y
 local incr = incrBy 2
 
-print-ln (incr 1)
-print-ln (incr 2)
+assert-eq 3 (incr 1)
+assert-eq 4 (incr 2)
 
 local mac = macro x => `(print-ln ,x)
 mac 1003
@@ -66,9 +67,9 @@ local closure = fun x =>
 
 local (a b) = closure 1
 
-a 1
+assert-eq 2 (a 1)
 b 2
-a 1
+assert-eq 3 (a 1)
 
 local check-self = fun =>
     print-ln "check-self " check-self
@@ -80,28 +81,30 @@ print-ln one-hundred
 
 import type
 
-print-ln (type/nil? nil)
-print-ln (type/nil? 1)
+assert (type/nil? nil)
+assert (not (type/nil? 1))
 
-print-ln (type/string? "foo")
-print-ln (type/string? 1)
+assert (type/string? "foo")
+assert (not (type/string? 1))
 
 import String
 
-print-ln (String/length "test")
+assert-eq 4 (String/length "test")
 
 import text
 
 print-ln (text/category 't')
-print-ln (text/lowercase "TEST")
-print-ln (text/uppercase "test")
-print-ln (text/lowercase? 't')
-print-ln (text/lowercase? 'T')
+assert-eq "test" (text/lowercase "TEST")
+assert-eq "TEST" (text/uppercase "test")
+assert (text/lowercase? 't')
+assert (not (text/lowercase? 'T'))
 
 print-ln (type/of (type/of 0))
-print-ln (type/of 0)
-print-ln (type/of 't')
-print-ln (type/of (text/category 't'))
+
+; FIXME: failing because of a bug in bindgen? error says Obj(Symbol) != Symbol
+; assert-eq 'i64 (type/of 0)
+; assert-eq 'u21 (type/of 't')
+; assert-eq 'GenCatData.Gc (type/of (text/category 't'))
 
 local fail-tester = fun x =>
     print-ln "this should print, but then we fail " x
@@ -116,3 +119,21 @@ with {
         print-ln "fail: " msg
         cancel 'failure-sym
 } fail "test"
+
+local x = 0
+with {
+    fresh = fun =>
+        local out = x
+        set! x (+ x 1)
+        out
+}
+    local a = (fresh)
+    local b = (fresh)
+    assert-eq a 0
+    assert-eq b 1
+    print-ln a " " b
+
+assert-eq 'failed (with (fail = fun() => cancel 'failed) (fail))
+
+; FIXME: failing because of the missing pattern, somehow
+; assert-eq 'failed (with (fail = fun => cancel 'failed) (fail))

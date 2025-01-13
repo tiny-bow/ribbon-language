@@ -23,7 +23,7 @@ pub const Parser = struct {
         };
     }
 
-    pub fn onCompare(a: *Parser, other: Rml.Object) Rml.Ordering {
+    pub fn onCompare(a: *const Parser, other: Rml.Object) Rml.Ordering {
         var ord = Rml.compare(Rml.getTypeId(a), other.getTypeId());
 
         if (ord == .Equal) {
@@ -34,7 +34,7 @@ pub const Parser = struct {
         return ord;
     }
 
-    pub fn onFormat(self: *Parser, writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *const Parser, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
         return writer.print("Parser{x}", .{@intFromPtr(self)});
     }
 

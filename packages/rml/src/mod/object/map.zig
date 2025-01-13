@@ -42,25 +42,24 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
             return ord;
         }
 
-        pub fn onFormat(self: *const Self, writer: std.io.AnyWriter) anyerror! void {
-            return writer.print("{}", .{self});
-        }
-
-        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
-            try writer.writeAll("map{");
+        pub fn onFormat(self: *const Self, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+            try writer.writeAll("map{ ");
 
             var it = self.native_map.iterator();
             while (it.next()) |entry| {
-                try writer.print("({} {})", .{entry.key_ptr.*, entry.value_ptr.*});
-                if (it.index < it.len) {
-                    try writer.writeAll(" ");
-                }
+                try writer.writeAll("(");
+                try entry.key_ptr.onFormat(fmt, writer);
+                try writer.writeAll(" = ");
+                try entry.value_ptr.onFormat(fmt, writer);
+                try writer.writeAll(") ");
             }
 
             try writer.writeAll("}");
         }
 
-
+        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+            return self.onFormat(comptime Rml.Format.debug, if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any());
+        }
 
 
         /// Set the value associated with a key
@@ -79,8 +78,8 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
         }
 
         /// Returns the number of key-value pairs in the map
-        pub fn length(self: *const Self) usize {
-            return self.native_map.count();
+        pub fn length(self: *const Self) Rml.Int {
+            return @intCast(self.native_map.count());
         }
 
         /// Check whether a key is stored in the map

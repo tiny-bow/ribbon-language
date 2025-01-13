@@ -33,18 +33,18 @@ pub const BlockKind = enum {
         };
     }
 
-    pub fn toOpenStrFmt(self: BlockKind) []const u8 {
+    pub fn toOpenStrFmt(self: BlockKind, format: Rml.Format) []const u8 {
         return switch (self) {
-            .doc => "⧼",
+            .doc => if (format != .source) "⧼" else "",
             .curly => "{",
             .square => "[",
             .paren => "(",
         };
     }
 
-    pub fn toCloseStrFmt(self: BlockKind) []const u8 {
+    pub fn toCloseStrFmt(self: BlockKind, format: Rml.Format) []const u8 {
         return switch (self) {
-            .doc => "⧽",
+            .doc => if (format != .source) "⧽" else "",
             .curly => "}",
             .square => "]",
             .paren => ")",
@@ -92,21 +92,21 @@ pub const Block = struct {
         return ord;
     }
 
-    pub fn onFormat(self: *Block, writer: std.io.AnyWriter) anyerror! void {
-        try writer.writeAll(self.kind.toOpenStrFmt());
+    pub fn onFormat(self: *Block, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+        try writer.writeAll(self.kind.toOpenStrFmt(fmt));
         for (self.items(), 0..) |item, i| {
-            try item.onFormat(writer);
+            try item.onFormat(fmt, writer);
 
             if (i < self.length() - 1) {
                 try writer.writeAll(" ");
             }
         }
-        try writer.writeAll(self.kind.toCloseStrFmt());
+        try writer.writeAll(self.kind.toCloseStrFmt(fmt));
     }
 
     /// Length of the block.
-    pub fn length(self: *const Block) usize {
-        return self.array.items.len;
+    pub fn length(self: *const Block) Rml.Int {
+        return @intCast(self.array.items.len);
     }
 
     /// Contents of the block.

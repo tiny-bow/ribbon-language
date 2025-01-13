@@ -61,9 +61,9 @@ pub const Quote = struct {
         return ord;
     }
 
-    pub fn onFormat(self: *Quote, writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *Quote, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
         try writer.writeAll(self.kind.toStr());
-        try self.body.onFormat(writer);
+        try self.body.onFormat(fmt, writer);
     }
 
     pub fn run(self: *Quote, interpreter: *Rml.Interpreter) Rml.Result! Rml.Object {

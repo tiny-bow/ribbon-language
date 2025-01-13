@@ -21,19 +21,19 @@ pub const Writer = struct {
         return ord;
     }
 
-    pub fn onFormat(self: *Writer, writer: std.io.AnyWriter) anyerror! void {
-        try writer.print("{}", .{self.native});
+    pub fn onFormat(self: *const Writer, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+        try writer.print("[native-writer-{x}-{x}]", .{@intFromPtr(self.native.context), @intFromPtr(self.native.writeFn)});
     }
 
-    pub fn print(self: *Writer, comptime fmt: []const u8, args: anytype) Rml.Error! void {
+    pub fn print(self: *const Writer, comptime fmt: []const u8, args: anytype) Rml.Error! void {
         return self.native.print(fmt, args) catch |err| return Rml.errorCast(err);
     }
 
-    pub fn write(self: *Writer, val: []const u8) Rml.Error! usize {
+    pub fn write(self: *const Writer, val: []const u8) Rml.Error! usize {
         return self.native.write(val) catch |err| return Rml.errorCast(err);
     }
 
-    pub fn writeAll(self: *Writer, val: []const u8) Rml.Error! void {
+    pub fn writeAll(self: *const Writer, val: []const u8) Rml.Error! void {
         return self.native.writeAll(val) catch |err| return Rml.errorCast(err);
     }
 };

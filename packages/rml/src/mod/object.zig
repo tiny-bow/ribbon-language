@@ -61,8 +61,8 @@ pub const Header = struct {
         return self.vtable.onCompare(self, obj);
     }
 
-    pub fn onFormat(self: *Header, w: std.io.AnyWriter) anyerror! void {
-        return self.vtable.onFormat(self, w);
+    pub fn onFormat(self: *Header, fmt: Rml.Format, w: std.io.AnyWriter) anyerror! void {
+        return self.vtable.onFormat(self, fmt, w);
     }
 
     pub fn getObject(self: *Header) Object {
@@ -87,7 +87,7 @@ pub const VTable = struct {
 
     pub const ObjDataFunctions = struct {
         onCompare: ?*const fn (*const ObjData, Rml.Object) Rml.Ordering = null,
-        onFormat: ?*const fn (*const ObjData, std.io.AnyWriter) anyerror! void = null,
+        onFormat: ?*const fn (*const ObjData, Rml.Format, std.io.AnyWriter) anyerror! void = null,
     };
 
     pub fn of(comptime T: type) *const VTable {
@@ -167,9 +167,9 @@ pub const VTable = struct {
         return self.obj_data.onCompare.?(data, other);
     }
 
-    pub fn onFormat(self: *const VTable, header: *Header, w: std.io.AnyWriter) Rml.Error! void {
+    pub fn onFormat(self: *const VTable, header: *Header, fmt: Rml.Format, w: std.io.AnyWriter) Rml.Error! void {
         const data = header.getData();
-        return self.obj_data.onFormat.?(data, w) catch |err| Rml.errorCast(err);
+        return self.obj_data.onFormat.?(data, fmt, w) catch |err| Rml.errorCast(err);
     }
 };
 
@@ -226,8 +226,8 @@ pub fn Obj(comptime T: type) type {
             return self.getHeader().onCompare(other.getHeader());
         }
 
-        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror! void {
-            try self.getHeader().onFormat(if (@TypeOf(w) == std.io.AnyWriter) w else w.any());
+        pub fn format(self: Self, comptime fmt: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror! void {
+            return self.getHeader().onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(w) == std.io.AnyWriter) w else w.any());
         }
 
         pub fn getMemory(self: Self) *ObjMemory(T) {
@@ -254,8 +254,8 @@ pub fn Obj(comptime T: type) type {
             return self.getHeader().onCompare(other.getHeader());
         }
 
-        pub fn onFormat(self: Self, w: std.io.AnyWriter) anyerror! void {
-            return self.getHeader().onFormat(w);
+        pub fn onFormat(self: Self, fmt: Rml.Format, w: std.io.AnyWriter) anyerror! void {
+            return self.getHeader().onFormat(fmt, w);
         }
     };
 }

@@ -41,19 +41,23 @@ pub const Env = struct {
         return ord;
     }
 
-    pub fn onFormat(self: *Env, writer: std.io.AnyWriter) anyerror! void {
-        return writer.print("{}", .{self});
-    }
-
-    pub fn format(self: *Env, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
-        try writer.writeAll("env{");
+    pub fn onFormat(self: *Env, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+        try writer.writeAll("env{ ");
 
         var it = self.table.iterator();
         while (it.next()) |entry| {
-            try writer.print("({} {})", .{entry.key_ptr.*, entry.value_ptr.*});
+            try writer.writeAll("(");
+            try entry.key_ptr.onFormat(fmt, writer);
+            try writer.writeAll(" = ");
+            try entry.value_ptr.onFormat(fmt, writer);
+            try writer.writeAll(") ");
         }
 
         try writer.writeAll("}");
+    }
+
+    pub fn format(self: *Env, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+        self.onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any());
     }
 
     pub fn clone(self: *Env, origin: ?Rml.Origin) Rml.OOM! Rml.Obj(Env) {
@@ -105,8 +109,8 @@ pub const Env = struct {
     }
 
     /// Returns the number of bindings in the env
-    pub fn length(self: *Env) usize {
-        return self.table.count();
+    pub fn length(self: *Env) Rml.Int {
+        return @intCast(self.table.count());
     }
 
     /// Check whether a key is bound in the env

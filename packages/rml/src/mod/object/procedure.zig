@@ -125,7 +125,8 @@ pub const Procedure = union(ProcedureKind) {
         return Rml.compare(Rml.getHeader(self).type_id, other.getTypeId());
     }
 
-    pub fn onFormat(self: *Procedure, writer: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *Procedure, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+        // TODO: source formatting
         return writer.print("[{s}-{x}]", .{@tagName(self.*), @intFromPtr(self)});
     }
 

@@ -24,7 +24,7 @@ pub fn TypedSet (comptime K: type) type {
         }
 
 
-        pub fn onCompare(a: *Self, other: Rml.Object) Rml.Ordering {
+        pub fn onCompare(a: *const Self, other: Rml.Object) Rml.Ordering {
             var ord = Rml.compare(Rml.getTypeId(a), other.getTypeId());
             if (ord == .Equal) {
                 const b = Rml.forceObj(Self, other);
@@ -44,20 +44,18 @@ pub fn TypedSet (comptime K: type) type {
             return ord;
         }
 
-        pub fn onFormat(self: *const Self, writer: std.io.AnyWriter) anyerror! void {
-            return writer.print("{}", .{self.native_set});
-        }
-
-        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+        pub fn onFormat(self: *const Self, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
             const ks = self.keys();
-            try writer.writeAll("SET{");
-            for (ks, 0..) |key, i| {
-                try writer.print("{}", .{key});
-                if (i < ks.len - 1) {
-                    try writer.writeAll(" ");
-                }
+            try writer.writeAll("set{ ");
+            for (ks) |key| {
+                try key.onFormat(fmt, writer);
+                try writer.writeAll(" ");
             }
             try writer.writeAll("}");
+        }
+
+        pub fn format(self: *const Self, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+            return self.onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any());
         }
 
 
@@ -76,8 +74,8 @@ pub fn TypedSet (comptime K: type) type {
         }
 
         /// Returns the number of key-value pairs in the map
-        pub fn length(self: *const Self) usize {
-            return self.native_set.count();
+        pub fn length(self: *const Self) Rml.Int {
+            return @intCast(self.native_set.count());
         }
 
         /// Check whether a key is stored in the map
@@ -100,7 +98,7 @@ pub fn TypedSet (comptime K: type) type {
         }
 
         /// Clones and returns the backing array of values in this map.
-        pub fn toArray(self: *Self) Rml.OOM! Rml.Obj(Rml.Array) {
+        pub fn toArray(self: *const Self) Rml.OOM! Rml.Obj(Rml.Array) {
             var array = try Rml.Obj(Rml.Array).wrap(Rml.getRml(self), Rml.getOrigin(self), .{.allocator = self.allocator});
 
             for (self.keys()) |key| {
@@ -110,7 +108,7 @@ pub fn TypedSet (comptime K: type) type {
             return array;
         }
 
-        pub fn clone(self: *Self) Rml.OOM! Self {
+        pub fn clone(self: *const Self) Rml.OOM! Self {
             return Self { .allocator = self.allocator, .native_set = try self.native_set.clone(self.allocator) };
         }
 
