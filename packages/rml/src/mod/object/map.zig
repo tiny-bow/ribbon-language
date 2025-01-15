@@ -12,21 +12,11 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
     return struct {
         const Self = @This();
 
-        pub const NativeIter = NativeMap.Iterator;
-        pub const NativeMap = std.ArrayHashMapUnmanaged(Rml.Obj(K), Rml.Obj(V), Rml.SimpleHashContext, true);
-
         allocator: std.mem.Allocator,
         native_map: NativeMap = .{},
 
-
-        pub fn onCompare(a: *Self, other: Rml.Object) Rml.Ordering {
-            var ord = Rml.compare(Rml.getTypeId(a), other.getTypeId());
-            if (ord == .Equal) {
-                const b = Rml.forceObj(Self, other);
-                ord = a.compare(b.data.*);
-            }
-            return ord;
-        }
+        pub const NativeIter = NativeMap.Iterator;
+        pub const NativeMap = std.ArrayHashMapUnmanaged(Rml.Obj(K), Rml.Obj(V), Rml.SimpleHashContext, true);
 
         pub fn compare(self: Self, other: Self) Rml.Ordering {
             var ord = Rml.compare(self.keys().len, other.keys().len);
@@ -42,23 +32,22 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
             return ord;
         }
 
-        pub fn onFormat(self: *const Self, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
-            try writer.writeAll("map{ ");
+        pub fn format(self: *const Self, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+            const fmt = Rml.Format.fromStr(fmtStr) orelse .debug;
+            const w = if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any();
+
+            try w.writeAll("map{ ");
 
             var it = self.native_map.iterator();
             while (it.next()) |entry| {
-                try writer.writeAll("(");
-                try entry.key_ptr.onFormat(fmt, writer);
-                try writer.writeAll(" = ");
-                try entry.value_ptr.onFormat(fmt, writer);
-                try writer.writeAll(") ");
+                try w.writeAll("(");
+                try entry.key_ptr.onFormat(fmt, w);
+                try w.writeAll(" = ");
+                try entry.value_ptr.onFormat(fmt, w);
+                try w.writeAll(") ");
             }
 
-            try writer.writeAll("}");
-        }
-
-        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
-            return self.onFormat(comptime Rml.Format.debug, if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any());
+            try w.writeAll("}");
         }
 
 

@@ -13,15 +13,11 @@ pub const Writer = struct {
         return Writer { .native = native_writer };
     }
 
-    pub fn onCompare(self: *Writer, other: Rml.Object) Rml.Ordering {
-        var ord = Rml.compare(Rml.getHeader(self).type_id, other.getTypeId());
-        if (ord == .Equal) {
-            ord = Rml.compare(self.native, Rml.forceObj(Writer, other).data.native);
-        }
-        return ord;
+    pub fn compare(self: Writer, other: Writer) Rml.Ordering {
+        return Rml.compare(self.native, other.native);
     }
 
-    pub fn onFormat(self: *const Writer, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+    pub fn format(self: *const Writer, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
         try writer.print("[native-writer-{x}-{x}]", .{@intFromPtr(self.native.context), @intFromPtr(self.native.writeFn)});
     }
 

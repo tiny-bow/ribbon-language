@@ -2,7 +2,6 @@ const std = @import("std");
 
 const Rml = @import("../root.zig");
 
-const ASSIGNMENT_OPERATOR = "=";
 
 /// Creates a string from any sequence of objects. If there are no objects, the string will be empty.
 ///
@@ -25,8 +24,8 @@ pub fn format(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const R
 ///
 /// The message can be derived from any sequence of objects. If there are no objects, the panic message will be empty.
 ///
-/// Each object will be evaluated, stringified with message formatting,
-/// and the resulting strings will be concatenated to form the final abort message.
+/// Each object will be evaluated, and stringified with message formatting.
+/// The resulting strings will be concatenated to form the final abort message.
 ///
 /// Note that the resulting message will only be seen if the interpreter has an `Rml.Diagnostic` output bound to it.
 pub fn panic(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -127,7 +126,18 @@ pub const import = Rml.Procedure {
     }.fun,
 };
 
-/// create a global variable binding
+/// # `global` Syntax
+///
+/// Binds a new variable in the global environment
+///
+/// ## Example
+/// ```rml
+/// global x = 1
+/// global (y z) = '(2 3)
+/// assert-eq x 1
+/// assert-eq y 2
+/// assert-eq z 3
+/// ```
 pub const global = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun (interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -241,7 +251,7 @@ pub const global = Rml.Procedure {
 
 /// # `local` Syntax
 ///
-/// Creates a local variable binding
+/// Binds a new variable in the local environment
 ///
 /// ## Example
 /// ```rml
@@ -386,7 +396,7 @@ pub const @"set!" = Rml.Procedure {
 ///
 /// Binds provided effect handlers to the evidence environment, then evaluates its body.
 ///
-/// Effect handlers bound this way have access to the Syntax `cancel`, which can be used to escape the with block.
+/// Effect handlers bound this way have access to the `cancel` Syntax, which can be used to escape the with block.
 ///
 /// ## Example
 /// ```rml
@@ -496,6 +506,12 @@ pub const with = Rml.Procedure {
 /// # `fun` Syntax
 ///
 /// Creates a function closure
+///
+/// ## Example
+/// ```rml
+/// local add = fun (a b) => (+ a b)
+/// assert-eq (add 1 2) 3
+/// ```
 pub const fun = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -562,6 +578,12 @@ pub const fun = Rml.Procedure {
 /// # `macro` Syntax
 ///
 /// Creates a macro closure
+///
+/// ## Example
+/// ```rml
+/// local add = macro (a b) => `(+ a b)
+/// assert-eq (add 1 2) 3
+/// ```
 pub const macro = Rml.Procedure {
     .native_macro = &struct {
         pub fn fun(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
@@ -1096,6 +1118,8 @@ pub fn gensym(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const R
 
 
 
+
+const ASSIGNMENT_OPERATOR = "=";
 
 fn arithCastReduce(
     interpreter: *Rml.Interpreter,

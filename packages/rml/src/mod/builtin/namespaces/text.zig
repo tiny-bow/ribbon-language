@@ -6,32 +6,10 @@ const TextUtils = @import("Utils").Text;
 
 const Rml = @import("../../root.zig");
 
+
 /// given a char, gives a symbol representing the unicode general category
 pub fn @"category"(char: Rml.Char) TextUtils.GeneralCategory {
-    const cat = TextUtils.generalCategory(char);
-    return cat;
-}
-
-fn textPred(comptime chPred: fn (Rml.Char) bool, comptime strPred: fn ([]const u8) bool, interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
-    var is = true;
-
-    for (args) |arg| {
-        const argIs = if (Rml.castObj(Rml.String, arg)) |str|
-            strPred(str.data.text())
-        else if (Rml.castObj(Rml.Char, arg)) |char|
-            chPred(char.data.*)
-        else {
-            try interpreter.abort(origin, error.TypeError,
-                "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
-        };
-
-        if (!argIs) {
-            is = false;
-            break;
-        }
-    }
-
-    return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, is)).typeErase();
+    return TextUtils.generalCategory(char);
 }
 
 /// given a string or char, checks if all characters are control characters
@@ -144,56 +122,6 @@ pub fn @"uppercase?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []
     return textPred(TextUtils.isUpper, TextUtils.isUpperStr, interpreter, origin, args);
 }
 
-fn appendConv (newStr: *Rml.String, conv: anytype) Rml.Result! void {
-    const T = @TypeOf(conv);
-    if (T == Rml.Char) {
-        try newStr.append(conv);
-    } else if (@typeInfo(T) == .pointer) {
-        if (@typeInfo(T).pointer.child == Rml.Char) {
-            for (conv) |ch| try newStr.append(ch);
-        } else if (comptime @typeInfo(T).pointer.child == u8)  {
-            try newStr.appendSlice(conv);
-        } else {
-            @compileError("unexpected type");
-        }
-    } else {
-        @compileError("unexpected type");
-    }
-}
-
-pub fn textConv(comptime charConv: anytype, interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
-    var compound = args.len != 1;
-    var newStr = try Rml.String.create(Rml.getRml(interpreter), "");
-
-    for (args) |arg| {
-        if (Rml.castObj(Rml.String, arg)) |str| {
-            compound = true;
-            const text = str.data.text();
-            var i: usize = 0;
-            while (i < text.len) {
-                const res = try TextUtils.decode1(text[i..]);
-                i += res.len;
-                const conv = charConv(res.ch);
-                try appendConv(&newStr, conv);
-            }
-        } else if (Rml.castObj(Rml.Char, arg)) |char| {
-            const conv = charConv(char.data.*);
-            try appendConv(&newStr, conv);
-        } else {
-            return try interpreter.abort(origin, Rml.Error.TypeError,
-                "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
-        }
-    }
-
-    if (!compound) {
-        if (TextUtils.codepointCount(newStr.text()) catch 0 == 1) {
-            return (try Rml.Obj(Rml.Char).wrap(Rml.getRml(interpreter), origin, TextUtils.nthCodepoint(0, newStr.text()) catch unreachable orelse unreachable)).typeErase();
-        }
-    }
-
-    return (try Rml.Obj(Rml.String).wrap(Rml.getRml(interpreter), origin, newStr)).typeErase();
-}
-
 /// given a string or char, returns a new copy with all of the characters converted to lowercase
 pub fn @"lowercase"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
     return textConv(TextUtils.toLower, interpreter, origin, args);
@@ -273,6 +201,78 @@ pub fn @"case-insensitive-eq?"(interpreter: *Rml.Interpreter, origin: Rml.Origin
         }
 
         if (!is) {
+            break;
+        }
+    }
+
+    return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, is)).typeErase();
+}
+
+fn appendConv (newStr: *Rml.String, conv: anytype) Rml.Result! void {
+    const T = @TypeOf(conv);
+    if (T == Rml.Char) {
+        try newStr.append(conv);
+    } else if (@typeInfo(T) == .pointer) {
+        if (@typeInfo(T).pointer.child == Rml.Char) {
+            for (conv) |ch| try newStr.append(ch);
+        } else if (comptime @typeInfo(T).pointer.child == u8)  {
+            try newStr.appendSlice(conv);
+        } else {
+            @compileError("unexpected type");
+        }
+    } else {
+        @compileError("unexpected type");
+    }
+}
+
+fn textConv(comptime charConv: anytype, interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+    var compound = args.len != 1;
+    var newStr = try Rml.String.create(Rml.getRml(interpreter), "");
+
+    for (args) |arg| {
+        if (Rml.castObj(Rml.String, arg)) |str| {
+            compound = true;
+            const text = str.data.text();
+            var i: usize = 0;
+            while (i < text.len) {
+                const res = try TextUtils.decode1(text[i..]);
+                i += res.len;
+                const conv = charConv(res.ch);
+                try appendConv(&newStr, conv);
+            }
+        } else if (Rml.castObj(Rml.Char, arg)) |char| {
+            const conv = charConv(char.data.*);
+            try appendConv(&newStr, conv);
+        } else {
+            return try interpreter.abort(origin, Rml.Error.TypeError,
+                "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
+        }
+    }
+
+    if (!compound) {
+        if (TextUtils.codepointCount(newStr.text()) catch 0 == 1) {
+            return (try Rml.Obj(Rml.Char).wrap(Rml.getRml(interpreter), origin, TextUtils.nthCodepoint(0, newStr.text()) catch unreachable orelse unreachable)).typeErase();
+        }
+    }
+
+    return (try Rml.Obj(Rml.String).wrap(Rml.getRml(interpreter), origin, newStr)).typeErase();
+}
+
+fn textPred(comptime chPred: fn (Rml.Char) bool, comptime strPred: fn ([]const u8) bool, interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+    var is = true;
+
+    for (args) |arg| {
+        const argIs = if (Rml.castObj(Rml.String, arg)) |str|
+            strPred(str.data.text())
+        else if (Rml.castObj(Rml.Char, arg)) |char|
+            chPred(char.data.*)
+        else {
+            try interpreter.abort(origin, error.TypeError,
+                "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
+        };
+
+        if (!argIs) {
+            is = false;
             break;
         }
     }

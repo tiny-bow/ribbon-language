@@ -21,37 +21,28 @@ pub fn TypedArray (comptime T: type) type {
             return self;
         }
 
-        pub fn onCompare(self: *const Self, other: Rml.Object) Rml.Ordering {
-            var ord = Rml.compare(Rml.getTypeId(self), other.getTypeId());
-            if (ord == .Equal) {
-                const otherObj = Rml.forceObj(Self, other);
-                ord = self.compare(otherObj.data.*);
-            }
-            return ord;
-        }
-
         pub fn compare(self: Self, other: Self) Rml.Ordering {
             return Rml.compare(self.native_array.items, other.native_array.items);
         }
 
-        pub fn onFormat(self: *const Self, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
-            try writer.print("array[{}]{{ ", .{self.native_array.items.len});
+        pub fn format(self: *const Self, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+            const fmt = Rml.Format.fromStr(fmtStr) orelse .debug;
+            const w = if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any();
+            try w.print("array[{}]{{ ", .{self.native_array.items.len});
             for (self.native_array.items) |obj| {
-                try obj.onFormat(fmt, writer);
-                try writer.writeAll(" ");
+                try obj.onFormat(fmt, w);
+                try w.writeAll(" ");
             }
-            try writer.writeAll("}");
+            try w.writeAll("}");
         }
 
-        pub fn format(self: *const Self, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
-            return self.onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any());
-        }
-
-        pub fn clone(self: *const Self) Rml.OOM! Self {
+        /// Shallow copy the array.
+        pub fn clone(self: *const Self, origin: ?Rml.Origin) Rml.OOM! Rml.Obj(Self) {
             const arr = try self.native_array.clone(self.allocator);
-            return Self{.allocator = self.allocator, .native_array = arr};
+            return Rml.Obj(Self).wrap(Rml.getRml(self), origin orelse Rml.getOrigin(self), Self {.allocator = self.allocator, .native_array = arr});
         }
 
+        /// Clear the array.
         pub fn clear(self: *Self) void {
             self.native_array.clearRetainingCapacity();
         }

@@ -3,35 +3,25 @@ const std = @import("std");
 const Rml = @import("../root.zig");
 
 
+
 pub const Set = TypedSet(Rml.object.ObjData);
 
 pub fn TypedSet (comptime K: type) type {
     return struct {
         const Self = @This();
 
-        pub const NativeIter = NativeSet.Iterator;
-        pub const NativeSet = std.ArrayHashMapUnmanaged(Rml.Obj(K), void, Rml.SimpleHashContext, true);
-
 
         allocator: std.mem.Allocator,
         native_set: NativeSet = .{},
 
 
+        pub const NativeIter = NativeSet.Iterator;
+        pub const NativeSet = std.ArrayHashMapUnmanaged(Rml.Obj(K), void, Rml.SimpleHashContext, true);
+
         pub fn create(rml: *Rml, initialKeys: []const Rml.Obj(K)) Rml.OOM! Self {
             var self = Self { .allocator = rml.blobAllocator() };
             for (initialKeys) |k| try self.native_set.put(rml.blobAllocator(), k, {});
             return self;
-        }
-
-
-        pub fn onCompare(a: *const Self, other: Rml.Object) Rml.Ordering {
-            var ord = Rml.compare(Rml.getTypeId(a), other.getTypeId());
-            if (ord == .Equal) {
-                const b = Rml.forceObj(Self, other);
-
-                ord = a.compare(b.data.*);
-            }
-            return ord;
         }
 
         pub fn compare(self: Self, other: Self) Rml.Ordering {
@@ -44,18 +34,38 @@ pub fn TypedSet (comptime K: type) type {
             return ord;
         }
 
-        pub fn onFormat(self: *const Self, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+        pub fn format(self: *const Self, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+            const fmt = Rml.Format.fromStr(fmtStr) orelse .debug;
+            const w = if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any();
+
             const ks = self.keys();
-            try writer.writeAll("set{ ");
+            try w.writeAll("set{ ");
             for (ks) |key| {
-                try key.onFormat(fmt, writer);
-                try writer.writeAll(" ");
+                try key.onFormat(fmt, w);
+                try w.writeAll(" ");
             }
-            try writer.writeAll("}");
+            try w.writeAll("}");
         }
 
-        pub fn format(self: *const Self, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
-            return self.onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any());
+        /// Clones and returns the backing array of values in this map.
+        pub fn toArray(self: *const Self) Rml.OOM! Rml.Obj(Rml.Array) {
+            var array = try Rml.Obj(Rml.Array).wrap(Rml.getRml(self), Rml.getOrigin(self), .{.allocator = self.allocator});
+
+            for (self.keys()) |key| {
+                try array.data.append(key.typeErase());
+            }
+
+            return array;
+        }
+
+        pub fn clone(self: *const Self) Rml.OOM! Self {
+            return Self { .allocator = self.allocator, .native_set = try self.native_set.clone(self.allocator) };
+        }
+
+        pub fn copyFrom(self: *Self, other: *const Self) Rml.OOM! void {
+            for (other.keys()) |key| {
+                try self.set(key);
+            }
         }
 
 
@@ -95,27 +105,6 @@ pub fn TypedSet (comptime K: type) type {
         /// necessary for the operation of the methods of this map that lookup entries by key.
         pub fn reIndex(self: *Self) Rml.OOM! void {
             return self.native_set.reIndex(self.allocator);
-        }
-
-        /// Clones and returns the backing array of values in this map.
-        pub fn toArray(self: *const Self) Rml.OOM! Rml.Obj(Rml.Array) {
-            var array = try Rml.Obj(Rml.Array).wrap(Rml.getRml(self), Rml.getOrigin(self), .{.allocator = self.allocator});
-
-            for (self.keys()) |key| {
-                try array.data.append(key.typeErase());
-            }
-
-            return array;
-        }
-
-        pub fn clone(self: *const Self) Rml.OOM! Self {
-            return Self { .allocator = self.allocator, .native_set = try self.native_set.clone(self.allocator) };
-        }
-
-        pub fn copyFrom(self: *Self, other: *const Self) Rml.OOM! void {
-            for (other.keys()) |key| {
-                try self.set(key);
-            }
         }
     };
 }

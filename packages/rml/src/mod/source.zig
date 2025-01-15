@@ -4,7 +4,7 @@ const Rml = @import("root.zig");
 
 
 
-pub fn blobOrigin (blob: []const Rml.Object) Origin {
+pub fn blobOrigin(blob: []const Rml.Object) Origin {
     if (blob.len == 0) return Origin { .filename = "system" };
 
     var origin = blob[0].getOrigin();
@@ -103,7 +103,7 @@ pub const Range = struct {
         return res;
     }
 
-    pub fn format(self: Range, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror!void {
+    pub fn format(self: *const Range, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror!void {
         const g = "{" ++ fmt ++ "}";
 
         if (self.start) |start| {
@@ -138,7 +138,7 @@ pub const Pos = struct {
         return Rml.compare(self.offset, other.offset);
     }
 
-    pub fn format(self: Pos, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror!void {
+    pub fn format(self: *const Pos, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror!void {
         try writer.print("{d}:{d}", .{ self.line, self.column});
     }
 

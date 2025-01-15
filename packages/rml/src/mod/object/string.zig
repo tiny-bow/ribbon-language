@@ -11,6 +11,7 @@ pub const String = struct {
     allocator: std.mem.Allocator,
     native_string: NativeString = .{},
 
+
     pub fn create(rml: *Rml, str: []const u8) Rml.OOM! String {
         var self = String {.allocator = rml.blobAllocator()};
         try self.appendSlice(str);

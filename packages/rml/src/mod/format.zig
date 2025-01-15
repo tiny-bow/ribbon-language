@@ -36,6 +36,12 @@ pub fn SliceFormatter(comptime T: type) type {
 
         buf: []const T,
 
+        pub fn onFormat(self: *const Self, fmt: Format, writer: std.io.AnyWriter) anyerror! void {
+            for (self.buf) |item| {
+                try item.onFormat(fmt, writer);
+            }
+        }
+
         pub fn format(self: *const Self, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
             for (self.buf) |item| {
                 try item.format(fmt, .{}, writer);

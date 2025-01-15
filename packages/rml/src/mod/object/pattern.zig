@@ -7,6 +7,16 @@ const Rml = @import("../root.zig");
 pub const Alias = struct {
     sym: Rml.Obj(Rml.Symbol),
     sub: Rml.Object,
+
+    pub fn compare(self: Alias, other: Alias) Rml.Ordering {
+        var ord = self.sym.compare(other.sym);
+
+        if (ord == .Equal) {
+            ord = self.sub.onCompare(other.sub);
+        }
+
+        return ord;
+    }
 };
 
 
@@ -50,39 +60,70 @@ pub const Pattern = union(enum) {
     // (| patt patt)        ;alternation ;outer block is not-a-block
     alternation: Rml.Obj(Rml.Array),
 
+    pub fn compare(self: Pattern, other: Pattern) Rml.Ordering {
+        var ord = Rml.compare(std.meta.activeTag(self), std.meta.activeTag(other));
 
-    pub fn onFormat (self: *Pattern, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+        if (ord == .Equal) {
+            ord = switch (self) {
+                .wildcard => ord,
+                .symbol => |x| x.compare(other.symbol),
+                .block => |x| x.compare(other.block),
+                .value_literal => |x| x.compare(other.value_literal),
+                .procedure => |x| x.compare(other.procedure),
+                .quote => |x| x.compare(other.quote),
+                .alias => |x| x.compare(other.alias),
+                .sequence => |x| x.compare(other.sequence),
+                .optional => |x| x.compare(other.optional),
+                .zero_or_more => |x| x.compare(other.zero_or_more),
+                .one_or_more => |x| x.compare(other.one_or_more),
+                .alternation => |x| x.compare(other.alternation),
+            };
+        }
+
+        return ord;
+    }
+
+    pub fn format(self: *const Pattern, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+        const fmt = Rml.Format.fromStr(fmtStr) orelse .debug;
+        const w = if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any();
         switch (self.*) {
-            .wildcard => try writer.writeAll("_"),
-            .symbol => |x| try x.onFormat(fmt, writer),
-            .block => |x| try x.onFormat(fmt, writer),
-            .value_literal => |x| try x.onFormat(fmt, writer),
-            .procedure => |x| try x.onFormat(fmt, writer),
-            .quote => |x| try x.onFormat(fmt, writer),
-            .sequence => {
-                try writer.writeAll("${");
-                try self.sequence.onFormat(fmt, writer);
-                try writer.writeAll("}");
+            .wildcard => try w.writeAll("_"),
+            .symbol => |x| try x.onFormat(fmt, w),
+            .block => |x| try x.onFormat(fmt, w),
+            .value_literal => |x| try x.onFormat(fmt, w),
+            .procedure => |x| try x.onFormat(fmt, w),
+            .quote => |x| try x.onFormat(fmt, w),
+            .sequence => |x| {
+                try w.writeAll("${");
+                try Rml.format.slice(x.data.items()).onFormat(fmt, w);
+                try w.writeAll("}");
             },
             .alias => |alias| {
-                try writer.writeAll("{as ");
-                try writer.print("{} {}}}", .{alias.sym, alias.sub});
+                try w.writeAll("{as ");
+                try alias.sym.onFormat(fmt, w);
+                try w.writeAll(" ");
+                try alias.sub.onFormat(fmt, w);
+                try w.writeAll("}");
             },
             .optional => |optional| {
-                try writer.writeAll("{? ");
-                try writer.print("{s}}}", .{optional});
+                try w.writeAll("{? ");
+                try optional.onFormat(fmt, w);
+                try w.writeAll("}");
             },
             .zero_or_more => |zero_or_more| {
-                try writer.writeAll("{* ");
-                try writer.print("{s}}}", .{zero_or_more});
+                try w.writeAll("{* ");
+                try zero_or_more.onFormat(fmt, w);
+                try w.writeAll("}");
             },
             .one_or_more => |one_or_more| {
-                try writer.writeAll("{+ ");
-                try writer.print("{s}}}", .{one_or_more});
+                try w.writeAll("{+ ");
+                try one_or_more.onFormat(fmt, w);
+                try w.writeAll("}");
             },
             .alternation => |alternation| {
-                try writer.writeAll("{| ");
-                try writer.print("{s}}}", .{alternation});
+                try w.writeAll("{| ");
+                try Rml.format.slice(alternation.data.items()).onFormat(fmt, w);
+                try w.writeAll("}");
             },
         }
     }

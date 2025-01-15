@@ -13,60 +13,39 @@ pub const Env = struct {
     allocator: std.mem.Allocator,
     table: CellTable = .{},
 
-    pub fn onCompare(a: *Env, other: Rml.Object) Rml.Ordering {
-        var ord = Rml.compare(Rml.getTypeId(a), other.getTypeId());
-
-        if (ord == .Equal) {
-            const b = Rml.forceObj(Env, other);
-            ord = a.compare(b.data.*);
-        }
-
-        return ord;
-    }
-
     pub fn compare(self: Env, other: Env) Rml.Ordering {
-        var ord = Rml.compare(self.table.count(), other.table.count());
+        var ord = Rml.compare(self.keys(), other.keys());
 
         if (ord == .Equal) {
-            var it = self.table.iterator();
-            while (it.next()) |entry| {
-                if (other.table.getEntry(entry.key_ptr.*)) |other_entry| {
-                    ord = entry.value_ptr.compare(other_entry.value_ptr.*);
-                } else {
-                    return .Greater;
-                }
-            }
+            ord = Rml.compare(self.cells(), other.cells());
         }
 
         return ord;
     }
 
-    pub fn onFormat(self: *Env, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
-        try writer.writeAll("env{ ");
-
+    pub fn format(self: *const Env, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+        const fmt = Rml.Format.fromStr(fmtStr) orelse .debug;
+        const w = if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any();
+        try w.writeAll("env{ ");
         var it = self.table.iterator();
         while (it.next()) |entry| {
-            try writer.writeAll("(");
-            try entry.key_ptr.onFormat(fmt, writer);
-            try writer.writeAll(" = ");
-            try entry.value_ptr.onFormat(fmt, writer);
-            try writer.writeAll(") ");
+            try w.writeAll("(");
+            try entry.key_ptr.onFormat(fmt, w);
+            try w.writeAll(" = ");
+            try entry.value_ptr.onFormat(fmt, w);
+            try w.writeAll(") ");
         }
-
-        try writer.writeAll("}");
+        try w.writeAll("}");
     }
 
-    pub fn format(self: *Env, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
-        self.onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any());
-    }
-
-    pub fn clone(self: *Env, origin: ?Rml.Origin) Rml.OOM! Rml.Obj(Env) {
+    /// Shallow copy an Env.
+    pub fn clone(self: *const Env, origin: ?Rml.Origin) Rml.OOM! Rml.Obj(Env) {
         const table = try self.table.clone(self.allocator);
 
         return try .wrap(Rml.getRml(self), origin orelse Rml.getOrigin(self), .{.allocator = self.allocator, .table = table});
     }
 
-    /// Set a value associated with a key
+    /// Set a value associated with a key in this Env.
     ///
     /// If the key is already bound, a new cell is created, overwriting the old one
     ///
@@ -100,7 +79,7 @@ pub const Env = struct {
     }
 
     /// Find the value bound to a symbol in the env
-    pub fn get(self: *Env, key: Rml.Obj(Rml.Symbol)) ?Rml.Object {
+    pub fn get(self: *const Env, key: Rml.Obj(Rml.Symbol)) ?Rml.Object {
         if (self.table.getEntry(key)) |entry| {
             return entry.value_ptr.data.get();
         }
@@ -109,21 +88,26 @@ pub const Env = struct {
     }
 
     /// Returns the number of bindings in the env
-    pub fn length(self: *Env) Rml.Int {
+    pub fn length(self: *const Env) Rml.Int {
         return @intCast(self.table.count());
     }
 
     /// Check whether a key is bound in the env
-    pub fn contains(self: *Env, key: Rml.Obj(Rml.Symbol)) bool {
+    pub fn contains(self: *const Env, key: Rml.Obj(Rml.Symbol)) bool {
         return self.table.contains(key);
     }
 
-    /// Get a slice of the local keys of this Env
-    pub fn keys(self: *Env) []Rml.Obj(Rml.Symbol) {
+    /// Get a slice of the keys of this Env
+    pub fn keys(self: *const Env) []Rml.Obj(Rml.Symbol) {
         return self.table.keys();
     }
 
+    /// Get a slice of the cells of this Env
+    pub fn cells(self: *const Env) []Rml.Obj(Rml.Cell) {
+        return self.table.values();
+    }
 
+    /// Copy all bindings from another env
     pub fn copyFromEnv(self: *Env, other: *Env) (Rml.OOM || Rml.SymbolAlreadyBound)! void {
         var it = other.table.iterator();
         while (it.next()) |entry| {
@@ -131,6 +115,7 @@ pub const Env = struct {
         }
     }
 
+    /// Copy all bindings from a table
     pub fn copyFromTable(self: *Env, table: *const Table) (Rml.OOM || Rml.SymbolAlreadyBound)! void {
         var it = table.iterator();
         while (it.next()) |entry| {
@@ -159,6 +144,7 @@ pub const Env = struct {
         try self.table.put(self.allocator, key, cell);
     }
 
+    /// Copy all bindings from a Zig namespace
     pub fn bindNamespace(self: *Env, namespace: anytype) Rml.OOM! void {
         const T = @TypeOf(namespace);
         const rml = Rml.getRml(self);

@@ -35,12 +35,11 @@ pub fn Support (comptime T: type) type {
     return struct {
         pub const onCompare = switch (@typeInfo(T)) {
             else => struct {
-                pub fn onCompare(a: *T, obj: Rml.Object) Rml.Ordering {
+                pub fn onCompare(a: *const T, obj: Rml.Object) Rml.Ordering {
                     var ord = Rml.compare(Rml.getTypeId(a), obj.getTypeId());
 
                     if (ord == .Equal) {
-                        const b = Rml.forceObj(T, obj);
-                        ord = Rml.compare(a.*, b.data.*);
+                        ord = Rml.compare(a.*, Rml.forceObj(T, obj).data.*);
                     }
 
                     return ord;
@@ -50,7 +49,7 @@ pub fn Support (comptime T: type) type {
 
         pub const onFormat = switch (T) {
             Rml.Char => struct {
-                pub fn onFormat(self: *T, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+                pub fn onFormat(self: *const T, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
                     switch (fmt) {
                         .message => try writer.print("{u}", .{self.*}),
                         inline else => {
@@ -63,16 +62,16 @@ pub fn Support (comptime T: type) type {
             },
             else => switch(@typeInfo(T)) {
                 .pointer => |info| if (@typeInfo(info.child) == .@"fn") struct {
-                    pub fn onFormat(self: *T, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+                    pub fn onFormat(self: *const T, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
                         try writer.print("[native-function {s} {x}]", .{fmtNativeType(T), @intFromPtr(self)});
                     }
                 } else struct {
-                    pub fn onFormat(self: *T, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+                    pub fn onFormat(self: *const T, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
                         try writer.print("[native-{s} {x}]", .{@typeName(T), @intFromPtr(self)});
                     }
                 },
                 .array => |info| struct {
-                    pub fn onFormat(self: *T, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+                    pub fn onFormat(self: *const T, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
                         try writer.writeAll("{");
                         for (self, 0..) |elem, i| {
                             try elem.onFormat(fmt, writer);
@@ -81,11 +80,23 @@ pub fn Support (comptime T: type) type {
                         try writer.writeAll("}");
                     }
                 },
-                else => struct {
-                    pub fn onFormat(self: *T, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
-                        try writer.print("{}", .{self.*});
+                else =>
+                    if (std.meta.hasFn(T, "format")) struct {
+                        pub fn onFormat(self: *const T, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+                            inline for (comptime std.meta.fieldNames(Rml.Format)) |fmtName| {
+                                const field = comptime @field(Rml.Format, fmtName);
+                                if (field == fmt) {
+                                    return @call(.always_inline, T.format, .{self, @tagName(field), .{}, writer});
+                                }
+                            }
+                            unreachable;
+                        }
+                    } else struct {
+                        pub fn onFormat(self: *const T, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+                            return writer.print("{any}", .{self.*});
+                        }
                     }
-                },
+                ,
             },
         }.onFormat;
     };

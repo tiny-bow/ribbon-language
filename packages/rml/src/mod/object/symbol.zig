@@ -12,13 +12,8 @@ pub const Symbol = struct {
         return .{ .str = try rml.data.intern(str) };
     }
 
-
-    pub fn onFormat(self: *const Symbol, _: Rml.Format, w: std.io.AnyWriter) anyerror! void {
-        try w.print("{s}", .{self.text()});
-    }
-
-    pub fn format(self: *const Symbol, comptime fmt: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror! void {
-        return self.onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(w) == std.io.AnyWriter) w else w.any());
+    pub fn format(self: *const Symbol, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+        return writer.writeAll(self.text());
     }
 
     pub fn text(self: *const Symbol) Rml.str {

@@ -117,15 +117,35 @@ pub const Procedure = union(ProcedureKind) {
     native_function: Rml.bindgen.NativeFunction,
     cancellation: Rml.WithId,
 
-    pub fn onInit(_: *Procedure) Rml.OOM! void {
-        return;
+    pub fn compare(self: Procedure, other: Procedure) Rml.Ordering {
+        var ord = Rml.compare(std.meta.activeTag(self), std.meta.activeTag(other));
+
+        if (ord == .Equal) {
+            switch (self) {
+                .macro => |macro| {
+                    ord = Rml.compare(macro.env, other.macro.env);
+                    if (ord == .Equal) ord = Rml.compare(macro.cases, other.macro.cases);
+                },
+                .function => |function| {
+                    ord = Rml.compare(function.env, other.function.env);
+                    if (ord == .Equal) ord = Rml.compare(function.cases, other.function.cases);
+                },
+                .native_macro => |native| {
+                    ord = Rml.compare(native, other.native_macro);
+                },
+                .native_function => |native| {
+                    ord = Rml.compare(native, other.native_function);
+                },
+                .cancellation => |cancellation| {
+                    ord = Rml.compare(cancellation, other.cancellation);
+                },
+            }
+        }
+
+        return ord;
     }
 
-    pub fn onCompare(self: *Procedure, other: Rml.Object) Rml.Ordering {
-        return Rml.compare(Rml.getHeader(self).type_id, other.getTypeId());
-    }
-
-    pub fn onFormat(self: *Procedure, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
+    pub fn format(self: *const Procedure, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
         // TODO: source formatting
         return writer.print("[{s}-{x}]", .{@tagName(self.*), @intFromPtr(self)});
     }

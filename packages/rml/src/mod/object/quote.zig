@@ -40,30 +40,21 @@ pub const Quote = struct {
     kind: QuoteKind,
     body: Rml.Object,
 
-    pub fn onInit(self: *Quote, kind: QuoteKind, body: Rml.Object) void {
-        self.kind = kind;
-        self.body = body;
-    }
-
-    pub fn onCompare(self: *Quote, other: Rml.Object) Rml.Ordering {
-        var ord = Rml.compare(Rml.getTypeId(self), other.getTypeId());
+    pub fn compare(self: Quote, other: Quote) Rml.Ordering {
+        var ord = Rml.compare(self.kind, other.kind);
 
         if (ord == .Equal) {
-            const other_quote = Rml.forceObj(Quote, other);
-
-            ord = Rml.compare(self.kind, other_quote.data.kind);
-
-            if (ord == .Equal) {
-                ord = self.body.compare(other_quote.data.body);
-            }
+            ord = self.body.compare(other.body);
         }
 
         return ord;
     }
 
-    pub fn onFormat(self: *Quote, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
-        try writer.writeAll(self.kind.toStr());
-        try self.body.onFormat(fmt, writer);
+    pub fn format(self: *const Quote, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+        const fmt = Rml.Format.fromStr(fmtStr) orelse .debug;
+        const w = if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any();
+        try w.writeAll(self.kind.toStr());
+        try self.body.onFormat(fmt, w);
     }
 
     pub fn run(self: *Quote, interpreter: *Rml.Interpreter) Rml.Result! Rml.Object {

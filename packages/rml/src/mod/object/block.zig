@@ -70,18 +70,6 @@ pub const Block = struct {
         };
     }
 
-    pub fn onCompare(a: *Block, other: Rml.Object) Rml.Ordering {
-        var ord = Rml.compare(Rml.getTypeId(a), other.getTypeId());
-
-        if (ord == .Equal) {
-            const b = Rml.forceObj(Block, other);
-
-            ord = a.compare(b.data.*);
-        }
-
-        return ord;
-    }
-
     pub fn compare(self: Block, other: Block) Rml.Ordering {
         var ord = BlockKind.compare(self.kind, other.kind);
 
@@ -92,17 +80,20 @@ pub const Block = struct {
         return ord;
     }
 
-    pub fn onFormat(self: *Block, fmt: Rml.Format, writer: std.io.AnyWriter) anyerror! void {
-        try writer.writeAll(self.kind.toOpenStrFmt(fmt));
+    pub fn format(self: *const Block, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+        const fmt = Rml.Format.fromStr(fmtStr) orelse .debug;
+        const w = if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any();
+        try w.writeAll(self.kind.toOpenStrFmt(fmt));
         for (self.items(), 0..) |item, i| {
-            try item.onFormat(fmt, writer);
+            try item.onFormat(fmt, w);
 
             if (i < self.length() - 1) {
-                try writer.writeAll(" ");
+                try w.writeAll(" ");
             }
         }
-        try writer.writeAll(self.kind.toCloseStrFmt(fmt));
+        try w.writeAll(self.kind.toCloseStrFmt(fmt));
     }
+
 
     /// Length of the block.
     pub fn length(self: *const Block) Rml.Int {
@@ -117,7 +108,7 @@ pub const Block = struct {
     }
 
     /// Convert a block to an array.
-    pub fn toArray(self: *Block) Rml.OOM! Rml.Obj(Rml.Array) {
+    pub fn toArray(self: *const Block) Rml.OOM! Rml.Obj(Rml.Array) {
         const allocator = Rml.getRml(self).blobAllocator();
         return try Rml.Obj(Rml.Array).wrap(Rml.getRml(self), Rml.getOrigin(self), try .create(allocator, self.items()));
     }
