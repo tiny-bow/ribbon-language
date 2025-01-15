@@ -23,14 +23,14 @@ pub const compare = MiscUtils.compare;
 pub const equal = MiscUtils.equal;
 pub const hashWith = MiscUtils.hashWith;
 
-pub const bindgen = @import("bindgen.zig");
-pub const builtin = @import("builtin.zig");
-pub const format = @import("format.zig");
-pub const interpreter = @import("interpreter.zig");
-pub const object = @import("object.zig");
-pub const parser = @import("parser.zig");
-pub const source = @import("source.zig");
-pub const storage = @import("storage.zig");
+pub const bindgen = @import("Rml/bindgen.zig");
+pub const builtin = @import("Rml/builtin.zig");
+pub const format = @import("Rml/format.zig");
+pub const interpreter = @import("Rml/interpreter.zig");
+pub const object = @import("Rml/object.zig");
+pub const parser = @import("Rml/parser.zig");
+pub const source = @import("Rml/source.zig");
+pub const storage = @import("Rml/storage.zig");
 
 pub const Nil = extern struct {
     pub fn onFormat(_: *Nil, _: Format, w: std.io.AnyWriter) anyerror! void {

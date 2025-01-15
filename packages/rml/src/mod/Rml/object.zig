@@ -2,7 +2,7 @@ const std = @import("std");
 const MiscUtils = @import("Utils").Misc;
 const TypeUtils = @import("Utils").Type;
 
-const Rml = @import("root.zig");
+const Rml = @import("../Rml.zig");
 
 
 pub const array = @import("object/array.zig");

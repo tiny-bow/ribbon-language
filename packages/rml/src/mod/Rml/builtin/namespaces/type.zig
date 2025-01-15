@@ -1,4 +1,4 @@
-const Rml = @import("../../root.zig");
+const Rml = @import("../../../Rml.zig");
 
 
 /// Get the type of an object
@@ -9,7 +9,10 @@ pub fn @"of"(obj: Rml.Object) Rml.OOM! Rml.Obj(Rml.Symbol) {
 }
 
 /// Determine if an object is of type `nil`
-pub fn @"nil?"(obj: Rml.Object) Rml.Bool { return Rml.equal(obj.getTypeId(), Rml.TypeId.of(Rml.Nil)); }
+pub fn @"nil?"(obj: Rml.Object) Rml.Bool {
+    Rml.log.warn("Nil? {}", .{obj});
+    return Rml.equal(obj.getTypeId(), Rml.TypeId.of(Rml.Nil));
+}
 
 /// Determine if an object is of type `bool`
 pub fn @"bool?"(obj: Rml.Object) Rml.Bool { return Rml.equal(obj.getTypeId(), Rml.TypeId.of(Rml.Bool)); }

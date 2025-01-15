@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Rml = @import("root.zig");
+const Rml = @import("../Rml.zig");
 
 
 
@@ -104,6 +104,14 @@ pub const Interpreter = struct {
                 Rml.log.interpreter.debug("looking up symbol {}", .{symbol});
 
                 break :value self.lookup(symbol) orelse {
+                    Rml.log.interpreter.err("failed to lookup symbol {}", .{symbol});
+                    Rml.log.interpreter.err("evaluation_env: {debug}", .{self.evaluation_env.data.keys()});
+                    Rml.log.interpreter.err("evidence_env: {debug}", .{self.evidence_env.data.keys()});
+                    Rml.log.interpreter.err("global_env: {debug}", .{Rml.getRml(self).global_env.data.keys()});
+                    Rml.log.interpreter.err("namespace_env: {debug}", .{Rml.getRml(self).namespace_env.data.keys()});
+                    for (Rml.getRml(self).namespace_env.data.keys()) |key| {
+                        Rml.log.interpreter.err("namespace {message}: {debug}", .{key, Rml.getRml(self).namespace_env.data.get(key).?});
+                    }
                     try self.abort(expr.getOrigin(), error.UnboundSymbol, "no symbol `{s}` in evaluation environment", .{symbol});
                 };
             } else if (Rml.castObj(Rml.Block, expr)) |block| {

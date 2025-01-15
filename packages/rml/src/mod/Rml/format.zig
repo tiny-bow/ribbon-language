@@ -1,7 +1,7 @@
 const std = @import("std");
 const TextUtils = @import("Utils").Text;
 
-const Rml = @import("root.zig");
+const Rml = @import("../Rml.zig");
 
 
 pub const Format = enum {

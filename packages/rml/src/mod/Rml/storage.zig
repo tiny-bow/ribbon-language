@@ -1,7 +1,7 @@
 const std = @import("std");
 const MiscUtils = @import("Utils").Misc;
 
-const Rml = @import("root.zig");
+const Rml = @import("../Rml.zig");
 
 pub const ARENA_RETAIN_AMOUNT = 1024 * 1024 * 16;
 const Map = std.ArrayHashMapUnmanaged([]const u8, void, MiscUtils.SimpleHashContext, true);

@@ -1,6 +1,6 @@
 const TypeUtils = @import("Utils").Type;
 
-const Rml = @import("root.zig");
+const Rml = @import("../Rml.zig");
 
 pub const global = @import("builtin/global.zig");
 

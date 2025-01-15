@@ -1,7 +1,7 @@
 const std = @import("std");
 const MiscUtils = @import("Utils").Misc;
 
-const Rml = @import("../root.zig");
+const Rml = @import("../../Rml.zig");
 
 
 pub const Domain = std.ArrayHashMapUnmanaged(Rml.Obj(Rml.Symbol), void, MiscUtils.SimpleHashContext, true);
@@ -152,7 +152,7 @@ pub const Env = struct {
         inline for (comptime std.meta.fields(T)) |field| {
             const sym: Rml.Obj(Rml.Symbol) = try .wrap(rml, origin, try .create(rml, field.name));
 
-            if (comptime std.mem.startsWith(u8, @typeName(field.type), "object.Obj")) { // TODO: this check really needs to be more robust
+            if (comptime std.mem.startsWith(u8, @typeName(field.type), "Rml.object.Obj")) { // TODO: this check really needs to be more robust
                 self.bind(sym, @field(namespace, field.name).typeErase()) catch |err| {
                     if (err == error.OutOfMemory) return error.OutOfMemory
                     else @panic(@errorName(err));

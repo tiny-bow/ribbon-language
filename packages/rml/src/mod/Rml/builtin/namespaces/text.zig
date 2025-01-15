@@ -4,7 +4,7 @@
 const std = @import("std");
 const TextUtils = @import("Utils").Text;
 
-const Rml = @import("../../root.zig");
+const Rml = @import("../../../Rml.zig");
 
 
 /// given a char, gives a symbol representing the unicode general category

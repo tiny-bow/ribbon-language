@@ -2,7 +2,7 @@ const std = @import("std");
 const TextUtils = @import("Utils").Text;
 const TypeUtils = @import("Utils").Type;
 
-const Rml = @import("root.zig");
+const Rml = @import("../Rml.zig");
 
 
 
@@ -286,7 +286,7 @@ pub fn fromObject(comptime T: type, _: *Rml, value: Rml.Object) Rml.Error! T {
         else => {
             if (T == Rml.Object) {
                 return value;
-            } else if (comptime std.mem.startsWith(u8, @typeName(T), "object.Obj(")) {
+            } else if (comptime std.mem.startsWith(u8, @typeName(T), "Rml.object.Obj")) {
                 const O = @typeInfo(tInfo.@"struct".fields[0].type).pointer.child;
 
                 if (!Rml.equal(Rml.TypeId.of(O), value.getTypeId())) {
@@ -322,12 +322,11 @@ pub fn ObjectRepr(comptime T: type) type {
 
             .pointer => |info|
                 if (@typeInfo(info.child) == .@"fn") Rml.Obj(Rml.Procedure)
-                else if (info.alignment == Rml.object.OBJ_ALIGN) ObjectRepr(info.child)
-                     else if (info.size == .One and Rml.isBuiltinType(info.child)) Rml.Obj(info.child)
-                        else Rml.Obj(T),
+                else if (info.size == .One and Rml.isBuiltinType(info.child)) Rml.Obj(info.child)
+                    else Rml.Obj(T),
 
             .@"struct" =>
-                if (std.mem.startsWith(u8, @typeName(T), "object.Obj")) T
+                if (std.mem.startsWith(u8, @typeName(T), "Rml.object.Obj")) T
                 else Rml.Obj(T),
 
             .@"union" => Rml.Obj(T),
@@ -365,12 +364,11 @@ pub fn toObject(rml: *Rml, origin: Rml.Origin, value: anytype) Rml.OOM! ObjectRe
 
             .pointer => |info|
                 if (@typeInfo(info.child) == .@"fn") @compileError("wrap functions with wrapNativeFunction")
-                else if (comptime info.alignment == Rml.object.OBJ_ALIGN) Rml.getObj(value)
-                     else if (comptime info.size == .One and Rml.isBuiltinType(info.child)) Rml.Obj(T).wrap(rml, origin, value.*)
-                        else Rml.Obj(T).wrap(rml, origin, value),
+                else if (comptime info.size == .One and Rml.isBuiltinType(info.child)) Rml.Obj(T).wrap(rml, origin, value.*)
+                    else Rml.Obj(T).wrap(rml, origin, value),
 
             .@"struct" =>
-                if (comptime std.mem.startsWith(u8, @typeName(T), "object.Obj")) value
+                if (comptime std.mem.startsWith(u8, @typeName(T), "Rml.object.Obj")) value
                 else Rml.Obj(T).wrap(rml, origin, value),
 
             .@"union" =>
@@ -414,15 +412,14 @@ pub fn toObjectConst(rml: *Rml, origin: Rml.Origin, comptime value: anytype) Rml
 
             .pointer => |info|
                 if (@typeInfo(info.child) == .@"fn") wrapNativeFunction(rml, origin, value)
-                else if (comptime info.alignment == Rml.object.OBJ_ALIGN) Rml.getObj(value)
-                     else if (comptime info.size == .One and Rml.isBuiltinType(info.child)) Rml.Obj(info.child).wrap(rml, origin, value.*)
-                        else { // TODO: remove compileError when not frequently adding builtins
-                            @compileError(std.fmt.comptimePrint("not builtin type {} {}", .{info, Rml.isBuiltinType(info.child)}));
-                            // break :x Rml.Obj(T).wrap(rml, origin, value);
-                        },
+                else if (comptime info.size == .One and Rml.isBuiltinType(info.child)) Rml.Obj(info.child).wrap(rml, origin, value.*)
+                    else { // TODO: remove compileError when not frequently adding builtins
+                        @compileError(std.fmt.comptimePrint("not builtin type {} {}", .{info, Rml.isBuiltinType(info.child)}));
+                        // break :x Rml.Obj(T).wrap(rml, origin, value);
+                    },
 
             .@"struct", .@"union", =>
-                if (comptime std.mem.startsWith(u8, @typeName(T), "object.Rml.Obj")) value
+                if (comptime std.mem.startsWith(u8, @typeName(T), "Rml.object.Obj")) value
                 else Rml.Obj(T).wrap(rml, origin, value),
 
             .optional =>

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Rml = @import("../root.zig");
+const Rml = @import("../../Rml.zig");
 
 
 /// Creates a string from any sequence of objects. If there are no objects, the string will be empty.
