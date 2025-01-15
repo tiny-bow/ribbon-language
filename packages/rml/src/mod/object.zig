@@ -49,7 +49,7 @@ pub const Header = struct {
         self.* = Header {
             .rml = rml,
             .blob_id = rml.blobId(),
-            .type_id = Rml.TypeId.of(T),
+            .type_id = comptime Rml.TypeId.of(T),
             .vtable = VTable.of(T),
             .origin = origin,
             .properties = .{},
@@ -293,15 +293,16 @@ pub fn isUserdata(obj: Object) bool {
 }
 
 pub fn isBuiltinType(comptime T: type) bool {
-    return comptime {
-        const typeId = Rml.TypeId.of(T);
-
-        for (std.meta.fields(@TypeOf(Rml.builtin.types))) |builtin| {
-            if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.types, builtin.name)))) return true;
+    comptime {
+        for (std.meta.fieldNames(@TypeOf(Rml.builtin.types))) |builtinName| {
+            const builtin = @field(Rml.builtin.types, builtinName);
+            if (builtin == T) {
+                return true;
+            } // else @compileLog("builtin type: " ++ @typeName(builtin) ++ " vs " ++ " " ++ @typeName(T));
         }
 
         return false;
-    };
+    }
 }
 
 pub fn isBuiltin(obj: Object) bool {

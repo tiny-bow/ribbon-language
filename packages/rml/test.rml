@@ -99,12 +99,10 @@ assert-eq "TEST" (text/uppercase "test")
 assert (text/lowercase? 't')
 assert (not (text/lowercase? 'T'))
 
-print-ln (type/of (type/of 0))
-
-; FIXME: failing because of a bug in bindgen? error says Obj(Symbol) != Symbol
-; assert-eq 'i64 (type/of 0)
-; assert-eq 'u21 (type/of 't')
-; assert-eq 'GenCatData.Gc (type/of (text/category 't'))
+assert-eq 'Int (type/of 0)
+assert-eq 'Char (type/of 't')
+assert-eq 'Symbol (type/of (type/of 0))
+assert-eq 'native:GenCatData/Gc (type/of (text/category 't'))
 
 local fail-tester = fun x =>
     print-ln "this should print, but then we fail " x

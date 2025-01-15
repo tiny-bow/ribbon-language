@@ -9,10 +9,10 @@ pub const namespaces = .{
     .type = @import("builtin/namespaces/type.zig"),
 };
 
-
 pub const types = TypeUtils.structConcat(.{value_types, object_types});
 
 pub const value_types = TypeUtils.structConcat(.{atom_types, data_types});
+pub const object_types = TypeUtils.structConcat(.{source_types, collection_types});
 
 pub const atom_types = .{
     .Nil = Rml.Nil,
@@ -32,8 +32,6 @@ pub const data_types = .{
     .Writer = Rml.Writer,
     .Cell = Rml.Cell,
 };
-
-pub const object_types = TypeUtils.structConcat(.{source_types, collection_types});
 
 pub const source_types = .{
     .Block = Rml.Block,

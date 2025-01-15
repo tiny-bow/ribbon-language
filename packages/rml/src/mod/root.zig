@@ -14,7 +14,7 @@ pub const log = struct {
 
 const Rml = @This();
 
-pub const TypeId = TypeUtils.TypeId;
+pub const TypeId = bindgen.TypeId;
 
 pub const IOError = MiscUtils.IOError;
 pub const SimpleHashContext = MiscUtils.SimpleHashContext;

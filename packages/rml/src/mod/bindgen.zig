@@ -102,126 +102,6 @@ pub fn Support (comptime T: type) type {
     };
 }
 
-
-pub fn fmtNativeType(comptime T: type) []const u8 {
-    return comptime switch(T) {
-        else => switch (@typeInfo(T)) {
-            .void, .null, .undefined, .noreturn => "Nil",
-            .@"opaque" => "Opaque",
-            .bool => "Bool",
-            .int => |info| std.fmt.comptimePrint("{u}{}", .{switch (info.signedness) { .signed => 'S', .unsigned => 'U' }, info.bits}),
-            .float => |info| std.fmt.comptimePrint("F{}", .{info.bits}),
-            .error_set => "Error",
-            .error_union => |info| fmtNativeType(info.error_set) ++ "! " ++ fmtNativeType(info.payload),
-            .pointer => |info|
-                if (@typeInfo(info.child) == .@"fn") fmtNativeType(info.child)
-                else switch (info.size) {
-                    .C, .One, .Many =>
-                        if (info.alignment == Rml.object.OBJ_ALIGN) fmtNativeType(info.child)
-                        else "*" ++ fmtNativeType(info.child),
-                    .Slice => "[]" ++ fmtNativeType(info.child),
-                },
-            .array => |info| std.fmt.comptimePrint("[{}]", .{info.len} ++ fmtNativeType(info.child)),
-            .vector => |info| std.fmt.comptimePrint("<{}>", .{info.len} ++ fmtNativeType(info.child)),
-            .optional => |info| "?" ++ fmtNativeType(info.child),
-            .@"struct" => fmtTypeName(T),
-            .@"enum" => fmtTypeName(T),
-            .@"union" => fmtTypeName(T),
-            .@"fn" => |info| fun: {
-                var x: []const u8 = "(";
-
-                for (info.params) |param| {
-                    x = x ++ fmtNativeType(param.type.?) ++ " ";
-                }
-
-                x = x ++ "-> " ++ fmtNativeType(info.return_type.?);
-
-                break :fun x ++ ")";
-            },
-            .enum_literal => "Obj(Symbol)",
-            else => fmtTypeName(T),
-        }
-    };
-}
-
-pub fn fmtTypeName(comptime T: type) []const u8 {
-    const OBJECT = "object/Obj_object.ObjData_";
-    const OBJ_GENERIC = "/Memory_object.ObjData_";
-    const OBJ_MEMORY = "/Memory_object/ObjData_object.ObjData_";
-    const OBJ_START = "object/Obj_";
-    const END_MEMORY = ".Memory";
-    const OBJ_END_MEMORY = END_MEMORY ++ "_";
-    return comptime fmt: {
-        var out = zigNameToPath(@typeName(T));
-        if (std.mem.eql(u8, out, OBJECT)) out = "Rml.Object";
-        if (std.mem.endsWith(u8, out, OBJ_MEMORY)) out = toCamel(out[0..out.len - OBJ_MEMORY.len]);
-        if (std.mem.startsWith(u8, out, OBJ_START)) {
-            out =
-                if (std.mem.endsWith(u8, out, OBJ_END_MEMORY)) toCamel(out[OBJ_START.len..out.len - OBJ_END_MEMORY.len])
-                else toCamel(out[OBJ_START.len..]);
-        }
-        if (std.mem.endsWith(u8, out, END_MEMORY)) out = toCamel(out[0..out.len - END_MEMORY.len]);
-        if (std.mem.endsWith(u8, out, OBJ_GENERIC)) out = toCamel(out[0..out.len - OBJ_GENERIC.len]);
-        break :fmt out;
-    };
-}
-
-pub fn toCamel(comptime name: []const u8) []const u8 {
-    const uppercaseEdgeChars = " _-";
-    comptime var edges = [1]usize {0} ** (name.len + 1);
-    comptime var edgesLen = 1;
-    inline for (name, 1..) |b, i| {
-        if (std.mem.indexOfScalar(u8, uppercaseEdgeChars, b) != null) {
-            edges[edgesLen] = i;
-            edgesLen += 1;
-        }
-    }
-    comptime var out = [1]u8 {0} ** name.len;
-    comptime var outLen = 0;
-    comptime var i = 0;
-    comptime var edgeIndex = 0;
-    inline while (i < name.len) : (i += 1) {
-        if (i == edges[edgeIndex]) {
-            edgeIndex += 1;
-
-            const offset = if (i == 0) 0 else 1;
-            out[outLen] = std.ascii.toUpper(name[i + offset]);
-            i += offset;
-        } else {
-            out[outLen] = name[i];
-        }
-        outLen += 1;
-    }
-    return out[0..outLen];
-}
-
-pub fn zigNameToPath(comptime name: []const u8) []const u8 {
-    @setEvalBranchQuota(10000);
-    const ESCAPE_CHARS = " ,;:[]{}()<>+-*/%&|^!~@#$?=";
-    comptime var dotIndices = [1]usize {0} ** name.len;
-    comptime var dotIndicesLen = 0;
-    comptime var escapeIndices = [1]usize {0} ** name.len;
-    comptime var escapeIndicesLen = 0;
-    inline for (name, 0..) |b, i| {
-        if (b == '.') {
-            dotIndices[dotIndicesLen] = i;
-            dotIndicesLen += 1;
-        }
-        if (std.mem.indexOfScalar(u8, ESCAPE_CHARS, b) != null) {
-            escapeIndices[escapeIndicesLen] = i;
-            escapeIndicesLen += 1;
-        }
-    }
-    comptime var path = @as(*const [name.len]u8, @ptrCast(name.ptr)).*;
-    for (dotIndices[0..dotIndicesLen], 0..) |dotIndex, i| {
-        if (i < dotIndicesLen - 1) {
-            path[dotIndex] = '/';
-        }
-    }
-    for (escapeIndices[0..escapeIndicesLen]) |escapeIndex| path[escapeIndex] = '_';
-    return &path;
-}
-
 pub const VTABLE_METHOD_NAMES
      = std.meta.fieldNames(Rml.object.VTable.ObjDataFunctions)
     ++ std.meta.fieldNames(Rml.object.VTable.ObjMemoryFunctions)
@@ -447,7 +327,7 @@ pub fn ObjectRepr(comptime T: type) type {
                         else Rml.Obj(T),
 
             .@"struct" =>
-                if (std.mem.startsWith(u8, @typeName(T), "object.Rml.Obj")) T
+                if (std.mem.startsWith(u8, @typeName(T), "object.Obj")) T
                 else Rml.Obj(T),
 
             .@"union" => Rml.Obj(T),
@@ -490,7 +370,7 @@ pub fn toObject(rml: *Rml, origin: Rml.Origin, value: anytype) Rml.OOM! ObjectRe
                         else Rml.Obj(T).wrap(rml, origin, value),
 
             .@"struct" =>
-                if (comptime std.mem.startsWith(u8, @typeName(T), "object.Rml.Obj")) value
+                if (comptime std.mem.startsWith(u8, @typeName(T), "object.Obj")) value
                 else Rml.Obj(T).wrap(rml, origin, value),
 
             .@"union" =>
@@ -536,13 +416,14 @@ pub fn toObjectConst(rml: *Rml, origin: Rml.Origin, comptime value: anytype) Rml
                 if (@typeInfo(info.child) == .@"fn") wrapNativeFunction(rml, origin, value)
                 else if (comptime info.alignment == Rml.object.OBJ_ALIGN) Rml.getObj(value)
                      else if (comptime info.size == .One and Rml.isBuiltinType(info.child)) Rml.Obj(info.child).wrap(rml, origin, value.*)
-                        else x: { // TODO: remove compileLog when not frequently adding builtins
-                            // @compileLog("not builtin type: " ++ @typeName(info.child));
-                            break :x Rml.Obj(T).wrap(rml, origin, value);
+                        else { // TODO: remove compileError when not frequently adding builtins
+                            @compileError(std.fmt.comptimePrint("not builtin type {} {}", .{info, Rml.isBuiltinType(info.child)}));
+                            // break :x Rml.Obj(T).wrap(rml, origin, value);
                         },
 
             .@"struct", .@"union", =>
-                Rml.Obj(T).wrap(rml, origin, value),
+                if (comptime std.mem.startsWith(u8, @typeName(T), "object.Rml.Obj")) value
+                else Rml.Obj(T).wrap(rml, origin, value),
 
             .optional =>
                 if (value) |v| v: {
@@ -598,4 +479,135 @@ pub fn wrapNativeFunction(rml: *Rml, origin: Rml.Origin, comptime nativeFunc: an
             return objWrapper.typeErase();
         }
     }.method });
+}
+
+
+pub const TypeId = struct {
+    typename: [*:0]const u8,
+
+    pub fn of(comptime T: type) TypeId {
+        return TypeId { .typename = fmtNativeType(T) };
+    }
+
+    pub fn name(self: TypeId) []const u8 {
+        return std.mem.span(self.typename);
+    }
+
+    pub fn format(self: TypeId, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror!void {
+        try w.print("{s}", .{self.name()});
+    }
+};
+
+pub fn fmtNativeType(comptime T: type) [:0]const u8 {
+    return comptime switch(T) {
+        else =>
+            if (Rml.isBuiltinType(T)) &fmtBuiltinTypeName(T)
+            else switch (@typeInfo(T)) {
+                .void, .null, .undefined, .noreturn => "Nil",
+                .@"opaque" => "Opaque",
+                .bool => "Bool",
+                .int => |info| std.fmt.comptimePrint("{u}{}", .{switch (info.signedness) { .signed => 'S', .unsigned => 'U' }, info.bits}),
+                .float => |info| std.fmt.comptimePrint("F{}", .{info.bits}),
+                .error_set => "Error",
+                .error_union => |info| fmtNativeType(info.error_set) ++ "! " ++ fmtNativeType(info.payload),
+                .pointer => |info|
+                    if (@typeInfo(info.child) == .@"fn") fmtNativeType(info.child)
+                    else switch (info.size) {
+                        .C, .One, .Many =>
+                            if (info.alignment == Rml.object.OBJ_ALIGN) fmtNativeType(info.child)
+                            else "*" ++ fmtNativeType(info.child),
+                        .Slice => "[]" ++ fmtNativeType(info.child),
+                    },
+                .array => |info| std.fmt.comptimePrint("[{}]", .{info.len} ++ fmtNativeType(info.child)),
+                .vector => |info| std.fmt.comptimePrint("<{}>", .{info.len} ++ fmtNativeType(info.child)),
+                .optional => |info| "?" ++ fmtNativeType(info.child),
+                .@"struct" => &fmtTypeName(T),
+                .@"enum" => &fmtTypeName(T),
+                .@"union" => &fmtTypeName(T),
+                .@"fn" => |info| fun: {
+                    var x: []const u8 = "(";
+
+                    for (info.params) |param| {
+                        x = x ++ fmtNativeType(param.type.?) ++ " ";
+                    }
+
+                    x = x ++ "-> " ++ fmtNativeType(info.return_type.?);
+
+                    break :fun x ++ ")";
+                },
+                .enum_literal => "Symbol",
+                else => fmtTypeName(T),
+            }
+    };
+}
+
+pub fn builtinTypeNameLen(comptime T: type) usize {
+    comptime {
+        for (std.meta.fieldNames(@TypeOf(Rml.builtin.types))) |builtinName| {
+            const builtin = @field(Rml.builtin.types, builtinName);
+            if (builtin == T) return builtinName.len;
+        }
+
+        @compileError("fmtBuiltinTypeName: " ++ @typeName(T) ++ " is not a builtin type");
+    }
+}
+
+pub fn fmtBuiltinTypeName(comptime T: type) [builtinTypeNameLen(T):0] u8 {
+    comptime {
+        for (std.meta.fieldNames(@TypeOf(Rml.builtin.types))) |builtinName| {
+            const builtin = @field(Rml.builtin.types, builtinName);
+            if (builtin == T) return @as(*const [builtinTypeNameLen(T):0] u8, @ptrCast(builtinName.ptr)).*;
+        }
+
+        @compileError("fmtBuiltinTypeName: " ++ @typeName(T) ++ " is not a builtin type");
+    }
+}
+
+pub fn typeNameLen(comptime T: type) usize {
+    comptime return
+        if (Rml.isBuiltinType(T)) builtinTypeNameLen(T)
+        else externTypeNameLen(T)
+    ;
+}
+
+pub const NATIVE_PREFIX = "native:";
+
+pub fn externTypeNameLen(comptime T: type) usize {
+    comptime return
+        if (Rml.isBuiltinType(T)) @compileError("externTypeNameLen used with builtin type")
+        else @typeName(T).len + NATIVE_PREFIX.len
+    ;
+}
+
+pub fn fmtExternTypeName(comptime T: type) [externTypeNameLen(T):0]u8 {
+    @setEvalBranchQuota(10_000);
+
+    comptime
+        if (Rml.isBuiltinType(T)) @compileLog("fmtExternTypeName used with builtin type")
+        else {
+            const baseName = @typeName(T).*;
+            var outName = std.mem.zeroes([externTypeNameLen(T):0]u8);
+            for (NATIVE_PREFIX, 0..) |c, i| {
+                outName[i] = c;
+            }
+
+            for (baseName, 0..) |c, i| {
+                if (c == '.') {
+                    outName[i + NATIVE_PREFIX.len] = '/';
+                } else if (std.mem.indexOfScalar(u8, "()[]{}", c) != null) {
+                    outName[i + NATIVE_PREFIX.len] = '_';
+                } else {
+                    outName[i + NATIVE_PREFIX.len] = c;
+                }
+            }
+
+            return outName;
+        };
+}
+
+pub fn fmtTypeName(comptime T: type) [typeNameLen(T):0]u8 {
+    comptime return
+        if (Rml.isBuiltinType(T)) fmtBuiltinTypeName(T)
+        else fmtExternTypeName(T)
+    ;
 }
