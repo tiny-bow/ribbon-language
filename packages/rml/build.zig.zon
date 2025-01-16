@@ -3,6 +3,7 @@
     .version = "0.0.0",
     .dependencies = .{
         .Utils = .{ .path = "../utils/" },
+        .Rir = .{ .path = "../rir/" },
     },
     .paths = .{
         "build.zig",

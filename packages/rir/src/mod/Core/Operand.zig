@@ -1,4 +1,4 @@
-const Core = @import("root.zig");
+const Core = @import("../Core.zig");
 
 
 pub const Operand = union(enum) {
@@ -11,7 +11,6 @@ pub const Operand = union(enum) {
     global: Core.Ref(Core.GlobalId),
     upvalue: Core.UpvalueId,
     handler_set: Core.HandlerSetId,
-    evidence: Core.EvidenceId,
     local: Core.LocalId,
 
     pub const Immediate = packed struct {
@@ -33,7 +32,6 @@ pub const Operand = union(enum) {
                 .block,
                 .function,
                 .handler_set,
-                .evidence,
              => true,
         };
     }

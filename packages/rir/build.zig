@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     const Core = b.addModule("Core", .{
-        .root_source_file = b.path("src/mod/Core/root.zig"),
+        .root_source_file = b.path("src/mod/Core.zig"),
         .target = defaultTarget,
         .optimize = defaultOptimize,
     });
@@ -50,7 +50,7 @@ pub fn build(b: *std.Build) !void {
     main.root_module.addImport("Rir:RbcGenerator", RbcGenerator);
 
     const testCore = b.addTest(.{
-        .root_source_file = b.path("src/mod/Core/root.zig"),
+        .root_source_file = b.path("src/mod/Core.zig"),
     });
     testCore.root_module.addImport("Utils", Utils.module("Utils"));
     testCore.root_module.addImport("ISA", ISA.module("ISA"));

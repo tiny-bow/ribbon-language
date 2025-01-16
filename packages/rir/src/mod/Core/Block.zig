@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Core = @import("root.zig");
+const Core = @import("../Core.zig");
 
 const Block = @This();
 
@@ -8,11 +8,12 @@ const Block = @This();
 function: *Core.Function,
 parent: ?*Block,
 id: Core.BlockId,
+name: Core.Name,
 has_exit: bool = false,
 instructions: std.ArrayListUnmanaged(Core.Instruction) = .{},
 
 
-pub fn init(function: *Core.Function, parent: ?*Block, id: Core.BlockId) !*Block {
+pub fn init(function: *Core.Function, parent: ?*Block, id: Core.BlockId, name: Core.Name) !*Block {
     const ptr = try function.module.root.allocator.create(Block);
     errdefer function.module.root.allocator.destroy(ptr);
 
@@ -20,6 +21,7 @@ pub fn init(function: *Core.Function, parent: ?*Block, id: Core.BlockId) !*Block
         .function = function,
         .parent = parent,
         .id = id,
+        .name = name,
     };
 
     return ptr;
@@ -30,11 +32,16 @@ pub fn deinit(self: *Block) void {
     self.function.module.root.allocator.destroy(self);
 }
 
-pub fn format(self: *const Block, comptime _: []const u8, _: anytype, writer: anytype) !void {
-    try writer.print("{}:\n", .{self.id});
-    for (self.instructions.items, 0..) |inst, i| {
-        try writer.print("    {}  {}\n", .{i, inst});
-    }
+pub fn onFormat(self: *const Block, formatter: Core.Formatter) !void {
+    try formatter.fmt(self.name);
+    try formatter.writeAll(":");
+    try formatter.beginBlock();
+        for (self.instructions.items, 0..) |inst, i| {
+            try formatter.print("{} ", .{i});
+            try formatter.fmt(inst);
+            if (i < self.instructions.items.len - 1) try formatter.endLine();
+        }
+    try formatter.endBlock();
 }
 
 inline fn bCast(b: anytype) u8 {

@@ -1,13 +1,27 @@
 const std = @import("std");
+const MiscUtils = @import("Utils").Misc;
 
-const Core = @import("root.zig");
+const Core = @import("../Core.zig");
 const IR = @This();
 
 
 allocator: std.mem.Allocator,
-type_map: Core.Type.Map = .{},
+interner: Interner = .{},
+type_map: Core.types.TypeMap = .{},
 foreign_list: std.ArrayListUnmanaged(*Core.Foreign) = .{},
 module_list: std.ArrayListUnmanaged(*Core.Module) = .{},
+
+pub const Interner = std.ArrayHashMapUnmanaged(Core.Name, void, InternerContext, true);
+pub const InternerContext = struct {
+    pub fn eql(_: InternerContext, a: anytype, b: anytype, _: anytype) bool {
+        return @intFromPtr(a.ptr) == @intFromPtr(b.ptr)
+            or (a.len == b.len and std.mem.eql(u8, a.ptr[0..a.len], b.ptr[0..b.len]));
+    }
+
+    pub fn hash(_: InternerContext, a: anytype) u32 {
+        return MiscUtils.fnv1a_32(a);
+    }
+};
 
 
 pub fn init(alloc: std.mem.Allocator) !IR {
@@ -17,6 +31,12 @@ pub fn init(alloc: std.mem.Allocator) !IR {
 }
 
 pub fn deinit(self: *IR) void {
+    for (self.interner.keys()) |name| {
+        self.allocator.free(name);
+    }
+
+    self.interner.deinit(self.allocator);
+
     self.type_map.deinit(self.allocator);
 
     for (self.foreign_list.items) |f| {
@@ -32,6 +52,21 @@ pub fn deinit(self: *IR) void {
     self.module_list.deinit(self.allocator);
 }
 
+/// Intern a string, yielding a Name
+pub fn intern(self: *IR, name: []const u8) !Core.Name {
+    if (self.interner.getKeyAdapted(name, InternerContext{})) |interned| {
+        return interned;
+    }
+
+    const interned = try self.allocator.allocWithOptions(u8, name.len, 1, 0);
+
+    @memcpy(interned, name);
+
+    try self.interner.put(self.allocator, interned, {});
+
+    return interned;
+}
+
 
 /// If the type is not found in the map,
 /// calls `Type.clone` on the input and puts the clone in the map
@@ -44,15 +79,15 @@ pub inline fn typeIdPreallocated(self: *IR, ty: Core.Type) !Core.TypeId {
     return self.type_map.typeIdPreallocated(self.allocator, ty);
 }
 
-pub inline fn typeFromNative(self: *const Core, comptime T: type) !Core.Type {
-    return self.type_map.typeFromNative(T, self.allocator);
+pub inline fn typeFromNative(self: *const Core, comptime T: type, parameterNames: ?[]const Core.Name) !Core.Type {
+    return self.type_map.typeFromNative(T, self.allocator, parameterNames);
 }
 
-pub inline fn typeIdFromNative(self: *IR, comptime T: type) !Core.TypeId {
-    return self.type_map.typeIdFromNative(T, self.allocator);
+pub inline fn typeIdFromNative(self: *IR, comptime T: type, parameterNames: ?[]const Core.Name) !Core.TypeId {
+    return self.type_map.typeIdFromNative(T, self.allocator, parameterNames);
 }
 
-pub inline fn getType(self: *IR, id: Core.TypeId) !Core.Type {
+pub inline fn getType(self: *const IR, id: Core.TypeId) !Core.Type {
     return self.type_map.getType(id);
 }
 
@@ -92,14 +127,14 @@ pub fn getForeign(self: *IR, id: Core.ForeignId) !*Core.Foreign {
 }
 
 
-pub fn module(self: *IR) !*Core.Module {
+pub fn module(self: *IR, name: Core.Name) !*Core.Module {
     const id = self.module_list.items.len;
 
     if (id >= Core.MAX_MODULES) {
         return error.InvalidModule;
     }
 
-    const mod = try Core.Module.init(self, @truncate(id));
+    const mod = try Core.Module.init(self, @enumFromInt(id), name);
     errdefer self.allocator.destroy(mod);
 
     try self.module_list.append(self.allocator, mod);
@@ -107,21 +142,21 @@ pub fn module(self: *IR) !*Core.Module {
     return mod;
 }
 
-pub fn getModule(self: *IR, id: Core.ModuleId) !*Core.Module {
-    if (id >= self.module_list.items.len) {
+pub fn getModule(self: *const IR, id: Core.ModuleId) !*Core.Module {
+    if (@intFromEnum(id) >= self.module_list.items.len) {
         return error.InvalidModule;
     }
 
-    return self.module_list.items[id];
+    return self.module_list.items[@intFromEnum(id)];
 }
 
-pub fn getGlobal(self: *IR, ref: Core.Ref(Core.GlobalId)) !*Core.Global {
+pub fn getGlobal(self: *const IR, ref: Core.Ref(Core.GlobalId)) !*Core.Global {
     const mod = try self.getModule(ref.module);
 
     return mod.getGlobal(ref.id);
 }
 
-pub fn getFunction(self: *IR, ref: Core.Ref(Core.FunctionId)) !*Core.Function {
+pub fn getFunction(self: *const IR, ref: Core.Ref(Core.FunctionId)) !*Core.Function {
     const mod = try self.getModule(ref.module);
 
     return mod.getFunction(ref.id);

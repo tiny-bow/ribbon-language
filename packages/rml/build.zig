@@ -15,6 +15,11 @@ pub fn build(b: *Build) !void {
     const config = b.addOptions();
     config.addOption(std.SemanticVersion, "version", manifest.version);
 
+    const Rir = b.dependency("Rir", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const Utils = b.dependency("Utils", .{
         .target = target,
         .optimize = optimize,

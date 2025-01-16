@@ -1,5 +1,5 @@
 const std = @import("std");
-const Core = @import("root.zig");
+const Core = @import("../Core.zig");
 
 const Foreign = @This();
 

@@ -1,14 +1,14 @@
 const std = @import("std");
 const MiscUtils = @import("Utils").Misc;
 
-const Core = @import("root.zig");
+const Core = @import("../Core.zig");
 
 const HandlerSet = @This();
 
 
 parent: *Core.Function,
 id: Core.HandlerSetId,
-handlers: std.ArrayHashMapUnmanaged(Core.EvidenceId, *Core.Function, MiscUtils.SimpleHashContext, false) = .{},
+handlers: std.ArrayHashMapUnmanaged(Core.TypeId, *Core.Function, MiscUtils.SimpleHashContext, false) = .{},
 
 
 pub fn init(parent: *Core.Function, id: Core.HandlerSetId) !*HandlerSet {
@@ -47,6 +47,6 @@ pub fn handler(self: *HandlerSet, evId: Core.TypeId) !*Core.Function {
     return func;
 }
 
-pub fn getHandler(self: *HandlerSet, evId: Core.EvidenceId) !*Core.Function {
-    return self.handlers.get(evId) orelse error.InvalidEvidence;
+pub fn getHandler(self: *HandlerSet, evId: Core.TypeId) !*Core.Function {
+    return self.handlers.get(evId) orelse error.InvalidEvidenceId;
 }
