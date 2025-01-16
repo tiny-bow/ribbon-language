@@ -85,22 +85,33 @@ pub const Type = union(enum) {
     pub fn formatMemory(self: Type, formatter: Core.Formatter, memory: []const u8) !void {
         switch (self) {
             .Nil => try formatter.writeAll("Nil"),
+
             .Bool => try formatter.writeAll(if (memory[0] == 1) "true" else "false"),
+
             .U8 => try formatter.fmt(memory[0]),
             .U16 => try formatter.fmt(@as(*const u16, @alignCast(@ptrCast(memory.ptr))).*),
             .U32 => try formatter.fmt(@as(*const u32, @alignCast(@ptrCast(memory.ptr))).*),
             .U64 => try formatter.fmt(@as(*const u64, @alignCast(@ptrCast(memory.ptr))).*),
+
             .S8 => try formatter.fmt(@as(*const i8, @alignCast(@ptrCast(memory.ptr))).*),
             .S16 => try formatter.fmt(@as(*const i16, @alignCast(@ptrCast(memory.ptr))).*),
             .S32 => try formatter.fmt(@as(*const i32, @alignCast(@ptrCast(memory.ptr))).*),
             .S64 => try formatter.fmt(@as(*const i64, @alignCast(@ptrCast(memory.ptr))).*),
+
             .F32 => try formatter.fmt(@as(*const f32, @alignCast(@ptrCast(memory.ptr))).*),
             .F64 => try formatter.fmt(@as(*const f64, @alignCast(@ptrCast(memory.ptr))).*),
-            .Block => try formatter.print("[{} @ {x}]", .{formatter.wrap(self), @intFromPtr(memory.ptr)}),
-            .HandlerSet => try formatter.print("[{} @ {x}]", .{formatter.wrap(self), @intFromPtr(memory.ptr)}),
+
+            inline
+                .Block,
+                .HandlerSet,
+                .Pointer,
+                .Sum,
+            => try formatter.print("[{} @ {x}]", .{formatter.wrap(self), @intFromPtr(memory.ptr)}),
+
             .Type => try @as(*const Type, @alignCast(@ptrCast(memory.ptr))).onFormat(formatter),
-            .Pointer => try formatter.print("[{} @ {x}]", .{formatter.wrap(self), @intFromPtr(memory.ptr)}),
+
             .Slice => try formatter.print("[{} @ {x} + {}]", .{formatter.wrap(self), @intFromPtr(memory.ptr), memory.len}),
+
             .Array => |info| {
                 const elem = try formatter.getIR().getType(info.element);
                 try formatter.print("array({})[", .{info.length});
@@ -116,6 +127,7 @@ pub const Type = union(enum) {
                 try formatter.endBlock();
                 try formatter.writeAll("]");
             },
+
             .Struct => |info| {
                 try formatter.fmt(info.name);
                 try formatter.writeAll("{");
@@ -123,7 +135,9 @@ pub const Type = union(enum) {
                     for (info.fields, 0..) |field, i| {
                         const T = try formatter.getIR().getType(field.type);
                         try formatter.print("{} {} = ", .{formatter.wrap(field.location), formatter.wrap(field.name)});
-                        try T.formatMemory(formatter, memory[@intFromEnum(field.location)..]); // TODO: this probably should be computing
+                        // FIXME: layout should be known by formatMemory, but
+                        // we haven't yet implemented a cache for it. Locations are not field offsets.
+                        try T.formatMemory(formatter, memory[@intFromEnum(field.location)..]);
                         if (i < info.fields.len - 1) {
                             try formatter.writeAll(",");
                             try formatter.endLine();
@@ -132,7 +146,9 @@ pub const Type = union(enum) {
                 try formatter.endBlock();
                 try formatter.writeAll("}");
             },
-            .Union => @panic("TODO"),
+
+            .Union => @panic("TODO union types"),
+
             .Product => |types| {
                 try formatter.writeAll("(");
                 try formatter.beginBlock();
@@ -147,7 +163,7 @@ pub const Type = union(enum) {
                 try formatter.endBlock();
                 try formatter.writeAll(")");
             },
-            .Sum => @panic("TODO"),
+
             .Function => try formatter.print("[{} @ {x}]", .{formatter.wrap(self), @intFromPtr(memory.ptr)}),
         }
     }
@@ -155,10 +171,21 @@ pub const Type = union(enum) {
     pub fn onFormat(self: Type, formatter: Core.Formatter) !void {
         switch (self) {
             .Nil => try formatter.writeAll("Nil"),
+
             .Bool => try formatter.writeAll("Bool"),
-            .U8 => try formatter.writeAll("U8"), .U16 => try formatter.writeAll("U16"), .U32 => try formatter.writeAll("U32"), .U64 => try formatter.writeAll("U64"),
-            .S8 => try formatter.writeAll("S8"), .S16 => try formatter.writeAll("S16"), .S32 => try formatter.writeAll("S32"), .S64 => try formatter.writeAll("S64"),
-            .F32 => try formatter.writeAll("F32"), .F64 => try formatter.writeAll("F64"),
+
+            .U8 => try formatter.writeAll("U8"),
+            .U16 => try formatter.writeAll("U16"),
+            .U32 => try formatter.writeAll("U32"),
+            .U64 => try formatter.writeAll("U64"),
+
+            .S8 => try formatter.writeAll("S8"),
+            .S16 => try formatter.writeAll("S16"),
+            .S32 => try formatter.writeAll("S32"),
+            .S64 => try formatter.writeAll("S64"),
+
+            .F32 => try formatter.writeAll("F32"),
+            .F64 => try formatter.writeAll("F64"),
 
             .Block => try formatter.writeAll("Block"),
             .HandlerSet => try formatter.writeAll("HandlerSet"),
