@@ -50,21 +50,22 @@ pub fn onFormat(self: *const Module, formatter: Core.Formatter) !void {
     defer _ = formatter.setModule(oldActiveModule);
 
     try formatter.writeAll("module ");
+    if (formatter.getShowIds()) try formatter.print("{} ", .{@intFromEnum(self.id)});
     try formatter.fmt(self.name);
-    try formatter.writeAll(":");
+    try formatter.writeAll(" =");
     try formatter.beginBlock();
-        try formatter.writeAll("globals:");
+        try formatter.writeAll("globals =");
         try formatter.beginBlock();
             for (self.global_list.items, 0..) |global, i| {
-                try formatter.print("{} ", .{i});
+                if (formatter.getShowIds()) try formatter.print("{} ", .{i});
                 try formatter.fmt(global);
                 if (i < self.global_list.items.len - 1) try formatter.endLine();
             }
         try formatter.endBlock();
-        try formatter.writeAll("functions:");
+        try formatter.writeAll("functions =");
         try formatter.beginBlock();
             for (self.function_list.items, 0..) |func, i| {
-                try formatter.print("{} ", .{i});
+                if (formatter.getShowIds()) try formatter.print("{} ", .{i});
                 try formatter.fmt(func);
                 if (i < self.function_list.items.len - 1) try formatter.endLine();
             }

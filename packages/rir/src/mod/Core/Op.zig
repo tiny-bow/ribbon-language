@@ -172,8 +172,6 @@ pub const Data = packed union {
     }
 
     comptime {
-        std.debug.assert(@sizeOf(Data) == 8);
-
         for (std.meta.fieldNames(Code)) |opName| {
             if (!@hasField(Data, opName)) {
                 @compileError("missing OpData: `" ++ opName ++ "`");

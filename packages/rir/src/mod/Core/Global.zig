@@ -38,11 +38,9 @@ pub fn onFormat(self: *const Global, formatter: Core.Formatter) !void {
 
     const T = try self.module.getType(self.type);
 
-    try formatter.writeAll("{ ");
     try formatter.fmt(self.name);
     try formatter.writeAll(": ");
     try formatter.fmt(self.type);
     try formatter.writeAll(" = ");
     try T.formatMemory(formatter, self.value);
-    try formatter.writeAll(" }");
 }

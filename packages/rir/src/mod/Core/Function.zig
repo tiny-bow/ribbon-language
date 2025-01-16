@@ -87,8 +87,9 @@ pub fn onFormat(self: *const Function, formatter: Core.Formatter) !void {
     defer _ = formatter.setFunction(oldActiveFunction);
 
     try formatter.fmt(self.name);
-    try formatter.writeAll(": ; ");
+    try formatter.writeAll(": ");
     try formatter.fmt(self.type);
+    try formatter.writeAll(" =");
     try formatter.beginBlock();
         for (self.blocks.items) |b| {
             try formatter.fmt(b);

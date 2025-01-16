@@ -33,11 +33,12 @@ pub fn deinit(self: *Block) void {
 }
 
 pub fn onFormat(self: *const Block, formatter: Core.Formatter) !void {
+    if (formatter.getShowIds()) try formatter.print("{} ", .{@intFromEnum(self.id)});
     try formatter.fmt(self.name);
     try formatter.writeAll(":");
     try formatter.beginBlock();
         for (self.instructions.items, 0..) |inst, i| {
-            try formatter.print("{} ", .{i});
+            if (formatter.getShowIndices()) try formatter.print("{} ", .{i});
             try formatter.fmt(inst);
             if (i < self.instructions.items.len - 1) try formatter.endLine();
         }

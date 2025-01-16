@@ -39,5 +39,9 @@ pub fn main() !void {
     var formatter = try RirCore.Formatter.init(&ir, stdout.any());
     defer formatter.deinit();
 
+    _ = formatter.setShowIds(true);
+    // _ = formatter.setShowIndices(false);
+    // _ = formatter.setShowOpCodes(false);
+    // _ = formatter.setShowEncoded(false);
     try formatter.fmt(module);
 }
