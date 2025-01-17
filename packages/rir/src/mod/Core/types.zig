@@ -49,8 +49,8 @@ pub const Type = union(enum) {
 
     pub fn clone(self: *const Type, allocator: std.mem.Allocator) !Type {
         switch (self.*) {
-            .Struct => |field_types| return Type { .Product = try allocator.dupe(Core.TypeId, field_types) },
-            .Union => |sum| return Type { .Union = try sum.clone(allocator) },
+            .Struct => |@"struct"| return Type { .Struct = try @"struct".clone(allocator) },
+            .Union => |@"union"| return Type { .Union = try @"union".clone(allocator) },
 
             .Product => |field_types| return Type { .Product = try allocator.dupe(Core.TypeId, field_types) },
             .Sum => |field_types| return Type { .Sum = try allocator.dupe(Core.TypeId, field_types) },
@@ -250,8 +250,8 @@ pub const Struct = struct {
 
     pub fn clone(self: *const Struct, allocator: std.mem.Allocator) !Struct {
         return Struct {
-            .discriminator = self.discriminator,
-            .fields = try allocator.dupe(Core.TypeId, self.fields),
+            .name = self.name,
+            .fields = try allocator.dupe(Field, self.fields),
         };
     }
 
@@ -307,8 +307,9 @@ pub const Union = struct {
 
     pub fn clone(self: *const Union, allocator: std.mem.Allocator) !Union {
         return Union {
+            .name = self.name,
             .discriminator = self.discriminator,
-            .fields = try allocator.dupe(Core.TypeId, self.fields),
+            .fields = try allocator.dupe(Field, self.fields),
         };
     }
 
@@ -354,7 +355,7 @@ pub const Function = struct {
         const effects = try allocator.dupe(Core.TypeId, self.effects);
         errdefer allocator.free(effects);
 
-        const parameters = try allocator.dupe(Core.TypeId, self.parameters);
+        const parameters = try allocator.dupe(Parameter, self.parameters);
         errdefer allocator.free(parameters);
 
         return Function {
@@ -379,15 +380,15 @@ pub const Function = struct {
 };
 
 const BASIC_TYPE_NAMES = [_][:0]const u8 {
-    "void",
-    "bool",
-    "u8", "u16", "u32", "u64",
-    "s8", "s16", "s32", "s64",
-    "f32", "f64",
+    "Nil",
+    "Bool",
+    "U8", "U16", "U32", "U64",
+    "S8", "S16", "S32", "S64",
+    "F32", "F64",
 
-    "block",
-    "handler_set",
-    "type",
+    "Block",
+    "HandlerSet",
+    "Type",
 };
 
 pub const BASIC_TYPE_IDS = type_ids: {
@@ -411,10 +412,18 @@ pub const BASIC_TYPES = types: {
 };
 
 pub const TypeMap = struct {
-    inner: std.ArrayHashMapUnmanaged(Core.Type, void, MiscUtils.SimpleHashContext, true) = .{},
+    inner: Inner,
 
-    pub fn init() !TypeMap {
-        return TypeMap { };
+    pub const Inner = std.ArrayHashMapUnmanaged(Core.Type, void, MiscUtils.SimpleHashContext, true);
+
+    pub fn init(allocator: std.mem.Allocator) !TypeMap {
+        var self = TypeMap { .inner = .{} };
+
+        for (BASIC_TYPES) |bt| {
+            _ = try self.typeId(allocator, bt);
+        }
+
+        return self;
     }
 
     pub fn deinit(self: *TypeMap, allocator: std.mem.Allocator) void {
@@ -425,10 +434,14 @@ pub const TypeMap = struct {
         self.inner.deinit(allocator);
     }
 
+    pub fn count(self: *const TypeMap) usize {
+        return self.inner.count();
+    }
+
     /// Calls `Core.Type.clone` on the input, if the type is not found in the map
     pub fn typeId(self: *TypeMap, allocator: std.mem.Allocator, ty: Core.Type) !Core.TypeId {
         if (self.inner.getIndex(ty)) |index| {
-            return @truncate(index);
+            return @enumFromInt(index);
         }
 
         const index = self.inner.count();
@@ -544,5 +557,41 @@ pub const TypeMap = struct {
         }
 
         return self.inner.keys()[@intFromEnum(id)];
+    }
+
+    pub const Iterator = struct {
+        types: []const Core.Type,
+        index: usize,
+
+        pub const Item = struct { Core.TypeId, Core.Type };
+
+        pub fn next(self: *Iterator) ?Item {
+            if (self.peek()) |out| {
+                self.index += 1;
+                return out;
+            }
+
+            return null;
+        }
+
+        pub fn peek(self: *const Iterator) ?Item {
+            if (self.index < self.types.len) {
+                return Item { @enumFromInt(self.index), self.types[self.index] };
+            }
+
+            return null;
+        }
+
+        pub fn reset(self: *Iterator) void {
+            self.index = 0;
+        }
+    };
+
+    pub fn types(self: *const TypeMap) []Core.Type {
+        return self.inner.values();
+    }
+
+    pub fn iterator(self: *const TypeMap) Iterator {
+        return .{ .types = self.types(), .index = 0 };
     }
 };

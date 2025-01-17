@@ -6,11 +6,12 @@ const Foreign = @This();
 
 root: *Core.IR,
 id: Core.ForeignId,
+name: Core.Name,
 type: Core.TypeId,
 locals: []Core.TypeId,
 
 
-pub fn init(root: *Core.IR, id: Core.ForeignId, tyId: Core.TypeId, locals: []Core.TypeId) !*Foreign {
+pub fn init(root: *Core.IR, id: Core.ForeignId, name: Core.Name, tyId: Core.TypeId, locals: []Core.TypeId) !*Foreign {
     errdefer root.allocator.free(locals);
 
     const ptr = try root.allocator.create(Foreign);
@@ -19,6 +20,7 @@ pub fn init(root: *Core.IR, id: Core.ForeignId, tyId: Core.TypeId, locals: []Cor
     ptr.* = Foreign {
         .root = root,
         .id = id,
+        .name = name,
         .type = tyId,
         .locals = locals,
     };

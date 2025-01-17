@@ -271,5 +271,4 @@ pub fn beginBlock(self: Formatter) Error! void {
 
 pub fn endBlock(self: Formatter) Error! void {
     self.state.indent_level -= 1;
-    try self.endLine();
 }

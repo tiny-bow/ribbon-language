@@ -52,25 +52,33 @@ pub fn onFormat(self: *const Module, formatter: Core.Formatter) !void {
     try formatter.writeAll("module ");
     if (formatter.getShowIds()) try formatter.print("{} ", .{@intFromEnum(self.id)});
     try formatter.fmt(self.name);
-    try formatter.writeAll(" =");
-    try formatter.beginBlock();
-        try formatter.writeAll("globals =");
+
+    if (self.global_list.items.len > 0 or self.function_list.items.len > 0) {
+        try formatter.writeAll(" =");
         try formatter.beginBlock();
-            for (self.global_list.items, 0..) |global, i| {
-                if (formatter.getShowIds()) try formatter.print("{} ", .{i});
-                try formatter.fmt(global);
-                if (i < self.global_list.items.len - 1) try formatter.endLine();
+            if (self.global_list.items.len > 0) {
+                try formatter.writeAll("globals =");
+                try formatter.beginBlock();
+                    for (self.global_list.items, 0..) |global, i| {
+                        if (formatter.getShowIds()) try formatter.print("{} ", .{i});
+                        try formatter.fmt(global);
+                        if (i < self.global_list.items.len - 1) try formatter.endLine();
+                    }
+                try formatter.endBlock();
+                try formatter.endLine();
+            }
+            if (self.function_list.items.len > 0) {
+                try formatter.writeAll("functions =");
+                try formatter.beginBlock();
+                    for (self.function_list.items, 0..) |func, i| {
+                        if (formatter.getShowIds()) try formatter.print("{} ", .{i});
+                        try formatter.fmt(func);
+                        if (i < self.function_list.items.len - 1) try formatter.endLine();
+                    }
+                try formatter.endBlock();
             }
         try formatter.endBlock();
-        try formatter.writeAll("functions =");
-        try formatter.beginBlock();
-            for (self.function_list.items, 0..) |func, i| {
-                if (formatter.getShowIds()) try formatter.print("{} ", .{i});
-                try formatter.fmt(func);
-                if (i < self.function_list.items.len - 1) try formatter.endLine();
-            }
-        try formatter.endBlock();
-    try formatter.endBlock();
+    }
 }
 
 

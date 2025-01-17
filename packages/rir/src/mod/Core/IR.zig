@@ -7,7 +7,7 @@ const IR = @This();
 
 allocator: std.mem.Allocator,
 interner: Interner = .{},
-type_map: Core.types.TypeMap = .{},
+type_map: Core.types.TypeMap,
 foreign_list: std.ArrayListUnmanaged(*Core.Foreign) = .{},
 module_list: std.ArrayListUnmanaged(*Core.Module) = .{},
 
@@ -27,6 +27,7 @@ pub const InternerContext = struct {
 pub fn init(alloc: std.mem.Allocator) !IR {
     return IR {
         .allocator = alloc,
+        .type_map = try Core.types.TypeMap.init(alloc),
     };
 }
 
@@ -51,6 +52,48 @@ pub fn deinit(self: *IR) void {
 
     self.module_list.deinit(self.allocator);
 }
+
+
+pub fn onFormat(self: *const IR, formatter: Core.Formatter) !void {
+    if (self.type_map.count() > Core.types.BASIC_TYPES.len) {
+        try formatter.writeAll("types = ");
+        try formatter.beginBlock();
+        {
+            const oldTypeMode = formatter.setTypeMode(.full);
+            defer _ = formatter.setTypeMode(oldTypeMode);
+            for (Core.types.BASIC_TYPES.len..self.type_map.count()) |i| {
+                if (i > Core.types.BASIC_TYPES.len) try formatter.endLine();
+                if (formatter.getShowIds()) try formatter.print("{} ", .{i});
+                try formatter.fmt(self.type_map.getType(@enumFromInt(i)) catch unreachable);
+            }
+        }
+        try formatter.endBlock();
+        try formatter.endLine();
+    }
+    if (self.foreign_list.items.len > 0) {
+        try formatter.writeAll("foreign = ");
+        try formatter.beginBlock();
+            for (self.foreign_list.items, 0..) |f, i| {
+                if (i > 0) try formatter.endLine();
+                if (formatter.getShowIds()) try formatter.print("{} ", .{i});
+                try formatter.fmt(f);
+            }
+        try formatter.endBlock();
+        try formatter.endLine();
+    }
+    if (self.module_list.items.len > 0) {
+        try formatter.writeAll("modules = ");
+        try formatter.beginBlock();
+            for (self.module_list.items, 0..) |mod, i| {
+                if (i > 0) try formatter.endLine();
+                if (formatter.getShowIds()) try formatter.print("{} ", .{i});
+                try formatter.fmt(mod);
+            }
+        try formatter.endBlock();
+        try formatter.endLine();
+    }
+}
+
 
 /// Intern a string, yielding a Name
 pub fn intern(self: *IR, name: []const u8) !Core.Name {

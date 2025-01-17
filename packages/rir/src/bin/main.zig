@@ -18,7 +18,6 @@ pub fn main() !void {
     var ir = try RirCore.IR.init(allocator);
     defer ir.deinit();
 
-
     const module = try ir.module(try ir.intern("test-module"));
 
     const one = try module.globalFromNative(try ir.intern("one"), @as(i32, 1), null);
@@ -39,9 +38,11 @@ pub fn main() !void {
     var formatter = try RirCore.Formatter.init(&ir, stdout.any());
     defer formatter.deinit();
 
-    _ = formatter.setShowIds(true);
-    // _ = formatter.setShowIndices(false);
-    // _ = formatter.setShowOpCodes(false);
-    // _ = formatter.setShowEncoded(false);
-    try formatter.fmt(module);
+    // _ = formatter.setShowIds(true);
+    _ = formatter.setShowIndices(false);
+    _ = formatter.setShowOpCodes(false);
+    _ = formatter.setShowEncoded(false);
+    try formatter.writeAll("```rir\n");
+    try formatter.fmt(ir);
+    try formatter.writeAll("```\n");
 }

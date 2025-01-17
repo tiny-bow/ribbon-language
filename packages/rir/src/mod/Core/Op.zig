@@ -62,7 +62,8 @@ comptime {
 pub const Data = packed union {
     nop: void,
     halt: void, trap: void,
-    block: void, with: void, @"if": ZeroCheck, when: ZeroCheck, re: OptZeroCheck, br: OptZeroCheck,
+    block: void, with: void,
+    @"if": ZeroCheck, when: ZeroCheck, re: OptZeroCheck, br: OptZeroCheck,
     call: void, prompt: void, ret: void, term: void,
     alloca: RbcCore.RegisterLocalOffset, addr: void,
     read: void, write: void, load: void, store: void, clear: void, swap: void, copy: void,
@@ -89,9 +90,10 @@ pub const Data = packed union {
         switch (code) {
             inline
                 .nop,
-                .halt, .trap, .block, .with,
+                .halt, .trap,
+                .block, .with,
                 .call, .prompt, .ret, .term,
-                .alloca, .addr,
+                .addr,
                 .read, .write, .load, .store, .clear, .swap, .copy,
                 .add, .sub, .mul, .div, .rem, .neg,
                 .band, .bor, .bxor, .bnot, .bshiftl, .bshiftr,
@@ -101,9 +103,10 @@ pub const Data = packed union {
 
             .@"if" => try formatter.fmt(self.@"if"),
             .when => try formatter.fmt(self.when),
-
             .re => try formatter.fmt(self.re),
             .br => try formatter.fmt(self.br),
+
+            .alloca => try formatter.fmt(self.alloca),
 
             .ext => try formatter.fmt(self.ext),
             .trunc => try formatter.fmt(self.trunc),
