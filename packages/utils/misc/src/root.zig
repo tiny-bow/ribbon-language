@@ -169,6 +169,10 @@ pub fn arrayFromVector(vector: anytype) ArrayFromVector(@TypeOf(vector)) {
     return array;
 }
 
+pub inline fn alignTo(baseAddress: anytype, alignment: @TypeOf(baseAddress)) @TypeOf(baseAddress) {
+    return baseAddress + alignmentDelta(baseAddress, alignment);
+}
+
 pub inline fn alignmentDelta(baseAddress: anytype, alignment: @TypeOf(baseAddress)) @TypeOf(baseAddress) {
     return (alignment - (baseAddress % alignment)) % alignment;
 }
@@ -388,7 +392,39 @@ pub const Ordering = enum(u8) {
     Greater,
 };
 
-pub fn compare(a: anytype, b: @TypeOf(a)) Ordering {
+pub fn partialCompareSlice(a: anytype, b: @TypeOf(a)) ?Ordering {
+    if (a.len < b.len) {
+        return .Less;
+    } else if (a.len > b.len) {
+        return .Greater;
+    }
+
+    for (0..a.len) |i| {
+        if (compare(a[i], b[i])) |ord| {
+            if (ord != .Equal) {
+                return ord;
+            }
+        } else {
+            return null;
+        }
+    }
+
+    return .Equal;
+}
+
+pub fn CompareResult(comptime T: type) type {
+    if (comptime std.meta.hasFn(T, "compare")) {
+        switch (@typeInfo(@TypeOf(@field(T, "compare")))) {
+            .@"fn" => |info| return info.return_type.?,
+            .pointer => |info| return @typeInfo(info.child).@"fn".return_type.?,
+            else => @compileError("Invalid compare function type"),
+        }
+    } else {
+        return Ordering;
+    }
+}
+
+pub fn compare(a: anytype, b: @TypeOf(a)) CompareResult(@TypeOf(a)) {
     const T = @TypeOf(a);
 
     if (comptime std.meta.hasFn(T, "compare")) {
