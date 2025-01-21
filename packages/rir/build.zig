@@ -19,15 +19,15 @@ pub fn build(b: *std.Build) !void {
         .optimize = defaultOptimize,
     });
 
-    const Core = b.addModule("Core", .{
-        .root_source_file = b.path("src/mod/Core.zig"),
+    const Rir = b.addModule("Rir", .{
+        .root_source_file = b.path("src/mod/Rir.zig"),
         .target = defaultTarget,
         .optimize = defaultOptimize,
     });
-    Core.addImport("Utils", Utils.module("Utils"));
-    Core.addImport("ISA", ISA.module("ISA"));
-    Core.addImport("Rbc:Core", Rbc.module("Core"));
-    Core.addImport("Rbc:Builder", Rbc.module("Builder"));
+    Rir.addImport("Utils", Utils.module("Utils"));
+    Rir.addImport("ISA", ISA.module("ISA"));
+    Rir.addImport("Rbc:Core", Rbc.module("Core"));
+    Rir.addImport("Rbc:Builder", Rbc.module("Builder"));
 
     const RbcGenerator = b.addModule("RbcGenerator", .{
         .root_source_file = b.path("src/mod/RbcGenerator.zig"),
@@ -37,7 +37,7 @@ pub fn build(b: *std.Build) !void {
     RbcGenerator.addImport("Utils", Utils.module("Utils"));
     RbcGenerator.addImport("Rbc:Core", Rbc.module("Core"));
     RbcGenerator.addImport("Rbc:Builder", Rbc.module("Builder"));
-    RbcGenerator.addImport("Core", Core);
+    RbcGenerator.addImport("Rir", Rir);
 
     const main = b.addExecutable(.{
         .name = "main",
@@ -46,24 +46,28 @@ pub fn build(b: *std.Build) !void {
         .optimize = defaultOptimize,
     });
     main.root_module.addImport("Utils", Utils.module("Utils"));
-    main.root_module.addImport("Rir:Core", Core);
-    main.root_module.addImport("Rir:RbcGenerator", RbcGenerator);
+    main.root_module.addImport("Rir", Rir);
+    main.root_module.addImport("RbcGenerator", RbcGenerator);
 
-    const testCore = b.addTest(.{
-        .root_source_file = b.path("src/mod/Core.zig"),
+    const testRir = b.addTest(.{
+        .root_source_file = b.path("src/mod/Rir.zig"),
+        .target = defaultTarget,
+        .optimize = defaultOptimize,
     });
-    testCore.root_module.addImport("Utils", Utils.module("Utils"));
-    testCore.root_module.addImport("ISA", ISA.module("ISA"));
-    testCore.root_module.addImport("Rbc:Core", Rbc.module("Core"));
-    testCore.root_module.addImport("Rbc:Builder", Rbc.module("Builder"));
+    testRir.root_module.addImport("Utils", Utils.module("Utils"));
+    testRir.root_module.addImport("ISA", ISA.module("ISA"));
+    testRir.root_module.addImport("Rbc:Core", Rbc.module("Core"));
+    testRir.root_module.addImport("Rbc:Builder", Rbc.module("Builder"));
 
     const testRbcGenerator = b.addTest(.{
         .root_source_file = b.path("src/mod/RbcGenerator.zig"),
+        .target = defaultTarget,
+        .optimize = defaultOptimize,
     });
     testRbcGenerator.root_module.addImport("Utils", Utils.module("Utils"));
     testRbcGenerator.root_module.addImport("Rbc:Core", Rbc.module("Core"));
     testRbcGenerator.root_module.addImport("Rbc:Builder", Rbc.module("Builder"));
-    testRbcGenerator.root_module.addImport("Core", &testCore.root_module);
+    testRbcGenerator.root_module.addImport("Rir", Rir);
 
     const runTest = b.addRunArtifact(main);
     runTest.expectExitCode(0);
@@ -72,12 +76,12 @@ pub fn build(b: *std.Build) !void {
     installStep.dependOn(&b.addInstallArtifact(main, .{}).step);
 
     const checkStep = b.step("check", "Run semantic analysis");
-    checkStep.dependOn(&testCore.step);
+    checkStep.dependOn(&testRir.step);
     checkStep.dependOn(&testRbcGenerator.step);
     checkStep.dependOn(&main.step);
 
     const testStep = b.step("test", "Run unit tests");
-    testStep.dependOn(&b.addRunArtifact(testCore).step);
+    testStep.dependOn(&b.addRunArtifact(testRir).step);
     testStep.dependOn(&b.addRunArtifact(testRbcGenerator).step);
     testStep.dependOn(&runTest.step);
 
