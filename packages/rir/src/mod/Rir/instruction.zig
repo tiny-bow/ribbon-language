@@ -217,6 +217,25 @@ pub const Operand = union(enum) {
     handler_set: Rir.HandlerSetId,
     local: Rir.LocalId,
 
+    pub fn TypeOf(comptime tag: ?std.meta.Tag(Operand)) type {
+        return if (tag) |t| switch (t) {
+            .type => Rir.TypeId,
+            .register => Rir.RegisterId,
+            .im_8 => Immediate(u8),
+            .im_16 => Immediate(u16),
+            .im_32 => Immediate(u32),
+            .im_64 => Immediate(u64),
+            .block => Rir.BlockId,
+            .foreign => Rir.ForeignId,
+            .function => Rir.Ref(Rir.FunctionId),
+            .global => Rir.Ref(Rir.GlobalId),
+            .upvalue => Rir.UpvalueId,
+            .handler_set => Rir.HandlerSetId,
+            .local => Rir.LocalId,
+        }
+        else Operand;
+    }
+
     pub fn mem_const(self: *const Operand) []const u8 {
         return switch (self.*) {
             .type => |*x| std.mem.sliceAsBytes(@as([*]const Rir.TypeId, @ptrCast(x))[0..1]),

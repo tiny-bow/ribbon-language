@@ -14,11 +14,20 @@ pub const Function = struct {
     id: Rir.FunctionId,
     name: Rir.Name,
     type: Rir.TypeId,
+    evidence: ?Rir.EvidenceId = null,
     blocks: BlockList = .{},
     locals: LocalList = .{},
     parent: ?*Function = null,
     upvalue_indices: UpvalueList = .{},
     handler_sets: HandlerSetList = .{},
+
+
+    pub fn getRef(self: *const Function) Rir.Ref(Rir.FunctionId) {
+        return Rir.Ref(Rir.FunctionId) {
+            .id = self.id,
+            .module = self.module.id,
+        };
+    }
 
 
     pub fn init(module: *Rir.Module, id: Rir.FunctionId, name: Rir.Name, tyId: Rir.TypeId) error{InvalidType, OutOfMemory}! *Function {

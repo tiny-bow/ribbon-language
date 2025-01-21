@@ -43,6 +43,34 @@ pub const variable = @import("Rir/variable.zig");
 pub const Local = variable.Local;
 pub const Global = variable.Global;
 
+pub const Error = std.mem.Allocator.Error || error {
+    InvalidIndex,
+
+    InvalidType,
+    InvalidOperand,
+    InvalidLocal,
+    InvalidUpvalue,
+    InvalidGlobal,
+    InvalidFunction,
+    InvalidModule,
+    InvalidForeign,
+    InvalidEvidence,
+    InvalidBlock,
+    InvalidHandlerSet,
+
+    TooManyTypes,
+    TooManyLocals,
+    TooManyUpvalues,
+    TooManyGlobals,
+    TooManyEvidences,
+    TooManyFunctions,
+    TooManyForeignAddresses,
+    TooManyBlocks,
+    TooManyHandlerSets,
+
+    MultipleExits,
+};
+
 pub const MAX_MODULES = std.math.maxInt(std.meta.Tag(Rir.ModuleId));
 pub const MAX_TYPES = std.math.maxInt(std.meta.Tag(Rir.TypeId));
 pub const MAX_GLOBALS = std.math.maxInt(std.meta.Tag(Rir.GlobalId));
@@ -64,6 +92,7 @@ pub const FunctionId = NewType("FunctionId", RbcCore.FunctionIndex);
 pub const ForeignId = NewType("ForeignId", RbcCore.ForeignId);
 pub const GlobalId = NewType("GlobalId", RbcCore.GlobalIndex);
 pub const UpvalueId = NewType("UpvalueId", RbcCore.UpvalueIndex);
+pub const EvidenceId = NewType("EvidenceId", RbcCore.EvidenceIndex);
 pub const LocalId = NewType("LocalId", u16);
 pub const FieldId = NewType("FieldId", u16);
 

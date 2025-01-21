@@ -33,6 +33,14 @@ pub const Global = struct {
     value: []u8,
 
 
+    pub fn getRef(self: *const Global) Rir.Ref(Rir.GlobalId) {
+        return Rir.Ref(Rir.GlobalId) {
+            .id = self.id,
+            .module = self.module.id,
+        };
+    }
+
+
     pub fn init(mod: *Rir.Module, id: Rir.GlobalId, name: Rir.Name, ty: Rir.TypeId, value: []u8) error{OutOfMemory}! *Global {
         errdefer mod.root.allocator.free(value);
 

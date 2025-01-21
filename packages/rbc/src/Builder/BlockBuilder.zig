@@ -87,7 +87,7 @@ pub fn findRelativeBlockIndex(self: *const BlockBuilder, absoluteBlockIndex: Cor
     return Error.InvalidIndex;
 }
 
-pub fn extractBlockIndex(self: *const BlockBuilder, b: anytype) Core.BlockIndex {
+pub fn extractBlockIndex(self: *const BlockBuilder, b: anytype) Error! Core.BlockIndex {
     switch (@TypeOf(b)) {
         BlockBuilder => return self.extractBlockIndex(&b),
         *BlockBuilder => return self.extractBlockIndex(@as(*const BlockBuilder, b)),
@@ -248,17 +248,21 @@ pub fn block_v(self: *BlockBuilder, y: Core.RegisterIndex) Error!*BlockBuilder {
 }
 
 pub fn with(self: *BlockBuilder, h: anytype) Error!*BlockBuilder {
-    const handlerSetIndex = self.function.parent.extractHandlerSetIndex(h);
-    const newBlock = try self.function.newBlock(self.index, .{.with = .{ .handler_set = handlerSetIndex }});
+    const handlerSetIndex = try self.function.parent.extractHandlerSetIndex(h);
+    const newBlock = try self.function.newBlock(self.index, .{.with = handlerSetIndex});
 
     try self.op(.with, .{ .B0 = newBlock.index, .H0 = handlerSetIndex });
+
+    return newBlock;
 }
 
-pub fn with_v(self: *BlockBuilder, h: anytype, y: Core.RegisterIndex) Error!void {
-    const handlerSetIndex = try self.function.parent.extractHandlerSet(h);
-    const newBlock = try self.function.newBlock(self.index, .{.with_v = .{ .handler_set = handlerSetIndex }});
+pub fn with_v(self: *BlockBuilder, h: anytype, y: Core.RegisterIndex) Error!*BlockBuilder {
+    const handlerSetIndex = try self.function.parent.extractHandlerSetIndex(h);
+    const newBlock = try self.function.newBlock(self.index, .{.with_v = handlerSetIndex});
 
     try self.op(.with_v, .{ .B0 = newBlock.index, .H0 = handlerSetIndex, .R0 = y });
+
+    return newBlock;
 }
 
 pub fn if_nz(self: *BlockBuilder, x: Core.RegisterIndex) Error!struct { *BlockBuilder, *BlockBuilder } {
@@ -297,16 +301,20 @@ pub fn if_z_v(self: *BlockBuilder, x: Core.RegisterIndex, y: Core.RegisterIndex)
     return .{ thenBlock, elseBlock };
 }
 
-pub fn when_nz(self: *BlockBuilder, x: Core.RegisterIndex) Error!void {
+pub fn when_nz(self: *BlockBuilder, x: Core.RegisterIndex) Error!*BlockBuilder {
     const newBlock = try self.function.newBlock(self.index, .basic);
 
     try self.op(.when_nz, .{ .B0 = newBlock.index, .R0 = x });
+
+    return newBlock;
 }
 
-pub fn when_z(self: *BlockBuilder, x: Core.RegisterIndex) Error!void {
+pub fn when_z(self: *BlockBuilder, x: Core.RegisterIndex) Error!*BlockBuilder {
     const newBlock = try self.function.newBlock(self.index, .basic);
 
     try self.op(.when_z, .{ .B0 = newBlock.index, .R0 = x });
+
+    return newBlock;
 }
 
 pub fn re(self: *BlockBuilder, b: anytype) Error!void {
