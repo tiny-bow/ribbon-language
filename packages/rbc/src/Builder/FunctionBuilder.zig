@@ -79,7 +79,6 @@ pub fn getBlock(self: *const FunctionBuilder, index: Core.BlockIndex) Error!*Blo
     return self.blocks.items[index];
 }
 
-/// for use by BlockBuilder only
 pub fn newBlock(self: *FunctionBuilder, parent: ?Core.BlockIndex, kind: BlockBuilder.Kind) Error!*BlockBuilder {
     const index = self.blocks.items.len;
     if (index >= Core.MAX_BLOCKS) return Error.TooManyBlocks;

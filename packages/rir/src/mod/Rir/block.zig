@@ -1,18 +1,29 @@
 const std = @import("std");
+const MiscUtils = @import("Utils").Misc;
 
 const Rir = @import("../Rir.zig");
 
 
+const LocalMap = std.ArrayHashMapUnmanaged(Rir.LocalId, *Rir.Local, MiscUtils.SimpleHashContext, false);
+
+
+pub const BlockKind = union(enum) {
+    basic: void,
+    with: Rir.HandlerSetId,
+};
+
 pub const Block = struct {
     function: *Rir.Function,
+    locals: LocalMap = .{},
     parent: ?*Block,
     id: Rir.BlockId,
-    name: Rir.Name,
+    name: Rir.NameId,
     has_exit: bool = false,
+    kind: BlockKind = .basic,
     instructions: std.ArrayListUnmanaged(Rir.Instruction) = .{},
 
 
-    pub fn init(function: *Rir.Function, parent: ?*Block, id: Rir.BlockId, name: Rir.Name) !*Block {
+    pub fn init(function: *Rir.Function, parent: ?*Block, id: Rir.BlockId, name: Rir.NameId) !*Block {
         const ptr = try function.module.root.allocator.create(Block);
         errdefer function.module.root.allocator.destroy(ptr);
 
@@ -27,11 +38,17 @@ pub const Block = struct {
     }
 
     pub fn deinit(self: *Block) void {
+        for (self.locals.values()) |x| x.deinit();
+        self.locals.deinit(self.function.module.root.allocator);
+
         self.instructions.deinit(self.function.module.root.allocator);
         self.function.module.root.allocator.destroy(self);
     }
 
     pub fn onFormat(self: *const Block, formatter: Rir.Formatter) !void {
+        const oldBlock = formatter.swapBlock(self);
+        defer formatter.setBlock(oldBlock);
+
         try formatter.fmt(self.name);
         if (formatter.getFlag(.show_ids)) try formatter.print("#{}", .{@intFromEnum(self.id)});
         try formatter.writeAll(" =");
@@ -44,8 +61,35 @@ pub const Block = struct {
         try formatter.endBlock();
     }
 
-    pub fn createLocal(self: *Block, name: Rir.Name, tyId: Rir.TypeId) !*const Rir.Local {
-        return self.function.createLocal(self, name, tyId);
+
+    pub fn length(self: *const Block) Rir.Offset {
+        return @intCast(self.instructions.items.len);
+    }
+
+    pub fn localCount(self: *const Block) usize {
+        return self.locals.count();
+    }
+
+
+    pub fn getLocal(self: *const Block, id: Rir.LocalId) error{InvalidLocal}! *Rir.Local {
+        if (self.locals.get(id)) |x| {
+            return x;
+        } else if (self.parent) |p| {
+            return p.getLocal(id);
+        } else {
+            return error.InvalidLocal;
+        }
+    }
+
+    pub fn createLocal(self: *Block, name: Rir.NameId, tyId: Rir.TypeId) error{TooManyLocals, OutOfMemory}! *Rir.Local {
+        const id = try self.function.freshLocalId();
+
+        const local = try Rir.Local.init(self, id, name, tyId);
+        errdefer local.deinit();
+
+        try self.locals.put(self.function.module.root.allocator, id, local);
+
+        return local;
     }
 
 
@@ -226,8 +270,12 @@ pub const Block = struct {
         try op(self, .trunc, x);
     }
 
-    pub fn cast(self: *Block, x: Rir.TypeId) !void {
-        try op(self, .cast, x);
+    pub fn cast(self: *Block) !void {
+        try op(self, .cast, {});
+    }
+
+    pub fn new_local(self: *Block, x: Rir.NameId) !void {
+        try op(self, .new_local, x);
     }
 
     pub fn ref_local(self: *Block, x: Rir.LocalId) !void {

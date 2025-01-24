@@ -154,6 +154,12 @@ pub fn narrowErrorSet(comptime E: type, err: anyerror) ?E {
     return null;
 }
 
+pub fn forceErrorSet(comptime E: type, err: anyerror) E {
+    const buf = &struct{ threadlocal var x = [1]u8{0} ** 128; }.x;
+    return narrowErrorSet(E, err)
+        orelse @panic(std.fmt.bufPrint(buf, "unexpected error {s}", .{@errorName(err)}) catch buf);
+}
+
 const MAX_DECLS = 10_000;
 
 pub fn structConcat(subs: anytype) TypeOfStructConcat(@TypeOf(subs)) {

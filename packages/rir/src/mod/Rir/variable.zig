@@ -1,13 +1,43 @@
+const Rbc = @import("Rbc");
 const Rir = @import("../Rir.zig");
 
+
+pub const LocalStorage = enum {
+    /// The Local is not yet stored anywhere.
+    none,
+
+    /// The Local can pretend to be stored anywhere, because it has no size.
+    zero_size,
+
+    /// The Local is stored in a register.
+    register,
+
+    /// The Local is stored on the stack.
+    stack,
+
+    /// Never returns `.none`
+    ///
+    /// Forces `computeLayout` on the type
+    pub fn fromType(rir: *Rir, typeId: Rir.TypeId) !LocalStorage {
+        const typeLayout = try rir.getTypeLayout(typeId);
+
+        if (typeLayout.dimensions.size == 0) return .zero_size;
+
+        if (typeLayout.dimensions.size <= 8) return .register;
+
+        return .stack;
+    }
+};
 
 pub const Local = struct {
     block: *Rir.Block,
     id: Rir.LocalId,
-    name: Rir.Name,
+    name: Rir.NameId,
     type: Rir.TypeId,
+    lifetime_start: ?Rir.Offset,
+    storage: LocalStorage = .none,
 
-    pub fn init(block: *Rir.Block, id: Rir.LocalId, name: Rir.Name, tyId: Rir.TypeId) error{OutOfMemory}! *Local {
+    pub fn init(block: *Rir.Block, id: Rir.LocalId, name: Rir.NameId, tyId: Rir.TypeId) error{OutOfMemory}! *Local {
         const self = try block.function.module.root.allocator.create(Local);
 
         self.* = Local {
@@ -15,6 +45,7 @@ pub const Local = struct {
             .id = id,
             .name = name,
             .type = tyId,
+            .lifetime_start = block.length(),
         };
 
         return self;
@@ -28,7 +59,7 @@ pub const Local = struct {
 pub const Global = struct {
     module: *Rir.Module,
     id: Rir.GlobalId,
-    name: Rir.Name,
+    name: Rir.NameId,
     type: Rir.TypeId,
     value: []u8,
 
@@ -41,7 +72,7 @@ pub const Global = struct {
     }
 
 
-    pub fn init(mod: *Rir.Module, id: Rir.GlobalId, name: Rir.Name, ty: Rir.TypeId, value: []u8) error{OutOfMemory}! *Global {
+    pub fn init(mod: *Rir.Module, id: Rir.GlobalId, name: Rir.NameId, ty: Rir.TypeId, value: []u8) error{OutOfMemory}! *Global {
         errdefer mod.root.allocator.free(value);
 
         const self = try mod.root.allocator.create(Global);

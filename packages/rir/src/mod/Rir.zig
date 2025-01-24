@@ -7,7 +7,7 @@ test {
 const std = @import("std");
 const MiscUtils = @import("Utils").Misc;
 const TypeUtils = @import("Utils").Type;
-const RbcCore = @import("Rbc:Core");
+const RbcCore = @import("Rbc");
 
 pub const log = std.log.scoped(.Rir);
 
@@ -34,6 +34,7 @@ pub const Instruction = instruction.Instruction;
 pub const Operand = instruction.Operand;
 pub const OpCode = instruction.OpCode;
 pub const OpData = instruction.OpData;
+pub const Register = instruction.Register;
 
 pub const type_info = @import("Rir/type_info.zig");
 pub const Type = type_info.Type;
@@ -57,6 +58,7 @@ pub const Error = std.mem.Allocator.Error || error {
     InvalidEvidence,
     InvalidBlock,
     InvalidHandlerSet,
+    InvalidName,
 
     TooManyTypes,
     TooManyLocals,
@@ -67,6 +69,7 @@ pub const Error = std.mem.Allocator.Error || error {
     TooManyForeignAddresses,
     TooManyBlocks,
     TooManyHandlerSets,
+    TooManyNames,
 
     MultipleExits,
 };
@@ -81,6 +84,7 @@ pub const MAX_EVIDENCE = RbcCore.EVIDENCE_SENTINEL;
 pub const MAX_BLOCKS = RbcCore.MAX_BLOCKS;
 pub const MAX_REGISTERS = RbcCore.MAX_REGISTERS;
 pub const MAX_LOCALS = std.math.maxInt(std.meta.Tag(Rir.LocalId));
+pub const MAX_NAMES = std.math.maxInt(std.meta.Tag(Rir.NameId));
 
 pub const ModuleId = NewType("ModuleId", u16);
 pub const RegisterId = NewType("RegisterId", RbcCore.RegisterIndex);
@@ -94,9 +98,10 @@ pub const GlobalId = NewType("GlobalId", RbcCore.GlobalIndex);
 pub const UpvalueId = NewType("UpvalueId", RbcCore.UpvalueIndex);
 pub const EvidenceId = NewType("EvidenceId", RbcCore.EvidenceIndex);
 pub const LocalId = NewType("LocalId", u16);
+pub const NameId = NewType("NameId", u16);
 pub const FieldId = NewType("FieldId", u16);
 
-pub const Name = [:0]const u8;
+// pub const Name = [:0]const u8;
 
 pub const Arity = u8;
 pub const Alignment = u12; // 2^12 = 4096 = page size; should be enough for anyone (famous last words)
@@ -210,7 +215,7 @@ const TypeContext = struct {
     }
 };
 
-pub const Interner = std.ArrayHashMapUnmanaged(Rir.Name, void, InternerContext, true);
+pub const Interner = std.ArrayHashMapUnmanaged([:0]const u8, void, InternerContext, true);
 pub const InternerContext = struct {
     pub fn eql(_: InternerContext, a: anytype, b: anytype, _: anytype) bool {
         return @intFromPtr(a.ptr) == @intFromPtr(b.ptr)
@@ -241,13 +246,11 @@ pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}! *Rir {
     errdefer self.deinit();
 
     for (Rir.type_info.BASIC_TYPE_INFO, 0..) |bt, i| {
-        const name = try self.internName(Rir.type_info.BASIC_TYPE_NAMES[i]);
+        const name = self.internName(Rir.type_info.BASIC_TYPE_NAMES[i])
+            catch |err| return TypeUtils.forceErrorSet(error{OutOfMemory}, err);
 
         _ = self.createType(name, bt)
-            catch |err| {
-                return TypeUtils.narrowErrorSet(error{OutOfMemory}, err)
-                    orelse @panic("unexpected error creating builtin type");
-            };
+            catch |err| return TypeUtils.forceErrorSet(error{OutOfMemory}, err);
     }
 
     return self;
@@ -317,9 +320,14 @@ pub fn onFormat(self: *const Rir, formatter: Rir.Formatter) Rir.Formatter.Error!
 
 
 /// Intern a string, yielding a Name
-pub fn internName(self: *Rir, name: []const u8) !Rir.Name {
-    if (self.interner.getKeyAdapted(name, InternerContext{})) |interned| {
-        return interned;
+pub fn internName(self: *Rir, name: []const u8) error{TooManyNames, OutOfMemory}! Rir.NameId {
+    if (self.interner.getIndexAdapted(name, InternerContext{})) |interned| {
+        return @enumFromInt(interned);
+    }
+
+    const index = self.interner.count();
+    if (index >= Rir.MAX_NAMES) {
+        return error.TooManyNames;
     }
 
     const interned = try self.allocator.allocWithOptions(u8, name.len, 1, 0);
@@ -328,11 +336,19 @@ pub fn internName(self: *Rir, name: []const u8) !Rir.Name {
 
     try self.interner.put(self.allocator, interned, {});
 
-    return interned;
+    return @enumFromInt(index);
+}
+
+pub fn getName(self: *const Rir, id: Rir.NameId) error{InvalidName}! []const u8 {
+    if (@intFromEnum(id) >= self.interner.count()) {
+        return error.InvalidName;
+    }
+
+    return self.interner.keys()[@intFromEnum(id)];
 }
 
 /// Calls `Rir.Type.clone` on the input, if the type is not found in the map
-pub fn createType(self: *Rir, name: ?Rir.Name, info: Rir.TypeInfo) error{OutOfMemory, TooManyTypes}! *Rir.Type {
+pub fn createType(self: *Rir, name: ?Rir.NameId, info: Rir.TypeInfo) error{OutOfMemory, TooManyTypes}! *Rir.Type {
     const index = self.type_map.count();
 
     if (index >= Rir.MAX_TYPES) {
@@ -358,7 +374,7 @@ pub fn createType(self: *Rir, name: ?Rir.Name, info: Rir.TypeInfo) error{OutOfMe
 }
 
 /// Does not call `Rir.Type.clone` on the input
-pub fn createTypePreallocated(self: *Rir, name: ?Rir.Name, deinitInfoIfExisting: bool, info: Rir.TypeInfo) error{OutOfMemory, TooManyTypes}! *Rir.Type {
+pub fn createTypePreallocated(self: *Rir, name: ?Rir.NameId, deinitInfoIfExisting: bool, info: Rir.TypeInfo) error{OutOfMemory, TooManyTypes}! *Rir.Type {
     const index = self.type_map.count();
 
     if (index >= Rir.MAX_TYPES) {
@@ -384,7 +400,7 @@ pub fn createTypePreallocated(self: *Rir, name: ?Rir.Name, deinitInfoIfExisting:
     return getOrPut.key_ptr;
 }
 
-pub fn createTypeFromNative(self: *Rir, comptime T: type, name: ?Rir.Name, parameterNames: ?[]const Rir.Name) error{OutOfMemory, TooManyTypes}! *Rir.Type {
+pub fn createTypeFromNative(self: *Rir, comptime T: type, name: ?Rir.NameId, parameterNames: ?[]const Rir.NameId) error{TooManyTypes, TooManyNames, OutOfMemory}! *Rir.Type {
     const info = try TypeInfo.fromNative(T, self, parameterNames);
     errdefer info.deinit(self.allocator);
 
@@ -413,7 +429,7 @@ pub fn getTypeLayout(self: *Rir, id: Rir.TypeId) error{InvalidType, OutOfMemory}
 
 
 /// Calls `allocator.dupe` on the input locals
-pub fn createForeign(self: *Rir, name: Rir.Name, tyId: Rir.TypeId, locals: []Rir.TypeId) error{TooManyForeignAddresses, OutOfMemory}! *Rir.ForeignAddress {
+pub fn createForeign(self: *Rir, name: Rir.NameId, tyId: Rir.TypeId, locals: []Rir.TypeId) error{TooManyForeignAddresses, OutOfMemory}! *Rir.ForeignAddress {
     const dupeLocals = try self.allocator.dupe(Rir.TypeId, locals);
     errdefer self.allocator.free(dupeLocals);
 
@@ -421,7 +437,7 @@ pub fn createForeign(self: *Rir, name: Rir.Name, tyId: Rir.TypeId, locals: []Rir
 }
 
 /// Does not call `allocator.dupe` on the input locals
-pub fn foreignPreallocated(self: *Rir, name: Rir.Name, tyId: Rir.TypeId, locals: []Rir.TypeId) error{TooManyForeignAddresses, OutOfMemory}! *Rir.ForeignAddress {
+pub fn foreignPreallocated(self: *Rir, name: Rir.NameId, tyId: Rir.TypeId, locals: []Rir.TypeId) error{TooManyForeignAddresses, OutOfMemory}! *Rir.ForeignAddress {
     const index = self.foreign_list.items.len;
 
     if (index >= Rir.MAX_FOREIGN_ADDRESSES) {
@@ -445,7 +461,7 @@ pub fn getForeign(self: *Rir, id: Rir.ForeignId) error{InvalidForeign}! *Rir.For
 }
 
 
-pub fn createModule(self: *Rir, name: Rir.Name) error{InvalidModule, OutOfMemory}! *Rir.Module {
+pub fn createModule(self: *Rir, name: Rir.NameId) error{InvalidModule, OutOfMemory}! *Rir.Module {
     const id = self.module_list.items.len;
 
     if (id >= Rir.MAX_MODULES) {

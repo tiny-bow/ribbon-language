@@ -1,6 +1,6 @@
 const std = @import("std");
 const ISA = @import("ISA");
-const RbcCore = @import("Rbc:Core");
+const RbcCore = @import("Rbc");
 
 const Rir = @import("../Rir.zig");
 
@@ -48,6 +48,8 @@ pub const OpCode = enum(u8) {
     ext, trunc, cast,
 
     // Rir-specific instructions:
+    new_local,
+
     ref_local,
     ref_block,
     ref_function,
@@ -95,7 +97,9 @@ pub const OpData = packed union {
     add: void, sub: void, mul: void, div: void, rem: void, neg: void,
     band: void, bor: void, bxor: void, bnot: void, bshiftl: void, bshiftr: void,
     eq: void, ne: void, lt: void, gt: void, le: void, ge: void,
-    ext: BitSize, trunc: BitSize, cast: Rir.TypeId,
+    ext: BitSize, trunc: BitSize, cast: void,
+
+    new_local: Rir.NameId,
 
     ref_local: Rir.LocalId,
     ref_block: Rir.BlockId,
@@ -123,6 +127,7 @@ pub const OpData = packed union {
                 .add, .sub, .mul, .div, .rem, .neg,
                 .band, .bor, .bxor, .bnot, .bshiftl, .bshiftr,
                 .eq, .ne, .lt, .gt, .le, .ge,
+                .new_local,
                 .discard,
             => return,
 
@@ -202,9 +207,14 @@ pub fn Immediate (comptime T: type) type {
     };
 }
 
+pub const Register = struct {
+    type: Rir.TypeId,
+    index: RbcCore.RegisterIndex,
+};
+
 pub const Operand = union(enum) {
     type: Rir.TypeId,
-    register: Rir.RegisterId,
+    register: Register,
     im_8: Immediate(u8),
     im_16: Immediate(u16),
     im_32: Immediate(u32),
@@ -217,10 +227,49 @@ pub const Operand = union(enum) {
     handler_set: Rir.HandlerSetId,
     local: Rir.LocalId,
 
+    pub fn to(self: Operand, comptime T: type) ?T {
+        return switch (self) {
+            .type => |x| if (comptime T == Rir.TypeId) x else null,
+            .register => |x| if (comptime T == Register) x else null,
+            .im_8 => |x| if (comptime T == Immediate(u8)) x else null,
+            .im_16 => |x| if (comptime T == Immediate(u16)) x else null,
+            .im_32 => |x| if (comptime T == Immediate(u32)) x else null,
+            .im_64 => |x| if (comptime T == Immediate(u64)) x else null,
+            .block => |x| if (comptime T == Rir.BlockId) x else null,
+            .foreign => |x| if (comptime T == Rir.ForeignId) x else null,
+            .function => |x| if (comptime T == Rir.Ref(Rir.FunctionId)) x else null,
+            .global => |x| if (comptime T == Rir.Ref(Rir.GlobalId)) x else null,
+            .upvalue => |x| if (comptime T == Rir.UpvalueId) x else null,
+            .handler_set => |x| if (comptime T == Rir.HandlerSetId) x else null,
+            .local => |x| if (comptime T == Rir.LocalId) x else null,
+        };
+    }
+
+    pub fn from(value: anytype) Operand {
+        const T = @TypeOf(value);
+        return switch (T) {
+            Operand => value,
+            Rir.TypeId => .{ .type = value },
+            Register => .{ .register = value },
+            Immediate(u8) => .{ .im_8 = value },
+            Immediate(u16) => .{ .im_16 = value },
+            Immediate(u32) => .{ .im_32 = value },
+            Immediate(u64) => .{ .im_64 = value },
+            Rir.BlockId => .{ .block = value },
+            Rir.ForeignId => .{ .foreign = value },
+            Rir.Ref(Rir.FunctionId) => .{ .function = value },
+            Rir.Ref(Rir.GlobalId) => .{ .global = value },
+            Rir.UpvalueId => .{ .upvalue = value },
+            Rir.HandlerSetId => .{ .handler_set = value },
+            Rir.LocalId => .{ .local = value },
+            else => @compileError("Unsupported operand type " ++ @typeName(T)),
+        };
+    }
+
     pub fn TypeOf(comptime tag: ?std.meta.Tag(Operand)) type {
         return if (tag) |t| switch (t) {
             .type => Rir.TypeId,
-            .register => Rir.RegisterId,
+            .register => Register,
             .im_8 => Immediate(u8),
             .im_16 => Immediate(u16),
             .im_32 => Immediate(u32),
@@ -239,7 +288,7 @@ pub const Operand = union(enum) {
     pub fn mem_const(self: *const Operand) []const u8 {
         return switch (self.*) {
             .type => |*x| std.mem.sliceAsBytes(@as([*]const Rir.TypeId, @ptrCast(x))[0..1]),
-            .register => |*x| std.mem.sliceAsBytes(@as([*]const Rir.RegisterId, @ptrCast(x))[0..1]),
+            .register => |*x| std.mem.sliceAsBytes(@as([*]const Register, @ptrCast(x))[0..1]),
             .im_8 => |*x| std.mem.sliceAsBytes(@as([*]const u8, @ptrCast(&x.data))[0..1]),
             .im_16 => |*x| std.mem.sliceAsBytes(@as([*]const u16, @ptrCast(&x.data))[0..1]),
             .im_32 => |*x| std.mem.sliceAsBytes(@as([*]const u32, @ptrCast(&x.data))[0..1]),
@@ -257,7 +306,7 @@ pub const Operand = union(enum) {
     pub fn mem(self: *Operand) []u8 {
         return switch (self.*) {
             .type => |*x| std.mem.sliceAsBytes(@as([*]Rir.TypeId, @ptrCast(x))[0..1]),
-            .register => |*x| std.mem.sliceAsBytes(@as([*]Rir.RegisterId, @ptrCast(x))[0..1]),
+            .register => |*x| std.mem.sliceAsBytes(@as([*]Register, @ptrCast(x))[0..1]),
             .im_8 => |*x| std.mem.sliceAsBytes(@as([*]u8, @ptrCast(&x.data))[0..1]),
             .im_16 => |*x| std.mem.sliceAsBytes(@as([*]u16, @ptrCast(&x.data))[0..1]),
             .im_32 => |*x| std.mem.sliceAsBytes(@as([*]u32, @ptrCast(&x.data))[0..1]),

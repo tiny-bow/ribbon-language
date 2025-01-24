@@ -1,23 +1,25 @@
 const std = @import("std");
 const MiscUtils = @import("Utils").Misc;
 const ISA = @import("ISA");
-const RbcCore = @import("Rbc:Core");
-const RbcBuilder = @import("Rbc:Builder");
+const RbcCore = @import("Rbc");
+const RbcBuilder = @import("RbcBuilder");
 
 const Rir = @import("../Rir.zig");
 
 
 const GlobalList = std.ArrayListUnmanaged(*Rir.Global);
 const FunctionList = std.ArrayListUnmanaged(*Rir.Function);
+const HandlerSetList = std.ArrayListUnmanaged(*Rir.HandlerSet);
 
 pub const Module = struct {
     root: *Rir,
     id: Rir.ModuleId,
-    name: Rir.Name,
+    name: Rir.NameId,
     global_list: GlobalList = .{},
     function_list: FunctionList = .{},
+    handler_sets: HandlerSetList = .{},
 
-    pub fn init(root: *Rir, id: Rir.ModuleId, name: Rir.Name) error{OutOfMemory}! *Module {
+    pub fn init(root: *Rir, id: Rir.ModuleId, name: Rir.NameId) error{OutOfMemory}! *Module {
         const ptr = try root.allocator.create(Module);
         errdefer root.allocator.destroy(ptr);
 
@@ -31,15 +33,13 @@ pub const Module = struct {
     }
 
     pub fn deinit(self: *Module) void {
-        for (self.global_list.items) |g| {
-            g.deinit();
-        }
+        for (self.handler_sets.items) |x| x.deinit();
+        for (self.global_list.items) |x| x.deinit();
+        for (self.function_list.items) |x| x.deinit();
+
+        self.handler_sets.deinit(self.root.allocator);
 
         self.global_list.deinit(self.root.allocator);
-
-        for (self.function_list.items) |f| {
-            f.deinit();
-        }
 
         self.function_list.deinit(self.root.allocator);
 
@@ -72,7 +72,7 @@ pub const Module = struct {
 
 
     /// Calls `allocator.dupe` on the input bytes
-    pub fn createGlobal(self: *Module, name: Rir.Name, tyId: Rir.TypeId, bytes: []const u8) error{TooManyGlobals, OutOfMemory}! *Rir.Global {
+    pub fn createGlobal(self: *Module, name: Rir.NameId, tyId: Rir.TypeId, bytes: []const u8) error{TooManyGlobals, OutOfMemory}! *Rir.Global {
         const dupeBytes = try self.root.allocator.dupe(u8, bytes);
         errdefer self.root.allocator.free(dupeBytes);
 
@@ -80,7 +80,7 @@ pub const Module = struct {
     }
 
     /// Does not call `allocator.dupe` on the input bytes
-    pub fn createGlobalPreallocated(self: *Module, name: Rir.Name, tyId: Rir.TypeId, bytes: []u8) error{TooManyGlobals, OutOfMemory}! *Rir.Global {
+    pub fn createGlobalPreallocated(self: *Module, name: Rir.NameId, tyId: Rir.TypeId, bytes: []u8) error{TooManyGlobals, OutOfMemory}! *Rir.Global {
         const index = self.global_list.items.len;
 
         if (index >= Rir.MAX_GLOBALS) {
@@ -95,7 +95,7 @@ pub const Module = struct {
         return global;
     }
 
-    pub fn createGlobalFromNative(self: *Module, name: Rir.Name, value: anytype) error{TooManyGlobals, TooManyTypes, OutOfMemory}! *Rir.Global {
+    pub fn createGlobalFromNative(self: *Module, name: Rir.NameId, value: anytype) error{TooManyGlobals, TooManyTypes, TooManyNames, OutOfMemory}! *Rir.Global {
         const T = @TypeOf(value);
         const ty = try self.root.createTypeFromNative(T, null, null);
 
@@ -110,7 +110,7 @@ pub const Module = struct {
         return self.global_list.items[@intFromEnum(id)];
     }
 
-    pub fn createFunction(self: *Module, name: Rir.Name, tyId: Rir.TypeId) error{InvalidType, TooManyFunctions, OutOfMemory}! *Rir.Function {
+    pub fn createFunction(self: *Module, name: Rir.NameId, tyId: Rir.TypeId) error{InvalidType, TooManyFunctions, OutOfMemory}! *Rir.Function {
         const index = self.function_list.items.len;
 
         if (index >= Rir.MAX_FUNCTIONS) {
@@ -130,5 +130,27 @@ pub const Module = struct {
         }
 
         return self.function_list.items[@intFromEnum(id)];
+    }
+
+    pub fn createHandlerSet(self: *Module) error{TooManyHandlerSets, OutOfMemory}! *Rir.HandlerSet {
+        const index = self.handler_sets.items.len;
+
+        if (index >= Rir.MAX_HANDLER_SETS) {
+            return error.TooManyHandlerSets;
+        }
+
+        const builder = try Rir.HandlerSet.init(self, @enumFromInt(index));
+
+        try self.handler_sets.append(self.root.allocator, builder);
+
+        return builder;
+    }
+
+    pub fn getHandlerSet(self: *const Module, id: Rir.HandlerSetId) error{InvalidHandlerSet}! *Rir.HandlerSet {
+        if (@intFromEnum(id) >= self.handler_sets.items.len) {
+            return error.InvalidHandlerSet;
+        }
+
+        return self.handler_sets.items[@intFromEnum(id)];
     }
 };

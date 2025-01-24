@@ -2,6 +2,10 @@ const std = @import("std");
 
 const Rir = @import("Rir");
 
+const Rbc = @import("Rbc");
+
+const RbcGenerator = @import("RbcGenerator");
+
 pub const std_options = std.Options {
     .log_level = .debug,
 };
@@ -49,7 +53,7 @@ pub fn main() !void {
     { // incr
         const one = try module.createGlobalFromNative(try ir.internName("one"), @as(i32, 1));
 
-        const Incr = try ir.createTypeFromNative(fn (i32) i32, null, &.{"n"});
+        const Incr = try ir.createTypeFromNative(fn (i32) i32, null, &.{try ir.internName("n")});
         const incr = try module.createFunction(try ir.internName("incr"), Incr.id);
 
         const arg = try incr.getArgument(0);
@@ -61,15 +65,15 @@ pub fn main() !void {
         try entry.ret();
     }
 
-    { // fib
-        const Fib = try ir.createTypeFromNative(fn (i32) i32, null, &.{"n"});
-        const fib = try module.createFunction(try ir.internName("fib"), Fib.id);
+    const fib = fib: {
+        const Fib = try ir.createTypeFromNative(fn (i32) i32, null, &.{try ir.internName("n")});
+        const func = try module.createFunction(try ir.internName("fib"), Fib.id);
 
-        const arg = try fib.getArgument(0);
+        const arg = try func.getArgument(0);
 
-        const entry = fib.getEntryBlock();
-        const thenBlock = try fib.createBlock(entry, "then");
-        const elseBlock = try fib.createBlock(entry, "else");
+        const entry = func.getEntryBlock();
+        const thenBlock = try func.createBlock(entry, try ir.internName("then"));
+        const elseBlock = try func.createBlock(entry, try ir.internName("else"));
 
         try entry.ref_local(arg.id);
         try entry.im(@as(i32, 2));
@@ -84,18 +88,20 @@ pub fn main() !void {
         try elseBlock.ref_local(arg.id);
         try elseBlock.im(@as(i32, 1));
         try elseBlock.sub();
-        try elseBlock.ref_function(fib.id);
+        try elseBlock.ref_function(func.id);
         try elseBlock.call();
 
         try elseBlock.ref_local(arg.id);
         try elseBlock.im(@as(i32, 2));
         try elseBlock.sub();
-        try elseBlock.ref_function(fib.id);
+        try elseBlock.ref_function(func.id);
         try elseBlock.call();
 
         try elseBlock.add();
         try elseBlock.ret();
-    }
+
+        break :fib func;
+    };
 
     { // formatting
         var text = std.ArrayList(u8).init(allocator);
@@ -116,5 +122,21 @@ pub fn main() !void {
         try formatter.writeAll("```\n");
 
         std.debug.print("{s}", .{text.items});
+    }
+
+    { // codegen
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        var gen = try RbcGenerator.init(arena.allocator(), ir);
+
+        const exports = [_]RbcGenerator.Export {
+            .@"export"(fib),
+        };
+
+        const program = try gen.generate(allocator, &exports);
+        defer program.deinit(allocator);
+
+        std.debug.print("{}", .{program});
     }
 }

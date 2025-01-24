@@ -63,6 +63,20 @@ pub const Formatter = struct {
         return self.state.function orelse error.NoFormatterActiveFunction;
     }
 
+    pub fn getBlock(self: Formatter) !*const Rir.Block {
+        return self.state.block orelse error.NoFormatterActiveBlock;
+    }
+
+    pub fn setBlock(self: Formatter, b: ?*const Rir.Block) void {
+        self.state.block = b;
+    }
+
+    pub fn swapBlock(self: Formatter, b: ?*const Rir.Block) ?*const Rir.Block {
+        const oldBlock = self.getBlock() catch null;
+        self.setBlock(b);
+        return oldBlock;
+    }
+
     pub fn getOpCodeDataSplit(self: Formatter) ?u21 {
         return self.state.op_code_data_split;
     }
@@ -111,6 +125,9 @@ pub const Formatter = struct {
         if (std.meta.hasMethod(T, "onFormat")) {
             try value.onFormat(self);
         } else switch(T) {
+            Rir.NameId => {
+                try self.writeAll(try self.getIR().getName(value));
+            },
             Rir.ModuleId => {
                 const x = self.wrap((try self.getIR().getModule(value)).name);
                 if (self.getFlag(.show_ids)) try self.print("{}#{}", .{x, @intFromEnum(value)})
@@ -130,8 +147,8 @@ pub const Formatter = struct {
                 }
             },
             Rir.LocalId => {
-                if (self.getFunction()) |func| {
-                    const x = self.wrap((try func.getLocal(value)).name);
+                if (self.getBlock()) |bl| {
+                    const x = self.wrap((try bl.getLocal(value)).name);
                     if (self.getFlag(.show_ids)) try self.print("{}#{}", .{x, @intFromEnum(value)})
                     else try x.fmt();
                 } else |_| {
@@ -278,6 +295,7 @@ const FormatterState = struct {
     ir: *const Rir,
     module: ?*const Rir.Module = null,
     function: ?*const Rir.Function = null,
+    block: ?*const Rir.Block = null,
 
     writer: std.io.AnyWriter,
 

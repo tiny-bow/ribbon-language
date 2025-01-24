@@ -6,12 +6,12 @@ const Rir = @import("../Rir.zig");
 pub const ForeignAddress = struct {
     root: *Rir,
     id: Rir.ForeignId,
-    name: Rir.Name,
+    name: Rir.NameId,
     type: Rir.TypeId,
     locals: []Rir.TypeId,
 
 
-    pub fn init(root: *Rir, id: Rir.ForeignId, name: Rir.Name, tyId: Rir.TypeId, locals: []Rir.TypeId) error{OutOfMemory}! *ForeignAddress {
+    pub fn init(root: *Rir, id: Rir.ForeignId, name: Rir.NameId, tyId: Rir.TypeId, locals: []Rir.TypeId) error{OutOfMemory}! *ForeignAddress {
         errdefer root.allocator.free(locals);
 
         const ptr = try root.allocator.create(ForeignAddress);

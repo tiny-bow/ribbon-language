@@ -6,11 +6,11 @@ const Rir = @import("../Rir.zig");
 pub const Type = struct {
     ir: *Rir,
     id: Rir.TypeId,
-    name: ?Rir.Name,
+    name: ?Rir.NameId,
     hash: u32,
     info: TypeInfo,
 
-    pub fn init(ir: *Rir, id: Rir.TypeId, name: ?Rir.Name, info: TypeInfo) Type {
+    pub fn init(ir: *Rir, id: Rir.TypeId, name: ?Rir.NameId, info: TypeInfo) Type {
         return Type {
             .ir = ir,
             .id = id,
@@ -320,22 +320,6 @@ pub const Type = struct {
                         const fieldLayout = try self.ir.getTypeLayout(field.type);
                         const fieldOffset = layout.field_offsets[i];
                         const fieldMemory = (memory.ptr + fieldOffset)[0..fieldLayout.dimensions.size];
-                        Rir.log.err(
-                            \\name = {s}
-                            \\  type = {}
-                            \\  layout = {}
-                            \\  offset = {}
-                            \\  memory_base = {x}
-                            \\  memory_len = {d}
-                            ,.{
-                                field.name,
-                                fieldType,
-                                fieldLayout,
-                                fieldOffset,
-                                @intFromPtr(fieldMemory.ptr),
-                                fieldMemory.len,
-                            }
-                        );
 
                         try formatter.print("{} = ", .{formatter.wrap(field.name)});
 
@@ -389,6 +373,10 @@ pub const Type = struct {
 
             .Function => try formatter.print("[{} @ {x}]", .{formatter.wrap(self), @intFromPtr(memory.ptr)}),
         }
+    }
+
+    pub fn getLayout(self: *const Type) !*const Rir.Layout {
+        return self.ir.getTypeLayout(self.id);
     }
 };
 
@@ -625,7 +613,7 @@ pub const TypeInfo = union(enum) {
         };
     }
 
-    pub fn fromNative(comptime T: type, rir: *Rir, parameterNames: ?[]const Rir.Name) !Rir.TypeInfo {
+    pub fn fromNative(comptime T: type, rir: *Rir, parameterNames: ?[]const Rir.NameId) !Rir.TypeInfo {
         switch (T) {
             void => return .Nil,
             bool => return .Bool,
@@ -690,7 +678,9 @@ pub const TypeInfo = union(enum) {
                         const paramType = try rir.createTypeFromNative(param.type.?, null, null);
 
                         parameters[i] = Rir.type_info.Parameter {
-                            .name = if (parameterNames) |names| names[i] else std.fmt.comptimePrint("arg{}", .{i}),
+                            .name =
+                                if (parameterNames) |names| names[i]
+                                else try rir.internName(std.fmt.comptimePrint("arg{}", .{i})),
                             .type = paramType.id,
                         };
                     }
@@ -733,7 +723,7 @@ pub const Slice = struct {
 };
 
 pub const StructField = struct {
-    name: Rir.Name,
+    name: Rir.NameId,
     type: Rir.TypeId,
 
     pub fn onFormat(self: StructField, formatter: Rir.Formatter) !void {
@@ -774,7 +764,7 @@ pub const Struct = struct {
 
 pub const UnionField = struct {
     discriminant: Rir.Operand,
-    name: Rir.Name,
+    name: Rir.NameId,
     type: Rir.TypeId,
 
     pub fn onFormat(self: UnionField, formatter: Rir.Formatter) !void {
@@ -815,11 +805,11 @@ pub const Union = struct {
 };
 
 pub const Parameter = struct {
-    name: Rir.Name,
+    name: Rir.NameId,
     type: Rir.TypeId,
 
     pub fn onFormat(self: Parameter, formatter: Rir.Formatter) !void {
-        try formatter.writeAll(self.name);
+        try formatter.fmt(self.name);
         try formatter.writeAll(": ");
         try formatter.fmt(self.type);
     }
@@ -877,14 +867,45 @@ pub const BASIC_TYPE_NAMES = [_][:0]const u8 {
     "Type",
 };
 
-pub const BASIC_TYPE_IDS = type_ids: {
+pub const BASIC_TYPE_ID_ARRAY = type_id_array: {
     var type_ids = [1]Rir.TypeId { undefined } ** BASIC_TYPE_NAMES.len;
 
     for (0..BASIC_TYPE_NAMES.len) |i| {
         type_ids[i] = @enumFromInt(i);
     }
 
-    break :type_ids type_ids;
+    break :type_id_array type_ids;
+};
+
+pub const BASIC_TYPE_IDS = type_ids: {
+    var fields = [1]std.builtin.Type.StructField {undefined} ** BASIC_TYPE_NAMES.len;
+
+    for (BASIC_TYPE_NAMES, 0..) |name, i| {
+        fields[i] = std.builtin.Type.StructField {
+            .name = name,
+            .type = Rir.TypeId,
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = @alignOf(Rir.TypeId),
+        };
+    }
+
+    const T = @Type(.{
+        .@"struct" = std.builtin.Type.Struct {
+            .layout = .auto,
+            .fields = &fields,
+            .decls = &.{},
+            .is_tuple = false,
+        }
+    });
+
+    var typeIds: T = undefined;
+
+    for (BASIC_TYPE_NAMES, 0..) |name, i| {
+        @field(typeIds, name) = @enumFromInt(i);
+    }
+
+    break :type_ids typeIds;
 };
 
 pub const BASIC_TYPE_INFO = types: {

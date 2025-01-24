@@ -60,6 +60,7 @@ fn EvidenceMap(comptime T: type) type {
 
 
 pub const Global = struct {
+    index: Core.GlobalIndex,
     alignment: Core.Info.ValueAlignment,
     initial: []u8,
 };
@@ -215,36 +216,37 @@ pub fn generateHandlerSetList(self: *const Builder, allocator: std.mem.Allocator
     return handlerSets;
 }
 
-pub fn getGlobal(self: *const Builder, index: Core.GlobalIndex) Error!Global {
+pub fn getGlobal(self: *const Builder, index: Core.GlobalIndex) Error! *Global {
     if (index >= self.globals.items.len) {
         return Error.InvalidIndex;
     }
 
-    return self.globals.items[index];
+    return &self.globals.items[index];
 }
 
-pub fn globalBytes(self: *Builder, alignment: Core.Info.ValueAlignment, initial: []u8) Error!Core.GlobalIndex {
+pub fn globalBytes(self: *Builder, alignment: Core.Info.ValueAlignment, initial: []u8) Error! *Global {
     const index = self.globals.items.len;
     if (index >= std.math.maxInt(Core.GlobalIndex)) {
         return Error.TooManyGlobals;
     }
 
     try self.globals.append(self.allocator, .{
+        .index = @truncate(index),
         .alignment = alignment,
         .initial = try self.allocator.dupe(u8, initial),
     });
 
-    return @truncate(index);
+    return &self.globals.items[index];
 }
 
-pub fn globalNative(self: *Builder, value: anytype) Error!Core.GlobalIndex {
+pub fn globalNative(self: *Builder, value: anytype) Error! *Global {
     const T = @TypeOf(value);
     const initial = try self.allocator.create(T);
     initial.* = value;
     return self.globalBytes(@alignOf(T), @as([*]u8, @ptrCast(initial))[0..@sizeOf(T)]);
 }
 
-pub fn getFunction(self: *const Builder, index: Core.FunctionIndex) Error!*Function {
+pub fn getFunction(self: *const Builder, index: Core.FunctionIndex) Error! *Function {
     if (index >= self.functions.items.len) {
         return Error.InvalidIndex;
     }
@@ -270,7 +272,7 @@ pub fn hasMain(self: *const Builder) bool {
     return self.main_function != null;
 }
 
-pub fn main(self: *Builder) Error!*FunctionBuilder {
+pub fn main(self: *Builder) Error! *FunctionBuilder {
     if (self.hasMain()) return Error.MultipleMains;
 
     const func = try self.function();
@@ -280,7 +282,7 @@ pub fn main(self: *Builder) Error!*FunctionBuilder {
     return func;
 }
 
-pub fn foreign(self: *Builder, num_arguments: Core.RegisterIndex, num_registers: Core.RegisterIndex) Error!*Function.Foreign {
+pub fn foreign(self: *Builder, num_arguments: Core.RegisterIndex, num_registers: Core.RegisterIndex) Error! *Function.Foreign {
     const index = self.functions.items.len;
     if (index >= std.math.maxInt(Core.FunctionIndex)) {
         return Error.TooManyFunctions;
@@ -294,7 +296,7 @@ pub fn foreign(self: *Builder, num_arguments: Core.RegisterIndex, num_registers:
     return &func.foreign;
 }
 
-pub fn evidence(self: *Builder) Error!Core.EvidenceIndex {
+pub fn evidence(self: *Builder) Error! Core.EvidenceIndex {
     const index = self.evidences;
     if (index >= Core.EVIDENCE_SENTINEL) {
         return Error.TooManyEvidences;
@@ -304,7 +306,7 @@ pub fn evidence(self: *Builder) Error!Core.EvidenceIndex {
 }
 
 
-pub fn getHandlerSet(self: *const Builder, index: Core.HandlerSetIndex) Error!*HandlerSetBuilder {
+pub fn getHandlerSet(self: *const Builder, index: Core.HandlerSetIndex) Error! *HandlerSetBuilder {
     if (index >= self.handler_sets.items.len) {
         return Error.InvalidIndex;
     }
@@ -312,7 +314,7 @@ pub fn getHandlerSet(self: *const Builder, index: Core.HandlerSetIndex) Error!*H
     return self.handler_sets.items[index];
 }
 
-pub fn handlerSet(self: *Builder) Error!*HandlerSetBuilder {
+pub fn handlerSet(self: *Builder) Error! *HandlerSetBuilder {
     const index = self.handler_sets.items.len;
     if (index >= std.math.maxInt(Core.HandlerSetIndex)) {
         return Error.TooManyHandlerSets;
@@ -326,7 +328,7 @@ pub fn handlerSet(self: *Builder) Error!*HandlerSetBuilder {
 }
 
 
-pub fn extractFunctionIndex(self: *const Builder, f: anytype) Error!Core.FunctionIndex {
+pub fn extractFunctionIndex(self: *const Builder, f: anytype) Error! Core.FunctionIndex {
     switch (@TypeOf(f)) {
         *Core.FunctionIndex => return extractFunctionIndex(self, f.*),
         Core.FunctionIndex => {
@@ -364,7 +366,7 @@ pub fn extractFunctionIndex(self: *const Builder, f: anytype) Error!Core.Functio
     }
 }
 
-pub fn extractHandlerSetIndex(self: *const Builder, h: anytype) Error!Core.HandlerSetIndex {
+pub fn extractHandlerSetIndex(self: *const Builder, h: anytype) Error! Core.HandlerSetIndex {
     switch (@TypeOf(h)) {
         *Core.HandlerSetIndex => return extractHandlerSetIndex(self, h.*),
         Core.HandlerSetIndex => {
