@@ -17,6 +17,9 @@ pub const Error = Rir.Error || RbcBuilder.Error || error {
     StackUnderflow,
     StackNotCleared,
     StackBranchMismatch,
+    LocalNotAssignedStorage,
+    LocalNotAssignedRegister,
+    ExpectedRegister,
 };
 
 

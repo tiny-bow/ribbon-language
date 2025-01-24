@@ -35,6 +35,7 @@ pub const Local = struct {
     name: Rir.NameId,
     type: Rir.TypeId,
     lifetime_start: ?Rir.Offset,
+    register: ?Rir.RegisterIndex = null,
     storage: LocalStorage = .none,
 
     pub fn init(block: *Rir.Block, id: Rir.LocalId, name: Rir.NameId, tyId: Rir.TypeId) error{OutOfMemory}! *Local {

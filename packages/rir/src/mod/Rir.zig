@@ -7,7 +7,7 @@ test {
 const std = @import("std");
 const MiscUtils = @import("Utils").Misc;
 const TypeUtils = @import("Utils").Type;
-const RbcCore = @import("Rbc");
+const Rbc = @import("Rbc");
 
 pub const log = std.log.scoped(.Rir);
 
@@ -35,6 +35,7 @@ pub const Operand = instruction.Operand;
 pub const OpCode = instruction.OpCode;
 pub const OpData = instruction.OpData;
 pub const Register = instruction.Register;
+pub const RValue = instruction.RValue;
 
 pub const type_info = @import("Rir/type_info.zig");
 pub const Type = type_info.Type;
@@ -80,23 +81,23 @@ pub const MAX_GLOBALS = std.math.maxInt(std.meta.Tag(Rir.GlobalId));
 pub const MAX_FOREIGN_ADDRESSES = std.math.maxInt(std.meta.Tag(Rir.ForeignId));
 pub const MAX_FUNCTIONS = std.math.maxInt(std.meta.Tag(Rir.FunctionId));
 pub const MAX_HANDLER_SETS = std.math.maxInt(std.meta.Tag(Rir.HandlerSetId));
-pub const MAX_EVIDENCE = RbcCore.EVIDENCE_SENTINEL;
-pub const MAX_BLOCKS = RbcCore.MAX_BLOCKS;
-pub const MAX_REGISTERS = RbcCore.MAX_REGISTERS;
+pub const MAX_EVIDENCE = Rbc.EVIDENCE_SENTINEL;
+pub const MAX_BLOCKS = Rbc.MAX_BLOCKS;
+pub const MAX_REGISTERS = Rbc.MAX_REGISTERS;
 pub const MAX_LOCALS = std.math.maxInt(std.meta.Tag(Rir.LocalId));
 pub const MAX_NAMES = std.math.maxInt(std.meta.Tag(Rir.NameId));
 
 pub const ModuleId = NewType("ModuleId", u16);
-pub const RegisterId = NewType("RegisterId", RbcCore.RegisterIndex);
-pub const RegisterOffset = NewType("RegisterOffset", RbcCore.RegisterLocalOffset);
-pub const HandlerSetId = NewType("HandlerSetId", RbcCore.HandlerSetIndex);
-pub const TypeId = NewType("TypeId", RbcCore.Info.TypeIndex);
-pub const BlockId = NewType("BlockId", RbcCore.BlockIndex);
-pub const FunctionId = NewType("FunctionId", RbcCore.FunctionIndex);
-pub const ForeignId = NewType("ForeignId", RbcCore.ForeignId);
-pub const GlobalId = NewType("GlobalId", RbcCore.GlobalIndex);
-pub const UpvalueId = NewType("UpvalueId", RbcCore.UpvalueIndex);
-pub const EvidenceId = NewType("EvidenceId", RbcCore.EvidenceIndex);
+pub const RegisterId = NewType("RegisterId", Rbc.RegisterIndex);
+pub const RegisterOffset = NewType("RegisterOffset", Rbc.RegisterLocalOffset);
+pub const HandlerSetId = NewType("HandlerSetId", Rbc.HandlerSetIndex);
+pub const TypeId = NewType("TypeId", Rbc.Info.TypeIndex);
+pub const BlockId = NewType("BlockId", Rbc.BlockIndex);
+pub const FunctionId = NewType("FunctionId", Rbc.FunctionIndex);
+pub const ForeignId = NewType("ForeignId", Rbc.ForeignId);
+pub const GlobalId = NewType("GlobalId", Rbc.GlobalIndex);
+pub const UpvalueId = NewType("UpvalueId", Rbc.UpvalueIndex);
+pub const EvidenceId = NewType("EvidenceId", Rbc.EvidenceIndex);
 pub const LocalId = NewType("LocalId", u16);
 pub const NameId = NewType("NameId", u16);
 pub const FieldId = NewType("FieldId", u16);
@@ -107,6 +108,8 @@ pub const Arity = u8;
 pub const Alignment = u12; // 2^12 = 4096 = page size; should be enough for anyone (famous last words)
 pub const Size = u64;
 pub const Offset = u64;
+
+pub const RegisterIndex = Rbc.RegisterIndex;
 
 pub const Dimensions = packed struct {
     size: Size = 0,

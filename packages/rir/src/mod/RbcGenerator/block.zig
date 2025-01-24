@@ -37,7 +37,7 @@ pub const Block = struct {
         self.function.module.root.allocator.destroy(self);
     }
 
-    pub fn generate(self: *Block) !void {
+    pub fn generate(self: *Block) Generator.Error! void {
         const instrs = self.ir.instructions.items;
 
         var i: usize = 0;
@@ -109,11 +109,10 @@ pub const Block = struct {
                     const thenId = try self.pop(.block);
                     const elseId = try self.pop(.block);
 
-                    const condReg = try self.rvalue(condOperand);
+                    const condReg = try (try self.rvalue(condOperand)).forceRegister();
 
                     const thenChild = try self.function.compileBlock(thenId);
                     const elseChild = try self.function.compileBlock(elseId);
-
 
                     if (thenChild.stackDepth() != elseChild.stackDepth()) return error.StackBranchMismatch;
 
@@ -172,7 +171,7 @@ pub const Block = struct {
                     const condOperand = try self.pop(null);
                     const thenId = try self.pop(.block);
 
-                    const condReg = try self.rvalue(condOperand);
+                    const condReg = try (try self.rvalue(condOperand)).forceRegister();
 
                     const thenChild = try self.function.compileBlock(thenId);
 
@@ -205,7 +204,7 @@ pub const Block = struct {
                             const condOperand = try self.pop(null);
                             const reId = try self.pop(.block);
 
-                            const condReg = try self.rvalue(condOperand);
+                            const condReg = try (try self.rvalue(condOperand)).forceRegister();
 
                             const reBlock = try self.function.getBlock(reId);
 
@@ -215,7 +214,7 @@ pub const Block = struct {
                             const condOperand = try self.pop(null);
                             const reId = try self.pop(.block);
 
-                            const condReg = try self.rvalue(condOperand);
+                            const condReg = try (try self.rvalue(condOperand)).forceRegister();
 
                             const reBlock = try self.function.getBlock(reId);
 
@@ -229,25 +228,28 @@ pub const Block = struct {
                     const brId = try self.pop(.block);
                     const brBlock = try self.function.getBlock(brId);
 
-                    // TODO: immediates
                     switch (zeroCheck) {
                         .none => try self.builder.br(brBlock.builder),
                         .zero => switch (self.stackDepth()) {
                             0 => return error.StackUnderflow,
                             1 => {
                                 const condOperand = try self.pop(null);
-                                const condReg = try self.rvalue(condOperand);
+                                const condReg = try (try self.rvalue(condOperand)).forceRegister();
 
                                 try self.builder.br_z(brBlock.builder, condReg.index);
                             },
                             2 => {
                                 const condOperand = try self.pop(null);
-                                const condReg = try self.rvalue(condOperand);
+                                const condReg = try (try self.rvalue(condOperand)).forceRegister();
 
                                 const elseOperand = try self.pop(null);
-                                const elseReg = try self.rvalue(elseOperand);
+                                const elseRValue = try self.rvalue(elseOperand);
 
-                                try self.builder.br_z_v(brBlock.builder, condReg.index, elseReg.index);
+                                switch (elseRValue) {
+                                    .register => |r| try self.builder.br_z_v(brBlock.builder, condReg.index, r.index),
+                                    .im_0 => try self.builder.br_z(brBlock.builder, condReg.index),
+                                    inline .im_8, .im_16, .im_32, .im_64  => |im| try self.builder.br_z_im_v(brBlock.builder, condReg.index, im.data),
+                                }
                             },
                             else => return error.StackNotCleared,
                         },
@@ -255,11 +257,23 @@ pub const Block = struct {
                             0 => return error.StackUnderflow,
                             1 => {
                                 const condOperand = try self.pop(null);
-                                const condReg = try self.rvalue(condOperand);
+                                const condReg = try (try self.rvalue(condOperand)).forceRegister();
 
                                 try self.builder.br_nz(brBlock.builder, condReg.index);
                             },
-                            2 => {},
+                            2 => {
+                                const condOperand = try self.pop(null);
+                                const condReg = try (try self.rvalue(condOperand)).forceRegister();
+
+                                const elseOperand = try self.pop(null);
+                                const elseRValue = try self.rvalue(elseOperand);
+
+                                switch (elseRValue) {
+                                    .register => |r| try self.builder.br_nz_v(brBlock.builder, condReg.index, r.index),
+                                    .im_0 => try self.builder.br_nz(brBlock.builder, condReg.index),
+                                    inline .im_8, .im_16, .im_32, .im_64  => |im| try self.builder.br_nz_im_v(brBlock.builder, condReg.index, im.data),
+                                }
+                            },
                             else => return error.StackNotCleared,
                         },
                     }
@@ -316,19 +330,19 @@ pub const Block = struct {
                     try self.push(local.id);
                 },
 
-                .ref_local => @panic("ref_local nyi"),
-                .ref_block => @panic("ref_block nyi"),
-                .ref_function => @panic("ref_function nyi"),
-                .ref_foreign => @panic("ref_foreign nyi"),
-                .ref_global => @panic("ref_global nyi"),
-                .ref_upvalue => @panic("ref_upvalue nyi"),
+                .ref_local => try self.push(instr.data.ref_local),
+                .ref_block => try self.push(instr.data.ref_block),
+                .ref_function => try self.push(instr.data.ref_function),
+                .ref_foreign => try self.push(instr.data.ref_foreign),
+                .ref_global => try self.push(instr.data.ref_global),
+                .ref_upvalue => try self.push(instr.data.ref_upvalue),
 
                 .discard => @panic("discard nyi"),
 
-                .im_b => @panic("im_b nyi"),
-                .im_s => @panic("im_s nyi"),
-                .im_i => @panic("im_i nyi"),
-                .im_w => @panic("im_w nyi"),
+                .im_b => try self.push(instr.data.im_b),
+                .im_s => try self.push(instr.data.im_s),
+                .im_i => try self.push(instr.data.im_i),
+                .im_w => try self.push(instr.data.im_w),
             }
         }
     }
@@ -412,7 +426,7 @@ pub const Block = struct {
         @panic("lvalue nyi");
     }
 
-    pub fn rvalue(_: *Block, operand: Rir.Operand) !Rir.Register {
+    pub fn rvalue(self: *Block, operand: Rir.Operand) error{InvalidOperand, InvalidLocal, LocalNotAssignedStorage, LocalNotAssignedRegister}! Rir.RValue {
         return switch (operand) {
             inline
                 .type,
@@ -422,18 +436,32 @@ pub const Block = struct {
                 .foreign,
             => error.InvalidOperand,
 
-            .register => |r| r,
+            .register => |r| .{.register = r},
 
-            .im_8 => @panic("im_8 nyi"),
-            .im_16 => @panic("im_16 nyi"),
-            .im_32 => @panic("im_32 nyi"),
-            .im_64 => @panic("im_64 nyi"),
+            .im_8 => |im| .{.im_8 = im},
+            .im_16 => |im| .{.im_16 = im},
+            .im_32 => |im| .{.im_32 = im},
+            .im_64 => |im| .{.im_64 = im},
 
             .global => @panic("global nyi"),
 
             .upvalue => @panic("upvalue nyi"),
 
-            .local => @panic("local nyi"),
+            .local => |id| local: {
+                const local = try self.getLocal(id);
+
+                break :local switch (local.storage) {
+                    .none => error.LocalNotAssignedStorage,
+                    .zero_size => .im_0,
+                    .register, .stack => Rir.RValue {
+                        .register = Rir.Register {
+                            .type = local.type,
+                            .index = local.register
+                                orelse return error.LocalNotAssignedRegister,
+                        },
+                    },
+                };
+            },
         };
     }
 

@@ -207,6 +207,22 @@ pub fn Immediate (comptime T: type) type {
     };
 }
 
+pub const RValue = union(enum) {
+    im_0: void,
+    im_8: Immediate(u8),
+    im_16: Immediate(u16),
+    im_32: Immediate(u32),
+    im_64: Immediate(u64),
+    register: Register,
+
+    pub fn forceRegister(self: RValue) error{ExpectedRegister} !Register {
+        return switch (self) {
+            .register => |r| r,
+            else => error.ExpectedRegister,
+        };
+    }
+};
+
 pub const Register = struct {
     type: Rir.TypeId,
     index: RbcCore.RegisterIndex,
