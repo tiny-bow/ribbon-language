@@ -178,18 +178,6 @@ pub const Block = struct {
         try op(self, .store, {});
     }
 
-    pub fn clear(self: *Block) !void {
-        try op(self, .clear, {});
-    }
-
-    pub fn swap(self: *Block) !void {
-        try op(self, .swap, {});
-    }
-
-    pub fn copy(self: *Block) !void {
-        try op(self, .copy, {});
-    }
-
     pub fn add(self: *Block) !void {
         try op(self, .add, {});
     }
@@ -274,6 +262,18 @@ pub const Block = struct {
         try op(self, .cast, {});
     }
 
+    pub fn clear(self: *Block, count: Rir.Index) !void {
+        try op(self, .clear, count);
+    }
+
+    pub fn swap(self: *Block, index: Rir.Index) !void {
+        try op(self, .swap, index);
+    }
+
+    pub fn copy(self: *Block, index: Rir.Index) !void {
+        try op(self, .copy, index);
+    }
+
     pub fn new_local(self: *Block, x: Rir.NameId) !void {
         try op(self, .new_local, x);
     }
@@ -308,11 +308,6 @@ pub const Block = struct {
 
     pub fn ref_upvalue(self: *Block, x: Rir.UpvalueId) !void {
         try op(self, .ref_upvalue, x);
-    }
-
-
-    pub fn discard(self: *Block) !void {
-        try op(self, .discard, {});
     }
 
 

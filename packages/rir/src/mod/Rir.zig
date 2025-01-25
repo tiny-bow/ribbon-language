@@ -104,6 +104,7 @@ pub const FieldId = NewType("FieldId", u16);
 
 // pub const Name = [:0]const u8;
 
+pub const Index = u8;
 pub const Arity = u8;
 pub const Alignment = u12; // 2^12 = 4096 = page size; should be enough for anyone (famous last words)
 pub const Size = u64;

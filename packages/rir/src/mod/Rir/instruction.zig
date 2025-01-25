@@ -35,17 +35,20 @@ pub const Instruction = packed struct {
 };
 
 pub const OpCode = enum(u8) {
-    // ISA instructions:
+    // ISA instructions matching ISA semantics:
     nop,
     halt, trap,
     block, with, @"if", when, re, br,
     call, prompt, ret, term,
     alloca, addr,
-    read, write, load, store, clear, swap, copy,
+    read, write, load, store,
     add, sub, mul, div, rem, neg,
     band, bor, bxor, bnot, bshiftl, bshiftr,
     eq, ne, lt, gt, le, ge,
     ext, trunc, cast,
+
+    // re-purposed ISA instructions:
+    clear, swap, copy,
 
     // Rir-specific instructions:
     new_local,
@@ -56,8 +59,6 @@ pub const OpCode = enum(u8) {
     ref_foreign,
     ref_global,
     ref_upvalue,
-
-    discard,
 
     im_b, im_s, im_i, im_w,
 
@@ -93,11 +94,13 @@ pub const OpData = packed union {
     @"if": ZeroCheck, when: ZeroCheck, re: OptZeroCheck, br: OptZeroCheck,
     call: void, prompt: void, ret: void, term: void,
     alloca: Rir.RegisterOffset, addr: void,
-    read: void, write: void, load: void, store: void, clear: void, swap: void, copy: void,
+    read: void, write: void, load: void, store: void,
     add: void, sub: void, mul: void, div: void, rem: void, neg: void,
     band: void, bor: void, bxor: void, bnot: void, bshiftl: void, bshiftr: void,
     eq: void, ne: void, lt: void, gt: void, le: void, ge: void,
     ext: BitSize, trunc: BitSize, cast: void,
+
+    clear: Rir.Index, swap: Rir.Index, copy: Rir.Index,
 
     new_local: Rir.NameId,
 
@@ -107,8 +110,6 @@ pub const OpData = packed union {
     ref_foreign: Rir.ForeignId,
     ref_global: Rir.Ref(Rir.GlobalId),
     ref_upvalue: Rir.UpvalueId,
-
-    discard: void,
 
     im_b: Immediate(u8),
     im_s: Immediate(u16),
@@ -123,12 +124,11 @@ pub const OpData = packed union {
                 .block, .with,
                 .call, .prompt, .ret, .term,
                 .addr,
-                .read, .write, .load, .store, .clear, .swap, .copy,
+                .read, .write, .load, .store,
                 .add, .sub, .mul, .div, .rem, .neg,
                 .band, .bor, .bxor, .bnot, .bshiftl, .bshiftr,
                 .eq, .ne, .lt, .gt, .le, .ge,
                 .new_local,
-                .discard,
             => return,
 
             .@"if" => try formatter.fmt(self.@"if"),
@@ -142,6 +142,10 @@ pub const OpData = packed union {
             .trunc => try formatter.fmt(self.trunc),
 
             .cast => try formatter.fmt(self.cast),
+
+            .clear => try formatter.fmt(self.clear),
+            .swap => try formatter.fmt(self.swap),
+            .copy => try formatter.fmt(self.copy),
 
             .ref_local => try formatter.fmt(self.ref_local),
             .ref_block => try formatter.fmt(self.ref_block),
@@ -190,8 +194,6 @@ pub fn Immediate (comptime T: type) type {
         type: Rir.TypeId,
 
         pub fn onFormat(self: *const Self, formatter: Rir.Formatter) !void {
-            try formatter.fmt(self.type);
-            try formatter.writeAll(" ");
             if (formatter.getFlag(.raw_immediates)) {
                 try formatter.writeAll("0x");
                 try std.fmt.formatInt(self.data, 16, .lower, .{
@@ -200,8 +202,12 @@ pub fn Immediate (comptime T: type) type {
                     .fill = '0',
                 }, formatter);
             } else {
+                try formatter.writeAll("{");
                 const t = try formatter.getIR().getType(self.type);
                 try t.formatMemory(formatter, &std.mem.toBytes(self.data));
+                try formatter.writeAll(" : ");
+                try formatter.fmt(self.type);
+                try formatter.writeAll("}");
             }
         }
     };

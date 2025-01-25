@@ -291,9 +291,6 @@ pub const Block = struct {
                 .write => @panic("write nyi"),
                 .load => @panic("load nyi"),
                 .store => @panic("store nyi"),
-                .clear => @panic("clear nyi"),
-                .swap => @panic("swap nyi"),
-                .copy => @panic("copy nyi"),
 
                 .add => @panic("add nyi"),
                 .sub => @panic("sub nyi"),
@@ -320,6 +317,33 @@ pub const Block = struct {
                 .trunc => @panic("trunc nyi"),
                 .cast => @panic("cast nyi"),
 
+                .clear => {
+                    const count = instr.data.clear;
+
+                    if (count > self.stackDepth()) return error.StackUnderflow;
+
+                    for (count) |_| _ = try self.pop(null);
+                },
+                .swap => {
+                    const index = instr.data.swap;
+
+                    if (index >= self.stackDepth()) return error.StackUnderflow;
+
+                    const a = &self.stack.items[self.stackDepth() - 1 - index];
+                    const b = &self.stack.items[self.stackDepth() - 1];
+
+                    std.mem.swap(Rir.Operand, a, b);
+                },
+                .copy => {
+                    const index = instr.data.copy;
+
+                    if (index >= self.stackDepth()) return error.StackUnderflow;
+
+                    const operand = self.stack.items[self.stackDepth() - 1 - index];
+
+                    try self.push(operand);
+                },
+
                 .new_local => {
                     const name = instr.data.new_local;
 
@@ -336,8 +360,6 @@ pub const Block = struct {
                 .ref_foreign => try self.push(instr.data.ref_foreign),
                 .ref_global => try self.push(instr.data.ref_global),
                 .ref_upvalue => try self.push(instr.data.ref_upvalue),
-
-                .discard => @panic("discard nyi"),
 
                 .im_b => try self.push(instr.data.im_b),
                 .im_s => try self.push(instr.data.im_s),
