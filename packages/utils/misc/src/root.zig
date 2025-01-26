@@ -349,7 +349,7 @@ pub fn hashWith(hasher: anytype, a: anytype) void {
             switch (info.size) {
                 .One, .C => {
                     if (info.child == anyopaque) {
-                        @compileError("Cannot hash opaque pointers");
+                        return hashWith(hasher, @intFromPtr(a));
                     } else {
                         return hashWith(hasher, a.*);
                     }

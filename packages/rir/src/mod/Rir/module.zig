@@ -12,19 +12,23 @@ const FunctionList = std.ArrayListUnmanaged(*Rir.Function);
 const HandlerSetList = std.ArrayListUnmanaged(*Rir.HandlerSet);
 
 pub const Module = struct {
-    root: *Rir,
+    pub const Id = Rir.ModuleId;
+
+    ir: *Rir,
+
     id: Rir.ModuleId,
     name: Rir.NameId,
+
     global_list: GlobalList = .{},
     function_list: FunctionList = .{},
     handler_sets: HandlerSetList = .{},
 
-    pub fn init(root: *Rir, id: Rir.ModuleId, name: Rir.NameId) error{OutOfMemory}! *Module {
-        const ptr = try root.allocator.create(Module);
-        errdefer root.allocator.destroy(ptr);
+    pub fn init(ir: *Rir, id: Rir.ModuleId, name: Rir.NameId) error{OutOfMemory}! *Module {
+        const ptr = try ir.allocator.create(Module);
+        errdefer ir.allocator.destroy(ptr);
 
         ptr.* = Module {
-            .root = root,
+            .ir = ir,
             .id = id,
             .name = name,
         };
@@ -37,13 +41,13 @@ pub const Module = struct {
         for (self.global_list.items) |x| x.deinit();
         for (self.function_list.items) |x| x.deinit();
 
-        self.handler_sets.deinit(self.root.allocator);
+        self.handler_sets.deinit(self.ir.allocator);
 
-        self.global_list.deinit(self.root.allocator);
+        self.global_list.deinit(self.ir.allocator);
 
-        self.function_list.deinit(self.root.allocator);
+        self.function_list.deinit(self.ir.allocator);
 
-        self.root.allocator.destroy(self);
+        self.ir.allocator.destroy(self);
     }
 
     pub fn onFormat(self: *const Module, formatter: Rir.Formatter) Rir.Formatter.Error! void {
@@ -69,37 +73,29 @@ pub const Module = struct {
         }
     }
 
-
-
-    /// Calls `allocator.dupe` on the input bytes
-    pub fn createGlobal(self: *Module, name: Rir.NameId, tyId: Rir.TypeId, bytes: []const u8) error{TooManyGlobals, OutOfMemory}! *Rir.Global {
-        const dupeBytes = try self.root.allocator.dupe(u8, bytes);
-        errdefer self.root.allocator.free(dupeBytes);
-
-        return self.createGlobalPreallocated(name, tyId, dupeBytes);
+    pub fn get(self: *const Module, comptime T: type, id: T.Id) !*T {
+        return switch (T) {
+            Rir.Global => try self.getGlobal(id),
+            Rir.Function => try self.getFunction(id),
+            Rir.HandlerSet => try self.getHandlerSet(id),
+            Rir.ForeignAddress => try self.ir.getForeign(id),
+            else => @compileError("Unsupported type for Module.get: " ++ @typeName(T)),
+        };
     }
 
-    /// Does not call `allocator.dupe` on the input bytes
-    pub fn createGlobalPreallocated(self: *Module, name: Rir.NameId, tyId: Rir.TypeId, bytes: []u8) error{TooManyGlobals, OutOfMemory}! *Rir.Global {
+    pub fn createGlobal(self: *Module, name: Rir.NameId, typeIr: *Rir.Type) error{TooManyGlobals, OutOfMemory}! *Rir.Global {
         const index = self.global_list.items.len;
 
         if (index >= Rir.MAX_GLOBALS) {
             return error.TooManyGlobals;
         }
 
-        const global = try Rir.Global.init(self, @enumFromInt(index), name, tyId, bytes);
-        errdefer self.root.allocator.destroy(global);
+        const global = try Rir.Global.init(self, @enumFromInt(index), name, typeIr);
+        errdefer self.ir.allocator.destroy(global);
 
-        try self.global_list.append(self.root.allocator, global);
+        try self.global_list.append(self.ir.allocator, global);
 
         return global;
-    }
-
-    pub fn createGlobalFromNative(self: *Module, name: Rir.NameId, value: anytype) error{TooManyGlobals, TooManyTypes, TooManyNames, OutOfMemory}! *Rir.Global {
-        const T = @TypeOf(value);
-        const ty = try self.root.createTypeFromNative(T, null, null);
-
-        return self.createGlobal(name, ty.id, @as([*]const u8, @ptrCast(&value))[0..@sizeOf(T)]);
     }
 
     pub fn getGlobal(self: *const Module, id: Rir.GlobalId) error{InvalidGlobal}! *Rir.Global {
@@ -110,21 +106,21 @@ pub const Module = struct {
         return self.global_list.items[@intFromEnum(id)];
     }
 
-    pub fn createFunction(self: *Module, name: Rir.NameId, tyId: Rir.TypeId) error{InvalidType, TooManyFunctions, OutOfMemory}! *Rir.Function {
+    pub fn createFunction(self: *Module, name: Rir.NameId, typeIr: *Rir.Type) error{ExpectedFunctionType, TooManyFunctions, OutOfMemory}! *Rir.Function {
         const index = self.function_list.items.len;
 
         if (index >= Rir.MAX_FUNCTIONS) {
             return error.TooManyFunctions;
         }
 
-        const builder = try Rir.Function.init(self, @enumFromInt(index), name, tyId);
+        const builder = try Rir.Function.init(self, @enumFromInt(index), name, typeIr);
 
-        try self.function_list.append(self.root.allocator, builder);
+        try self.function_list.append(self.ir.allocator, builder);
 
         return builder;
     }
 
-    pub fn getFunction(self: *const Module, id: Rir.FunctionId) !*Rir.Function {
+    pub fn getFunction(self: *const Module, id: Rir.FunctionId) error{InvalidFunction}! *Rir.Function {
         if (@intFromEnum(id) >= self.function_list.items.len) {
             return error.InvalidFunction;
         }
@@ -141,7 +137,7 @@ pub const Module = struct {
 
         const builder = try Rir.HandlerSet.init(self, @enumFromInt(index));
 
-        try self.handler_sets.append(self.root.allocator, builder);
+        try self.handler_sets.append(self.ir.allocator, builder);
 
         return builder;
     }

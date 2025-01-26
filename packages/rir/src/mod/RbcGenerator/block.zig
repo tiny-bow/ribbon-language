@@ -8,33 +8,47 @@ const RbcBuilder = @import("RbcBuilder");
 
 const Generator = @import("../RbcGenerator.zig");
 
+const Stack = std.ArrayListUnmanaged(Rir.Operand);
+const RegisterList = std.ArrayListUnmanaged(*Rir.Register);
+
 pub const Block = struct {
-    parent: ?*Block,
+    generator: *Generator,
     function: *Generator.Function,
+
+    parent: ?*Block,
 
     ir: *Rir.Block,
     builder: *RbcBuilder.BlockBuilder,
 
-    stack: std.ArrayListUnmanaged(Rir.Operand) = .{},
+    register_list: RegisterList,
+
+    stack: Stack = .{},
 
 
-    pub fn init(parent: ?*Block, function: *Generator.Function, blockIr: *Rir.Block, blockBuilder: *RbcBuilder.BlockBuilder) !*Block {
-        const self = try function.module.root.allocator.create(Block);
+    pub fn init(parent: ?*Block, function: *Generator.Function, blockIr: *Rir.Block, blockBuilder: *RbcBuilder.BlockBuilder) error{OutOfMemory}! *Block {
+        const generator = function.generator;
+        const self = try generator.allocator.create(Block);
 
         self.* = Block {
-            .parent = parent,
             .function = function,
+            .generator = generator,
+
+            .parent = parent,
+
             .ir = blockIr,
             .builder = blockBuilder,
+
+            .register_list = try RegisterList.initCapacity(generator.allocator, Rir.MAX_REGISTERS),
         };
 
         return self;
     }
 
     pub fn deinit(self: *Block) void {
-        self.stack.deinit(self.function.module.root.allocator);
+        self.register_list.deinit(self.generator.allocator);
+        self.stack.deinit(self.generator.allocator);
 
-        self.function.module.root.allocator.destroy(self);
+        self.generator.allocator.destroy(self);
     }
 
     pub fn generate(self: *Block) Generator.Error! void {
@@ -51,8 +65,8 @@ pub const Block = struct {
                 .trap => try self.builder.trap(),
 
                 .block => {
-                    const blockId = try self.pop(.block);
-                    const child = try self.function.compileBlock(blockId);
+                    const blockIr = try (try self.pop(.meta)).forceBlock();
+                    const child = try self.function.compileBlock(blockIr);
 
                     if (child.stackDepth() == 0) {
                         try self.builder.op(.block, &.{ .B0 = child.builder.index });
@@ -61,26 +75,20 @@ pub const Block = struct {
 
                         if (child.stackDepth() != 0) return error.StackNotCleared;
 
-                        const operandType = try self.getType(operand);
+                        const operandType = try operand.getType();
 
-                        const newLocalName = try self.function.module.root.freshName(.{child.ir.name, "result"});
+                        const resultRegister = try self.allocRegister(operandType); // FIXME: see NOTES.md#1
 
-                        const resultLocal = try self.createLocal(newLocalName, operandType);
-
-                        try self.generateSetLocal(resultLocal.id, operand);
-
-                        const resultRegister = try self.lvalue(.{.local = resultLocal.id});
-
-                        try self.builder.op(.block_v, &.{ .B0 = child.builder.index, .R0 = resultRegister.index });
+                        try self.builder.op(.block_v, &.{ .B0 = child.builder.index, .R0 = resultRegister.getIndex() });
                     }
                 },
                 .with => {
-                    const blockId = try self.pop(.block);
-                    const handlerSetId = try self.pop(.handler_set);
+                    const handlerSetIr = try (try self.pop(.meta)).forceHandlerSet();
+                    const blockIr = try (try self.pop(.meta)).forceBlock();
 
-                    const child = try self.function.compileBlock(blockId);
+                    const child = try self.function.compileBlock(blockIr);
 
-                    const handlerSetBuilder = try self.function.module.getHandlerSet(handlerSetId);
+                    const handlerSetBuilder = try self.function.module.getHandlerSet(handlerSetIr);
 
                     if (child.stackDepth() == 0) {
                         try self.builder.op(.with, &.{ .B0 = child.builder.index, .H0 = handlerSetBuilder.index });
@@ -89,30 +97,22 @@ pub const Block = struct {
 
                         if (child.stackDepth() != 0) return error.StackNotCleared;
 
-                        const operandType = try self.getType(operand);
+                        const operandType = try operand.getType();
 
-                        const newLocalName = try self.function.module.root.freshName(.{child.ir.name, "result"});
+                        const resultRegister = try self.allocRegister(operandType); // FIXME: see NOTES.md#1
 
-                        const resultLocal = try self.createLocal(newLocalName, operandType);
-
-                        try self.generateSetLocal(resultLocal.id, operand);
-
-                        const resultRegister = try self.lvalue(.{.local = resultLocal.id});
-
-                        try self.builder.op(.with_v, &.{ .B0 = child.builder.index, .H0 = handlerSetBuilder.index, .R0 = resultRegister.index });
+                        try self.builder.op(.with_v, &.{ .B0 = child.builder.index, .H0 = handlerSetBuilder.index, .R0 = resultRegister.getIndex() });
                     }
                 },
                 .@"if" => {
                     const zeroCheck = instr.data.@"if";
 
-                    const condOperand = try self.pop(null);
-                    const thenId = try self.pop(.block);
-                    const elseId = try self.pop(.block);
+                    const condReg = try (try self.pop(.l_value)).forceRegister();
+                    const thenBlockIr = try (try self.pop(.meta)).forceBlock();
+                    const elseBlockIr = try (try self.pop(.meta)).forceBlock();
 
-                    const condReg = try (try self.rvalue(condOperand)).forceRegister();
-
-                    const thenChild = try self.function.compileBlock(thenId);
-                    const elseChild = try self.function.compileBlock(elseId);
+                    const thenChild = try self.function.compileBlock(thenBlockIr);
+                    const elseChild = try self.function.compileBlock(elseBlockIr);
 
                     if (thenChild.stackDepth() != elseChild.stackDepth()) return error.StackBranchMismatch;
 
@@ -123,7 +123,7 @@ pub const Block = struct {
                                 .non_zero => .if_nz,
                             },
                             &.{
-                                .R0 = condReg.index,
+                                .R0 = condReg.getIndex(),
                                 .B0 = thenChild.builder.index,
                                 .B1 = elseChild.builder.index
                             },
@@ -136,20 +136,14 @@ pub const Block = struct {
                             return error.StackNotCleared;
                         }
 
-                        const operandType = try self.getType(thenOperand);
-                        const elseOperandType = try self.getType(elseOperand);
+                        const operandType = try thenOperand.getType();
+                        const elseOperandType = try elseOperand.getType();
 
-                        if (operandType != elseOperandType) {
+                        if (operandType.id != elseOperandType.id) {
                             return error.StackBranchMismatch;
                         }
 
-                        const newLocalName = try self.function.module.root.freshName(.{thenChild.ir.name, "result"});
-
-                        const resultLocal = try self.createLocal(newLocalName, operandType);
-
-                        try self.generateSetLocal(resultLocal.id, thenOperand);
-
-                        const resultRegister = try self.lvalue(.{.local = resultLocal.id});
+                        const resultRegister = try self.allocRegister(operandType); // FIXME: see NOTES.md#1
 
                         try self.builder.op(
                             switch (zeroCheck) {
@@ -157,8 +151,8 @@ pub const Block = struct {
                                 .non_zero => .if_nz_v,
                             },
                             &.{
-                                .R0 = condReg.index,
-                                .R1 = resultRegister.index,
+                                .R0 = condReg.getIndex(),
+                                .R1 = resultRegister.getIndex(),
                                 .B0 = thenChild.builder.index,
                                 .B1 = elseChild.builder.index
                             },
@@ -168,12 +162,10 @@ pub const Block = struct {
                 .when => {
                     const zeroCheck = instr.data.when;
 
-                    const condOperand = try self.pop(null);
-                    const thenId = try self.pop(.block);
+                    const condReg = try (try self.pop(.l_value)).forceRegister();
+                    const thenBlockIr = try (try self.pop(.meta)).forceBlock();
 
-                    const condReg = try (try self.rvalue(condOperand)).forceRegister();
-
-                    const thenChild = try self.function.compileBlock(thenId);
+                    const thenChild = try self.function.compileBlock(thenBlockIr);
 
                     if (thenChild.stackDepth() == 0) {
                         try self.builder.op(
@@ -182,7 +174,7 @@ pub const Block = struct {
                                 .non_zero => .when_nz,
                             },
                             &.{
-                                .R0 = condReg.index,
+                                .R0 = condReg.getIndex(),
                                 .B0 = thenChild.builder.index
                             },
                         );
@@ -190,92 +182,80 @@ pub const Block = struct {
                         return error.StackBranchMismatch;
                     }
                 },
+
+
                 .re => {
                     const zeroCheck = instr.data.re;
 
                     switch (zeroCheck) {
                         .none => {
-                            const reId = try self.pop(.block);
-                            const reBlock = try self.function.getBlock(reId);
+                            const blockIr = try (try self.pop(.meta)).forceBlock();
+                            const blockGen = try self.function.getBlock(blockIr);
 
-                            try self.builder.re(reBlock.builder);
+                            try self.builder.re(blockGen.builder);
                         },
                         .zero => {
-                            const condOperand = try self.pop(null);
-                            const reId = try self.pop(.block);
+                            const condReg = try (try self.pop(.l_value)).forceRegister();
+                            const blockIr = try (try self.pop(.meta)).forceBlock();
+                            const blockGen = try self.function.getBlock(blockIr);
 
-                            const condReg = try (try self.rvalue(condOperand)).forceRegister();
-
-                            const reBlock = try self.function.getBlock(reId);
-
-                            try self.builder.re_z(reBlock.builder, condReg.index);
+                            try self.builder.re_z(blockGen.builder, condReg.getIndex());
                         },
                         .non_zero => {
-                            const condOperand = try self.pop(null);
-                            const reId = try self.pop(.block);
+                            const condReg = try (try self.pop(.l_value)).forceRegister();
+                            const blockIr = try (try self.pop(.meta)).forceBlock();
+                            const blockGen = try self.function.getBlock(blockIr);
 
-                            const condReg = try (try self.rvalue(condOperand)).forceRegister();
-
-                            const reBlock = try self.function.getBlock(reId);
-
-                            try self.builder.re_nz(reBlock.builder, condReg.index);
+                            try self.builder.re_nz(blockGen.builder, condReg.getIndex());
                         },
                     }
                 },
+
                 .br => {
                     const zeroCheck = instr.data.br;
 
-                    const brId = try self.pop(.block);
-                    const brBlock = try self.function.getBlock(brId);
+                    const blockIr = try (try self.pop(.meta)).forceBlock();
+                    const blockGen = try self.function.getBlock(blockIr);
 
                     switch (zeroCheck) {
-                        .none => try self.builder.br(brBlock.builder),
+                        .none => try self.builder.br(blockGen.builder),
                         .zero => switch (self.stackDepth()) {
                             0 => return error.StackUnderflow,
                             1 => {
-                                const condOperand = try self.pop(null);
-                                const condReg = try (try self.rvalue(condOperand)).forceRegister();
+                                const condReg = try (try self.pop(.l_value)).forceRegister();
 
-                                try self.builder.br_z(brBlock.builder, condReg.index);
+                                try self.builder.br_z(blockGen.builder, condReg.getIndex());
                             },
                             2 => {
-                                const condOperand = try self.pop(null);
-                                const condReg = try (try self.rvalue(condOperand)).forceRegister();
+                                const elseOperand: Rir.Operand = try self.pop(null);
 
-                                const elseOperand = try self.pop(null);
-                                const elseRValue = try self.rvalue(elseOperand);
+                                const condReg = try (try self.pop(.l_value)).forceRegister();
 
-                                switch (elseRValue) {
-                                    .register => |r| try self.builder.br_z_v(brBlock.builder, condReg.index, r.index),
-                                    .im_0 => try self.builder.br_z(brBlock.builder, condReg.index),
-                                    inline .im_8, .im_16, .im_32, .im_64  => |im| try self.builder.br_z_im_v(brBlock.builder, condReg.index, im.data),
+                                switch (elseOperand) {
+                                    .meta => return error.InvalidOperand,
+                                    .r_value => |r| switch (r) {
+                                        .immediate => |im| try self.builder.br_z_im_v(blockGen.builder, condReg.getIndex(), im.data),
+                                        .foreign => |f| {
+                                            const foreignId = try self.generator.getForeign(f);
+                                            try self.builder.br_z_im_v(blockGen.builder, condReg.getIndex(), foreignId);
+                                        },
+                                        .function => |f| {
+                                            const function = try self.generator.getFunction(f);
+                                            try self.builder.br_z_im_v(blockGen.builder, condReg.getIndex(), function.builder.index);
+                                        },
+                                    },
+                                    .l_value => |l| switch (l) {
+                                        .register => |r| try self.builder.br_z_v(blockGen.builder, condReg.getIndex(), r.getIndex()),
+                                        .multi_register => @panic("multi_register nyi"),
+                                        .local => @panic("local nyi"),
+                                        .upvalue => @panic("upvalue nyi"),
+                                        .global => @panic("global nyi"),
+                                    }
                                 }
                             },
                             else => return error.StackNotCleared,
                         },
-                        .non_zero => switch (self.stackDepth()) {
-                            0 => return error.StackUnderflow,
-                            1 => {
-                                const condOperand = try self.pop(null);
-                                const condReg = try (try self.rvalue(condOperand)).forceRegister();
-
-                                try self.builder.br_nz(brBlock.builder, condReg.index);
-                            },
-                            2 => {
-                                const condOperand = try self.pop(null);
-                                const condReg = try (try self.rvalue(condOperand)).forceRegister();
-
-                                const elseOperand = try self.pop(null);
-                                const elseRValue = try self.rvalue(elseOperand);
-
-                                switch (elseRValue) {
-                                    .register => |r| try self.builder.br_nz_v(brBlock.builder, condReg.index, r.index),
-                                    .im_0 => try self.builder.br_nz(brBlock.builder, condReg.index),
-                                    inline .im_8, .im_16, .im_32, .im_64  => |im| try self.builder.br_nz_im_v(brBlock.builder, condReg.index, im.data),
-                                }
-                            },
-                            else => return error.StackNotCleared,
-                        },
+                        .non_zero => @panic("br non_zero nyi"),
                     }
                 },
 
@@ -284,11 +264,67 @@ pub const Block = struct {
                 .ret => @panic("ret nyi"),
                 .term => @panic("term nyi"),
 
-                .alloca => @panic("alloca nyi"),
-                .addr => @panic("addr nyi"),
+                .alloca => {
+                    const typeIr = try (try self.pop(.meta)).forceType();
+
+                    const typeLayout = try typeIr.getLayout();
+
+                    const register = try self.allocRegister(typeIr);
+
+                    try self.builder.alloca(@intCast(typeLayout.dimensions.size), register.getIndex());
+
+                    try self.push(register);
+                },
+
+                .addr => {
+                    const operand: Rir.Operand = try self.pop(null);
+
+                    const operandType = try operand.getType();
+                    const pointerType = try operandType.createPointer();
+
+                    switch (operand) {
+                        .l_value => |l| switch (l) {
+                            .local => |localIr| {
+                                switch (localIr.storage) {
+                                    .none => return error.InvalidOperand,
+                                    .zero_size => try self.push(Rir.Immediate.zero(pointerType)),
+                                    .register => return error.AddressOfRegister,
+                                    .n_registers => return error.AddressOfRegister,
+                                    .stack => try self.push(localIr.register orelse return error.LocalNotAssignedRegister),
+                                    .@"comptime" => return error.InvalidOperand, // TODO: create global?
+                                }
+                            },
+
+                            .global => |globalIr| {
+                                const globalGen = try self.generator.getGlobal(globalIr);
+
+                                const outReg = try self.allocRegister(pointerType);
+
+                                try self.builder.addr_global(globalGen.builder.index, outReg.getIndex());
+                                try self.push(outReg);
+                            },
+
+                            .upvalue => { // FIXME: see NOTES.md#2
+                                @panic("addr upvalue nyi");
+                                // const upvalueGen = try self.function.getUpvalue(upvalueIr);
+
+                                // const outReg = try self.allocRegister(pointerType);
+
+                                // try self.builder.addr_upvalue(upvalueGen.builder.index, outReg.getIndex());
+                                // try self.push(outReg);
+                            },
+
+                            else => return error.InvalidOperand,
+                        },
+                        else => @panic("addr meta/r_value nyi"),
+                    }
+                },
 
                 .read => @panic("read nyi"),
+
                 .write => @panic("write nyi"),
+
+
                 .load => @panic("load nyi"),
                 .store => @panic("store nyi"),
 
@@ -347,9 +383,9 @@ pub const Block = struct {
                 .new_local => {
                     const name = instr.data.new_local;
 
-                    const tyId = try self.pop(.type);
+                    const typeIr = try (try self.pop(.meta)).forceType();
 
-                    const local = try self.createLocal(name, tyId);
+                    const local = try self.createLocal(name, typeIr);
 
                     try self.push(local.id);
                 },
@@ -361,10 +397,8 @@ pub const Block = struct {
                 .ref_global => try self.push(instr.data.ref_global),
                 .ref_upvalue => try self.push(instr.data.ref_upvalue),
 
-                .im_b => try self.push(instr.data.im_b),
-                .im_s => try self.push(instr.data.im_s),
                 .im_i => try self.push(instr.data.im_i),
-                .im_w => try self.push(instr.data.im_w),
+                .im_w => @panic("im_w nyi"),
             }
         }
     }
@@ -374,25 +408,19 @@ pub const Block = struct {
     }
 
     pub fn push(self: *Block, operand: anytype) !void {
-        try self.stack.append(self.function.module.root.allocator, Rir.Operand.from(operand));
+        try self.stack.append(self.generator.allocator, Rir.Operand.from(operand));
     }
 
-    pub fn pop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand)) !Rir.Operand.TypeOf(kind) {
+    pub fn pop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand)) !if (kind) |k| switch (k) {
+        .meta => Rir.Meta,
+        .l_value => Rir.LValue,
+        .r_value => Rir.RValue,
+    } else Rir.Operand {
         if (self.stack.popOrNull()) |operand| {
             return if (comptime kind) |k| switch (operand) {
-                .type => |x| if (comptime .type == k) x else error.InvalidOperand,
-                .register => |x| if (comptime .register == k) x else error.InvalidOperand,
-                .im_8 => |x| if (comptime .im_8 == k) x else error.InvalidOperand,
-                .im_16 => |x| if (comptime .im_16 == k) x else error.InvalidOperand,
-                .im_32 => |x| if (comptime .im_32 == k) x else error.InvalidOperand,
-                .im_64 => |x| if (comptime .im_64 == k) x else error.InvalidOperand,
-                .block => |x| if (comptime .block == k) x else error.InvalidOperand,
-                .foreign => |x| if (comptime .foreign == k) x else error.InvalidOperand,
-                .function => |x| if (comptime .function == k) x else error.InvalidOperand,
-                .global => |x| if (comptime .global == k) x else error.InvalidOperand,
-                .upvalue => |x| if (comptime .upvalue == k) x else error.InvalidOperand,
-                .handler_set => |x| if (comptime .handler_set == k) x else error.InvalidOperand,
-                .local => |x| if (comptime .local == k) x else error.InvalidOperand,
+                .meta => |m| if (k == .meta) m else error.InvalidOperand,
+                .l_value => |l| if (k == .l_value) l else error.InvalidOperand,
+                .r_value => |r| if (k == .r_value) r else error.InvalidOperand,
             }
             else operand;
         }
@@ -400,8 +428,40 @@ pub const Block = struct {
         return error.StackUnderflow;
     }
 
-    pub fn createLocal(self: *Block, name: Rir.NameId, ty: Rir.TypeId) error{TooManyLocals, OutOfMemory}! *Rir.Local {
-        return self.ir.createLocal(name, ty);
+    pub fn takeFreeRegister(self: *Block) ?*Rir.Register {
+        for (self.register_list.items) |reg| {
+            if (reg.ref_count == 0) return reg;
+        }
+
+        return null;
+    }
+
+    pub fn allocRegister(self: *Block, typeIr: *Rir.Type) error{InvalidType, TooManyRegisters, OutOfMemory}! *Rir.Register {
+        if (self.takeFreeRegister()) |reg| {
+            reg.type = typeIr;
+            return reg;
+        }
+
+        const index = self.register_list.items.len;
+        if (index >= Rbc.MAX_REGISTERS) {
+            return error.TooManyRegisters;
+        }
+
+        const freshReg = try Rir.Register.init(self.ir, @enumFromInt(index), typeIr);
+
+        try self.register_list.append(self.generator.allocator, freshReg);
+
+        return freshReg;
+    }
+
+    pub fn createLocal(self: *Block, name: Rir.NameId, typeIr: *Rir.Type) error{TooManyLocals, OutOfMemory}! *Rir.Local {
+        const out = try self.ir.createLocal(name, typeIr);
+        // const localType = try self.ir.ir.getType(localTypeId);
+        // const localStorage = try localType.getStorage();
+
+        // out.storage =
+
+        return out;
     }
 
     pub fn getLocal(self: *Block, id: Rir.LocalId) !*Rir.Local {
@@ -411,80 +471,4 @@ pub const Block = struct {
     pub fn generateSetLocal(_: *Block, _: Rir.LocalId, _: Rir.Operand) error{TooManyLocals, OutOfMemory}! void {
         @panic("setLocal nyi");
     }
-
-    pub fn getType(self: *Block, operand: Rir.Operand) Generator.Error! Rir.TypeId {
-        return switch (operand) {
-            .type => Rir.type_info.BASIC_TYPE_IDS.Type,
-            .register => |reg| reg.type,
-            .im_8 => |im| im.type,
-            .im_16 => |im| im.type,
-            .im_32 => |im| im.type,
-            .im_64 => |im| im.type,
-            .block => Rir.type_info.BASIC_TYPE_IDS.Block,
-            .foreign => |foreignId| (try self.function.module.root.ir.getForeign(foreignId)).type,
-            .function => |functionRef| (try self.function.module.root.ir.getFunction(functionRef)).type,
-            .global => |globalRef| (try self.function.module.root.ir.getGlobal(globalRef)).type,
-            .upvalue => |upvalueId| (try self.function.ir.getUpvalue(upvalueId)).type,
-            .handler_set => Rir.type_info.BASIC_TYPE_IDS.HandlerSet,
-            .local => |localId| (try self.getLocal(localId)).type,
-        };
-    }
-
-    // lvalue and rvalue conversion
-    //
-    // these both attempt to convert the provided operand to a typed Register;
-    //
-    // lvalue is used when
-    // - the operand is being assigned to
-    //
-    // rvalue is used when
-    // - the operand is being used as a value
-    //
-    // in both cases, we may not actually be reading/writing directly to the Register.
-    // for example, a local variable will resolve to a register, but if the actual value does not fit,
-    // it will be spilled to the stack, and the register will hold a pointer.
-
-    pub fn lvalue(_: *Block, _: Rir.Operand) !Rir.Register {
-        @panic("lvalue nyi");
-    }
-
-    pub fn rvalue(self: *Block, operand: Rir.Operand) error{InvalidOperand, InvalidLocal, LocalNotAssignedStorage, LocalNotAssignedRegister}! Rir.RValue {
-        return switch (operand) {
-            inline
-                .type,
-                .block,
-                .handler_set,
-                .function,
-                .foreign,
-            => error.InvalidOperand,
-
-            .register => |r| .{.register = r},
-
-            .im_8 => |im| .{.im_8 = im},
-            .im_16 => |im| .{.im_16 = im},
-            .im_32 => |im| .{.im_32 = im},
-            .im_64 => |im| .{.im_64 = im},
-
-            .global => @panic("global nyi"),
-
-            .upvalue => @panic("upvalue nyi"),
-
-            .local => |id| local: {
-                const local = try self.getLocal(id);
-
-                break :local switch (local.storage) {
-                    .none => error.LocalNotAssignedStorage,
-                    .zero_size => .im_0,
-                    .register, .stack => Rir.RValue {
-                        .register = Rir.Register {
-                            .type = local.type,
-                            .index = local.register
-                                orelse return error.LocalNotAssignedRegister,
-                        },
-                    },
-                };
-            },
-        };
-    }
-
 };

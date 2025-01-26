@@ -31,7 +31,7 @@ pub const Formatter = struct {
         return SliceWrap(@TypeOf(data)) { .formatter = self, .data = data };
     }
 
-    pub fn getIR(self: Formatter) *const Rir {
+    pub fn getRir(self: Formatter) *Rir {
         return self.state.ir;
     }
 
@@ -126,15 +126,15 @@ pub const Formatter = struct {
             try value.onFormat(self);
         } else switch(T) {
             Rir.NameId => {
-                try self.writeAll(try self.getIR().getName(value));
+                try self.writeAll(try self.getRir().getName(value));
             },
             Rir.ModuleId => {
-                const x = self.wrap((try self.getIR().getModule(value)).name);
+                const x = self.wrap((try self.getRir().getModule(value)).name);
                 if (self.getFlag(.show_ids)) try self.print("{}#{}", .{x, @intFromEnum(value)})
                 else try x.fmt();
             },
             Rir.TypeId => {
-                const x = try self.getIR().getType(value);
+                const x = try self.getRir().getType(value);
                 try x.onFormat(self);
             },
             Rir.BlockId => {
@@ -292,7 +292,8 @@ pub const Formatter = struct {
 };
 
 const FormatterState = struct {
-    ir: *const Rir,
+    ir: *Rir,
+
     module: ?*const Rir.Module = null,
     function: ?*const Rir.Function = null,
     block: ?*const Rir.Block = null,

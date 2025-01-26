@@ -20,6 +20,7 @@ pub const Error = Rir.Error || RbcBuilder.Error || error {
     LocalNotAssignedStorage,
     LocalNotAssignedRegister,
     ExpectedRegister,
+    AddressOfRegister,
 };
 
 
@@ -43,25 +44,25 @@ allocator: std.mem.Allocator,
 ir: *Rir,
 builder: RbcBuilder,
 
+// TODO: rename to _map, type aliases
 evidence_lookup: std.ArrayHashMapUnmanaged(Rir.EvidenceId, Rbc.EvidenceIndex, MiscUtils.SimpleHashContext, false) = .{},
 module_lookup: std.ArrayHashMapUnmanaged(Rir.ModuleId, *Module, MiscUtils.SimpleHashContext, false) = .{},
+foreign_lookup: std.ArrayHashMapUnmanaged(Rir.ForeignId, Rbc.ForeignId, MiscUtils.SimpleHashContext, false) = .{},
 
 
 pub const Export = union(enum) {
-    Function: Rir.Ref(Rir.FunctionId),
-    Global: Rir.Ref(Rir.GlobalId),
+    function: *Rir.Function,
+    global: *Rir.Global,
 
     pub fn @"export"(value: anytype) Export {
         switch (@TypeOf(value)) {
-            Rir.Ref(Rir.FunctionId) => return .{ .Function = value },
-            *const Rir.Function => return .{ .Function = value.getRef() },
-            *Rir.Function => return .{ .Function = value.getRef() },
+            *const Rir.Function => return .{ .function = @constCast(value) },
+            *Rir.Function => return .{ .function = value },
 
-            Rir.Ref(Rir.GlobalId) => return .{ .Global = value },
-            *const Rir.Global => return .{ .Global = value.getRef() },
-            *Rir.Global => return .{ .Global = value.getRef() },
+            *const Rir.Global => return .{ .global = @constCast(value) },
+            *Rir.Global => return .{ .global = value },
 
-            else => @compileError("Invalid export type " ++ @typeName(@TypeOf(value))),
+            else => @compileError("Invalid export type " ++ @typeName(@TypeOf(value) ++ ", must be a pointer to an Rir.Function or Rir.Global"),),
         }
     }
 };
@@ -86,8 +87,8 @@ pub fn init(allocator: std.mem.Allocator, ir: *Rir) error{OutOfMemory} !Generato
 pub fn generate(self: *Generator, allocator: std.mem.Allocator, exports: []const Export) Error! Rbc.Program {
     for (exports) |exp| {
         switch (exp) {
-            .Function => |ref| _ = try self.getFunction(ref),
-            .Global => |ref| _ = try self.getGlobal(ref),
+            .function => |ref| _ = try self.getFunction(ref),
+            .global => |ref| _ = try self.getGlobal(ref),
         }
     }
 
@@ -105,12 +106,12 @@ pub fn getModule(self: *Generator, modId: Rir.ModuleId) error{InvalidModule, Out
     return getOrPut.value_ptr.*;
 }
 
-pub fn getGlobal(self: *Generator, gRef: Rir.Ref(Rir.GlobalId)) Error! *Global {
-    return (try self.getModule(gRef.module)).getGlobal(gRef.id);
+pub fn getGlobal(self: *Generator, gRef: *Rir.Global) Error! *Global {
+    return (try self.getModule(gRef.module.id)).getGlobal(gRef.id);
 }
 
-pub fn getFunction(self: *Generator, fRef: Rir.Ref(Rir.FunctionId)) Error! *Function {
-    return (try self.getModule(fRef.module)).getFunction(fRef.id);
+pub fn getFunction(self: *Generator, fRef: *Rir.Function) Error! *Function {
+    return (try self.getModule(fRef.module.id)).getFunction(fRef.id);
 }
 
 pub fn getEvidence(self: *Generator, evId: Rir.EvidenceId) !Rbc.EvidenceIndex {
@@ -119,6 +120,16 @@ pub fn getEvidence(self: *Generator, evId: Rir.EvidenceId) !Rbc.EvidenceIndex {
     if (!getOrPut.found_existing) {
         const index = try self.builder.evidence();
         getOrPut.value_ptr.* = index;
+    }
+
+    return getOrPut.value_ptr.*;
+}
+
+pub fn getForeign(self: *Generator, foreignAddressIr: *Rir.ForeignAddress) !Rbc.ForeignId {
+    const getOrPut = try self.foreign_lookup.getOrPut(self.allocator, foreignAddressIr.id);
+
+    if (!getOrPut.found_existing) {
+        @panic("TODO: Implement Generator.getForeign");
     }
 
     return getOrPut.value_ptr.*;

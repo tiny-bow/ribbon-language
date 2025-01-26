@@ -10,6 +10,7 @@ const Generator = @import("../RbcGenerator.zig");
 
 
 pub const Global = struct {
+    generator: *Generator,
     module: *Generator.Module,
 
     ir: *Rir.Global,
@@ -17,9 +18,11 @@ pub const Global = struct {
 
 
     pub fn init(module: *Generator.Module, global: *Rir.Global, builder: *RbcBuilder.Global) error{OutOfMemory}! *Global {
-        const self = try module.root.allocator.create(Global);
+        const generator = module.generator;
+        const self = try generator.allocator.create(Global);
 
         self.* = Global {
+            .generator = generator,
             .module = module,
 
             .ir = global,

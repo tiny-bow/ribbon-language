@@ -7,17 +7,25 @@ const Rir = @import("../Rir.zig");
 const HandlerList = std.ArrayHashMapUnmanaged(Rir.EvidenceId, *Rir.Function, MiscUtils.SimpleHashContext, false);
 
 pub const HandlerSet = struct {
+    pub const Id = Rir.HandlerSetId;
+
+    ir: *Rir,
+
     module: *Rir.Module,
+
     id: Rir.HandlerSetId,
 
     parent: ?*Rir.Block = null,
     handlers: HandlerList = .{},
 
     pub fn init(module: *Rir.Module, id: Rir.HandlerSetId) !*HandlerSet {
-        const ptr = try module.root.allocator.create(HandlerSet);
-        errdefer module.root.allocator.destroy(ptr);
+        const ir = module.ir;
+
+        const ptr = try ir.allocator.create(HandlerSet);
+        errdefer ir.allocator.destroy(ptr);
 
         ptr.* = HandlerSet {
+            .ir = ir,
             .module = module,
             .id = id,
         };
@@ -30,24 +38,24 @@ pub const HandlerSet = struct {
             h.deinit();
         }
 
-        self.handlers.deinit(self.module.root.allocator);
+        self.handlers.deinit(self.ir.allocator);
 
-        self.module.root.allocator.destroy(self);
+        self.ir.allocator.destroy(self);
     }
 
-    pub fn createHandler(self: *HandlerSet, name: Rir.NameId, evId: Rir.EvidenceId, tyId: Rir.TypeId) !*Rir.Function {
+    pub fn createHandler(self: *HandlerSet, name: Rir.NameId, evId: Rir.EvidenceId, typeIr: *Rir.Type) !*Rir.Function {
         if (self.handlers.contains(evId)) {
             return error.EvidenceOverlap;
         }
 
         // TODO: check type against evidence signature
 
-        const func = try self.module.createFunction(name, tyId);
+        const func = try self.module.createFunction(name, typeIr);
 
         func.parent = self.parent;
         func.evidence = evId;
 
-        try self.handlers.put(self.module.root.allocator, evId, func);
+        try self.handlers.put(self.ir.allocator, evId, func);
 
         return func;
     }

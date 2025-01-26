@@ -1,5 +1,16 @@
 const std = @import("std");
 
+pub fn CopyConst(comptime Dest: type, comptime Src: type) type {
+    comptime {
+        var DestInfo = @typeInfo(Dest).pointer;
+        const SrcInfo = @typeInfo(Src).pointer;
+
+        DestInfo.is_const = SrcInfo.is_const;
+
+        return @Type(.{.pointer = DestInfo});
+    }
+}
+
 pub fn TupleArray(comptime N: comptime_int, comptime T: type) type {
     comptime var fields = [1]std.builtin.Type.StructField {undefined} ** N;
     inline for (0..N) |i| {

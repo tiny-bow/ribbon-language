@@ -4,16 +4,15 @@ const Rir = @import("../Rir.zig");
 
 
 pub const ForeignAddress = struct {
+    pub const Id = Rir.ForeignId;
+
     root: *Rir,
     id: Rir.ForeignId,
     name: Rir.NameId,
-    type: Rir.TypeId,
-    locals: []Rir.TypeId,
+    type: *Rir.Type,
 
 
-    pub fn init(root: *Rir, id: Rir.ForeignId, name: Rir.NameId, tyId: Rir.TypeId, locals: []Rir.TypeId) error{OutOfMemory}! *ForeignAddress {
-        errdefer root.allocator.free(locals);
-
+    pub fn init(root: *Rir, id: Rir.ForeignId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}! *ForeignAddress {
         const ptr = try root.allocator.create(ForeignAddress);
         errdefer root.allocator.destroy(ptr);
 
@@ -21,15 +20,13 @@ pub const ForeignAddress = struct {
             .root = root,
             .id = id,
             .name = name,
-            .type = tyId,
-            .locals = locals,
+            .type = typeIr,
         };
 
         return ptr;
     }
 
     pub fn deinit(self: *ForeignAddress) void {
-        self.root.allocator.free(self.locals);
         self.root.allocator.destroy(self);
     }
 };

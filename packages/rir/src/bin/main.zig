@@ -32,42 +32,44 @@ pub fn main() !void {
                 .fields = &.{
                     Rir.type_info.StructField {
                         .name = try ir.internName("x"),
-                        .type = S32.id,
+                        .type = S32,
                     },
                     Rir.type_info.StructField {
                         .name = try ir.internName("y"),
-                        .type = S32.id,
+                        .type = S32,
                     },
                 },
             }
         });
 
-        const FOO = try module.createGlobal(try ir.internName("FOO"), Foo.id, &.{
+        const FOO = try module.createGlobal(try ir.internName("FOO"), Foo);
+
+        FOO.mutability = .mutable;
+        FOO.initial_value = try ir.allocator.dupe(u8, &.{
             0x01, 0x01, 0x00, 0x00, // x
             0x01, 0x00, 0x00, 0x00, // y
         });
-
-        _ = FOO;
     }
 
     { // incr
-        const one = try module.createGlobalFromNative(try ir.internName("one"), @as(i32, 1));
+        const one = try module.createGlobal(try ir.internName("one"), S32);
+        try one.initializerFromNative(@as(i32, 1));
 
         const Incr = try ir.createTypeFromNative(fn (i32) i32, null, &.{try ir.internName("n")});
-        const incr = try module.createFunction(try ir.internName("incr"), Incr.id);
+        const incr = try module.createFunction(try ir.internName("incr"), Incr);
 
         const arg = try incr.getArgument(0);
 
         const entry = incr.getEntryBlock();
-        try entry.ref_local(arg.id);
-        try entry.ref_global(one.id);
+        try entry.ref_local(arg);
+        try entry.ref_global(one);
         try entry.add();
         try entry.ret();
     }
 
     const fib = fib: {
         const Fib = try ir.createTypeFromNative(fn (i32) i32, null, &.{try ir.internName("n")});
-        const func = try module.createFunction(try ir.internName("fib"), Fib.id);
+        const func = try module.createFunction(try ir.internName("fib"), Fib);
 
         const arg = try func.getArgument(0);
 
@@ -75,26 +77,26 @@ pub fn main() !void {
         const thenBlock = try func.createBlock(entry, try ir.internName("then"));
         const elseBlock = try func.createBlock(entry, try ir.internName("else"));
 
-        try entry.ref_local(arg.id);
+        try entry.ref_local(arg);
         try entry.im(@as(i32, 2));
         try entry.lt();
-        try entry.ref_block(thenBlock.id);
-        try entry.ref_block(elseBlock.id);
+        try entry.ref_block(thenBlock);
+        try entry.ref_block(elseBlock);
         try entry.@"if"(.non_zero);
 
-        try thenBlock.ref_local(arg.id);
+        try thenBlock.ref_local(arg);
         try thenBlock.ret();
 
-        try elseBlock.ref_local(arg.id);
+        try elseBlock.ref_local(arg);
         try elseBlock.im(@as(i32, 1));
         try elseBlock.sub();
-        try elseBlock.ref_function(func.id);
+        try elseBlock.ref_function(func);
         try elseBlock.call();
 
-        try elseBlock.ref_local(arg.id);
+        try elseBlock.ref_local(arg);
         try elseBlock.im(@as(i32, 2));
         try elseBlock.sub();
-        try elseBlock.ref_function(func.id);
+        try elseBlock.ref_function(func);
         try elseBlock.call();
 
         try elseBlock.add();

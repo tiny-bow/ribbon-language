@@ -29,20 +29,27 @@ pub const HandlerSet = handler_set.HandlerSet;
 pub const module = @import("Rir/module.zig");
 pub const Module = module.Module;
 
-pub const instruction = @import("Rir/instruction.zig");
-pub const Instruction = instruction.Instruction;
-pub const Operand = instruction.Operand;
-pub const OpCode = instruction.OpCode;
-pub const OpData = instruction.OpData;
-pub const Register = instruction.Register;
-pub const RValue = instruction.RValue;
+pub const value = @import("Rir/value.zig");
+pub const Instruction = value.Instruction;
+pub const OpCode = value.OpCode;
+pub const OpData = value.OpData;
+pub const Immediate = value.Immediate;
+pub const Register = value.Register;
+pub const MultiRegister = value.MultiRegister;
+pub const Meta = value.Meta;
+pub const LValue = value.LValue;
+pub const RValue = value.RValue;
+pub const Operand = value.Operand;
 
 pub const type_info = @import("Rir/type_info.zig");
 pub const Type = type_info.Type;
 pub const TypeInfo = type_info.TypeInfo;
 
 pub const variable = @import("Rir/variable.zig");
+pub const Mutability = variable.Mutability;
+pub const LocalStorage = variable.LocalStorage;
 pub const Local = variable.Local;
+pub const Upvalue = variable.Upvalue;
 pub const Global = variable.Global;
 
 pub const Error = std.mem.Allocator.Error || error {
@@ -73,6 +80,19 @@ pub const Error = std.mem.Allocator.Error || error {
     TooManyNames,
 
     MultipleExits,
+
+    ExpectedType,
+    ExpectedOperand,
+    ExpectedLocal,
+    ExpectedUpvalue,
+    ExpectedGlobal,
+    ExpectedFunction,
+    ExpectedModule,
+    ExpectedForeign,
+    ExpectedEvidence,
+    ExpectedBlock,
+    ExpectedHandlerSet,
+    ExpectedName,
 };
 
 pub const MAX_MODULES = std.math.maxInt(std.meta.Tag(Rir.ModuleId));
@@ -86,21 +106,21 @@ pub const MAX_BLOCKS = Rbc.MAX_BLOCKS;
 pub const MAX_REGISTERS = Rbc.MAX_REGISTERS;
 pub const MAX_LOCALS = std.math.maxInt(std.meta.Tag(Rir.LocalId));
 pub const MAX_NAMES = std.math.maxInt(std.meta.Tag(Rir.NameId));
+pub const MAX_MULTI_REGISTER = std.math.maxInt(MultiRegisterIndex);
 
-pub const ModuleId = NewType("ModuleId", u16);
-pub const RegisterId = NewType("RegisterId", Rbc.RegisterIndex);
-pub const RegisterOffset = NewType("RegisterOffset", Rbc.RegisterLocalOffset);
-pub const HandlerSetId = NewType("HandlerSetId", Rbc.HandlerSetIndex);
-pub const TypeId = NewType("TypeId", Rbc.Info.TypeIndex);
-pub const BlockId = NewType("BlockId", Rbc.BlockIndex);
-pub const FunctionId = NewType("FunctionId", Rbc.FunctionIndex);
-pub const ForeignId = NewType("ForeignId", Rbc.ForeignId);
-pub const GlobalId = NewType("GlobalId", Rbc.GlobalIndex);
-pub const UpvalueId = NewType("UpvalueId", Rbc.UpvalueIndex);
-pub const EvidenceId = NewType("EvidenceId", Rbc.EvidenceIndex);
-pub const LocalId = NewType("LocalId", u16);
-pub const NameId = NewType("NameId", u16);
-pub const FieldId = NewType("FieldId", u16);
+pub const ModuleId = NewType("ModuleId", u16, Module);
+pub const RegisterId = NewType("RegisterId", Rbc.RegisterIndex, Register);
+pub const HandlerSetId = NewType("HandlerSetId", Rbc.HandlerSetIndex, HandlerSet);
+pub const TypeId = NewType("TypeId", Rbc.Info.TypeIndex, Type);
+pub const BlockId = NewType("BlockId", Rbc.BlockIndex, Block);
+pub const FunctionId = NewType("FunctionId", Rbc.FunctionIndex, Function);
+pub const ForeignId = NewType("ForeignId", Rbc.ForeignId, ForeignAddress);
+pub const GlobalId = NewType("GlobalId", Rbc.GlobalIndex, Global);
+pub const UpvalueId = NewType("UpvalueId", Rbc.UpvalueIndex, Upvalue);
+pub const EvidenceId = NewType("EvidenceId", Rbc.EvidenceIndex, Local);
+pub const LocalId = NewType("LocalId", u16, Local);
+pub const NameId = NewType("NameId", u16, [:0]const u8);
+pub const FieldId = NewType("FieldId", u16, void);
 
 // pub const Name = [:0]const u8;
 
@@ -110,7 +130,9 @@ pub const Alignment = u12; // 2^12 = 4096 = page size; should be enough for anyo
 pub const Size = u64;
 pub const Offset = u64;
 
-pub const RegisterIndex = Rbc.RegisterIndex;
+pub const RegisterOffset = Rbc.RegisterLocalOffset;
+/// 2 ^ 2 = max of 4 registers per multi-register entity
+pub const MultiRegisterIndex = std.meta.Int(.unsigned, 2);
 
 pub const Dimensions = packed struct {
     size: Size = 0,
@@ -125,6 +147,7 @@ pub const Dimensions = packed struct {
 };
 
 pub const Layout = struct {
+    local_storage: LocalStorage,
     dimensions: Dimensions,
     field_offsets: []Offset = &.{},
 
@@ -142,6 +165,7 @@ pub const Layout = struct {
 
     pub fn fromDimensions(dimensions: Dimensions) Layout {
         return Layout {
+            .local_storage = .fromSize(dimensions.size),
             .dimensions = dimensions,
         };
     }
@@ -171,29 +195,12 @@ pub const Layout = struct {
     }
 };
 
-pub fn Ref (comptime T: type) type {
-    return packed struct {
-        module: Rir.ModuleId,
-        id: T,
 
-        const Self = @This();
-
-        pub fn onFormat(self: Self, formatter: Rir.Formatter) !void {
-            try formatter.fmt(self.module);
-            try formatter.writeAll("/");
-            try formatter.fmt(self.id);
-        }
-
-        pub fn format(self: Self, comptime _: []const u8, _: anytype, writer: anytype) !void {
-            try writer.print("[{}:{}]", .{self.module, self.id});
-        }
-    };
-}
-
-
-fn NewType(comptime NewTypeName: []const u8, comptime Tag: type) type {
+fn NewType(comptime NewTypeName: []const u8, comptime Tag: type, comptime Data: type) type {
     return enum(Tag) {
         const Self = @This();
+
+        pub const DataType = Data;
 
         _,
 
@@ -249,14 +256,6 @@ pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}! *Rir {
     };
     errdefer self.deinit();
 
-    for (Rir.type_info.BASIC_TYPE_INFO, 0..) |bt, i| {
-        const name = self.internName(Rir.type_info.BASIC_TYPE_NAMES[i])
-            catch |err| return TypeUtils.forceErrorSet(error{OutOfMemory}, err);
-
-        _ = self.createType(name, bt)
-            catch |err| return TypeUtils.forceErrorSet(error{OutOfMemory}, err);
-    }
-
     return self;
 }
 
@@ -295,14 +294,14 @@ pub fn deinit(self: *Rir) void {
 }
 
 pub fn onFormat(self: *const Rir, formatter: Rir.Formatter) Rir.Formatter.Error! void {
-    if (self.type_map.count() > Rir.type_info.BASIC_TYPE_NAMES.len) {
+    if (self.type_map.count() > 0) {
         const oldTypeMode = formatter.swapFlag(.show_nominative_type_bodies, true);
         defer formatter.setFlag(.show_nominative_type_bodies, oldTypeMode);
 
         try formatter.writeAll("types = ");
         try formatter.beginBlock();
-        for (Rir.type_info.BASIC_TYPE_NAMES.len..self.type_map.count()) |i| {
-            if (i > Rir.type_info.BASIC_TYPE_NAMES.len) try formatter.endLine();
+        for (0..self.type_map.count()) |i| {
+            if (i > 0) try formatter.endLine();
             try formatter.fmt(@as(Rir.TypeId, @enumFromInt(i)));
         }
         try formatter.endBlock();
@@ -431,24 +430,14 @@ pub fn getTypeLayout(self: *Rir, id: Rir.TypeId) error{InvalidType, OutOfMemory}
     return getOrPut.value_ptr;
 }
 
-
-/// Calls `allocator.dupe` on the input locals
-pub fn createForeign(self: *Rir, name: Rir.NameId, tyId: Rir.TypeId, locals: []Rir.TypeId) error{TooManyForeignAddresses, OutOfMemory}! *Rir.ForeignAddress {
-    const dupeLocals = try self.allocator.dupe(Rir.TypeId, locals);
-    errdefer self.allocator.free(dupeLocals);
-
-    return self.foreignPreallocated(name, tyId, dupeLocals);
-}
-
-/// Does not call `allocator.dupe` on the input locals
-pub fn foreignPreallocated(self: *Rir, name: Rir.NameId, tyId: Rir.TypeId, locals: []Rir.TypeId) error{TooManyForeignAddresses, OutOfMemory}! *Rir.ForeignAddress {
+pub fn createForeign(self: *Rir, name: Rir.NameId, typeIr: *Rir.Type) error{TooManyForeignAddresses, OutOfMemory}! *Rir.ForeignAddress {
     const index = self.foreign_list.items.len;
 
     if (index >= Rir.MAX_FOREIGN_ADDRESSES) {
         return error.TooManyForeignAddresses;
     }
 
-    const f = try Rir.ForeignAddress.init(self, @enumFromInt(index), name, tyId, locals);
+    const f = try Rir.ForeignAddress.init(self, @enumFromInt(index), name, typeIr);
     errdefer self.allocator.destroy(f);
 
     try self.foreign_list.append(self.allocator, f);
@@ -486,16 +475,4 @@ pub fn getModule(self: *const Rir, id: Rir.ModuleId) error{InvalidModule}! *Rir.
     }
 
     return self.module_list.items[@intFromEnum(id)];
-}
-
-pub fn getGlobal(self: *const Rir, ref: Rir.Ref(Rir.GlobalId)) error{InvalidModule, InvalidGlobal}! *Rir.Global {
-    const mod = try self.getModule(ref.module);
-
-    return mod.getGlobal(ref.id);
-}
-
-pub fn getFunction(self: *const Rir, ref: Rir.Ref(Rir.FunctionId)) error{InvalidModule, InvalidFunction}! *Rir.Function {
-    const mod = try self.getModule(ref.module);
-
-    return mod.getFunction(ref.id);
 }

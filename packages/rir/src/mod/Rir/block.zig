@@ -7,27 +7,31 @@ const Rir = @import("../Rir.zig");
 const LocalMap = std.ArrayHashMapUnmanaged(Rir.LocalId, *Rir.Local, MiscUtils.SimpleHashContext, false);
 
 
-pub const BlockKind = union(enum) {
-    basic: void,
-    with: Rir.HandlerSetId,
-};
 
 pub const Block = struct {
+    pub const Id = Rir.BlockId;
+
+    ir: *Rir,
     function: *Rir.Function,
-    locals: LocalMap = .{},
+
     parent: ?*Block,
     id: Rir.BlockId,
     name: Rir.NameId,
+
     has_exit: bool = false,
-    kind: BlockKind = .basic,
+    handler_set: ?*Rir.HandlerSet = null,
+    local_map: LocalMap = .{},
     instructions: std.ArrayListUnmanaged(Rir.Instruction) = .{},
 
 
     pub fn init(function: *Rir.Function, parent: ?*Block, id: Rir.BlockId, name: Rir.NameId) !*Block {
-        const ptr = try function.module.root.allocator.create(Block);
-        errdefer function.module.root.allocator.destroy(ptr);
+        const ir = function.ir;
+
+        const ptr = try ir.allocator.create(Block);
+        errdefer ir.allocator.destroy(ptr);
 
         ptr.* = Block {
+            .ir = ir,
             .function = function,
             .parent = parent,
             .id = id,
@@ -38,11 +42,11 @@ pub const Block = struct {
     }
 
     pub fn deinit(self: *Block) void {
-        for (self.locals.values()) |x| x.deinit();
-        self.locals.deinit(self.function.module.root.allocator);
+        for (self.local_map.values()) |x| x.deinit();
+        self.local_map.deinit(self.ir.allocator);
 
-        self.instructions.deinit(self.function.module.root.allocator);
-        self.function.module.root.allocator.destroy(self);
+        self.instructions.deinit(self.ir.allocator);
+        self.ir.allocator.destroy(self);
     }
 
     pub fn onFormat(self: *const Block, formatter: Rir.Formatter) !void {
@@ -67,12 +71,12 @@ pub const Block = struct {
     }
 
     pub fn localCount(self: *const Block) usize {
-        return self.locals.count();
+        return self.local_map.count();
     }
 
 
     pub fn getLocal(self: *const Block, id: Rir.LocalId) error{InvalidLocal}! *Rir.Local {
-        if (self.locals.get(id)) |x| {
+        if (self.local_map.get(id)) |x| {
             return x;
         } else if (self.parent) |p| {
             return p.getLocal(id);
@@ -81,13 +85,13 @@ pub const Block = struct {
         }
     }
 
-    pub fn createLocal(self: *Block, name: Rir.NameId, tyId: Rir.TypeId) error{TooManyLocals, OutOfMemory}! *Rir.Local {
+    pub fn createLocal(self: *Block, name: Rir.NameId, typeIr: *Rir.Type) error{TooManyLocals, OutOfMemory}! *Rir.Local {
         const id = try self.function.freshLocalId();
 
-        const local = try Rir.Local.init(self, id, name, tyId);
+        const local = try Rir.Local.init(self, id, name, typeIr);
         errdefer local.deinit();
 
-        try self.locals.put(self.function.module.root.allocator, id, local);
+        try self.local_map.put(self.ir.allocator, id, local);
 
         return local;
     }
@@ -114,15 +118,15 @@ pub const Block = struct {
         try op(self, .with, {});
     }
 
-    pub fn @"if"(self: *Block, x: Rir.instruction.ZeroCheck) !void {
+    pub fn @"if"(self: *Block, x: Rir.value.ZeroCheck) !void {
         try op(self, .@"if", x);
     }
 
-    pub fn when(self: *Block, x: Rir.instruction.ZeroCheck) !void {
+    pub fn when(self: *Block, x: Rir.value.ZeroCheck) !void {
         try op(self, .when, x);
     }
 
-    pub fn re(self: *Block, x: Rir.instruction.OptZeroCheck) !void {
+    pub fn re(self: *Block, x: Rir.value.OptZeroCheck) !void {
         if (x != .none) {
             try op(self, .re, x);
         } else {
@@ -130,7 +134,7 @@ pub const Block = struct {
         }
     }
 
-    pub fn br(self: *Block, x: Rir.instruction.OptZeroCheck) !void {
+    pub fn br(self: *Block, x: Rir.value.OptZeroCheck) !void {
         if (x != .none) {
             try op(self, .br, x);
         } else {
@@ -154,8 +158,8 @@ pub const Block = struct {
         try exitOp(self, .term, {});
     }
 
-    pub fn alloca(self: *Block, x: Rir.RegisterOffset) !void {
-        try op(self, .alloca, x);
+    pub fn alloca(self: *Block) !void {
+        try op(self, .alloca, {});
     }
 
     pub fn addr(self: *Block) !void {
@@ -250,11 +254,11 @@ pub const Block = struct {
         try op(self, .ge, {});
     }
 
-    pub fn ext(self: *Block, x: Rir.instruction.BitSize) !void {
+    pub fn ext(self: *Block, x: Rir.value.BitSize) !void {
         try op(self, .ext, x);
     }
 
-    pub fn trunc(self: *Block, x: Rir.instruction.BitSize) !void {
+    pub fn trunc(self: *Block, x: Rir.value.BitSize) !void {
         try op(self, .trunc, x);
     }
 
@@ -278,154 +282,81 @@ pub const Block = struct {
         try op(self, .new_local, x);
     }
 
-    pub fn ref_local(self: *Block, x: Rir.LocalId) !void {
-        try op(self, .ref_local, x);
+    pub fn ref_local(self: *Block, x: *Rir.Local) !void {
+        try op(self, .ref_local, x.id);
     }
 
-    pub fn ref_block(self: *Block, x: Rir.BlockId) !void {
-        try op(self, .ref_block, x);
+    pub fn ref_block(self: *Block, x: *Rir.Block) !void {
+        try op(self, .ref_block, x.id);
     }
 
-    pub fn ref_function(self: *Block, x: Rir.FunctionId) !void {
-        try op(self, .ref_function, .{ .module = self.function.module.id, .id = x });
+    pub fn ref_function(self: *Block, x: *Rir.Function) !void {
+        try op(self, .ref_function, .{ .module_id = self.function.module.id, .id = x.id });
     }
 
-    pub fn ref_extern_function(self: *Block, m: Rir.ModuleId, x: Rir.FunctionId) !void {
-        try op(self, .ref_function, .{ .module = m, .id = x });
+    pub fn ref_extern_function(self: *Block, m: *Rir.Module, x: *Rir.Function) !void {
+        try op(self, .ref_function, .{ .module_id = m.id, .id = x.id });
     }
 
-    pub fn ref_foreign(self: *Block, x: Rir.ForeignId) !void {
-        try op(self, .ref_foreign, x);
+    pub fn ref_foreign(self: *Block, x: *Rir.ForeignAddress) !void {
+        try op(self, .ref_foreign, x.id);
     }
 
-    pub fn ref_global(self: *Block, x: anytype) !void {
-        try op(self, .ref_global, .{ .module = self.function.module.id, .id = x });
+    pub fn ref_global(self: *Block, x: *Rir.Global) !void {
+        try op(self, .ref_global, .{ .module_id = self.function.module.id, .id = x.id });
     }
 
-    pub fn ref_extern_global(self: *Block, m: Rir.ModuleId, x: Rir.GlobalId) !void {
-        try op(self, .ref_global, .{ .module = m, .id = x });
+    pub fn ref_extern_global(self: *Block, m: *Rir.Module, x: *Rir.Global) !void {
+        try op(self, .ref_global, .{ .module_id = m.id, .id = x.id });
     }
 
-    pub fn ref_upvalue(self: *Block, x: Rir.UpvalueId) !void {
-        try op(self, .ref_upvalue, x);
+    pub fn ref_upvalue(self: *Block, x: *Rir.Upvalue) !void {
+        try op(self, .ref_upvalue, x.id);
     }
 
 
     pub fn im(self: *Block, x: anytype) !void {
         const size = @bitSizeOf(@TypeOf(x));
         return if (comptime size > 32) @call(.always_inline, im_w, .{self, x})
-        else if (comptime size > 16) @call(.always_inline, im_i, .{self, x})
-        else if (comptime size > 8) @call(.always_inline, im_s, .{self, x})
-        else @call(.always_inline, im_b, .{self, x});
-    }
-
-    pub fn im_b(self: *Block, x: anytype) !void {
-        const ty = try self.function.module.root.createTypeFromNative(@TypeOf(x), null, null);
-        try op(self, .im_b, .{.type = ty.id, .data = bCast(x)});
-    }
-
-    pub fn im_s(self: *Block, x: anytype) !void {
-        const ty = try self.function.module.root.createTypeFromNative(@TypeOf(x), null, null);
-        try op(self, .im_s, .{.type = ty.id, .data = sCast(x)});
+        else @call(.always_inline, im_i, .{self, x});
     }
 
     pub fn im_i(self: *Block, x: anytype) !void {
-        const ty = try self.function.module.root.createTypeFromNative(@TypeOf(x), null, null);
-        try op(self, .im_i, .{.type = ty.id, .data = iCast(x)});
+        const ty = try self.ir.createTypeFromNative(@TypeOf(x), null, null);
+        try op(self, .im_i, try Rir.value.OpImmediate.fromNative(ty, x));
     }
 
     pub fn im_w(self: *Block, x: anytype) !void {
-        const ty = try self.function.module.root.createTypeFromNative(@TypeOf(x), null, null);
-        try op(self, .im_w, .{.type = ty.id});
-        try wideImmediate(self, x);
+        const ty = try self.ir.createTypeFromNative(@TypeOf(x), null, null);
+        try op(self, .im_w, ty.id);
+        try @call(.always_inline, std.ArrayListUnmanaged(Rir.Instruction).append, .{
+            &self.instructions,
+            self.ir.allocator,
+            @as(Rir.Instruction, @bitCast(try Rir.Immediate.fromNative(x))),
+        });
+    }
+
+
+
+    pub fn op(self: *Block, comptime code: Rir.OpCode, data: Rir.value.OpData.Of(code)) !void {
+        try @call(.always_inline, std.ArrayListUnmanaged(Rir.Instruction).append, .{
+            &self.instructions,
+            self.ir.allocator,
+            Rir.Instruction {
+                .code = code,
+                .data = @unionInit(Rir.OpData, @tagName(code), data),
+            },
+        });
+    }
+
+    pub fn exitOp(self: *Block, comptime code: Rir.OpCode, data: Rir.value.OpData.Of(code)) !void {
+        if (self.has_exit) {
+            return error.MultipleExits;
+        }
+        try op(self, code, data);
+        self.has_exit = true;
     }
 };
-
-
-
-inline fn bCast(b: anytype) u8 {
-    return switch (@typeInfo(@TypeOf(b))) {
-        .comptime_int => @as(u8, b),
-        .int => |info|
-            if (info.bits <= 8) switch (info.signedness) {
-                .unsigned => @as(u8, b),
-                .signed => @as(u8, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
-            }
-            else @bitCast(@as(std.meta.Int(info.signedness, 8), @intCast(b))),
-        .@"enum" => bCast(@intFromEnum(b)),
-        else => @as(u8, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(b))), @bitCast(b))),
-    };
-}
-
-inline fn sCast(b: anytype) u16 {
-    return switch (@typeInfo(@TypeOf(b))) {
-        .comptime_int => @as(u16, b),
-        .int => |info|
-            if (info.bits <= 16) switch (info.signedness) {
-                .unsigned => @as(u16, b),
-                .signed => @as(u16, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
-            }
-            else @bitCast(@as(std.meta.Int(info.signedness, 16), @intCast(b))),
-        .@"enum" => sCast(@intFromEnum(b)),
-        else => @as(u16, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(b))), @bitCast(b))),
-    };
-}
-
-inline fn iCast(b: anytype) u32 {
-    return switch (@typeInfo(@TypeOf(b))) {
-        .comptime_int => @as(u32, b),
-        .int => |info|
-            if (info.bits <= 32) switch (info.signedness) {
-                .unsigned => @as(u32, b),
-                .signed => @as(u32, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
-            }
-            else @bitCast(@as(std.meta.Int(info.signedness, 32), @intCast(b))),
-        .@"enum" => iCast(@intFromEnum(b)),
-        else => @as(u32, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(b))), @bitCast(b))),
-    };
-}
-
-inline fn wCast(b: anytype) u64 {
-    return switch (@typeInfo(@TypeOf(b))) {
-        .comptime_int => @as(u64, b),
-        .int => |info|
-            if (info.bits <= 64) switch (info.signedness) {
-                .unsigned => @as(u64, b),
-                .signed => @as(u64, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
-            }
-            else @bitCast(@as(std.meta.Int(info.signedness, 64), @intCast(b))),
-        .@"enum" => wCast(@intFromEnum(b)),
-        else => @as(u64, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(b))), @bitCast(b))),
-    };
-}
-
-
-inline fn wideImmediate(self: *Block, x: u64) !void {
-    try @call(.always_inline, std.ArrayListUnmanaged(Rir.Instruction).append, .{
-        &self.instructions,
-        self.function.module.root.allocator,
-        @as(Rir.Instruction, @bitCast(wCast(x))),
-    });
-}
-
-inline fn op(self: *Block, comptime code: Rir.OpCode, data: Rir.instruction.DataOf(code)) !void {
-    try @call(.always_inline, std.ArrayListUnmanaged(Rir.Instruction).append, .{
-        &self.instructions,
-        self.function.module.root.allocator,
-        Rir.Instruction {
-            .code = code,
-            .data = @unionInit(Rir.OpData, @tagName(code), data),
-        },
-    });
-}
-
-inline fn exitOp(self: *Block, comptime code: Rir.OpCode, data: Rir.instruction.DataOf(code)) !void {
-    if (self.has_exit) {
-        return error.MultipleExits;
-    }
-    try op(self, code, data);
-    self.has_exit = true;
-}
 
 comptime {
     for (std.meta.fieldNames(Rir.OpCode)) |opName| {

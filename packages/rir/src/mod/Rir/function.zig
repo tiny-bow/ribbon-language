@@ -8,10 +8,16 @@ const BlockList = std.ArrayListUnmanaged(*Rir.Block);
 const UpvalueList = std.ArrayListUnmanaged(Rir.LocalId);
 
 pub const Function = struct {
+    pub const Id = Rir.FunctionId;
+
+    ir: *Rir,
     module: *Rir.Module,
+
     id: Rir.FunctionId,
     name: Rir.NameId,
-    type: Rir.TypeId,
+
+    type: *Rir.Type,
+
     evidence: ?Rir.EvidenceId = null,
     blocks: BlockList = .{},
     parent: ?*Rir.Block = null,
@@ -19,37 +25,42 @@ pub const Function = struct {
     local_id_counter: usize = 0,
 
 
-    pub fn getRef(self: *const Function) Rir.Ref(Rir.FunctionId) {
-        return Rir.Ref(Rir.FunctionId) {
+    pub fn getRef(self: *const Function) Rir.value.OpRef(Rir.Function) {
+        return Rir.value.OpRef(Rir.Function) {
+            .module_id = self.module.id,
             .id = self.id,
-            .module = self.module.id,
         };
     }
 
 
-    pub fn init(module: *Rir.Module, id: Rir.FunctionId, name: Rir.NameId, tyId: Rir.TypeId) error{InvalidType, OutOfMemory}! *Function {
-        const self = try module.root.allocator.create(Function);
-        errdefer module.root.allocator.destroy(self);
+    pub fn init(module: *Rir.Module, id: Rir.FunctionId, name: Rir.NameId, typeIr: *Rir.Type) error{ExpectedFunctionType,  OutOfMemory}! *Function {
+        const ir = module.ir;
+
+        const self = try ir.allocator.create(Function);
+        errdefer ir.allocator.destroy(self);
 
         self.* = Function {
+            .ir = ir,
             .module = module,
+
             .id = id,
             .name = name,
-            .type = tyId,
+
+            .type = typeIr,
         };
 
         const funcTyInfo = try self.getTypeInfo();
 
-        const entryName = module.root.internName("entry")
+        const entryName = ir.internName("entry") // shouldn't be able to get error.TooManyNames here; every function has an entry
             catch |err| return TypeUtils.forceErrorSet(error{OutOfMemory}, err);
 
         const entryBlock = try Rir.Block.init(self, null, @enumFromInt(0), entryName);
         errdefer entryBlock.deinit();
 
-        try self.blocks.append(module.root.allocator, entryBlock);
+        try self.blocks.append(ir.allocator, entryBlock);
 
         for (funcTyInfo.parameters) |param| {
-            _ = entryBlock.createLocal(param.name, param.type)
+            _ = entryBlock.createLocal(param.name, param.type) // shouldn't be able to get error.TooManyLocals here; the type was already checked
                 catch |err| return TypeUtils.forceErrorSet(error{OutOfMemory}, err);
         }
 
@@ -59,11 +70,11 @@ pub const Function = struct {
     pub fn deinit(self: *Function) void {
         for (self.blocks.items) |b| b.deinit();
 
-        self.blocks.deinit(self.module.root.allocator);
+        self.blocks.deinit(self.ir.allocator);
 
-        self.upvalue_indices.deinit(self.module.root.allocator);
+        self.upvalue_indices.deinit(self.ir.allocator);
 
-        self.module.root.allocator.destroy(self);
+        self.ir.allocator.destroy(self);
     }
 
     pub fn onFormat(self: *const Function, formatter: Rir.Formatter) !void {
@@ -95,32 +106,32 @@ pub const Function = struct {
         return @enumFromInt(id);
     }
 
-    pub fn getTypeInfo(self: *const Function) error{InvalidType}! Rir.type_info.Function {
-        return (try self.module.root.getType(self.type)).info.asFunction();
+    pub fn getTypeInfo(self: *const Function) error{ExpectedFunctionType}! Rir.type_info.Function {
+        return self.type.info.forceFunction();
     }
 
-    pub fn getParameters(self: *const Function) error{InvalidType}! []const Rir.type_info.Parameter {
+    pub fn getParameters(self: *const Function) error{ExpectedFunctionType}! []const Rir.type_info.Parameter {
         return (try self.getTypeInfo()).parameters;
     }
 
-    pub fn getReturnType(self: *const Function) error{InvalidType}! Rir.TypeId {
+    pub fn getReturnType(self: *const Function) error{ExpectedFunctionType}! *Rir.Type {
         return (try self.getTypeInfo()).return_type;
     }
 
-    pub fn getEffects(self: *const Function) error{InvalidType}! []const Rir.TypeId {
+    pub fn getEffects(self: *const Function) error{ExpectedFunctionType}! []const *Rir.Type {
         return (try self.getTypeInfo()).effects;
     }
 
-    pub fn getArity(self: *const Function) error{InvalidType}! Rir.Arity {
+    pub fn getArity(self: *const Function) error{ExpectedFunctionType}! Rir.Arity {
         return @intCast((try self.getParameters()).len);
     }
 
-    pub fn getArgument(self: *const Function, argIndex: Rir.Arity) error{InvalidArgument, InvalidType}! *Rir.Local {
+    pub fn getArgument(self: *const Function, argIndex: Rir.Arity) error{InvalidArgument, ExpectedFunctionType}! *Rir.Local {
         if (argIndex >= try self.getArity()) {
             return error.InvalidArgument;
         }
 
-        return self.getEntryBlock().locals.values()[argIndex];
+        return self.getEntryBlock().local_map.values()[argIndex];
     }
 
     pub fn createUpvalue(self: *Function, parentLocal: Rir.LocalId) error{TooManyUpvalues, InvalidLocal, InvalidUpvalue, OutOfMemory}! Rir.UpvalueId {
@@ -133,7 +144,7 @@ pub const Function = struct {
                 return error.TooManyUpvalues;
             }
 
-            try self.upvalue_indices.append(self.module.root.allocator, parentLocal);
+            try self.upvalue_indices.append(self.ir.allocator, parentLocal);
 
             return @enumFromInt(index);
         } else {
@@ -166,7 +177,7 @@ pub const Function = struct {
 
         const newBlock = try Rir.Block.init(self, parent, @enumFromInt(index), name);
 
-        try self.blocks.append(self.module.root.allocator, newBlock);
+        try self.blocks.append(self.ir.allocator, newBlock);
 
         return newBlock;
     }
