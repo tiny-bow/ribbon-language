@@ -1,6 +1,7 @@
-const std = @import("std");
-
 const Rml = @import("../../Rml.zig");
+
+const std = @import("std");
+const utils = @import("utils");
 
 
 
@@ -40,8 +41,8 @@ pub const Quote = struct {
     kind: QuoteKind,
     body: Rml.Object,
 
-    pub fn compare(self: Quote, other: Quote) Rml.Ordering {
-        var ord = Rml.compare(self.kind, other.kind);
+    pub fn compare(self: Quote, other: Quote) utils.Ordering {
+        var ord = utils.compare(self.kind, other.kind);
 
         if (ord == .Equal) {
             ord = self.body.compare(other.body);

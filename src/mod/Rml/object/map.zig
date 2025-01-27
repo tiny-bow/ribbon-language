@@ -1,6 +1,7 @@
-const std = @import("std");
-
 const Rml = @import("../../Rml.zig");
+
+const std = @import("std");
+const utils = @import("utils");
 
 
 
@@ -16,17 +17,17 @@ pub fn TypedMap (comptime K: type, comptime V: type) type {
         native_map: NativeMap = .{},
 
         pub const NativeIter = NativeMap.Iterator;
-        pub const NativeMap = std.ArrayHashMapUnmanaged(Rml.Obj(K), Rml.Obj(V), Rml.SimpleHashContext, true);
+        pub const NativeMap = std.ArrayHashMapUnmanaged(Rml.Obj(K), Rml.Obj(V), utils.SimpleHashContext, true);
 
-        pub fn compare(self: Self, other: Self) Rml.Ordering {
-            var ord = Rml.compare(self.keys().len, other.keys().len);
+        pub fn compare(self: Self, other: Self) utils.Ordering {
+            var ord = utils.compare(self.keys().len, other.keys().len);
 
             if (ord == .Equal) {
-                ord = Rml.compare(self.keys(), other.keys());
+                ord = utils.compare(self.keys(), other.keys());
             }
 
             if (ord == .Equal) {
-                ord = Rml.compare(self.values(), other.values());
+                ord = utils.compare(self.values(), other.values());
             }
 
             return ord;

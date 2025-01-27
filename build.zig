@@ -76,20 +76,20 @@ const MODULES: []const Module = &.{
 
 const BINARIES: []const Binary = &.{
     .{
-        .name = "RmlTester",
+        .name = "rml",
         .dependencies = &.{
             .internal("Rml"),
         },
     },
     .{
-        .name = "RirTester",
+        .name = "rir",
         .dependencies = &.{
             .internal("Rir"),
             .internal("RbcGenerator"),
         },
     },
     .{
-        .name = "RvmTester",
+        .name = "rvm",
         .dependencies = &.{
             .internal("utils"),
             .internal("Rvm"),
@@ -103,7 +103,7 @@ pub fn build(zigBuild: *Build) !void {
 
     const installStep = b.build.default_step;
     const checkStep = b.build.step("check", "Run semantic analysis");
-    const testStep = b.build.step("test", "Run unit tests");
+    // const testStep = b.build.step("test", "Run unit tests");
 
     for (PACKAGES) |packageName| {
         const ext = b.build.dependency(packageName, .{.target = b.target, .optimize = b.optimize});
@@ -135,10 +135,14 @@ pub fn build(zigBuild: *Build) !void {
         try b.module_map.put(mod.name, moduleStandard);
         try b.test_map.put(mod.name, &moduleTest.root_module);
 
-        const runTest = b.build.addRunArtifact(moduleTest);
+        // const runTest = b.build.addRunArtifact(moduleTest);
+        // const unitTestStep = b.build.step(b.fmt("test-{s}", .{mod.name}), b.fmt("Run unit tests for the {s} module", .{mod.name}));
+        const unitCheckStep = b.build.step(b.fmt("check-{s}", .{mod.name}), b.fmt("Run semantic analysis for the {s} module", .{mod.name}));
 
         checkStep.dependOn(&moduleTest.step);
-        testStep.dependOn(&runTest.step);
+        unitCheckStep.dependOn(&moduleTest.step);
+        // testStep.dependOn(&runTest.step);
+        // unitTestStep.dependOn(&runTest.step);
     }
 
     for (MODULES) |mod| {
@@ -170,17 +174,27 @@ pub fn build(zigBuild: *Build) !void {
         b.addDependencies(.standard, &binaryStandard.root_module, bin.dependencies);
         b.addDependencies(.testing, &binaryTest.root_module, bin.dependencies);
 
-        const installBinary = b.build.addInstallArtifact(binaryStandard, .{});
-        installStep.dependOn(&installBinary.step);
-
-        const runStep = b.build.step(bin.name, b.fmt("Build & run the {s} executable", .{bin.name}));
         const run = b.build.addRunArtifact(binaryStandard);
+        const installBinary = b.build.addInstallArtifact(binaryStandard, .{});
 
-        const runTest = b.build.addRunArtifact(binaryTest);
+
+        const runStep = b.build.step(b.fmt("run-{s}", .{bin.name}), b.fmt("Build & run the {s} executable", .{bin.name}));
+        const unitInstallStep = b.build.step(bin.name, b.fmt("Build the {s} executable", .{bin.name}));
+        const unitCheckStep = b.build.step(b.fmt("check-{s}", .{bin.name}), b.fmt("Run semantic analysis for the {s} executable", .{bin.name}));
+        // const unitTestStep = b.build.step(b.fmt("test-{s}", .{bin.name}), b.fmt("Run unit tests for the {s} executable", .{bin.name}));
+
+        // const runTest = b.build.addRunArtifact(binaryTest);
+
+        installStep.dependOn(&installBinary.step);
+        unitInstallStep.dependOn(&installBinary.step);
 
         runStep.dependOn(&run.step);
+
         checkStep.dependOn(&binaryTest.step);
-        testStep.dependOn(&runTest.step);
+        unitCheckStep.dependOn(&binaryTest.step);
+
+        // testStep.dependOn(&runTest.step);
+        // unitTestStep.dependOn(&runTest.step);
     }
 }
 

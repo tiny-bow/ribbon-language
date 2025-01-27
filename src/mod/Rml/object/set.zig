@@ -1,6 +1,7 @@
-const std = @import("std");
-
 const Rml = @import("../../Rml.zig");
+
+const std = @import("std");
+const utils = @import("utils");
 
 
 
@@ -16,7 +17,7 @@ pub fn TypedSet (comptime K: type) type {
 
 
         pub const NativeIter = NativeSet.Iterator;
-        pub const NativeSet = std.ArrayHashMapUnmanaged(Rml.Obj(K), void, Rml.SimpleHashContext, true);
+        pub const NativeSet = std.ArrayHashMapUnmanaged(Rml.Obj(K), void, utils.SimpleHashContext, true);
 
         pub fn create(rml: *Rml, initialKeys: []const Rml.Obj(K)) Rml.OOM! Self {
             var self = Self { .allocator = rml.blobAllocator() };
@@ -24,11 +25,11 @@ pub fn TypedSet (comptime K: type) type {
             return self;
         }
 
-        pub fn compare(self: Self, other: Self) Rml.Ordering {
-            var ord = Rml.compare(self.keys().len, other.keys().len);
+        pub fn compare(self: Self, other: Self) utils.Ordering {
+            var ord = utils.compare(self.keys().len, other.keys().len);
 
             if (ord == .Equal) {
-                ord = Rml.compare(self.keys(), other.keys());
+                ord = utils.compare(self.keys(), other.keys());
             }
 
             return ord;

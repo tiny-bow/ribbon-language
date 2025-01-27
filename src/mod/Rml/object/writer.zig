@@ -1,6 +1,7 @@
-const std = @import("std");
-
 const Rml = @import("../../Rml.zig");
+
+const std = @import("std");
+const utils = @import("utils");
 
 
 
@@ -13,8 +14,8 @@ pub const Writer = struct {
         return Writer { .native = native_writer };
     }
 
-    pub fn compare(self: Writer, other: Writer) Rml.Ordering {
-        return Rml.compare(self.native, other.native);
+    pub fn compare(self: Writer, other: Writer) utils.Ordering {
+        return utils.compare(self.native, other.native);
     }
 
     pub fn format(self: *const Writer, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {

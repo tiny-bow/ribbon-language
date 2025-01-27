@@ -1,6 +1,9 @@
+const Rml = @import("../Rml.zig");
+
+const format = @This();
+
 const std = @import("std");
 
-const Rml = @import("../Rml.zig");
 
 
 pub const Format = enum {

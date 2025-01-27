@@ -1,8 +1,9 @@
-const std = @import("std");
-const utils = @import("utils");
-
 const Rml = @import("../Rml.zig");
 
+const object = @This();
+
+const std = @import("std");
+const utils = @import("utils");
 
 pub const array = @import("object/array.zig");
 pub const block = @import("object/block.zig");
@@ -16,6 +17,8 @@ pub const set = @import("object/set.zig");
 pub const string = @import("object/string.zig");
 pub const symbol = @import("object/symbol.zig");
 pub const writer = @import("object/writer.zig");
+
+
 
 pub const Writer = writer.Writer;
 pub const Array = array.Array;
@@ -55,7 +58,7 @@ pub const Header = struct {
         };
     }
 
-    pub fn onCompare(self: *Header, other: *Header) Rml.Ordering {
+    pub fn onCompare(self: *Header, other: *Header) utils.Ordering {
         const obj = other.getObject();
         return self.vtable.onCompare(self, obj);
     }
@@ -85,7 +88,7 @@ pub const VTable = struct {
     pub const ObjMemoryFunctions = struct { };
 
     pub const ObjDataFunctions = struct {
-        onCompare: ?*const fn (*const ObjData, Rml.Object) Rml.Ordering = null,
+        onCompare: ?*const fn (*const ObjData, Rml.Object) utils.Ordering = null,
         onFormat: ?*const fn (*const ObjData, Rml.Format, std.io.AnyWriter) anyerror! void = null,
     };
 
@@ -161,7 +164,7 @@ pub const VTable = struct {
         return &x.vtable;
     }
 
-    pub fn onCompare(self: *const VTable, header: *Header, other: Object) Rml.Ordering {
+    pub fn onCompare(self: *const VTable, header: *Header, other: Object) utils.Ordering {
         const data = header.getData();
         return self.obj_data.onCompare.?(data, other);
     }
@@ -221,7 +224,7 @@ pub fn Obj(comptime T: type) type {
             return Self { .data = memory.getData() };
         }
 
-        pub fn compare(self: Self, other: Obj(T)) Rml.Ordering {
+        pub fn compare(self: Self, other: Obj(T)) utils.Ordering {
             return self.getHeader().onCompare(other.getHeader());
         }
 
@@ -249,7 +252,7 @@ pub fn Obj(comptime T: type) type {
             return self.getHeader().rml;
         }
 
-        pub fn onCompare(self: Self, other: Object) Rml.Ordering {
+        pub fn onCompare(self: Self, other: Object) utils.Ordering {
             return self.getHeader().onCompare(other.getHeader());
         }
 
@@ -308,7 +311,7 @@ pub fn isBuiltin(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.builtin.types))) |builtin| {
-        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.types, builtin.name)))) return true;
+        if (utils.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.types, builtin.name)))) return true;
     }
 
     return false;
@@ -318,7 +321,7 @@ pub fn isValue(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.builtin.value_types))) |value| {
-        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.value_types, value.name)))) return true;
+        if (utils.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.value_types, value.name)))) return true;
     }
 
     return false;
@@ -328,7 +331,7 @@ pub fn isAtom(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.builtin.atom_types))) |atom| {
-        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.atom_types, atom.name)))) return true;
+        if (utils.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.atom_types, atom.name)))) return true;
     }
 
     return false;
@@ -338,7 +341,7 @@ pub fn isData(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.builtin.data_types))) |data| {
-        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.data_types, data.name)))) return true;
+        if (utils.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.data_types, data.name)))) return true;
     }
 
     return false;
@@ -347,8 +350,8 @@ pub fn isData(obj: Object) bool {
 pub fn isObject(obj: Object) bool {
     const typeId = obj.getTypeId();
 
-    inline for (comptime std.meta.fields(@TypeOf(Rml.builtin.object_types))) |object| {
-        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.object_types, object.name)))) return true;
+    inline for (comptime std.meta.fields(@TypeOf(Rml.builtin.object_types))) |o| {
+        if (utils.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.object_types, o.name)))) return true;
     }
 
     return false;
@@ -358,7 +361,7 @@ pub fn isSource(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.builtin.source_types))) |source| {
-        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.source_types, source.name)))) return true;
+        if (utils.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.source_types, source.name)))) return true;
     }
 
     return false;
@@ -368,7 +371,7 @@ pub fn isCollection(obj: Object) bool {
     const typeId = obj.getTypeId();
 
     inline for (comptime std.meta.fields(@TypeOf(Rml.builtin.collection_types))) |collection| {
-        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.collection_types, collection.name)))) return true;
+        if (utils.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.collection_types, collection.name)))) return true;
     }
 
     return false;
@@ -377,8 +380,8 @@ pub fn isCollection(obj: Object) bool {
 pub fn isObjectType(comptime T: type) bool {
     const typeId = Rml.TypeId.of(T);
 
-    inline for (comptime std.meta.fields(Rml.builtin.object_types)) |object| {
-        if (Rml.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.object_types, object.name)))) return true;
+    inline for (comptime std.meta.fields(Rml.builtin.object_types)) |obj| {
+        if (utils.equal(typeId, Rml.TypeId.of(@field(Rml.builtin.object_types, obj.name)))) return true;
     }
 
     return false;

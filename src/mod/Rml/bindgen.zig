@@ -1,7 +1,9 @@
+const Rml = @import("../Rml.zig");
+
+const bindgen = @This();
+
 const std = @import("std");
 const utils = @import("utils");
-
-const Rml = @import("../Rml.zig");
 
 
 
@@ -34,11 +36,11 @@ pub fn Support (comptime T: type) type {
     return struct {
         pub const onCompare = switch (@typeInfo(T)) {
             else => struct {
-                pub fn onCompare(a: *const T, obj: Rml.Object) Rml.Ordering {
-                    var ord = Rml.compare(Rml.getTypeId(a), obj.getTypeId());
+                pub fn onCompare(a: *const T, obj: Rml.Object) utils.Ordering {
+                    var ord = utils.compare(Rml.getTypeId(a), obj.getTypeId());
 
                     if (ord == .Equal) {
-                        ord = Rml.compare(a.*, Rml.forceObj(T, obj).data.*);
+                        ord = utils.compare(a.*, Rml.forceObj(T, obj).data.*);
                     }
 
                     return ord;
@@ -270,7 +272,7 @@ pub fn fromObject(comptime T: type, _: *Rml, value: Rml.Object) Rml.Error! T {
     switch (tInfo) {
         .pointer => |info| {
             if (info.size == .One and comptime Rml.isBuiltinType(info.child)) {
-                if (!Rml.equal(Rml.TypeId.of(info.child), value.getTypeId())) {
+                if (!utils.equal(Rml.TypeId.of(info.child), value.getTypeId())) {
                     Rml.log.warn("expected {s} got {s}", .{@typeName(info.child), Rml.TypeId.name(value.getTypeId())});
                     return error.TypeError;
                 }
@@ -288,7 +290,7 @@ pub fn fromObject(comptime T: type, _: *Rml, value: Rml.Object) Rml.Error! T {
             } else if (comptime std.mem.startsWith(u8, @typeName(T), "Rml.object.Obj")) {
                 const O = @typeInfo(tInfo.@"struct".fields[0].type).pointer.child;
 
-                if (!Rml.equal(Rml.TypeId.of(O), value.getTypeId())) {
+                if (!utils.equal(Rml.TypeId.of(O), value.getTypeId())) {
                     return error.TypeError;
                 }
 

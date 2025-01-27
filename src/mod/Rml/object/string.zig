@@ -1,7 +1,7 @@
+const Rml = @import("../../Rml.zig");
+
 const std = @import("std");
 const utils = @import("utils");
-
-const Rml = @import("../../Rml.zig");
 
 
 
@@ -18,19 +18,19 @@ pub const String = struct {
         return self;
     }
 
-    pub fn onCompare(self: *const String, other: Rml.Object) Rml.Ordering {
-        var ord = Rml.compare(Rml.TypeId.of(String), other.getTypeId());
+    pub fn onCompare(self: *const String, other: Rml.Object) utils.Ordering {
+        var ord = utils.compare(Rml.TypeId.of(String), other.getTypeId());
 
         if (ord == .Equal) {
             const otherStr = Rml.forceObj(String, other);
-            ord = Rml.compare(self.text(), otherStr.data.text());
+            ord = utils.compare(self.text(), otherStr.data.text());
         }
 
         return ord;
     }
 
-    pub fn compare(self: String, other: String) Rml.Ordering {
-        return Rml.compare(self.text(), other.text());
+    pub fn compare(self: String, other: String) utils.Ordering {
+        return utils.compare(self.text(), other.text());
     }
 
     pub fn onFormat(self: *const String, fmt: Rml.Format, w: std.io.AnyWriter) anyerror! void {

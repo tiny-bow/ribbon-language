@@ -1,6 +1,9 @@
-const std = @import("std");
-
 const Rml = @import("../Rml.zig");
+
+const source = @This();
+
+const std = @import("std");
+const utils = @import("utils");
 
 
 
@@ -39,11 +42,11 @@ pub const Origin = struct {
         return Origin { .filename = comptime std.fmt.comptimePrint(fmt, args) };
     }
 
-    pub fn compare(self: Origin, other: Origin) Rml.Ordering {
-        var res = Rml.compare(self.filename, other.filename);
+    pub fn compare(self: Origin, other: Origin) utils.Ordering {
+        var res = utils.compare(self.filename, other.filename);
 
         if (res == .Equal) {
-            res = Rml.compare(self.range, other.range);
+            res = utils.compare(self.range, other.range);
         }
 
         return res;
@@ -60,8 +63,8 @@ pub const Origin = struct {
     }
 
     pub fn hashWith(self: Origin, hasher: anytype) void {
-        Rml.hashWith(hasher, self.filename);
-        Rml.hashWith(hasher, self.range);
+        utils.hashWith(hasher, self.filename);
+        utils.hashWith(hasher, self.range);
     }
 };
 
@@ -93,11 +96,11 @@ pub const Range = struct {
     start: ?Pos = null,
     end: ?Pos = null,
 
-    pub fn compare(self: Range, other: Range) Rml.Ordering {
-        var res = Rml.compare(self.start, other.start);
+    pub fn compare(self: Range, other: Range) utils.Ordering {
+        var res = utils.compare(self.start, other.start);
 
         if (res == .Equal) {
-            res = Rml.compare(self.end, other.end);
+            res = utils.compare(self.end, other.end);
         }
 
         return res;
@@ -123,8 +126,8 @@ pub const Range = struct {
     }
 
     pub fn hashWith(self: Range, hasher: anytype) void {
-        Rml.hashWith(hasher, self.start);
-        Rml.hashWith(hasher, self.end);
+        utils.hashWith(hasher, self.start);
+        utils.hashWith(hasher, self.end);
     }
 };
 
@@ -134,8 +137,8 @@ pub const Pos = struct {
     offset: u32 = 0,
     indentation: u32 = 0,
 
-    pub fn compare(self: Pos, other: Pos) Rml.Ordering {
-        return Rml.compare(self.offset, other.offset);
+    pub fn compare(self: Pos, other: Pos) utils.Ordering {
+        return utils.compare(self.offset, other.offset);
     }
 
     pub fn format(self: *const Pos, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror!void {
@@ -143,6 +146,6 @@ pub const Pos = struct {
     }
 
     pub fn hashWith(self: Pos, hasher: anytype) void {
-        Rml.hashWith(hasher, self.offset);
+        utils.hashWith(hasher, self.offset);
     }
 };

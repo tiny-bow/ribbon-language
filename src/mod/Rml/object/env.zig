@@ -1,11 +1,11 @@
+const Rml = @import("../../Rml.zig");
+
 const std = @import("std");
 const utils = @import("utils");
 
-const Rml = @import("../../Rml.zig");
 
 
 pub const Domain = std.ArrayHashMapUnmanaged(Rml.Obj(Rml.Symbol), void, utils.SimpleHashContext, true);
-
 pub const CellTable = std.ArrayHashMapUnmanaged(Rml.Obj(Rml.Symbol), Rml.Obj(Rml.Cell), utils.SimpleHashContext, true);
 pub const Table = std.ArrayHashMapUnmanaged(Rml.Obj(Rml.Symbol), Rml.Obj(Rml.ObjData), utils.SimpleHashContext, true);
 
@@ -13,11 +13,11 @@ pub const Env = struct {
     allocator: std.mem.Allocator,
     table: CellTable = .{},
 
-    pub fn compare(self: Env, other: Env) Rml.Ordering {
-        var ord = Rml.compare(self.keys(), other.keys());
+    pub fn compare(self: Env, other: Env) utils.Ordering {
+        var ord = utils.compare(self.keys(), other.keys());
 
         if (ord == .Equal) {
-            ord = Rml.compare(self.cells(), other.cells());
+            ord = utils.compare(self.cells(), other.cells());
         }
 
         return ord;

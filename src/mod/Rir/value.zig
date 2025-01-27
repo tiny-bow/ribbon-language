@@ -1,10 +1,12 @@
+const Rir = @import("../Rir.zig");
+
+const value = @This();
+
 const std = @import("std");
 const utils = @import("utils");
-
 const Isa = @import("Isa");
 const Rbc = @import("Rbc");
 
-const Rir = @import("../Rir.zig");
 
 
 pub const ZeroCheck = enum(u1) { zero, non_zero };
@@ -109,26 +111,26 @@ pub const OpImmediate = packed struct {
     }
 
 
-    fn convert(value: anytype) u32 {
-        return switch (@typeInfo(@TypeOf(value))) {
-            .comptime_int => @as(u32, value),
+    fn convert(val: anytype) u32 {
+        return switch (@typeInfo(@TypeOf(val))) {
+            .comptime_int => @as(u32, val),
             .int => |info|
                 if (info.bits <= 32) switch (info.signedness) {
-                    .unsigned => @as(u32, value),
-                    .signed => @as(u32, @as(std.meta.Int(.unsigned, info.bits), @bitCast(value))),
+                    .unsigned => @as(u32, val),
+                    .signed => @as(u32, @as(std.meta.Int(.unsigned, info.bits), @bitCast(val))),
                 }
-                else @bitCast(@as(std.meta.Int(info.signedness, 32), @intCast(value))),
-            .@"enum" => |info| convert(@as(info.tag_type, @intFromEnum(value))),
-            else => @as(u32, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(value))), @bitCast(value))),
+                else @bitCast(@as(std.meta.Int(info.signedness, 32), @intCast(val))),
+            .@"enum" => |info| convert(@as(info.tag_type, @intFromEnum(val))),
+            else => @as(u32, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(val))), @bitCast(val))),
         };
     }
 
-    pub fn fromNative(typeIr: *Rir.Type, value: anytype) error{TypeMismatch, TooManyTypes, TooManyNames, OutOfMemory}! OpImmediate {
-        try typeIr.checkNative(@TypeOf(value));
+    pub fn fromNative(typeIr: *Rir.Type, val: anytype) error{TypeMismatch, TooManyTypes, TooManyNames, OutOfMemory}! OpImmediate {
+        try typeIr.checkNative(@TypeOf(val));
 
         return OpImmediate {
             .type_id = typeIr.id,
-            .data = convert(value),
+            .data = convert(val),
         };
     }
 
@@ -347,10 +349,10 @@ pub const Immediate = struct {
         };
     }
 
-    pub fn fromNative(rir: *Rir, value: anytype) error{TooManyTypes, TooManyNames, OutOfMemory}! Immediate {
+    pub fn fromNative(rir: *Rir, val: anytype) error{TooManyTypes, TooManyNames, OutOfMemory}! Immediate {
         return Immediate {
-            .type = try rir.createTypeFromNative(@TypeOf(value), null, null),
-            .data = convert(value),
+            .type = try rir.createTypeFromNative(@TypeOf(val), null, null),
+            .data = convert(val),
         };
     }
 
@@ -379,17 +381,17 @@ pub const Immediate = struct {
         }
     }
 
-    fn convert(value: anytype) u64 {
-        return switch (@typeInfo(@TypeOf(value))) {
-            .comptime_int => @as(u64, value),
+    fn convert(val: anytype) u64 {
+        return switch (@typeInfo(@TypeOf(val))) {
+            .comptime_int => @as(u64, val),
             .int => |info|
                 if (info.bits <= 64) switch (info.signedness) {
-                    .unsigned => @as(u64, value),
-                    .signed => @as(u64, @as(std.meta.Int(.unsigned, info.bits), @bitCast(value))),
+                    .unsigned => @as(u64, val),
+                    .signed => @as(u64, @as(std.meta.Int(.unsigned, info.bits), @bitCast(val))),
                 }
-                else @bitCast(@as(std.meta.Int(info.signedness, 64), @intCast(value))),
-            .@"enum" => |info| convert(@as(info.tag_type, @intFromEnum(value))),
-            else => @as(u64, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(value))), @bitCast(value))),
+                else @bitCast(@as(std.meta.Int(info.signedness, 64), @intCast(val))),
+            .@"enum" => |info| convert(@as(info.tag_type, @intFromEnum(val))),
+            else => @as(u64, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(val))), @bitCast(val))),
         };
     }
 };

@@ -1,12 +1,13 @@
+const Generator = @import("../RbcGenerator.zig");
+
+const global = @This();
+
 const std = @import("std");
 const utils = @import("utils");
-
 const Rir = @import("Rir");
 const Rbc = @import("Rbc");
 const RbcBuilder = @import("RbcBuilder");
 
-
-const Generator = @import("../RbcGenerator.zig");
 
 
 pub const Global = struct {
@@ -17,7 +18,7 @@ pub const Global = struct {
     builder: *RbcBuilder.Global,
 
 
-    pub fn init(module: *Generator.Module, global: *Rir.Global, builder: *RbcBuilder.Global) error{OutOfMemory}! *Global {
+    pub fn init(module: *Generator.Module, globalIr: *Rir.Global, globalBuilder: *RbcBuilder.Global) error{OutOfMemory}! *Global {
         const generator = module.generator;
         const self = try generator.allocator.create(Global);
 
@@ -25,8 +26,8 @@ pub const Global = struct {
             .generator = generator,
             .module = module,
 
-            .ir = global,
-            .builder = builder,
+            .ir = globalIr,
+            .builder = globalBuilder,
         };
 
         return self;

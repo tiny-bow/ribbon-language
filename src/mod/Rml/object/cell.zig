@@ -1,24 +1,25 @@
-const std = @import("std");
-
 const Rml = @import("../../Rml.zig");
+
+const std = @import("std");
+const utils = @import("utils");
 
 
 
 pub const Cell = struct {
     value: Rml.Object,
 
-    pub fn onCompare(a: *Cell, other: Rml.Object) Rml.Ordering {
-        var ord = Rml.compare(Rml.getTypeId(a), other.getTypeId());
+    pub fn onCompare(a: *Cell, other: Rml.Object) utils.Ordering {
+        var ord = utils.compare(Rml.getTypeId(a), other.getTypeId());
         if (ord == .Equal) {
             const b = Rml.forceObj(Cell, other);
             ord = a.value.compare(b.data.value);
-        } else if (Rml.compare(a.value.getTypeId(), other.getTypeId()) == .Equal) {
-            ord = Rml.compare(a.value, other);
+        } else if (utils.compare(a.value.getTypeId(), other.getTypeId()) == .Equal) {
+            ord = utils.compare(a.value, other);
         }
         return ord;
     }
 
-    pub fn compare(self: Cell, other: Cell) Rml.Ordering {
+    pub fn compare(self: Cell, other: Cell) utils.Ordering {
         return self.value.compare(other.value);
     }
 

@@ -1,9 +1,11 @@
+const Rir = @import("../Rir.zig");
 
+const fmt = @This();
 
 const std = @import("std");
 const utils = @import("utils");
 
-const Rir = @import("../Rir.zig");
+
 
 pub const FormatError = anyerror;
 

@@ -4,11 +4,15 @@ const std = @import("std");
 
 pub const log = std.log.scoped(.utils);
 
-
 pub const ansi = @import("utils/ansi.zig");
 pub const external = @import("utils/external.zig");
 pub const text = @import("utils/text.zig");
 pub const types = @import("utils/types.zig");
+
+test {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
 
 
 pub const Unit = extern struct {};
@@ -195,17 +199,17 @@ pub inline fn bitAndBool(a: bool, b: bool) bool {
 }
 
 pub inline fn sliceCast(comptime T: type, comptime U: type, buffer: []U) []T {
-    const ucount = buffer.len * @sizeOf(U);
-    const tcount = ucount / @sizeOf(T);
+    const uCount = buffer.len * @sizeOf(U);
+    const tCount = uCount / @sizeOf(T);
     const ptr = @intFromPtr(buffer.ptr);
-    return @as([*]T, @ptrFromInt(ptr))[0..tcount];
+    return @as([*]T, @ptrFromInt(ptr))[0..tCount];
 }
 
 pub inline fn sliceCastConst(comptime T: type, comptime U: type, buffer: []const U) []const T {
-    const ucount = buffer.len * @sizeOf(U);
-    const tcount = ucount / @sizeOf(T);
+    const uCount = buffer.len * @sizeOf(U);
+    const tCount = uCount / @sizeOf(T);
     const ptr = @intFromPtr(buffer.ptr);
-    return @as([*]const T, @ptrFromInt(ptr))[0..tcount];
+    return @as([*]const T, @ptrFromInt(ptr))[0..tCount];
 }
 
 pub inline fn makeSlice(comptime T: type, ptr: [*]T, len: usize) []T {
@@ -309,7 +313,7 @@ pub fn fnv1a_128(a: anytype) u128 {
 pub fn hashWith(hasher: anytype, a: anytype) void {
     const T = @TypeOf(a);
 
-    log.debug("hashing " ++ @typeName(T), .{});
+    // log.debug("hashing " ++ @typeName(T), .{});
 
     if (comptime std.meta.hasFn(T, "hashWith")) {
         return T.hashWith(a, hasher);
@@ -746,8 +750,6 @@ pub inline fn notEqualAddress(a: anytype, b: @TypeOf(a)) bool {
 }
 
 test {
-    std.testing.refAllDeclsRecursive(@This());
-
     const expectEqual = std.testing.expectEqual;
 
     {

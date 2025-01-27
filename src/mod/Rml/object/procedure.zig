@@ -1,7 +1,7 @@
-const std = @import("std");
-
 const Rml = @import("../../Rml.zig");
 
+const std = @import("std");
+const utils = @import("utils");
 
 
 pub const CASE_SEP_SYM = "=>";
@@ -117,27 +117,27 @@ pub const Procedure = union(ProcedureKind) {
     native_function: Rml.bindgen.NativeFunction,
     cancellation: Rml.WithId,
 
-    pub fn compare(self: Procedure, other: Procedure) Rml.Ordering {
-        var ord = Rml.compare(std.meta.activeTag(self), std.meta.activeTag(other));
+    pub fn compare(self: Procedure, other: Procedure) utils.Ordering {
+        var ord = utils.compare(std.meta.activeTag(self), std.meta.activeTag(other));
 
         if (ord == .Equal) {
             switch (self) {
                 .macro => |macro| {
-                    ord = Rml.compare(macro.env, other.macro.env);
-                    if (ord == .Equal) ord = Rml.compare(macro.cases, other.macro.cases);
+                    ord = utils.compare(macro.env, other.macro.env);
+                    if (ord == .Equal) ord = utils.compare(macro.cases, other.macro.cases);
                 },
                 .function => |function| {
-                    ord = Rml.compare(function.env, other.function.env);
-                    if (ord == .Equal) ord = Rml.compare(function.cases, other.function.cases);
+                    ord = utils.compare(function.env, other.function.env);
+                    if (ord == .Equal) ord = utils.compare(function.cases, other.function.cases);
                 },
                 .native_macro => |native| {
-                    ord = Rml.compare(native, other.native_macro);
+                    ord = utils.compare(native, other.native_macro);
                 },
                 .native_function => |native| {
-                    ord = Rml.compare(native, other.native_function);
+                    ord = utils.compare(native, other.native_function);
                 },
                 .cancellation => |cancellation| {
-                    ord = Rml.compare(cancellation, other.cancellation);
+                    ord = utils.compare(cancellation, other.cancellation);
                 },
             }
         }

@@ -1,3 +1,7 @@
+const Generator = @import("../RbcGenerator.zig");
+
+const block = @This();
+
 const std = @import("std");
 const utils = @import("utils");
 
@@ -6,7 +10,6 @@ const Rbc = @import("Rbc");
 const RbcBuilder = @import("RbcBuilder");
 
 
-const Generator = @import("../RbcGenerator.zig");
 
 const Stack = std.ArrayListUnmanaged(Rir.Operand);
 const RegisterList = std.ArrayListUnmanaged(*Rir.Register);
@@ -18,14 +21,14 @@ pub const Block = struct {
     parent: ?*Block,
 
     ir: *Rir.Block,
-    builder: *RbcBuilder.BlockBuilder,
+    builder: *RbcBuilder.Block,
 
     register_list: RegisterList,
 
     stack: Stack = .{},
 
 
-    pub fn init(parent: ?*Block, function: *Generator.Function, blockIr: *Rir.Block, blockBuilder: *RbcBuilder.BlockBuilder) error{OutOfMemory}! *Block {
+    pub fn init(parent: ?*Block, function: *Generator.Function, blockIr: *Rir.Block, blockBuilder: *RbcBuilder.Block) error{OutOfMemory}! *Block {
         const generator = function.generator;
         const self = try generator.allocator.create(Block);
 

@@ -1,4 +1,13 @@
+const Isa = @This();
+
 const std = @import("std");
+
+pub const log = std.log.scoped(.isa);
+
+test {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
 
 
 pub const Instructions = &[_]InstructionCategory {

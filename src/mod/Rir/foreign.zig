@@ -1,9 +1,12 @@
-const std = @import("std");
-
 const Rir = @import("../Rir.zig");
 
+const foreign = @This();
 
-pub const ForeignAddress = struct {
+const std = @import("std");
+
+
+
+pub const Foreign = struct {
     pub const Id = Rir.ForeignId;
 
     root: *Rir,
@@ -12,11 +15,11 @@ pub const ForeignAddress = struct {
     type: *Rir.Type,
 
 
-    pub fn init(root: *Rir, id: Rir.ForeignId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}! *ForeignAddress {
-        const ptr = try root.allocator.create(ForeignAddress);
+    pub fn init(root: *Rir, id: Rir.ForeignId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}! *Foreign {
+        const ptr = try root.allocator.create(Foreign);
         errdefer root.allocator.destroy(ptr);
 
-        ptr.* = ForeignAddress {
+        ptr.* = Foreign {
             .root = root,
             .id = id,
             .name = name,
@@ -26,7 +29,7 @@ pub const ForeignAddress = struct {
         return ptr;
     }
 
-    pub fn deinit(self: *ForeignAddress) void {
+    pub fn deinit(self: *Foreign) void {
         self.root.allocator.destroy(self);
     }
 };

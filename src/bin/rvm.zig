@@ -1,22 +1,41 @@
 const std = @import("std");
-
 const zig_builtin = @import("builtin");
-
 const utils = @import("utils");
 const Rvm = @import("Rvm");
 const Builder = @import("RbcBuilder");
-const log = std.log.scoped(.rvm);
+
+const log = std.log.scoped(.rvm_main);
 
 pub const std_options = std.Options {
     .log_level = .info,
 };
 
+test {
+    std.debug.print("rvm-test\n", .{});
+    try main();
+}
+
+
+
+const n: i64 = 12;
+const expected: i64 = calc: {
+    break :calc fib(n);
+};
+
+fn fib(i: i64) i64 {
+    return if (i < 2) i else fib(i - 1) + fib(i - 2);
+}
+
 pub fn main() !void {
+    log.info("starting rvm", .{});
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    const context = try Rvm.Context.init(arena.allocator());
-    // defer context.deinit();
+    log.info("created arena", .{});
+
+    const rvm = try Rvm.init(arena.allocator());
+    // defer rvm.deinit();
 
     var builder = try Builder.init(arena.allocator());
 
@@ -56,10 +75,9 @@ pub fn main() !void {
     // defer program.deinit(arena.allocator());
 
 
-    const fiber = try Rvm.Fiber.init(context, &program, &[0] Rvm.Fiber.ForeignFunction {});
+    const fiber = try Rvm.Fiber.init(rvm, &program, &.{});
     defer fiber.deinit();
 
-    const n: i64 = 32;
 
     const start = std.time.nanoTimestamp();
 
@@ -71,14 +89,5 @@ pub fn main() !void {
 
 
     try std.io.getStdOut().writer().print("result: {} (in {d:.3}s)\n", .{result, time});
-    try std.testing.expectEqual(2178309, result);
-}
-
-// fn fib(n: i64) i64 {
-//     return if (n < 2) n else fib(n - 1) + fib(n - 2);
-// }
-
-
-test {
-    std.testing.refAllDeclsRecursive(@This());
+    try std.testing.expectEqual(expected, result);
 }

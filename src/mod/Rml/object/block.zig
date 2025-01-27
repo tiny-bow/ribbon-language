@@ -1,6 +1,7 @@
-const std = @import("std");
-
 const Rml = @import("../../Rml.zig");
+
+const std = @import("std");
+const utils = @import("utils");
 
 
 
@@ -10,9 +11,9 @@ pub const BlockKind = enum {
     square,
     paren,
 
-    pub fn compare(a: BlockKind, b: BlockKind) Rml.Ordering {
+    pub fn compare(a: BlockKind, b: BlockKind) utils.Ordering {
         if (a == .doc or b == .doc) return .Equal;
-        return Rml.compare(@intFromEnum(a), @intFromEnum(b));
+        return utils.compare(@intFromEnum(a), @intFromEnum(b));
     }
 
     pub fn toOpenStr(self: BlockKind) []const u8 {
@@ -70,11 +71,11 @@ pub const Block = struct {
         };
     }
 
-    pub fn compare(self: Block, other: Block) Rml.Ordering {
+    pub fn compare(self: Block, other: Block) utils.Ordering {
         var ord = BlockKind.compare(self.kind, other.kind);
 
         if (ord == .Equal) {
-            ord = Rml.compare(self.array.items, other.array.items);
+            ord = utils.compare(self.array.items, other.array.items);
         }
 
         return ord;

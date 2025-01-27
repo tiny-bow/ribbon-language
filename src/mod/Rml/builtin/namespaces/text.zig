@@ -1,10 +1,11 @@
 //! This module provides predicate and conversion functions,
 //! to enable working with utf8 text and utf32 codepoints.
 
+const Rml = @import("../../../Rml.zig");
+
 const std = @import("std");
 const utils = @import("utils");
 
-const Rml = @import("../../../Rml.zig");
 
 
 /// given a char, gives a symbol representing the unicode general category

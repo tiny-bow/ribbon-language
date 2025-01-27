@@ -1,10 +1,13 @@
+const Rir = @import("../Rir.zig");
+
+const module = @This();
+
 const std = @import("std");
 const utils = @import("utils");
 const Isa = @import("Isa");
 const RbcCore = @import("Rbc");
 const RbcBuilder = @import("RbcBuilder");
 
-const Rir = @import("../Rir.zig");
 
 
 const GlobalList = std.ArrayListUnmanaged(*Rir.Global);

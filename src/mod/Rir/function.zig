@@ -1,7 +1,10 @@
+const Rir = @import("../Rir.zig");
+
+const function = @This();
+
 const std = @import("std");
 const utils = @import("utils");
 
-const Rir = @import("../Rir.zig");
 
 
 const BlockList = std.ArrayListUnmanaged(*Rir.Block);

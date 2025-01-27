@@ -1,6 +1,9 @@
-const std = @import("std");
-
 const Rml = @import("../Rml.zig");
+
+const interpreter = @This();
+
+const std = @import("std");
+const utils = @import("utils");
 
 
 
@@ -23,8 +26,8 @@ pub const Interpreter = struct {
         };
     }
 
-    pub fn onCompare(a: *Interpreter, other: Rml.Object) Rml.Ordering {
-        return Rml.compare(@intFromPtr(a), @intFromPtr(other.data));
+    pub fn onCompare(a: *Interpreter, other: Rml.Object) utils.Ordering {
+        return utils.compare(@intFromPtr(a), @intFromPtr(other.data));
     }
 
     pub fn onFormat(self: *Interpreter, _: Rml.Format, writer: std.io.AnyWriter) anyerror! void {

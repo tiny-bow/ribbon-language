@@ -1,6 +1,7 @@
-const std = @import("std");
-
 const Rml = @import("../../Rml.zig");
+
+const std = @import("std");
+const utils = @import("utils");
 
 
 
@@ -8,7 +9,7 @@ pub const Alias = struct {
     sym: Rml.Obj(Rml.Symbol),
     sub: Rml.Object,
 
-    pub fn compare(self: Alias, other: Alias) Rml.Ordering {
+    pub fn compare(self: Alias, other: Alias) utils.Ordering {
         var ord = self.sym.compare(other.sym);
 
         if (ord == .Equal) {
@@ -18,7 +19,6 @@ pub const Alias = struct {
         return ord;
     }
 };
-
 
 pub const Pattern = union(enum) {
     // _                    ;wildcard
@@ -60,8 +60,8 @@ pub const Pattern = union(enum) {
     // (| patt patt)        ;alternation ;outer block is not-a-block
     alternation: Rml.Obj(Rml.Array),
 
-    pub fn compare(self: Pattern, other: Pattern) Rml.Ordering {
-        var ord = Rml.compare(std.meta.activeTag(self), std.meta.activeTag(other));
+    pub fn compare(self: Pattern, other: Pattern) utils.Ordering {
+        var ord = utils.compare(std.meta.activeTag(self), std.meta.activeTag(other));
 
         if (ord == .Equal) {
             ord = switch (self) {
@@ -245,7 +245,7 @@ pub fn patternBinders(patternObj: Rml.Object) (Rml.OOM || error{BadDomain})! Rml
                 var subDomain = try patternBinders(item);
 
                 if (referenceSubDomain) |refDomain| {
-                    if (Rml.equal(refDomain, subDomain)) {
+                    if (utils.equal(refDomain, subDomain)) {
                         for (subDomain.keys()) |key| {
                             try domain.put(rml.blobAllocator(), key, {});
                         }

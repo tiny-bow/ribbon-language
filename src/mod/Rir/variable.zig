@@ -1,5 +1,9 @@
-const Rbc = @import("Rbc");
 const Rir = @import("../Rir.zig");
+
+const variable = @This();
+
+const Rbc = @import("Rbc");
+
 
 
 /// Describes where a `Local` variable is stored

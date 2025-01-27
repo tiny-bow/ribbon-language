@@ -1,6 +1,7 @@
-const std = @import("std");
-
 const Rml = @import("../../Rml.zig");
+
+const std = @import("std");
+const utils = @import("utils");
 
 
 
@@ -21,8 +22,8 @@ pub fn TypedArray (comptime T: type) type {
             return self;
         }
 
-        pub fn compare(self: Self, other: Self) Rml.Ordering {
-            return Rml.compare(self.native_array.items, other.native_array.items);
+        pub fn compare(self: Self, other: Self) utils.Ordering {
+            return utils.compare(self.native_array.items, other.native_array.items);
         }
 
         pub fn format(self: *const Self, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {

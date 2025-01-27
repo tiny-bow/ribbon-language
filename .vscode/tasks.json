@@ -19,30 +19,48 @@
             }
         },
         {
-            "label": "run",
+            "label": "run-rvm",
             "type": "shell",
-            "command": "zig build run -freference-trace --prominent-compile-errors",
+            "command": "zig build run-rvm -freference-trace --prominent-compile-errors",
             "group": {
                 "kind": "build",
-                "isDefault": false
+                "isDefault": true
             }
         },
         {
-            "label": "test",
+            "label": "run-rir",
             "type": "shell",
-            "command": "zig build test -freference-trace --prominent-compile-errors",
+            "command": "zig build run-rir -freference-trace --prominent-compile-errors",
             "group": {
                 "kind": "build",
-                "isDefault": false
+                "isDefault": true
             }
         },
+        {
+            "label": "run-rml",
+            "type": "shell",
+            "command": "zig build run-rml -freference-trace --prominent-compile-errors",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        // {
+        //     "label": "test",
+        //     "type": "shell",
+        //     "command": "zig build test -freference-trace --prominent-compile-errors",
+        //     "group": {
+        //         "kind": "build",
+        //         "isDefault": false
+        //     }
+        // },
         {
             "label": "build",
             "type": "shell",
             "command": "zig build -freference-trace --prominent-compile-errors",
             "group": {
                 "kind": "build",
-                "isDefault": true
+                "isDefault": false
             }
         }
     ]

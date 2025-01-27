@@ -1,25 +1,30 @@
 const std = @import("std");
-
 const Rir = @import("Rir");
-
 const Rbc = @import("Rbc");
-
 const RbcGenerator = @import("RbcGenerator");
+
+const log = std.log.scoped(.rir_main);
 
 pub const std_options = std.Options {
     .log_level = .debug,
 };
 
-const log = std.log.scoped(.main);
+test {
+    std.debug.print("rir-test\n", .{});
+    try main();
+}
+
 
 
 pub fn main() !void {
+    log.info("starting rir", .{});
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
 
     const allocator = gpa.allocator();
 
-    log.info("Starting RirTester", .{});
+    log.info("created gpa", .{});
 
     var ir = try Rir.init(allocator);
     defer ir.deinit();

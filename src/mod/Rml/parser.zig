@@ -1,7 +1,10 @@
+const Rml = @import("../Rml.zig");
+
+const parser = @This();
+
 const std = @import("std");
 const utils = @import("utils");
 
-const Rml = @import("../Rml.zig");
 
 
 pub const Parser = struct {
@@ -23,12 +26,12 @@ pub const Parser = struct {
         };
     }
 
-    pub fn onCompare(a: *const Parser, other: Rml.Object) Rml.Ordering {
-        var ord = Rml.compare(Rml.getTypeId(a), other.getTypeId());
+    pub fn onCompare(a: *const Parser, other: Rml.Object) utils.Ordering {
+        var ord = utils.compare(Rml.getTypeId(a), other.getTypeId());
 
         if (ord == .Equal) {
             const b = Rml.forceObj(Parser, other);
-            ord = Rml.compare(@intFromPtr(a), @intFromPtr(b.data));
+            ord = utils.compare(@intFromPtr(a), @intFromPtr(b.data));
         }
 
         return ord;

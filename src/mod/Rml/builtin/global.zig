@@ -1,6 +1,8 @@
-const std = @import("std");
-
 const Rml = @import("../../Rml.zig");
+
+const std = @import("std");
+const utils = @import("utils");
+
 
 
 /// Creates a string from any sequence of objects. If there are no objects, the string will be empty.
@@ -75,7 +77,7 @@ pub const @"assert-eq" = Rml.Procedure {
             const a = try interpreter.eval(args[0]);
             const b = try interpreter.eval(args[1]);
 
-            if (Rml.equal(a, b)) {
+            if (utils.equal(a, b)) {
                 return a;
             } else if (args.len > 2) {
                 try interpreter.abort(origin, error.Panic, "Assertion failed: {message}", .{Rml.format.slice(args[2..])});
@@ -195,7 +197,7 @@ pub const global = Rml.Procedure {
             const obj =
                 if (args.len - offset == 0) nilObj.typeErase()
                 else obj: {
-                    if (!Rml.equal(args[offset], equalSym.typeErase())) {
+                    if (!utils.equal(args[offset], equalSym.typeErase())) {
                         try interpreter.abort(origin, error.UnexpectedInput,
                             "expected `=` after global variable pattern", .{});
                     }
@@ -318,7 +320,7 @@ pub const local = Rml.Procedure {
             const obj =
                 if (args.len - offset == 0) nilObj.typeErase()
                 else obj: {
-                    if (!Rml.equal(args[offset], equalSym.typeErase())) {
+                    if (!utils.equal(args[offset], equalSym.typeErase())) {
                         try interpreter.abort(origin, error.UnexpectedInput,
                             "expected `=` after local variable pattern", .{});
                     }
@@ -961,7 +963,7 @@ pub fn @"=="(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rm
     for (args[1..]) |aN| {
         const b = aN;
 
-        if (!Rml.equal(a, b)) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+        if (!utils.equal(a, b)) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
     }
 
     return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, true)).typeErase();
@@ -981,7 +983,7 @@ pub fn @"!="(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rm
     for (args[1..]) |aN| {
         const b = aN;
 
-        if (Rml.equal(a, b)) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+        if (utils.equal(a, b)) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
     }
 
     return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, true)).typeErase();
@@ -1004,7 +1006,7 @@ pub fn @"<"(
     for (args[1..]) |aN| {
         const b = aN;
 
-        if (Rml.compare(a, b) != .Less) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+        if (utils.compare(a, b) != .Less) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
 
         a = b;
     }
@@ -1028,7 +1030,7 @@ pub fn @"<="(
     for (args[1..]) |aN| {
         const b = aN;
 
-        if (Rml.compare(a, b) == .Greater) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+        if (utils.compare(a, b) == .Greater) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
 
         a = b;
     }
@@ -1052,7 +1054,7 @@ pub fn @">"(
     for (args[1..]) |aN| {
         const b = aN;
 
-        if (Rml.compare(a, b) != .Greater) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+        if (utils.compare(a, b) != .Greater) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
 
         a = b;
     }
@@ -1076,7 +1078,7 @@ pub fn @">="(
     for (args[1..]) |aN| {
         const b = aN;
 
-        if (Rml.compare(a, b) == .Less) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+        if (utils.compare(a, b) == .Less) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
 
         a = b;
     }

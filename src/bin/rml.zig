@@ -1,14 +1,21 @@
 const std = @import("std");
-
 const Rml = @import("Rml");
-const log = std.log.scoped(.main);
+
+const log = std.log.scoped(.rml_main);
 
 pub const std_options = std.Options {
     .log_level = .info,
 };
 
+test {
+    std.debug.print("rml-test\n", .{});
+    try main();
+}
+
+
+
 pub fn main () !void {
-    log.debug("init", .{});
+    log.info("starting rml", .{});
 
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer {

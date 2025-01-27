@@ -1,0 +1,20 @@
+{
+    "cSpell.files": [
+        "**.bb",
+        "**.rml",
+        "**.zig",
+        "**.md",
+        "**.json",
+    ],
+    "cSpell.ignorePaths": [
+        ".zig-cache/**",
+        "zig-out/**",
+        "NOTES.md",
+    ],
+    "cSpell.words": [
+        "blobify",
+        "Daan",
+        "Leijen",
+        "Thunderseethe",
+    ]
+}

@@ -1,7 +1,11 @@
+const Rml = @import("../Rml.zig");
+
+const builtin = @This();
+
 const std = @import("std");
 const utils = @import("utils");
 
-const Rml = @import("../Rml.zig");
+
 
 pub const global = @import("builtin/global.zig");
 
@@ -9,6 +13,7 @@ pub const namespaces = .{
     .text = @import("builtin/namespaces/text.zig"),
     .type = @import("builtin/namespaces/type.zig"),
 };
+
 
 pub const types = utils.types.structConcat(.{value_types, object_types});
 

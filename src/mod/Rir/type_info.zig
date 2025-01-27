@@ -1,7 +1,10 @@
+const Rir = @import("../Rir.zig");
+
+const type_info = @This();
+
 const std = @import("std");
 const utils = @import("utils");
 
-const Rir = @import("../Rir.zig");
 
 
 /// Type representation for all values in Rir;

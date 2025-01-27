@@ -1,12 +1,13 @@
+const Generator = @import("../RbcGenerator.zig");
+
+const function = @This();
+
 const std = @import("std");
 const utils = @import("utils");
-
 const Rir = @import("Rir");
 const Rbc = @import("Rbc");
 const RbcBuilder = @import("RbcBuilder");
 
-
-const Generator = @import("../RbcGenerator.zig");
 
 
 pub const Function = struct {
@@ -14,12 +15,12 @@ pub const Function = struct {
     module: *Generator.Module,
 
     ir: *Rir.Function,
-    builder: *RbcBuilder.FunctionBuilder,
+    builder: *RbcBuilder.Function,
 
     block_lookup: std.ArrayHashMapUnmanaged(Rir.BlockId, *Generator.Block, utils.SimpleHashContext, false) = .{},
 
 
-    pub fn init(module: *Generator.Module, function: *Rir.Function, builder: *RbcBuilder.FunctionBuilder) error{OutOfMemory}! *Function {
+    pub fn init(module: *Generator.Module, functionIr: *Rir.Function, functionBuilder: *RbcBuilder.Function) error{OutOfMemory}! *Function {
         const generator = module.generator;
 
         const self = try generator.allocator.create(Function);
@@ -27,8 +28,8 @@ pub const Function = struct {
         self.* = Function {
             .generator = generator,
             .module = module,
-            .ir = function,
-            .builder = builder,
+            .ir = functionIr,
+            .builder = functionBuilder,
         };
 
         return self;
@@ -54,7 +55,7 @@ pub const Function = struct {
 
                 break :createBlockBuilder try self.builder.newBlock(
                     parent,
-                    if (blockIr.handler_set) |handlerSetIr| RbcBuilder.BlockBuilder.Kind {
+                    if (blockIr.handler_set) |handlerSetIr| RbcBuilder.block.BlockKind {
                         .with = (try self.module.getHandlerSet(handlerSetIr)).index,
                     } else .basic,
                 );

@@ -1,12 +1,13 @@
+const Rir = @import("../Rir.zig");
+
+const block = @This();
+
 const std = @import("std");
 const utils = @import("utils");
 
-const Rir = @import("../Rir.zig");
 
 
 const LocalMap = std.ArrayHashMapUnmanaged(Rir.LocalId, *Rir.Local, utils.SimpleHashContext, false);
-
-
 
 pub const Block = struct {
     pub const Id = Rir.BlockId;

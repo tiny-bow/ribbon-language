@@ -1,6 +1,6 @@
-const std = @import("std");
-const zig_builtin = @import("builtin");
+const Rml = @This();
 
+const std = @import("std");
 const utils = @import("utils");
 
 pub const log = struct {
@@ -9,17 +9,6 @@ pub const log = struct {
     pub const parser = std.log.scoped(.@"rml/parser");
     pub const match = std.log.scoped(.@"rml/match");
 };
-
-const Rml = @This();
-
-pub const TypeId = bindgen.TypeId;
-
-pub const IOError = utils.IOError;
-pub const SimpleHashContext = utils.SimpleHashContext;
-pub const Ordering = utils.Ordering;
-pub const compare = utils.compare;
-pub const equal = utils.equal;
-pub const hashWith = utils.hashWith;
 
 pub const bindgen = @import("Rml/bindgen.zig");
 pub const builtin = @import("Rml/builtin.zig");
@@ -30,13 +19,93 @@ pub const parser = @import("Rml/parser.zig");
 pub const source = @import("Rml/source.zig");
 pub const storage = @import("Rml/storage.zig");
 
+test {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
+
+
+data: Storage,
+cwd: ?std.fs.Dir,
+out: ?std.io.AnyWriter,
+namespace_env: Obj(Env) = undefined,
+global_env: Obj(Env) = undefined,
+main_interpreter: Obj(Interpreter) = undefined,
+diagnostic: ?*?Diagnostic = null,
+
+
+/// caller must close cwd and out
+pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWriter, diagnostic: ?*?Diagnostic, args: []const []const u8) OOM! *Rml {
+    const self = try allocator.create(Rml);
+    errdefer allocator.destroy(self);
+
+    self.* = Rml {
+        .data = try Storage.init(allocator),
+        .cwd = cwd,
+        .out = out,
+        .diagnostic = diagnostic,
+    };
+    errdefer self.data.deinit();
+
+    self.data.origin = try Origin.fromStr(self, "system");
+
+    log.debug("initializing interpreter ...", .{});
+
+    self.global_env = try Obj(Env).wrap(self, self.data.origin, .{.allocator = self.data.permanent.allocator()});
+    self.namespace_env = try Obj(Env).wrap(self, self.data.origin, .{.allocator = self.data.permanent.allocator()});
+
+    bindgen.bindObjectNamespaces(self, self.namespace_env, builtin.types)
+        catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => @panic(@errorName(err)),
+        };
+
+    bindgen.bindObjectNamespaces(self, self.namespace_env, builtin.namespaces)
+        catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => @panic(@errorName(err)),
+        };
+
+    bindgen.bindGlobals(self, self.global_env, builtin.global)
+        catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => @panic(@errorName(err)),
+        };
+
+    // TODO args
+    _ = args;
+
+    if (Obj(Interpreter).wrap(self, self.data.origin, try .create(self))) |x| {
+        log.debug("... interpreter ready", .{});
+        self.main_interpreter = x;
+        return self;
+    } else |err| {
+        log.err("... failed to initialize interpreter", .{});
+        return err;
+    }
+}
+
+pub fn deinit(self: *Rml) MemoryLeak! void {
+    log.debug("deinitializing Rml", .{});
+
+    self.data.deinit();
+
+    self.data.long_term.destroy(self);
+}
+
+
+
+pub const TypeId = bindgen.TypeId;
+
+pub const IOError = utils.IOError;
+
 pub const Nil = extern struct {
     pub fn onFormat(_: *Nil, _: Format, w: std.io.AnyWriter) anyerror! void {
         return w.print("nil", .{});
     }
 
-    pub fn onCompare(_: *Nil, other: Object) Ordering {
-        return Rml.compare(TypeId.of(Nil), other.getTypeId());
+    pub fn onCompare(_: *Nil, other: Object) utils.Ordering {
+        return utils.compare(TypeId.of(Nil), other.getTypeId());
     }
 };
 pub const Bool = bool;
@@ -123,19 +192,6 @@ pub const coerceBool = object.coerceBool;
 pub const coerceArray = object.coerceArray;
 pub const isArrayLike = object.isArrayLike;
 
-test {
-    std.testing.refAllDeclsRecursive(@This());
-}
-
-
-data: Storage,
-cwd: ?std.fs.Dir,
-out: ?std.io.AnyWriter,
-namespace_env: Obj(Env) = undefined,
-global_env: Obj(Env) = undefined,
-main_interpreter: Obj(Interpreter) = undefined,
-diagnostic: ?*?Diagnostic = null,
-
 
 pub const Diagnostic = struct {
     pub const MAX_LENGTH = 256;
@@ -176,64 +232,6 @@ pub const Diagnostic = struct {
 
 
 
-/// caller must close cwd and out
-pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWriter, diagnostic: ?*?Diagnostic, args: []const []const u8) OOM! *Rml {
-    const self = try allocator.create(Rml);
-    errdefer allocator.destroy(self);
-
-    self.* = Rml {
-        .data = try Storage.init(allocator),
-        .cwd = cwd,
-        .out = out,
-        .diagnostic = diagnostic,
-    };
-    errdefer self.data.deinit();
-
-    self.data.origin = try Origin.fromStr(self, "system");
-
-    log.debug("initializing interpreter ...", .{});
-
-    self.global_env = try Obj(Env).wrap(self, self.data.origin, .{.allocator = self.data.permanent.allocator()});
-    self.namespace_env = try Obj(Env).wrap(self, self.data.origin, .{.allocator = self.data.permanent.allocator()});
-
-    bindgen.bindObjectNamespaces(self, self.namespace_env, builtin.types)
-        catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => @panic(@errorName(err)),
-        };
-
-    bindgen.bindObjectNamespaces(self, self.namespace_env, builtin.namespaces)
-        catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => @panic(@errorName(err)),
-        };
-
-    bindgen.bindGlobals(self, self.global_env, builtin.global)
-        catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => @panic(@errorName(err)),
-        };
-
-    // TODO args
-    _ = args;
-
-    if (Obj(Interpreter).wrap(self, self.data.origin, try .create(self))) |x| {
-        log.debug("... interpreter ready", .{});
-        self.main_interpreter = x;
-        return self;
-    } else |err| {
-        log.err("... failed to initialize interpreter", .{});
-        return err;
-    }
-}
-
-pub fn deinit(self: *Rml) MemoryLeak! void {
-    log.debug("deinitializing Rml", .{});
-
-    self.data.deinit();
-
-    self.data.long_term.destroy(self);
-}
 
 pub fn expectedOutput(self: *Rml, comptime fmt: []const u8, args: anytype) void {
     if (self.out) |out| {
