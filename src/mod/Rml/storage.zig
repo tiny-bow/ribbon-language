@@ -5,8 +5,6 @@ const storage = @This();
 const std = @import("std");
 const utils = @import("utils");
 
-
-
 pub const ARENA_RETAIN_AMOUNT = 1024 * 1024 * 16;
 const Map = std.ArrayHashMapUnmanaged([]const u8, void, utils.SimpleHashContext, true);
 
@@ -43,7 +41,7 @@ pub const Storage = struct {
     userstate: *anyopaque = undefined,
     origin: Rml.Origin = undefined,
 
-    pub fn init(long_term: std.mem.Allocator) Rml.OOM! Storage {
+    pub fn init(long_term: std.mem.Allocator) Rml.OOM!Storage {
         return .{
             .long_term = long_term,
             .map = .{},
@@ -52,13 +50,11 @@ pub const Storage = struct {
     }
 
     pub fn blobId(self: *Storage) BlobId {
-        return if (self.blob) |*b| b.id
-        else .pre_blob;
+        return if (self.blob) |*b| b.id else .pre_blob;
     }
 
     pub fn blobAllocator(self: *Storage) std.mem.Allocator {
-        return if (self.blob) |*b| b.arena.allocator()
-        else self.permanent.allocator();
+        return if (self.blob) |*b| b.arena.allocator() else self.permanent.allocator();
     }
 
     pub fn beginBlob(self: *Storage) void {
@@ -108,7 +104,7 @@ pub const Storage = struct {
         return null;
     }
 
-    pub fn intern(self: *Storage, key: []const u8) Rml.OOM! Rml.str {
+    pub fn intern(self: *Storage, key: []const u8) Rml.OOM!Rml.str {
         return self.internNoAlloc(key) orelse {
             const ownedKey = try self.permanent.allocator().dupe(u8, key);
             try self.map.put(self.long_term, ownedKey, {});
@@ -117,8 +113,8 @@ pub const Storage = struct {
         };
     }
 
-    pub fn gensym(self: *Storage, origin: Rml.Origin) Rml.OOM! Rml.str {
-        const key = try std.fmt.allocPrint(self.permanent.allocator(), "{s}/{}", .{origin.filename, self.fresh(GenSym)});
+    pub fn gensym(self: *Storage, origin: Rml.Origin) Rml.OOM!Rml.str {
+        const key = try std.fmt.allocPrint(self.permanent.allocator(), "{s}/{}", .{ origin.filename, self.fresh(GenSym) });
         std.debug.assert(!self.map.contains(key));
         try self.map.put(self.long_term, key, {});
         return key;

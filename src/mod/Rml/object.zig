@@ -18,8 +18,6 @@ pub const string = @import("object/string.zig");
 pub const symbol = @import("object/symbol.zig");
 pub const writer = @import("object/writer.zig");
 
-
-
 pub const Writer = writer.Writer;
 pub const Array = array.Array;
 pub const Block = block.Block;
@@ -48,7 +46,7 @@ pub const Header = struct {
     properties: PropertySet,
 
     pub fn onInit(self: *Header, comptime T: type, rml: *Rml, origin: Rml.Origin) void {
-        self.* = Header {
+        self.* = Header{
             .rml = rml,
             .blob_id = rml.blobId(),
             .type_id = comptime Rml.TypeId.of(T),
@@ -63,7 +61,7 @@ pub const Header = struct {
         return self.vtable.onCompare(self, obj);
     }
 
-    pub fn onFormat(self: *Header, fmt: Rml.Format, w: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *Header, fmt: Rml.Format, w: std.io.AnyWriter) anyerror!void {
         return self.vtable.onFormat(self, fmt, w);
     }
 
@@ -80,23 +78,22 @@ pub const Header = struct {
     }
 };
 
-
 pub const VTable = struct {
     obj_memory: ObjMemoryFunctions,
     obj_data: ObjDataFunctions,
 
-    pub const ObjMemoryFunctions = struct { };
+    pub const ObjMemoryFunctions = struct {};
 
     pub const ObjDataFunctions = struct {
         onCompare: ?*const fn (*const ObjData, Rml.Object) utils.Ordering = null,
-        onFormat: ?*const fn (*const ObjData, Rml.Format, std.io.AnyWriter) anyerror! void = null,
+        onFormat: ?*const fn (*const ObjData, Rml.Format, std.io.AnyWriter) anyerror!void = null,
     };
 
     pub fn of(comptime T: type) *const VTable {
         if (comptime T == ObjData) return undefined;
 
         const x = struct {
-            const vtable = VTable {
+            const vtable = VTable{
                 .obj_memory = obj_memory: {
                     var functionSet: ObjMemoryFunctions = .{};
 
@@ -127,9 +124,7 @@ pub const VTable = struct {
                         const funcName = field.name;
 
                         const def =
-                            if (utils.types.supportsDecls(T) and @hasDecl(T, funcName)) &@field(T, funcName)
-                            else if (@hasDecl(support, funcName)) &@field(support, funcName)
-                            else @compileError("no " ++ @typeName(T) ++ "." ++ funcName ++ " found");
+                            if (utils.types.supportsDecls(T) and @hasDecl(T, funcName)) &@field(T, funcName) else if (@hasDecl(support, funcName)) &@field(support, funcName) else @compileError("no " ++ @typeName(T) ++ "." ++ funcName ++ " found");
 
                         const G = @typeInfo(@typeInfo(field.type).optional.child).pointer.child;
                         const gInfo = @typeInfo(G).@"fn";
@@ -147,7 +142,7 @@ pub const VTable = struct {
                             @compileError("expected non-variadic function: " ++ @typeName(T) ++ "." ++ funcName);
                         }
                         if (fInfo.return_type.? != gInfo.return_type.?) {
-                            @compileError("expected return type: " ++ @typeName(T) ++ "." ++ funcName  ++ ": " ++ @typeName(gInfo.return_type.?) ++ ", got " ++ @typeName(fInfo.return_type.?));
+                            @compileError("expected return type: " ++ @typeName(T) ++ "." ++ funcName ++ ": " ++ @typeName(gInfo.return_type.?) ++ ", got " ++ @typeName(fInfo.return_type.?));
                         }
                         if (fInfo.params.len != gInfo.params.len) {
                             @compileError("invalid param count: " ++ @typeName(T) ++ "." ++ funcName);
@@ -169,14 +164,14 @@ pub const VTable = struct {
         return self.obj_data.onCompare.?(data, other);
     }
 
-    pub fn onFormat(self: *const VTable, header: *Header, fmt: Rml.Format, w: std.io.AnyWriter) Rml.Error! void {
+    pub fn onFormat(self: *const VTable, header: *Header, fmt: Rml.Format, w: std.io.AnyWriter) Rml.Error!void {
         const data = header.getData();
         return self.obj_data.onFormat.?(data, fmt, w) catch |err| Rml.errorCast(err);
     }
 };
 
 pub const ObjectMemory = ObjMemory(ObjData);
-pub fn ObjMemory (comptime T: type) type {
+pub fn ObjMemory(comptime T: type) type {
     return extern struct {
         const Self = @This();
 
@@ -216,19 +211,19 @@ pub fn Obj(comptime T: type) type {
             return .{ .data = @alignCast(@ptrCast(self.data)) };
         }
 
-        pub fn wrap(rml: *Rml, origin: Rml.Origin, val: T) Rml.OOM! Self {
+        pub fn wrap(rml: *Rml, origin: Rml.Origin, val: T) Rml.OOM!Self {
             const memory = try rml.blobAllocator().create(ObjMemory(T));
 
             memory.onInit(rml, origin, val);
 
-            return Self { .data = memory.getData() };
+            return Self{ .data = memory.getData() };
         }
 
         pub fn compare(self: Self, other: Obj(T)) utils.Ordering {
             return self.getHeader().onCompare(other.getHeader());
         }
 
-        pub fn format(self: Self, comptime fmt: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror! void {
+        pub fn format(self: Self, comptime fmt: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror!void {
             return self.getHeader().onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(w) == std.io.AnyWriter) w else w.any());
         }
 
@@ -256,14 +251,14 @@ pub fn Obj(comptime T: type) type {
             return self.getHeader().onCompare(other.getHeader());
         }
 
-        pub fn onFormat(self: Self, fmt: Rml.Format, w: std.io.AnyWriter) anyerror! void {
+        pub fn onFormat(self: Self, fmt: Rml.Format, w: std.io.AnyWriter) anyerror!void {
             return self.getHeader().onFormat(fmt, w);
         }
     };
 }
 
 pub fn getObj(p: anytype) Obj(@typeInfo(@TypeOf(p)).pointer.child) {
-    return Obj(@typeInfo(@TypeOf(p)).pointer.child) { .data = @constCast(p) };
+    return Obj(@typeInfo(@TypeOf(p)).pointer.child){ .data = @constCast(p) };
 }
 
 pub fn getHeader(p: anytype) *Header {
@@ -388,9 +383,8 @@ pub fn isObjectType(comptime T: type) bool {
 }
 
 pub fn forceObj(comptime T: type, obj: Object) Obj(T) {
-    return .{.data = @ptrCast(obj.data)};
+    return .{ .data = @ptrCast(obj.data) };
 }
-
 
 pub fn coerceBool(obj: Object) Rml.Bool {
     if (castObj(Rml.Bool, obj)) |b| {
@@ -402,9 +396,8 @@ pub fn coerceBool(obj: Object) Rml.Bool {
     }
 }
 
-pub fn coerceArray(obj: Object) Rml.OOM! ?Obj(Rml.Array) {
-    if (castObj(Rml.Array, obj)) |x| return x
-    else if (castObj(Rml.Map, obj)) |x| {
+pub fn coerceArray(obj: Object) Rml.OOM!?Obj(Rml.Array) {
+    if (castObj(Rml.Array, obj)) |x| return x else if (castObj(Rml.Map, obj)) |x| {
         return try x.data.toArray();
     } else if (castObj(Rml.Set, obj)) |x| {
         return try x.data.toArray();
@@ -414,13 +407,8 @@ pub fn coerceArray(obj: Object) Rml.OOM! ?Obj(Rml.Array) {
 }
 
 pub fn isArrayLike(obj: Object) bool {
-    return isType(Rml.Array, obj)
-        or isType(Rml.Map, obj)
-        or isType(Rml.Set, obj)
-        or isType(Rml.Block, obj)
-        ;
+    return isType(Rml.Array, obj) or isType(Rml.Map, obj) or isType(Rml.Set, obj) or isType(Rml.Block, obj);
 }
-
 
 pub fn isExactString(name: []const u8, obj: Object) bool {
     if (castObj(Rml.String, obj)) |sym| {

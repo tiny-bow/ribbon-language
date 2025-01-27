@@ -6,140 +6,138 @@ const Rml = @import("../../../Rml.zig");
 const std = @import("std");
 const utils = @import("utils");
 
-
-
 /// given a char, gives a symbol representing the unicode general category
-pub fn @"category"(char: Rml.Char) utils.text.GeneralCategory {
+pub fn category(char: Rml.Char) utils.text.GeneralCategory {
     return utils.text.generalCategory(char);
 }
 
 /// given a string or char, checks if all characters are control characters
-pub fn @"control?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"control?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isControl, utils.text.isControlStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are letter characters
-pub fn @"letter?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"letter?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isLetter, utils.text.isLetterStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are mark characters
-pub fn @"mark?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"mark?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isMark, utils.text.isMarkStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are number characters
-pub fn @"number?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"number?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isNumber, utils.text.isNumberStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are punctuation characters
-pub fn @"punctuation?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"punctuation?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isPunctuation, utils.text.isPunctuationStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are separator characters
-pub fn @"separator?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"separator?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isSeparator, utils.text.isSeparatorStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are symbol characters
-pub fn @"symbol?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"symbol?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isSymbol, utils.text.isSymbolStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are math characters
-pub fn @"math?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"math?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isMath, utils.text.isMathStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are alphabetic characters
-pub fn @"alphabetic?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"alphabetic?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isAlphabetic, utils.text.isAlphabeticStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are id-start characters char
-pub fn @"id-start?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"id-start?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isIdStart, utils.text.isIdStartStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are id-continue characters char
-pub fn @"id-continue?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"id-continue?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isIdContinue, utils.text.isIdContinueStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are xid-start characters char
-pub fn @"xid-start?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"xid-start?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isXidStart, utils.text.isXidStartStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are xid-continue characters char
-pub fn @"xid-continue?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"xid-continue?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isXidContinue, utils.text.isXidContinueStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are space characters
-pub fn @"space?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"space?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isSpace, utils.text.isSpaceStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are hexadecimal digit characters char
-pub fn @"hex-digit?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"hex-digit?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isHexDigit, utils.text.isHexDigitStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are diacritic characters
-pub fn @"diacritic?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"diacritic?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isDiacritic, utils.text.isDiacriticStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are numeric characters
-pub fn @"numeric?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"numeric?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isNumeric, utils.text.isNumericStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are digit characters
-pub fn @"digit?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"digit?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isDigit, utils.text.isDigitStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are decimal digit characters char
-pub fn @"decimal?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"decimal?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isDecimal, utils.text.isDecimalStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are hexadecimal digit characters char
-pub fn @"hex?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"hex?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isHexDigit, utils.text.isHexDigitStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are lowercase
-pub fn @"lowercase?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"lowercase?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isLower, utils.text.isLowerStr, interpreter, origin, args);
 }
 
 /// given a string or char, checks if all characters are uppercase
-pub fn @"uppercase?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"uppercase?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textPred(utils.text.isUpper, utils.text.isUpperStr, interpreter, origin, args);
 }
 
 /// given a string or char, returns a new copy with all of the characters converted to lowercase
-pub fn @"lowercase"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn lowercase(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textConv(utils.text.toLower, interpreter, origin, args);
 }
 
 /// given a string or char, returns a new copy with all of the characters converted to uppercase
-pub fn @"uppercase"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn uppercase(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return textConv(utils.text.toUpper, interpreter, origin, args);
 }
 
 /// given a string or a char, returns a new copy with all characters converted with unicode case folding; note that is may require converting chars to strings
-pub fn @"casefold"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn casefold(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     return try textConv(utils.text.caseFold, interpreter, origin, args);
 }
 
 /// given a string or a char, returns the number of bytes required to represent it as text/8
-pub fn @"byte-count"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"byte-count"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     var a: Rml.Int = 0;
 
     for (args) |arg| {
@@ -147,12 +145,10 @@ pub fn @"byte-count"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []
             a += @intCast(str.data.text().len);
         } else if (Rml.castObj(Rml.Char, arg)) |char| {
             a += @intCast(utils.text.sequenceLength(char.data.*) catch {
-                return try interpreter.abort(origin, error.TypeError,
-                    "bad utf32 char", .{});
+                return try interpreter.abort(origin, error.TypeError, "bad utf32 char", .{});
             });
         } else {
-            return try interpreter.abort(origin, error.TypeError,
-                "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
+            return try interpreter.abort(origin, error.TypeError, "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
         }
     }
 
@@ -160,7 +156,7 @@ pub fn @"byte-count"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []
 }
 
 /// given a string or a char, returns the width of the value in visual columns (approximate
-pub fn @"display-width"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"display-width"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     var a: Rml.Int = 0;
 
     for (args) |arg| {
@@ -169,8 +165,7 @@ pub fn @"display-width"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args:
         } else if (Rml.castObj(Rml.Char, arg)) |char| {
             a += @intCast(utils.text.displayWidth(char.data.*));
         } else {
-            return try interpreter.abort(origin, error.TypeError,
-                "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
+            return try interpreter.abort(origin, error.TypeError, "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
         }
     }
 
@@ -178,7 +173,7 @@ pub fn @"display-width"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args:
 }
 
 /// compare two strings or chars using unicode case folding to ignore case
-pub fn @"case-insensitive-eq?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+pub fn @"case-insensitive-eq?"(interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     var is = true;
 
     for (args) |arg| {
@@ -186,19 +181,16 @@ pub fn @"case-insensitive-eq?"(interpreter: *Rml.Interpreter, origin: Rml.Origin
             if (Rml.castObj(Rml.String, arg)) |str2| {
                 is = utils.text.caseInsensitiveCompareStr(str1.data.text(), str2.data.text()) catch true;
             } else {
-                return try interpreter.abort(origin, error.TypeError,
-                    "expected two Strings or Two chars, got {}: `{}`, and {}: `{}`", .{ arg.getTypeId(), arg, arg.getTypeId(), arg });
+                return try interpreter.abort(origin, error.TypeError, "expected two Strings or Two chars, got {}: `{}`, and {}: `{}`", .{ arg.getTypeId(), arg, arg.getTypeId(), arg });
             }
         } else if (Rml.castObj(Rml.Char, arg)) |char1| {
             if (Rml.castObj(Rml.Char, arg)) |char2| {
                 is = utils.text.caseInsensitiveCompare(char1.data.*, char2.data.*);
             } else {
-                return try interpreter.abort(origin, error.TypeError,
-                    "expected two Strings or Two chars, got {}: `{}`, and {}: `{}`", .{ arg.getTypeId(), arg, arg.getTypeId(), arg });
+                return try interpreter.abort(origin, error.TypeError, "expected two Strings or Two chars, got {}: `{}`, and {}: `{}`", .{ arg.getTypeId(), arg, arg.getTypeId(), arg });
             }
         } else {
-            return try interpreter.abort(origin, error.TypeError,
-                "expected two Strings or Two chars, got {}: `{}`, and {}: `{}`", .{ arg.getTypeId(), arg, arg.getTypeId(), arg });
+            return try interpreter.abort(origin, error.TypeError, "expected two Strings or Two chars, got {}: `{}`, and {}: `{}`", .{ arg.getTypeId(), arg, arg.getTypeId(), arg });
         }
 
         if (!is) {
@@ -209,14 +201,14 @@ pub fn @"case-insensitive-eq?"(interpreter: *Rml.Interpreter, origin: Rml.Origin
     return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, is)).typeErase();
 }
 
-fn appendConv (newStr: *Rml.String, conv: anytype) Rml.Result! void {
+fn appendConv(newStr: *Rml.String, conv: anytype) Rml.Result!void {
     const T = @TypeOf(conv);
     if (T == Rml.Char) {
         try newStr.append(conv);
     } else if (@typeInfo(T) == .pointer) {
         if (@typeInfo(T).pointer.child == Rml.Char) {
             for (conv) |ch| try newStr.append(ch);
-        } else if (comptime @typeInfo(T).pointer.child == u8)  {
+        } else if (comptime @typeInfo(T).pointer.child == u8) {
             try newStr.appendSlice(conv);
         } else {
             @compileError("unexpected type");
@@ -226,7 +218,7 @@ fn appendConv (newStr: *Rml.String, conv: anytype) Rml.Result! void {
     }
 }
 
-fn textConv(comptime charConv: anytype, interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+fn textConv(comptime charConv: anytype, interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     var compound = args.len != 1;
     var newStr = try Rml.String.create(Rml.getRml(interpreter), "");
 
@@ -245,8 +237,7 @@ fn textConv(comptime charConv: anytype, interpreter: *Rml.Interpreter, origin: R
             const conv = charConv(char.data.*);
             try appendConv(&newStr, conv);
         } else {
-            return try interpreter.abort(origin, Rml.Error.TypeError,
-                "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
+            return try interpreter.abort(origin, Rml.Error.TypeError, "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
         }
     }
 
@@ -259,7 +250,7 @@ fn textConv(comptime charConv: anytype, interpreter: *Rml.Interpreter, origin: R
     return (try Rml.Obj(Rml.String).wrap(Rml.getRml(interpreter), origin, newStr)).typeErase();
 }
 
-fn textPred(comptime chPred: fn (Rml.Char) bool, comptime strPred: fn ([]const u8) bool, interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result! Rml.Object {
+fn textPred(comptime chPred: fn (Rml.Char) bool, comptime strPred: fn ([]const u8) bool, interpreter: *Rml.Interpreter, origin: Rml.Origin, args: []const Rml.Object) Rml.Result!Rml.Object {
     var is = true;
 
     for (args) |arg| {
@@ -268,8 +259,7 @@ fn textPred(comptime chPred: fn (Rml.Char) bool, comptime strPred: fn ([]const u
         else if (Rml.castObj(Rml.Char, arg)) |char|
             chPred(char.data.*)
         else {
-            try interpreter.abort(origin, error.TypeError,
-                "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
+            try interpreter.abort(origin, error.TypeError, "expected a String or a Char, got {}: `{}`", .{ arg.getTypeId(), arg });
         };
 
         if (!argIs) {

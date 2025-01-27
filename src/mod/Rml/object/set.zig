@@ -3,24 +3,20 @@ const Rml = @import("../../Rml.zig");
 const std = @import("std");
 const utils = @import("utils");
 
-
-
 pub const Set = TypedSet(Rml.object.ObjData);
 
-pub fn TypedSet (comptime K: type) type {
+pub fn TypedSet(comptime K: type) type {
     return struct {
         const Self = @This();
-
 
         allocator: std.mem.Allocator,
         native_set: NativeSet = .{},
 
-
         pub const NativeIter = NativeSet.Iterator;
         pub const NativeSet = std.ArrayHashMapUnmanaged(Rml.Obj(K), void, utils.SimpleHashContext, true);
 
-        pub fn create(rml: *Rml, initialKeys: []const Rml.Obj(K)) Rml.OOM! Self {
-            var self = Self { .allocator = rml.blobAllocator() };
+        pub fn create(rml: *Rml, initialKeys: []const Rml.Obj(K)) Rml.OOM!Self {
+            var self = Self{ .allocator = rml.blobAllocator() };
             for (initialKeys) |k| try self.native_set.put(rml.blobAllocator(), k, {});
             return self;
         }
@@ -35,7 +31,7 @@ pub fn TypedSet (comptime K: type) type {
             return ord;
         }
 
-        pub fn format(self: *const Self, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+        pub fn format(self: *const Self, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror!void {
             const fmt = Rml.Format.fromStr(fmtStr) orelse .debug;
             const w = if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any();
 
@@ -49,8 +45,8 @@ pub fn TypedSet (comptime K: type) type {
         }
 
         /// Clones and returns the backing array of values in this map.
-        pub fn toArray(self: *const Self) Rml.OOM! Rml.Obj(Rml.Array) {
-            var array = try Rml.Obj(Rml.Array).wrap(Rml.getRml(self), Rml.getOrigin(self), .{.allocator = self.allocator});
+        pub fn toArray(self: *const Self) Rml.OOM!Rml.Obj(Rml.Array) {
+            var array = try Rml.Obj(Rml.Array).wrap(Rml.getRml(self), Rml.getOrigin(self), .{ .allocator = self.allocator });
 
             for (self.keys()) |key| {
                 try array.data.append(key.typeErase());
@@ -59,19 +55,18 @@ pub fn TypedSet (comptime K: type) type {
             return array;
         }
 
-        pub fn clone(self: *const Self) Rml.OOM! Self {
-            return Self { .allocator = self.allocator, .native_set = try self.native_set.clone(self.allocator) };
+        pub fn clone(self: *const Self) Rml.OOM!Self {
+            return Self{ .allocator = self.allocator, .native_set = try self.native_set.clone(self.allocator) };
         }
 
-        pub fn copyFrom(self: *Self, other: *const Self) Rml.OOM! void {
+        pub fn copyFrom(self: *Self, other: *const Self) Rml.OOM!void {
             for (other.keys()) |key| {
                 try self.set(key);
             }
         }
 
-
         /// Set a key
-        pub fn set(self: *Self, key: Rml.Obj(K)) Rml.OOM! void {
+        pub fn set(self: *Self, key: Rml.Obj(K)) Rml.OOM!void {
             if (self.native_set.getEntry(key)) |entry| {
                 entry.key_ptr.* = key;
             } else {
@@ -104,7 +99,7 @@ pub fn TypedSet (comptime K: type) type {
         /// If the underlying keys have been modified directly,
         /// call this method to recompute the denormalized metadata
         /// necessary for the operation of the methods of this map that lookup entries by key.
-        pub fn reIndex(self: *Self) Rml.OOM! void {
+        pub fn reIndex(self: *Self) Rml.OOM!void {
             return self.native_set.reIndex(self.allocator);
         }
     };

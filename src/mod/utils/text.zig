@@ -9,18 +9,15 @@ const CaseData = @import("zg/CaseData");
 const CaseFold = @import("zg/CaseFold");
 const DisplayWidth = @import("zg/DisplayWidth");
 
-
-
 pub const Char = u21;
 
 pub var ALLOCATOR = std.heap.page_allocator;
 
-pub const Error = error { BadEncoding };
+pub const Error = error{BadEncoding};
 
 pub fn isTextError(err: anyerror) bool {
     return err == Error.BadEncoding;
 }
-
 
 const Data = struct {
     genCat: GenCatData,
@@ -74,7 +71,9 @@ fn getData() *Data {
 
 pub const GeneralCategory = GenCatData.Gc;
 
-pub fn generalCategory(c: Char) GeneralCategory { return getData().genCat.gc(c); }
+pub fn generalCategory(c: Char) GeneralCategory {
+    return getData().genCat.gc(c);
+}
 
 pub fn generalCategoryFromName(name: []const u8) ?GeneralCategory {
     inline for (comptime std.meta.fieldNames(GeneralCategory)) |field| {
@@ -84,7 +83,7 @@ pub fn generalCategoryFromName(name: []const u8) ?GeneralCategory {
 }
 
 pub fn describeGeneralCategory(cat: GeneralCategory) []const u8 {
-    return switch(cat) {
+    return switch (cat) {
         .Cc => "Other, Control",
         .Cf => "Other, Format",
         .Cn => "Other, Unassigned",
@@ -128,49 +127,127 @@ inline fn strPredicate(str: []const u8, comptime f: fn (c: Char) bool) bool {
     return true;
 }
 
-pub fn isControl(c: Char) bool { return getData().genCat.isControl(c); }
-pub fn isLetter(c: Char) bool { return getData().genCat.isLetter(c); }
-pub fn isMark(c: Char) bool { return getData().genCat.isMark(c); }
-pub fn isNumber(c: Char) bool { return getData().genCat.isNumber(c); }
-pub fn isPunctuation(c: Char) bool { return getData().genCat.isPunctuation(c); }
-pub fn isSeparator(c: Char) bool { return getData().genCat.isSeparator(c); }
-pub fn isSymbol(c: Char) bool { return getData().genCat.isSymbol(c); }
+pub fn isControl(c: Char) bool {
+    return getData().genCat.isControl(c);
+}
+pub fn isLetter(c: Char) bool {
+    return getData().genCat.isLetter(c);
+}
+pub fn isMark(c: Char) bool {
+    return getData().genCat.isMark(c);
+}
+pub fn isNumber(c: Char) bool {
+    return getData().genCat.isNumber(c);
+}
+pub fn isPunctuation(c: Char) bool {
+    return getData().genCat.isPunctuation(c);
+}
+pub fn isSeparator(c: Char) bool {
+    return getData().genCat.isSeparator(c);
+}
+pub fn isSymbol(c: Char) bool {
+    return getData().genCat.isSymbol(c);
+}
 
-pub fn isControlStr(str: []const u8) bool { return strPredicate(str, isControl); }
-pub fn isLetterStr(str: []const u8) bool { return strPredicate(str, isLetter); }
-pub fn isMarkStr(str: []const u8) bool { return strPredicate(str, isMark); }
-pub fn isNumberStr(str: []const u8) bool { return strPredicate(str, isNumber); }
-pub fn isPunctuationStr(str: []const u8) bool { return strPredicate(str, isPunctuation); }
-pub fn isSeparatorStr(str: []const u8) bool { return strPredicate(str, isSeparator); }
-pub fn isSymbolStr(str: []const u8) bool { return strPredicate(str, isSymbol); }
+pub fn isControlStr(str: []const u8) bool {
+    return strPredicate(str, isControl);
+}
+pub fn isLetterStr(str: []const u8) bool {
+    return strPredicate(str, isLetter);
+}
+pub fn isMarkStr(str: []const u8) bool {
+    return strPredicate(str, isMark);
+}
+pub fn isNumberStr(str: []const u8) bool {
+    return strPredicate(str, isNumber);
+}
+pub fn isPunctuationStr(str: []const u8) bool {
+    return strPredicate(str, isPunctuation);
+}
+pub fn isSeparatorStr(str: []const u8) bool {
+    return strPredicate(str, isSeparator);
+}
+pub fn isSymbolStr(str: []const u8) bool {
+    return strPredicate(str, isSymbol);
+}
 
-pub fn isMath(c: Char) bool { return getData().props.isMath(c); }
-pub fn isAlphabetic(c: Char) bool { return getData().props.isAlphabetic(c); }
-pub fn isIdStart(c: Char) bool { return getData().props.isIdStart(c); }
-pub fn isIdContinue(c: Char) bool { return getData().props.isIdContinue(c); }
-pub fn isXidStart(c: Char) bool { return getData().props.isXidStart(c); }
-pub fn isXidContinue(c: Char) bool { return getData().props.isXidContinue(c); }
-pub fn isSpace(c: Char) bool { return getData().props.isWhitespace(c); }
-pub fn isHexDigit(c: Char) bool { return getData().props.isHexDigit(c); }
-pub fn isDiacritic(c: Char) bool { return getData().props.isDiacritic(c); }
-pub fn isNumeric(c: Char) bool { return getData().props.isNumeric(c); }
-pub fn isDigit(c: Char) bool { return getData().props.isDigit(c); }
-pub fn isDecimal(c: Char) bool { return getData().props.isDecimal(c); }
+pub fn isMath(c: Char) bool {
+    return getData().props.isMath(c);
+}
+pub fn isAlphabetic(c: Char) bool {
+    return getData().props.isAlphabetic(c);
+}
+pub fn isIdStart(c: Char) bool {
+    return getData().props.isIdStart(c);
+}
+pub fn isIdContinue(c: Char) bool {
+    return getData().props.isIdContinue(c);
+}
+pub fn isXidStart(c: Char) bool {
+    return getData().props.isXidStart(c);
+}
+pub fn isXidContinue(c: Char) bool {
+    return getData().props.isXidContinue(c);
+}
+pub fn isSpace(c: Char) bool {
+    return getData().props.isWhitespace(c);
+}
+pub fn isHexDigit(c: Char) bool {
+    return getData().props.isHexDigit(c);
+}
+pub fn isDiacritic(c: Char) bool {
+    return getData().props.isDiacritic(c);
+}
+pub fn isNumeric(c: Char) bool {
+    return getData().props.isNumeric(c);
+}
+pub fn isDigit(c: Char) bool {
+    return getData().props.isDigit(c);
+}
+pub fn isDecimal(c: Char) bool {
+    return getData().props.isDecimal(c);
+}
 
-pub fn isMathStr(str: []const u8) bool { return strPredicate(str, isMath); }
-pub fn isAlphabeticStr(str: []const u8) bool { return strPredicate(str, isAlphabetic); }
-pub fn isIdStartStr(str: []const u8) bool { return strPredicate(str, isIdStart); }
-pub fn isIdContinueStr(str: []const u8) bool { return strPredicate(str, isIdContinue); }
-pub fn isXidStartStr(str: []const u8) bool { return strPredicate(str, isXidStart); }
-pub fn isXidContinueStr(str: []const u8) bool { return strPredicate(str, isXidContinue); }
-pub fn isSpaceStr(str: []const u8) bool { return strPredicate(str, isSpace); }
-pub fn isHexDigitStr(str: []const u8) bool { return strPredicate(str, isHexDigit); }
-pub fn isDiacriticStr(str: []const u8) bool { return strPredicate(str, isDiacritic); }
-pub fn isNumericStr(str: []const u8) bool { return strPredicate(str, isNumeric); }
-pub fn isDigitStr(str: []const u8) bool { return strPredicate(str, isDigit); }
-pub fn isDecimalStr(str: []const u8) bool { return strPredicate(str, isDecimal); }
+pub fn isMathStr(str: []const u8) bool {
+    return strPredicate(str, isMath);
+}
+pub fn isAlphabeticStr(str: []const u8) bool {
+    return strPredicate(str, isAlphabetic);
+}
+pub fn isIdStartStr(str: []const u8) bool {
+    return strPredicate(str, isIdStart);
+}
+pub fn isIdContinueStr(str: []const u8) bool {
+    return strPredicate(str, isIdContinue);
+}
+pub fn isXidStartStr(str: []const u8) bool {
+    return strPredicate(str, isXidStart);
+}
+pub fn isXidContinueStr(str: []const u8) bool {
+    return strPredicate(str, isXidContinue);
+}
+pub fn isSpaceStr(str: []const u8) bool {
+    return strPredicate(str, isSpace);
+}
+pub fn isHexDigitStr(str: []const u8) bool {
+    return strPredicate(str, isHexDigit);
+}
+pub fn isDiacriticStr(str: []const u8) bool {
+    return strPredicate(str, isDiacritic);
+}
+pub fn isNumericStr(str: []const u8) bool {
+    return strPredicate(str, isNumeric);
+}
+pub fn isDigitStr(str: []const u8) bool {
+    return strPredicate(str, isDigit);
+}
+pub fn isDecimalStr(str: []const u8) bool {
+    return strPredicate(str, isDecimal);
+}
 
-pub fn isCased(c: Char) bool { return getData().case.isCased(c); }
+pub fn isCased(c: Char) bool {
+    return getData().case.isCased(c);
+}
 
 pub fn isCasedStr(str: []const u8) bool {
     var is = false;
@@ -183,19 +260,37 @@ pub fn isCasedStr(str: []const u8) bool {
     return true;
 }
 
-pub fn isUpper(c: Char) bool { return getData().case.isUpper(c); }
-pub fn isLower(c: Char) bool { return getData().case.isLower(c); }
+pub fn isUpper(c: Char) bool {
+    return getData().case.isUpper(c);
+}
+pub fn isLower(c: Char) bool {
+    return getData().case.isLower(c);
+}
 
-pub fn toUpper(c: Char) Char { return getData().case.toUpper(c); }
-pub fn toLower(c: Char) Char { return getData().case.toLower(c); }
+pub fn toUpper(c: Char) Char {
+    return getData().case.toUpper(c);
+}
+pub fn toLower(c: Char) Char {
+    return getData().case.toLower(c);
+}
 
-pub fn isUpperStr(str: []const u8) bool { return getData().case.isUpperStr(str); }
-pub fn isLowerStr(str: []const u8) bool { return getData().case.isLowerStr(str); }
+pub fn isUpperStr(str: []const u8) bool {
+    return getData().case.isUpperStr(str);
+}
+pub fn isLowerStr(str: []const u8) bool {
+    return getData().case.isLowerStr(str);
+}
 
-pub fn toLowerStr(allocator: std.mem.Allocator, str: []const u8) ![]u8 { return getData().case.toLowerStr(allocator, str); }
-pub fn toUpperStr(allocator: std.mem.Allocator, str: []const u8) ![]u8 { return getData().case.toUpperStr(allocator, str); }
+pub fn toLowerStr(allocator: std.mem.Allocator, str: []const u8) ![]u8 {
+    return getData().case.toLowerStr(allocator, str);
+}
+pub fn toUpperStr(allocator: std.mem.Allocator, str: []const u8) ![]u8 {
+    return getData().case.toUpperStr(allocator, str);
+}
 
-pub fn caseFold(c: Char) []const Char { return getData().caseFold.caseFold(c); }
+pub fn caseFold(c: Char) []const Char {
+    return getData().caseFold.caseFold(c);
+}
 pub fn caseFoldStr(allocator: std.mem.Allocator, str: []const u8) ![]u8 {
     var mem = std.ArrayList(u8).init(allocator);
     var i: usize = 0;
@@ -220,9 +315,13 @@ pub fn caseFoldStr(allocator: std.mem.Allocator, str: []const u8) ![]u8 {
     }
     return try mem.toOwnedSlice();
 }
-pub fn changesWhenCaseFolded(c: Char) bool { return getData().caseFold.changesWhenCaseFolded(c); }
+pub fn changesWhenCaseFolded(c: Char) bool {
+    return getData().caseFold.changesWhenCaseFolded(c);
+}
 
-pub fn displayWidth(c: Char) i3 { return getData().displayWidth.codePointWidth(c); }
+pub fn displayWidth(c: Char) i3 {
+    return getData().displayWidth.codePointWidth(c);
+}
 pub fn displayWidthStr(str: []const u8) !i64 {
     var w: i64 = 0;
     var i: usize = 0;
@@ -235,12 +334,22 @@ pub fn displayWidthStr(str: []const u8) !i64 {
     return w;
 }
 
-pub fn isValid(c: Char) bool { return std.unicode.utf8ValidCodepoint(c); }
-pub fn isValidStr(str: []const u8) bool { return std.unicode.utf8ValidateSlice(str); }
+pub fn isValid(c: Char) bool {
+    return std.unicode.utf8ValidCodepoint(c);
+}
+pub fn isValidStr(str: []const u8) bool {
+    return std.unicode.utf8ValidateSlice(str);
+}
 
-pub fn sequenceLength(c: Char) Error!u3 { return std.unicode.utf8CodepointSequenceLength(c) catch return Error.BadEncoding; }
-pub fn sequenceLengthByte(b: u8) Error!u3 { return std.unicode.utf8ByteSequenceLength(b) catch return Error.BadEncoding; }
-pub fn codepointCount(str: []const u8) Error!usize { return std.unicode.utf8CountCodepoints(str) catch return Error.BadEncoding; }
+pub fn sequenceLength(c: Char) Error!u3 {
+    return std.unicode.utf8CodepointSequenceLength(c) catch return Error.BadEncoding;
+}
+pub fn sequenceLengthByte(b: u8) Error!u3 {
+    return std.unicode.utf8ByteSequenceLength(b) catch return Error.BadEncoding;
+}
+pub fn codepointCount(str: []const u8) Error!usize {
+    return std.unicode.utf8CountCodepoints(str) catch return Error.BadEncoding;
+}
 
 pub fn nthCodepoint(n: usize, str: []const u8) Error!?Char {
     var i: usize = 0;
@@ -270,13 +379,17 @@ pub fn nthCodepointOffset(n: usize, str: []const u8) Error!?usize {
     return null;
 }
 
-pub fn decode(str: []const u8) Error!Char { return std.unicode.utf8Decode(str) catch return Error.BadEncoding; }
+pub fn decode(str: []const u8) Error!Char {
+    return std.unicode.utf8Decode(str) catch return Error.BadEncoding;
+}
 pub fn decode1(str: []const u8) Error!struct { ch: Char, len: u3 } {
     const len = try sequenceLengthByte(str[0]);
-    const ch = try decode(str[0 .. len]);
+    const ch = try decode(str[0..len]);
     return .{ .ch = ch, .len = len };
 }
-pub fn encode(c: Char, out: []u8) Error!u3 { return std.unicode.utf8Encode(c, out) catch return Error.BadEncoding; }
+pub fn encode(c: Char, out: []u8) Error!u3 {
+    return std.unicode.utf8Encode(c, out) catch return Error.BadEncoding;
+}
 
 pub fn caseInsensitiveCompare(a: Char, b: Char) bool {
     if (a == b) return true;
@@ -357,7 +470,7 @@ pub fn findStr(haystack: []const u8, needle: []const u8) ?usize {
 
     var i: usize = 0;
     while (i < haystack.len) {
-        if (std.mem.eql(u8, haystack[i..i + needle.len], needle)) return i;
+        if (std.mem.eql(u8, haystack[i .. i + needle.len], needle)) return i;
         i += 1;
     }
 
@@ -371,7 +484,7 @@ pub fn findStrCodepointIndex(haystack: []const u8, needle: []const u8) Error!?us
     var i: usize = 0;
     var j: usize = 0;
     while (i < haystack.len) {
-        if (std.mem.eql(u8, haystack[i..i + needle.len], needle)) return j;
+        if (std.mem.eql(u8, haystack[i .. i + needle.len], needle)) return j;
         const len = try sequenceLengthByte(haystack[i]);
         i += len;
         j += 1;
@@ -385,7 +498,7 @@ pub fn findInCStr(haystack: [*:0]const u8, needle: []const u8) ?usize {
     while (true) {
         if (haystack[i] == 0) return null;
         var eq = true;
-        for (0 .. needle.len) |j| {
+        for (0..needle.len) |j| {
             if (haystack[i + j] != needle[j]) {
                 eq = false;
                 break;
@@ -396,7 +509,6 @@ pub fn findInCStr(haystack: [*:0]const u8, needle: []const u8) ?usize {
     }
     return null;
 }
-
 
 pub fn cStrLen(str: [*:0]const u8) usize {
     var i: usize = 0;
@@ -423,40 +535,40 @@ pub fn indentStr(str: *std.ArrayList(u8), indent: []const u8) !void {
     }
 }
 
-const Escape = struct {text: []const u8, len: u3};
-const escapeTable = [32]Escape {
-    .{.text = "\\0", .len = 2},
-    .{.text = "\\x01", .len = 4},
-    .{.text = "\\x02", .len = 4},
-    .{.text = "\\x03", .len = 4},
-    .{.text = "\\x04", .len = 4},
-    .{.text = "\\x05", .len = 4},
-    .{.text = "\\x06", .len = 4},
-    .{.text = "\\a", .len = 2},
-    .{.text = "\\b", .len = 2},
-    .{.text = "\\t", .len = 2},
-    .{.text = "\\n", .len = 2},
-    .{.text = "\\v", .len = 2},
-    .{.text = "\\f", .len = 2},
-    .{.text = "\\r", .len = 2},
-    .{.text = "\\x0E", .len = 4},
-    .{.text = "\\x0F", .len = 4},
-    .{.text = "\\x10", .len = 4},
-    .{.text = "\\x11", .len = 4},
-    .{.text = "\\x12", .len = 4},
-    .{.text = "\\x13", .len = 4},
-    .{.text = "\\x14", .len = 4},
-    .{.text = "\\x15", .len = 4},
-    .{.text = "\\x16", .len = 4},
-    .{.text = "\\x17", .len = 4},
-    .{.text = "\\x18", .len = 4},
-    .{.text = "\\x19", .len = 4},
-    .{.text = "\\x1A", .len = 4},
-    .{.text = "\\esc", .len = 4},
-    .{.text = "\\x1C", .len = 4},
-    .{.text = "\\x1D", .len = 4},
-    .{.text = "\\x1E", .len = 4},
-    .{.text = "\\x1F", .len = 4},
+const Escape = struct { text: []const u8, len: u3 };
+const escapeTable = [32]Escape{
+    .{ .text = "\\0", .len = 2 },
+    .{ .text = "\\x01", .len = 4 },
+    .{ .text = "\\x02", .len = 4 },
+    .{ .text = "\\x03", .len = 4 },
+    .{ .text = "\\x04", .len = 4 },
+    .{ .text = "\\x05", .len = 4 },
+    .{ .text = "\\x06", .len = 4 },
+    .{ .text = "\\a", .len = 2 },
+    .{ .text = "\\b", .len = 2 },
+    .{ .text = "\\t", .len = 2 },
+    .{ .text = "\\n", .len = 2 },
+    .{ .text = "\\v", .len = 2 },
+    .{ .text = "\\f", .len = 2 },
+    .{ .text = "\\r", .len = 2 },
+    .{ .text = "\\x0E", .len = 4 },
+    .{ .text = "\\x0F", .len = 4 },
+    .{ .text = "\\x10", .len = 4 },
+    .{ .text = "\\x11", .len = 4 },
+    .{ .text = "\\x12", .len = 4 },
+    .{ .text = "\\x13", .len = 4 },
+    .{ .text = "\\x14", .len = 4 },
+    .{ .text = "\\x15", .len = 4 },
+    .{ .text = "\\x16", .len = 4 },
+    .{ .text = "\\x17", .len = 4 },
+    .{ .text = "\\x18", .len = 4 },
+    .{ .text = "\\x19", .len = 4 },
+    .{ .text = "\\x1A", .len = 4 },
+    .{ .text = "\\esc", .len = 4 },
+    .{ .text = "\\x1C", .len = 4 },
+    .{ .text = "\\x1D", .len = 4 },
+    .{ .text = "\\x1E", .len = 4 },
+    .{ .text = "\\x1F", .len = 4 },
 };
 
 pub const QuoteMode = enum {
@@ -548,11 +660,10 @@ pub fn escape(c: Char, quoteMode: QuoteMode, out: []u8) ![]u8 {
             else => {
                 const len = try encode(c, out);
                 return out[0..len];
-            }
+            },
         }
     }
 }
-
 
 pub fn wcwidth(wc: Char) isize {
     return tableSearch.wcwidth(wc);
@@ -592,7 +703,6 @@ pub fn lastChar(str: []const u8) Error!?Char {
     return dec.ch;
 }
 
-
 pub fn lastToken(comptime predicateMode: bool, predicate: *const fn (Char) bool, buffer: []const u8) Error!?[]const u8 {
     if (buffer.len == 0) return null;
     var it = try InvertibleTokenIterator(predicateMode).init(buffer, predicate);
@@ -602,7 +712,7 @@ pub fn lastToken(comptime predicateMode: bool, predicate: *const fn (Char) bool,
 pub const PosTokenIterator = InvertibleTokenIterator(true);
 pub const NegTokenIterator = InvertibleTokenIterator(false);
 
-fn InvertibleTokenIterator (comptime predicateMode: bool) type {
+fn InvertibleTokenIterator(comptime predicateMode: bool) type {
     return struct {
         cache: ?[]const u8,
         buffer: []const u8,
@@ -627,8 +737,8 @@ fn InvertibleTokenIterator (comptime predicateMode: bool) type {
             }
         }
 
-        pub fn init (buffer: []const u8, predicate: *const fn (Char) bool) Error!Self {
-            var out = Self {
+        pub fn init(buffer: []const u8, predicate: *const fn (Char) bool) Error!Self {
+            var out = Self{
                 .cache = null,
                 .buffer = buffer,
                 .index = 0,
@@ -691,8 +801,6 @@ fn InvertibleTokenIterator (comptime predicateMode: bool) type {
     };
 }
 
-
-
 test {
     const expect = std.testing.expect;
     const expectEqual = std.testing.expectEqual;
@@ -718,7 +826,7 @@ test {
 
     try expectEqual('A', toUpper('a'));
     try expectEqual('x', toLower('X'));
-    try expectEqualSlices(Char, &[_]Char{ 'g' }, caseFold('G'));
+    try expectEqualSlices(Char, &[_]Char{'g'}, caseFold('G'));
 
     try expectEqual(3, numDigits(@as(i32, 100), 10));
     try expectEqual(2, numDigits(@as(i32, 0xFF), 16));
@@ -732,49 +840,49 @@ test {
     try expectEqualSlices(u8, "\thello\n\tworld\n", str.items);
 
     var escBuf = [1]u8{0} ** 4;
-    try expectEqualSlices(u8, "\\0",   try escape('\x00', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x01", try escape('\x01', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x02", try escape('\x02', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x03", try escape('\x03', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x04", try escape('\x04', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x05", try escape('\x05', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x06", try escape('\x06', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\a",   try escape('\x07', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\b",   try escape('\x08', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\t",   try escape('\t',   .None,   &escBuf));
-    try expectEqualSlices(u8, "\\n",   try escape('\n',   .None,   &escBuf));
-    try expectEqualSlices(u8, "\\v",   try escape('\x0b', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\f",   try escape('\x0c', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\r",   try escape('\r',   .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x0E", try escape('\x0E', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x0F", try escape('\x0F', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x10", try escape('\x10', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x11", try escape('\x11', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x12", try escape('\x12', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x13", try escape('\x13', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x14", try escape('\x14', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x15", try escape('\x15', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x16", try escape('\x16', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x17", try escape('\x17', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x18", try escape('\x18', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x19", try escape('\x19', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x1A", try escape('\x1A', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\esc", try escape('\x1B', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x1C", try escape('\x1C', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x1D", try escape('\x1D', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x1E", try escape('\x1E', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x1F", try escape('\x1F', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\x7F", try escape('\x7F', .None,   &escBuf));
-    try expectEqualSlices(u8, "\\\\",  try escape('\\',   .None,   &escBuf));
-    try expectEqualSlices(u8, "\"",    try escape('"',    .None,   &escBuf));
-    try expectEqualSlices(u8, "\"",    try escape('"',    .Single, &escBuf));
-    try expectEqualSlices(u8, "\\\"",  try escape('"',    .Double, &escBuf));
-    try expectEqualSlices(u8, "\\\"",  try escape('"',    .Both,   &escBuf));
-    try expectEqualSlices(u8, "\'",    try escape('\'',   .None,   &escBuf));
-    try expectEqualSlices(u8, "\'",    try escape('\'',   .Double, &escBuf));
-    try expectEqualSlices(u8, "\\\'",  try escape('\'',   .Single, &escBuf));
-    try expectEqualSlices(u8, "\\\'",  try escape('\'',   .Both,   &escBuf));
-    try expectEqualSlices(u8, "❔",    try escape('❔',   .None,   &escBuf));
+    try expectEqualSlices(u8, "\\0", try escape('\x00', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x01", try escape('\x01', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x02", try escape('\x02', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x03", try escape('\x03', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x04", try escape('\x04', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x05", try escape('\x05', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x06", try escape('\x06', .None, &escBuf));
+    try expectEqualSlices(u8, "\\a", try escape('\x07', .None, &escBuf));
+    try expectEqualSlices(u8, "\\b", try escape('\x08', .None, &escBuf));
+    try expectEqualSlices(u8, "\\t", try escape('\t', .None, &escBuf));
+    try expectEqualSlices(u8, "\\n", try escape('\n', .None, &escBuf));
+    try expectEqualSlices(u8, "\\v", try escape('\x0b', .None, &escBuf));
+    try expectEqualSlices(u8, "\\f", try escape('\x0c', .None, &escBuf));
+    try expectEqualSlices(u8, "\\r", try escape('\r', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x0E", try escape('\x0E', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x0F", try escape('\x0F', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x10", try escape('\x10', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x11", try escape('\x11', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x12", try escape('\x12', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x13", try escape('\x13', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x14", try escape('\x14', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x15", try escape('\x15', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x16", try escape('\x16', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x17", try escape('\x17', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x18", try escape('\x18', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x19", try escape('\x19', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x1A", try escape('\x1A', .None, &escBuf));
+    try expectEqualSlices(u8, "\\esc", try escape('\x1B', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x1C", try escape('\x1C', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x1D", try escape('\x1D', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x1E", try escape('\x1E', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x1F", try escape('\x1F', .None, &escBuf));
+    try expectEqualSlices(u8, "\\x7F", try escape('\x7F', .None, &escBuf));
+    try expectEqualSlices(u8, "\\\\", try escape('\\', .None, &escBuf));
+    try expectEqualSlices(u8, "\"", try escape('"', .None, &escBuf));
+    try expectEqualSlices(u8, "\"", try escape('"', .Single, &escBuf));
+    try expectEqualSlices(u8, "\\\"", try escape('"', .Double, &escBuf));
+    try expectEqualSlices(u8, "\\\"", try escape('"', .Both, &escBuf));
+    try expectEqualSlices(u8, "\'", try escape('\'', .None, &escBuf));
+    try expectEqualSlices(u8, "\'", try escape('\'', .Double, &escBuf));
+    try expectEqualSlices(u8, "\\\'", try escape('\'', .Single, &escBuf));
+    try expectEqualSlices(u8, "\\\'", try escape('\'', .Both, &escBuf));
+    try expectEqualSlices(u8, "❔", try escape('❔', .None, &escBuf));
 
     try expect(caseInsensitiveCompare('a', 'A'));
     try expect(caseInsensitiveCompare('a', 'a'));
@@ -893,10 +1001,6 @@ test {
         }
     }
 }
-
-
-
-
 
 // adapted from https://github.com/joachimschmidt557/zig-wcwidth (MIT License)
 const tableSearch = struct {

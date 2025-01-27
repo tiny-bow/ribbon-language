@@ -4,8 +4,6 @@ const external = @This();
 
 const std = @import("std");
 
-
-
 pub fn Option(comptime T: type) type {
     return extern struct {
         isSome: bool,
@@ -28,7 +26,7 @@ pub fn Option(comptime T: type) type {
 
         pub inline fn fromNative(value: ?T) Self {
             if (value) |v| {
-                return Self { .isSome = true, .value = .{ .Some = v } };
+                return Self{ .isSome = true, .value = .{ .Some = v } };
             } else {
                 return Self.None;
             }
@@ -80,7 +78,7 @@ pub const Hasher = extern struct {
     pub fn fromNative(v: anytype) Self {
         const T = @TypeOf(v);
 
-        return Self {
+        return Self{
             .state = v.value,
             .proc = &struct {
                 fn fun(state: *u32, byte_buf: [*]const u8, byte_len: usize) callconv(.C) void {
@@ -181,7 +179,7 @@ pub const Writer = extern struct {
     }
 };
 
-pub fn Union (comptime T: type) type {
+pub fn Union(comptime T: type) type {
     return extern struct {
         tag: Tg,
         value: Un,
@@ -190,11 +188,11 @@ pub fn Union (comptime T: type) type {
         const info = @typeInfo(T).@"union";
 
         const Tg = info.tag_type.?;
-        const Un = @Type(.{.@"union" = .{
+        const Un = @Type(.{ .@"union" = .{
             .layout = .@"extern",
             .tag_type = null,
             .fields = info.fields,
-        }});
+        } });
 
         pub fn fromNative(native: T) Self {
             const activeTag = @as(Tg, native);
@@ -203,10 +201,7 @@ pub fn Union (comptime T: type) type {
                 const tag = @field(Tg, field.name);
 
                 if (comptime tag == activeTag) {
-                    return Self {
-                        .tag = activeTag,
-                        .value = @unionInit(Un, field.name, @field(native, field.name))
-                    };
+                    return Self{ .tag = activeTag, .value = @unionInit(Un, field.name, @field(native, field.name)) };
                 }
             }
 

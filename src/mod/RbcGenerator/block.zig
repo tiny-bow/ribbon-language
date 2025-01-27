@@ -9,8 +9,6 @@ const Rir = @import("Rir");
 const Rbc = @import("Rbc");
 const RbcBuilder = @import("RbcBuilder");
 
-
-
 const Stack = std.ArrayListUnmanaged(Rir.Operand);
 const RegisterList = std.ArrayListUnmanaged(*Rir.Register);
 
@@ -27,12 +25,11 @@ pub const Block = struct {
 
     stack: Stack = .{},
 
-
-    pub fn init(parent: ?*Block, function: *Generator.Function, blockIr: *Rir.Block, blockBuilder: *RbcBuilder.Block) error{OutOfMemory}! *Block {
+    pub fn init(parent: ?*Block, function: *Generator.Function, blockIr: *Rir.Block, blockBuilder: *RbcBuilder.Block) error{OutOfMemory}!*Block {
         const generator = function.generator;
         const self = try generator.allocator.create(Block);
 
-        self.* = Block {
+        self.* = Block{
             .function = function,
             .generator = generator,
 
@@ -54,7 +51,7 @@ pub const Block = struct {
         self.generator.allocator.destroy(self);
     }
 
-    pub fn generate(self: *Block) Generator.Error! void {
+    pub fn generate(self: *Block) Generator.Error!void {
         const instrs = self.ir.instructions.items;
 
         var i: usize = 0;
@@ -125,11 +122,7 @@ pub const Block = struct {
                                 .zero => .if_z,
                                 .non_zero => .if_nz,
                             },
-                            &.{
-                                .R0 = condReg.getIndex(),
-                                .B0 = thenChild.builder.index,
-                                .B1 = elseChild.builder.index
-                            },
+                            &.{ .R0 = condReg.getIndex(), .B0 = thenChild.builder.index, .B1 = elseChild.builder.index },
                         );
                     } else {
                         const thenOperand = try thenChild.pop(null);
@@ -153,12 +146,7 @@ pub const Block = struct {
                                 .zero => .if_z_v,
                                 .non_zero => .if_nz_v,
                             },
-                            &.{
-                                .R0 = condReg.getIndex(),
-                                .R1 = resultRegister.getIndex(),
-                                .B0 = thenChild.builder.index,
-                                .B1 = elseChild.builder.index
-                            },
+                            &.{ .R0 = condReg.getIndex(), .R1 = resultRegister.getIndex(), .B0 = thenChild.builder.index, .B1 = elseChild.builder.index },
                         );
                     }
                 },
@@ -176,16 +164,12 @@ pub const Block = struct {
                                 .zero => .when_z,
                                 .non_zero => .when_nz,
                             },
-                            &.{
-                                .R0 = condReg.getIndex(),
-                                .B0 = thenChild.builder.index
-                            },
+                            &.{ .R0 = condReg.getIndex(), .B0 = thenChild.builder.index },
                         );
                     } else {
                         return error.StackBranchMismatch;
                     }
                 },
-
 
                 .re => {
                     const zeroCheck = instr.data.re;
@@ -253,7 +237,7 @@ pub const Block = struct {
                                         .local => @panic("local nyi"),
                                         .upvalue => @panic("upvalue nyi"),
                                         .global => @panic("global nyi"),
-                                    }
+                                    },
                                 }
                             },
                             else => return error.StackNotCleared,
@@ -326,7 +310,6 @@ pub const Block = struct {
                 .read => @panic("read nyi"),
 
                 .write => @panic("write nyi"),
-
 
                 .load => @panic("load nyi"),
                 .store => @panic("store nyi"),
@@ -424,8 +407,7 @@ pub const Block = struct {
                 .meta => |m| if (k == .meta) m else error.InvalidOperand,
                 .l_value => |l| if (k == .l_value) l else error.InvalidOperand,
                 .r_value => |r| if (k == .r_value) r else error.InvalidOperand,
-            }
-            else operand;
+            } else operand;
         }
 
         return error.StackUnderflow;
@@ -439,7 +421,7 @@ pub const Block = struct {
         return null;
     }
 
-    pub fn allocRegister(self: *Block, typeIr: *Rir.Type) error{InvalidType, TooManyRegisters, OutOfMemory}! *Rir.Register {
+    pub fn allocRegister(self: *Block, typeIr: *Rir.Type) error{ InvalidType, TooManyRegisters, OutOfMemory }!*Rir.Register {
         if (self.takeFreeRegister()) |reg| {
             reg.type = typeIr;
             return reg;
@@ -457,7 +439,7 @@ pub const Block = struct {
         return freshReg;
     }
 
-    pub fn createLocal(self: *Block, name: Rir.NameId, typeIr: *Rir.Type) error{TooManyLocals, OutOfMemory}! *Rir.Local {
+    pub fn createLocal(self: *Block, name: Rir.NameId, typeIr: *Rir.Type) error{ TooManyLocals, OutOfMemory }!*Rir.Local {
         const out = try self.ir.createLocal(name, typeIr);
         // const localType = try self.ir.ir.getType(localTypeId);
         // const localStorage = try localType.getStorage();
@@ -471,7 +453,7 @@ pub const Block = struct {
         return self.ir.getLocal(id);
     }
 
-    pub fn generateSetLocal(_: *Block, _: Rir.LocalId, _: Rir.Operand) error{TooManyLocals, OutOfMemory}! void {
+    pub fn generateSetLocal(_: *Block, _: Rir.LocalId, _: Rir.Operand) error{ TooManyLocals, OutOfMemory }!void {
         @panic("setLocal nyi");
     }
 };

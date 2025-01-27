@@ -3,7 +3,6 @@ const Build = std.Build;
 
 const log = std.log.scoped(.build);
 
-
 const MOD_PATH = "src/mod";
 const BIN_PATH = "src/bin";
 
@@ -106,13 +105,13 @@ pub fn build(zigBuild: *Build) !void {
     // const testStep = b.build.step("test", "Run unit tests");
 
     for (PACKAGES) |packageName| {
-        const ext = b.build.dependency(packageName, .{.target = b.target, .optimize = b.optimize});
+        const ext = b.build.dependency(packageName, .{ .target = b.target, .optimize = b.optimize });
 
         try b.package_map.put(packageName, ext);
     }
 
     for (MODULES) |mod| {
-        const modPathStr = b.fmt("{s}/{s}.zig", .{MOD_PATH, mod.name});
+        const modPathStr = b.fmt("{s}/{s}.zig", .{ MOD_PATH, mod.name });
         const modPath = b.path(modPathStr);
 
         const moduleStandard = b.build.createModule(.{
@@ -154,7 +153,7 @@ pub fn build(zigBuild: *Build) !void {
     }
 
     for (BINARIES) |bin| {
-        const binPathStr = b.fmt("{s}/{s}.zig", .{BIN_PATH, bin.name});
+        const binPathStr = b.fmt("{s}/{s}.zig", .{ BIN_PATH, bin.name });
         const binPath = b.path(binPathStr);
 
         const binaryStandard = b.build.addExecutable(.{
@@ -177,7 +176,6 @@ pub fn build(zigBuild: *Build) !void {
         const run = b.build.addRunArtifact(binaryStandard);
         const installBinary = b.build.addInstallArtifact(binaryStandard, .{});
 
-
         const runStep = b.build.step(b.fmt("run-{s}", .{bin.name}), b.fmt("Build & run the {s} executable", .{bin.name}));
         const unitInstallStep = b.build.step(bin.name, b.fmt("Build the {s} executable", .{bin.name}));
         const unitCheckStep = b.build.step(b.fmt("check-{s}", .{bin.name}), b.fmt("Run semantic analysis for the {s} executable", .{bin.name}));
@@ -197,7 +195,6 @@ pub fn build(zigBuild: *Build) !void {
         // unitTestStep.dependOn(&runTest.step);
     }
 }
-
 
 const Module = struct {
     name: [:0]const u8,
@@ -234,7 +231,7 @@ const Builder = struct {
     test_map: std.StringHashMap(*Build.Module),
 
     fn init(b: *Build) Builder {
-        return Builder {
+        return Builder{
             .build = b,
 
             .target = b.standardTargetOptions(.{}),
@@ -255,15 +252,13 @@ const Builder = struct {
         for (dependencies) |depUnion| {
             switch (depUnion) {
                 .external_module => |dep| {
-                    const package = self.package_map.get(dep.package_name)
-                        orelse @panic(self.fmt("package not found: {s}", .{dep.package_name}));
-                    const dependencyName = self.build.fmt("{s}/{s}", .{dep.package_name, dep.module_name});
+                    const package = self.package_map.get(dep.package_name) orelse @panic(self.fmt("package not found: {s}", .{dep.package_name}));
+                    const dependencyName = self.build.fmt("{s}/{s}", .{ dep.package_name, dep.module_name });
 
                     module.addImport(dependencyName, package.module(dep.module_name));
                 },
                 .internal_module => |dep| {
-                    const dependency = internals.get(dep.module_name)
-                        orelse @panic(self.fmt("module not found: {s}", .{dep.module_name}));
+                    const dependency = internals.get(dep.module_name) orelse @panic(self.fmt("module not found: {s}", .{dep.module_name}));
 
                     module.addImport(dep.module_name, dependency);
                 },

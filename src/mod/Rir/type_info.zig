@@ -5,8 +5,6 @@ const type_info = @This();
 const std = @import("std");
 const utils = @import("utils");
 
-
-
 /// Type representation for all values in Rir;
 ///
 /// Essentially, this is a wrapper for `TypeInfo` that
@@ -23,9 +21,8 @@ pub const Type = struct {
 
     info: TypeInfo,
 
-
     pub fn init(ir: *Rir, id: Rir.TypeId, name: ?Rir.NameId, info: TypeInfo) Type {
-        return Type {
+        return Type{
             .ir = ir,
             .id = id,
             .name = name,
@@ -150,7 +147,7 @@ pub const Type = struct {
         }
     }
 
-    pub fn compareMemory(self: *const Type, a: []const u8, b: []const u8) ! utils.Ordering {
+    pub fn compareMemory(self: *const Type, a: []const u8, b: []const u8) !utils.Ordering {
         if (a.ptr == b.ptr and a.len == b.len) return .Equal;
 
         const layout = try self.ir.getTypeLayout(self.id);
@@ -173,10 +170,9 @@ pub const Type = struct {
             .F32 => return utils.compare(@as(*const f32, @alignCast(@ptrCast(a.ptr))).*, @as(*const f32, @alignCast(@ptrCast(b.ptr))).*),
             .F64 => return utils.compare(@as(*const f64, @alignCast(@ptrCast(a.ptr))).*, @as(*const f64, @alignCast(@ptrCast(b.ptr))).*),
 
-            inline
-                .Block,
-                .HandlerSet,
-                .Pointer,
+            inline .Block,
+            .HandlerSet,
+            .Pointer,
             => return utils.compare(a, b),
 
             .Type => return @as(*const Type, @alignCast(@ptrCast(a.ptr))).compare(@as(*const Type, @alignCast(@ptrCast(b.ptr))).*),
@@ -199,8 +195,8 @@ pub const Type = struct {
                 if (ord == .Equal) {
                     for (0..aLength.*) |i| {
                         const j = i * elemLayout.dimensions.size;
-                        const aElem = aBuf[j..j + elemLayout.dimensions.size];
-                        const bElem = bBuf[j..j + elemLayout.dimensions.size];
+                        const aElem = aBuf[j .. j + elemLayout.dimensions.size];
+                        const bElem = bBuf[j .. j + elemLayout.dimensions.size];
 
                         ord = try info.element.compareMemory(aElem, bElem);
 
@@ -216,8 +212,8 @@ pub const Type = struct {
 
                 for (0..info.length) |i| {
                     const j = i * elemLayout.dimensions.size;
-                    const aElem = a[j..j + elemLayout.dimensions.size];
-                    const bElem = b[j..j + elemLayout.dimensions.size];
+                    const aElem = a[j .. j + elemLayout.dimensions.size];
+                    const bElem = b[j .. j + elemLayout.dimensions.size];
 
                     const ord = try info.element.compareMemory(aElem, bElem);
                     if (ord != .Equal) return ord;
@@ -230,8 +226,8 @@ pub const Type = struct {
                 for (info.fields, 0..) |field, i| {
                     const fieldLayout = try field.type.getLayout();
                     const fieldOffset = layout.field_offsets[i];
-                    const fieldMemoryA = a[fieldOffset..fieldOffset + fieldLayout.dimensions.size];
-                    const fieldMemoryB = b[fieldOffset..fieldOffset + fieldLayout.dimensions.size];
+                    const fieldMemoryA = a[fieldOffset .. fieldOffset + fieldLayout.dimensions.size];
+                    const fieldMemoryB = b[fieldOffset .. fieldOffset + fieldLayout.dimensions.size];
 
                     const ord = try field.type.compareMemory(fieldMemoryA, fieldMemoryB);
                     if (ord != .Equal) return ord;
@@ -252,8 +248,8 @@ pub const Type = struct {
 
                     if (try info.discriminator.compareMemory(discMemA, fieldDiscMem) == .Equal) {
                         const fieldLayout = try field.type.getLayout();
-                        const fieldMemoryA = a[layout.field_offsets[1]..layout.field_offsets[1] + fieldLayout.dimensions.size];
-                        const fieldMemoryB = b[layout.field_offsets[1]..layout.field_offsets[1] + fieldLayout.dimensions.size];
+                        const fieldMemoryA = a[layout.field_offsets[1] .. layout.field_offsets[1] + fieldLayout.dimensions.size];
+                        const fieldMemoryB = b[layout.field_offsets[1] .. layout.field_offsets[1] + fieldLayout.dimensions.size];
 
                         return field.type.compareMemory(fieldMemoryA, fieldMemoryB);
                     }
@@ -266,8 +262,8 @@ pub const Type = struct {
                 for (type_set, 0..) |T, i| {
                     const TLayout = try T.getLayout();
                     const offset = layout.field_offsets[i];
-                    const memoryA = a[offset..offset + TLayout.dimensions.size];
-                    const memoryB = b[offset..offset + TLayout.dimensions.size];
+                    const memoryA = a[offset .. offset + TLayout.dimensions.size];
+                    const memoryB = b[offset .. offset + TLayout.dimensions.size];
 
                     const ord = try T.compareMemory(memoryA, memoryB);
                     if (ord != .Equal) return ord;
@@ -307,28 +303,27 @@ pub const Type = struct {
             .F32 => try formatter.fmt(@as(*const f32, @alignCast(@ptrCast(memory.ptr))).*),
             .F64 => try formatter.fmt(@as(*const f64, @alignCast(@ptrCast(memory.ptr))).*),
 
-            inline
-                .Block,
-                .HandlerSet,
-                .Pointer,
-                .Sum,
-            => try formatter.print("[{} @ {x}]", .{formatter.wrap(self), @intFromPtr(memory.ptr)}),
+            inline .Block,
+            .HandlerSet,
+            .Pointer,
+            .Sum,
+            => try formatter.print("[{} @ {x}]", .{ formatter.wrap(self), @intFromPtr(memory.ptr) }),
 
             .Type => try @as(*const Type, @alignCast(@ptrCast(memory.ptr))).onFormat(formatter),
 
-            .Slice => try formatter.print("[{} @ {x} + {}]", .{formatter.wrap(self), @intFromPtr(memory.ptr), memory.len}),
+            .Slice => try formatter.print("[{} @ {x} + {}]", .{ formatter.wrap(self), @intFromPtr(memory.ptr), memory.len }),
 
             .Array => |info| {
                 try formatter.print("array({})[", .{info.length});
                 try formatter.beginBlock();
-                    const elemSize = @divExact(memory.len, info.length);
-                    for (0..info.length) |i| {
-                        if (i > 0) {
-                            try formatter.writeAll(",");
-                            try formatter.endLine();
-                        }
-                        try info.element.formatMemory(formatter, memory[i * elemSize..]);
+                const elemSize = @divExact(memory.len, info.length);
+                for (0..info.length) |i| {
+                    if (i > 0) {
+                        try formatter.writeAll(",");
+                        try formatter.endLine();
                     }
+                    try info.element.formatMemory(formatter, memory[i * elemSize ..]);
+                }
                 try formatter.endBlock();
                 try formatter.endLine();
                 try formatter.writeAll("]");
@@ -337,20 +332,20 @@ pub const Type = struct {
             .Struct => |info| {
                 try formatter.writeAll("{");
                 try formatter.beginBlock();
-                    for (info.fields, 0..) |field, i| {
-                        if (i > 0) {
-                            try formatter.writeAll(",");
-                            try formatter.endLine();
-                        }
-
-                        const fieldLayout = try field.type.getLayout();
-                        const fieldOffset = layout.field_offsets[i];
-                        const fieldMemory = (memory.ptr + fieldOffset)[0..fieldLayout.dimensions.size];
-
-                        try formatter.print("{} = ", .{formatter.wrap(field.name)});
-
-                        try field.type.formatMemory(formatter, fieldMemory);
+                for (info.fields, 0..) |field, i| {
+                    if (i > 0) {
+                        try formatter.writeAll(",");
+                        try formatter.endLine();
                     }
+
+                    const fieldLayout = try field.type.getLayout();
+                    const fieldOffset = layout.field_offsets[i];
+                    const fieldMemory = (memory.ptr + fieldOffset)[0..fieldLayout.dimensions.size];
+
+                    try formatter.print("{} = ", .{formatter.wrap(field.name)});
+
+                    try field.type.formatMemory(formatter, fieldMemory);
+                }
                 try formatter.endBlock();
                 try formatter.endLine();
                 try formatter.writeAll("}");
@@ -367,7 +362,7 @@ pub const Type = struct {
                         const fieldLayout = try field.type.getLayout();
                         const fieldMemory = (memory.ptr + layout.field_offsets[1])[0..fieldLayout.dimensions.size];
 
-                        try formatter.print("{}.{}(", .{formatter.wrap(self.id), formatter.wrap(field.name)});
+                        try formatter.print("{}.{}(", .{ formatter.wrap(self.id), formatter.wrap(field.name) });
 
                         try field.type.formatMemory(formatter, fieldMemory);
 
@@ -383,30 +378,30 @@ pub const Type = struct {
             .Product => |type_set| {
                 try formatter.writeAll("(");
                 try formatter.beginBlock();
-                    for (type_set, 0..) |T, i| {
-                        try T.formatMemory(formatter, memory);
-                        if (i < type_set.len - 1) {
-                            try formatter.writeAll(",");
-                            try formatter.endLine();
-                        }
+                for (type_set, 0..) |T, i| {
+                    try T.formatMemory(formatter, memory);
+                    if (i < type_set.len - 1) {
+                        try formatter.writeAll(",");
+                        try formatter.endLine();
                     }
+                }
                 try formatter.endBlock();
                 try formatter.writeAll(")");
             },
 
-            .Function => try formatter.print("[{} @ {x}]", .{formatter.wrap(self), @intFromPtr(memory.ptr)}),
+            .Function => try formatter.print("[{} @ {x}]", .{ formatter.wrap(self), @intFromPtr(memory.ptr) }),
         }
     }
 
-    pub fn getLayout(self: *const Type) error{InvalidType, OutOfMemory}! *const Rir.Layout {
+    pub fn getLayout(self: *const Type) error{ InvalidType, OutOfMemory }!*const Rir.Layout {
         return self.ir.getTypeLayout(self.id);
     }
 
-    pub fn createPointer(self: *const Type) error{OutOfMemory, TooManyTypes}! *Type {
+    pub fn createPointer(self: *const Type) error{ OutOfMemory, TooManyTypes }!*Type {
         return self.ir.createType(null, .{ .Pointer = .{ .element = @constCast(self) } });
     }
 
-    pub fn checkNative(self: *const Type, comptime T: type) error{TypeMismatch, TooManyTypes, TooManyNames, OutOfMemory}! void {
+    pub fn checkNative(self: *const Type, comptime T: type) error{ TypeMismatch, TooManyTypes, TooManyNames, OutOfMemory }!void {
         const t = try self.ir.createTypeFromNative(T, null, null);
 
         if (t.compare(self.*) != .Equal) {
@@ -427,9 +422,16 @@ pub const TypeTag = std.meta.Tag(TypeInfo);
 pub const TypeInfo = union(enum) {
     Nil: void,
     Bool: void,
-    U8: void, U16: void, U32: void, U64: void,
-    S8: void, S16: void, S32: void, S64: void,
-    F32: void, F64: void,
+    U8: void,
+    U16: void,
+    U32: void,
+    U64: void,
+    S8: void,
+    S16: void,
+    S32: void,
+    S64: void,
+    F32: void,
+    F64: void,
 
     Block: void,
     HandlerSet: void,
@@ -463,13 +465,13 @@ pub const TypeInfo = union(enum) {
 
     pub fn clone(self: *const TypeInfo, allocator: std.mem.Allocator) !TypeInfo {
         return switch (self.*) {
-            .Struct => |x| .{.Struct = try x.clone(allocator)},
-            .Union => |x| .{.Union = try x.clone(allocator)},
+            .Struct => |x| .{ .Struct = try x.clone(allocator) },
+            .Union => |x| .{ .Union = try x.clone(allocator) },
 
-            .Product => |x| .{.Product = try allocator.dupe(*Rir.Type, x)},
-            .Sum => |x| .{.Sum = try allocator.dupe(*Rir.Type, x)},
+            .Product => |x| .{ .Product = try allocator.dupe(*Rir.Type, x) },
+            .Sum => |x| .{ .Sum = try allocator.dupe(*Rir.Type, x) },
 
-            .Function => |x| .{.Function = try x.clone(allocator)},
+            .Function => |x| .{ .Function = try x.clone(allocator) },
 
             inline else => pod: {
                 std.debug.assert(!self.isAllocated());
@@ -484,10 +486,11 @@ pub const TypeInfo = union(enum) {
 
     pub fn isAllocated(self: *const TypeInfo) bool {
         return switch (self.*) {
-            inline
-                .Struct, .Union,
-                .Product, .Sum,
-                .Function,
+            inline .Struct,
+            .Union,
+            .Product,
+            .Sum,
+            .Function,
             => true,
 
             inline else => false,
@@ -495,7 +498,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `Nil` from a `Type` or return `error.ExpectedNilType`
-    pub fn forceNil(self: *const TypeInfo) error{ExpectedNilType}! void {
+    pub fn forceNil(self: *const TypeInfo) error{ExpectedNilType}!void {
         switch (self.*) {
             .Nil => return,
             inline else => return error.ExpectedNilType,
@@ -503,7 +506,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `Bool` from a `Type` or return `error.ExpectedBoolType`
-    pub fn forceBool(self: *const TypeInfo) error{ExpectedBoolType}! void {
+    pub fn forceBool(self: *const TypeInfo) error{ExpectedBoolType}!void {
         switch (self.*) {
             .Bool => return,
             inline else => return error.ExpectedBoolType,
@@ -511,7 +514,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `U8` from a `Type` or return `error.ExpectedU8Type`
-    pub fn forceU8(self: *const TypeInfo) error{ExpectedU8Type}! void {
+    pub fn forceU8(self: *const TypeInfo) error{ExpectedU8Type}!void {
         switch (self.*) {
             .U8 => return,
             inline else => return error.ExpectedU8Type,
@@ -519,7 +522,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `U16` from a `Type` or return `error.ExpectedU16Type`
-    pub fn forceU16(self: *const TypeInfo) error{ExpectedU16Type}! void {
+    pub fn forceU16(self: *const TypeInfo) error{ExpectedU16Type}!void {
         switch (self.*) {
             .U16 => return,
             inline else => return error.ExpectedU16Type,
@@ -527,7 +530,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `U32` from a `Type` or return `error.ExpectedU32Type`
-    pub fn forceU32(self: *const TypeInfo) error{ExpectedU32Type}! void {
+    pub fn forceU32(self: *const TypeInfo) error{ExpectedU32Type}!void {
         switch (self.*) {
             .U32 => return,
             inline else => return error.ExpectedU32Type,
@@ -535,7 +538,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `U64` from a `Type` or return `error.ExpectedU64Type`
-    pub fn forceU64(self: *const TypeInfo) error{ExpectedU64Type}! void {
+    pub fn forceU64(self: *const TypeInfo) error{ExpectedU64Type}!void {
         switch (self.*) {
             .U64 => return,
             inline else => return error.ExpectedU64Type,
@@ -543,7 +546,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `S8` from a `Type` or return `error.ExpectedS8Type`
-    pub fn forceS8(self: *const TypeInfo) error{ExpectedS8Type}! void {
+    pub fn forceS8(self: *const TypeInfo) error{ExpectedS8Type}!void {
         switch (self.*) {
             .S8 => return,
             inline else => return error.ExpectedS8Type,
@@ -551,7 +554,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `S16` from a `Type` or return `error.ExpectedS16Type`
-    pub fn forceS16(self: *const TypeInfo) error{ExpectedS16Type}! void {
+    pub fn forceS16(self: *const TypeInfo) error{ExpectedS16Type}!void {
         switch (self.*) {
             .S16 => return,
             inline else => return error.ExpectedS16Type,
@@ -559,7 +562,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `S32` from a `Type` or return `error.ExpectedS32Type`
-    pub fn forceS32(self: *const TypeInfo) error{ExpectedS32Type}! void {
+    pub fn forceS32(self: *const TypeInfo) error{ExpectedS32Type}!void {
         switch (self.*) {
             .S32 => return,
             inline else => return error.ExpectedS32Type,
@@ -567,7 +570,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `S32` from a `Type` or return `error.ExpectedS32Type`
-    pub fn forceS64(self: *const TypeInfo) error{ExpectedS64Type}! void {
+    pub fn forceS64(self: *const TypeInfo) error{ExpectedS64Type}!void {
         switch (self.*) {
             .S64 => return,
             inline else => return error.ExpectedS64Type,
@@ -575,7 +578,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `F32` from a `Type` or return `error.ExpectedF32Type`
-    pub fn forceF32(self: *const TypeInfo) error{ExpectedF32Type}! void {
+    pub fn forceF32(self: *const TypeInfo) error{ExpectedF32Type}!void {
         switch (self.*) {
             .F32 => return,
             inline else => return error.ExpectedF32Type,
@@ -583,7 +586,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `F64` from a `Type` or return `error.ExpectedF64Type`
-    pub fn forceF64(self: *const TypeInfo) error{ExpectedF64Type}! void {
+    pub fn forceF64(self: *const TypeInfo) error{ExpectedF64Type}!void {
         switch (self.*) {
             .F64 => return,
             inline else => return error.ExpectedF64Type,
@@ -591,7 +594,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `Block` from a `Type` or return `error.ExpectedBlockType`
-    pub fn forceBlock(self: *const TypeInfo) error{ExpectedBlockType}! void {
+    pub fn forceBlock(self: *const TypeInfo) error{ExpectedBlockType}!void {
         switch (self.*) {
             .Block => return,
             inline else => return error.ExpectedBlockType,
@@ -599,7 +602,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `HandlerSet` from a `Type` or return `error.ExpectedHandlerSetType`
-    pub fn forceHandlerSet(self: *const TypeInfo) error{ExpectedHandlerSetType}! void {
+    pub fn forceHandlerSet(self: *const TypeInfo) error{ExpectedHandlerSetType}!void {
         switch (self.*) {
             .HandlerSet => return,
             inline else => return error.ExpectedHandlerSetType,
@@ -607,7 +610,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `Type` from a `Type` or return `error.ExpectedTypeType`
-    pub fn forceType(self: *const TypeInfo) error{ExpectedTypeType}! void {
+    pub fn forceType(self: *const TypeInfo) error{ExpectedTypeType}!void {
         switch (self.*) {
             .Type => return,
             inline else => return error.ExpectedTypeType,
@@ -615,7 +618,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `Pointer` from a `Type` or return `error.ExpectedPointerType`
-    pub fn forcePointer(self: *const TypeInfo) error{ExpectedPointerType}! Pointer {
+    pub fn forcePointer(self: *const TypeInfo) error{ExpectedPointerType}!Pointer {
         switch (self.*) {
             .Pointer => |ptr| return ptr,
             inline else => return error.ExpectedPointerType,
@@ -623,7 +626,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `Slice` from a `Type` or return `error.ExpectedSliceType`
-    pub fn forceSlice(self: *const TypeInfo) error{ExpectedSliceType}! Slice {
+    pub fn forceSlice(self: *const TypeInfo) error{ExpectedSliceType}!Slice {
         switch (self.*) {
             .Slice => |slice| return slice,
             inline else => return error.ExpectedSliceType,
@@ -631,7 +634,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract an `Array` from a `Type` or return `error.ExpectedArrayType`
-    pub fn forceArray(self: *const TypeInfo) error{ExpectedArrayType}! Array {
+    pub fn forceArray(self: *const TypeInfo) error{ExpectedArrayType}!Array {
         switch (self.*) {
             .Array => |array| return array,
             inline else => return error.ExpectedArrayType,
@@ -639,7 +642,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `Struct` from a `Type` or return `error.ExpectedStructType`
-    pub fn forceStruct(self: *const TypeInfo) error{ExpectedStructType}! Struct {
+    pub fn forceStruct(self: *const TypeInfo) error{ExpectedStructType}!Struct {
         switch (self.*) {
             .Struct => |str| return str,
             inline else => return error.ExpectedStructType,
@@ -647,7 +650,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `Union` from a `Type` or return `error.ExpectedUnionType`
-    pub fn forceUnion(self: *const TypeInfo) error{ExpectedUnionType}! Union {
+    pub fn forceUnion(self: *const TypeInfo) error{ExpectedUnionType}!Union {
         switch (self.*) {
             .Union => |@"union"| return @"union",
             inline else => return error.ExpectedUnionType,
@@ -655,7 +658,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `Product` from a `Type` or return `error.ExpectedProductType`
-    pub fn forceProduct(self: *const TypeInfo) error{ExpectedProductType}! TypeSet {
+    pub fn forceProduct(self: *const TypeInfo) error{ExpectedProductType}!TypeSet {
         switch (self.*) {
             .Product => |set| return set,
             inline else => return error.ExpectedProductType,
@@ -663,7 +666,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `Sum` from a `Type` or return `error.ExpectedSumType`
-    pub fn forceSum(self: *const TypeInfo) error{ExpectedSumType}! TypeSet {
+    pub fn forceSum(self: *const TypeInfo) error{ExpectedSumType}!TypeSet {
         switch (self.*) {
             .Sum => |set| return set,
             inline else => return error.ExpectedSumType,
@@ -671,7 +674,7 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Extract a `Function` from a `Type` or return `error.ExpectedFunctionType`
-    pub fn forceFunction(self: *const TypeInfo) error{ExpectedFunctionType}! Function {
+    pub fn forceFunction(self: *const TypeInfo) error{ExpectedFunctionType}!Function {
         switch (self.*) {
             .Function => |fun| return fun,
             inline else => return error.ExpectedFunctionType,
@@ -679,34 +682,34 @@ pub const TypeInfo = union(enum) {
     }
 
     /// Generate an `Rir.Layout` based on this `TypeInfo`
-    pub fn computeLayout(self: *const TypeInfo, ir: *Rir) error{InvalidType, OutOfMemory}!Rir.Layout {
+    pub fn computeLayout(self: *const TypeInfo, ir: *Rir) error{ InvalidType, OutOfMemory }!Rir.Layout {
         return switch (self.*) {
-            .Nil => .{.local_storage = .zero_size, .dimensions = .{ .size = 0, .alignment = 1 }},
+            .Nil => .{ .local_storage = .zero_size, .dimensions = .{ .size = 0, .alignment = 1 } },
 
-            .Bool => .{.local_storage = .register, .dimensions = .{ .size = 1, .alignment = 1 }},
+            .Bool => .{ .local_storage = .register, .dimensions = .{ .size = 1, .alignment = 1 } },
 
-            .U8  => .{.local_storage = .register, .dimensions = .{ .size = 1, .alignment = 1 }},
-            .U16 => .{.local_storage = .register, .dimensions = .{ .size = 2, .alignment = 2 }},
-            .U32 => .{.local_storage = .register, .dimensions = .{ .size = 4, .alignment = 4 }},
-            .U64 => .{.local_storage = .register, .dimensions = .{ .size = 8, .alignment = 8 }},
+            .U8 => .{ .local_storage = .register, .dimensions = .{ .size = 1, .alignment = 1 } },
+            .U16 => .{ .local_storage = .register, .dimensions = .{ .size = 2, .alignment = 2 } },
+            .U32 => .{ .local_storage = .register, .dimensions = .{ .size = 4, .alignment = 4 } },
+            .U64 => .{ .local_storage = .register, .dimensions = .{ .size = 8, .alignment = 8 } },
 
-            .S8  => .{.local_storage = .register, .dimensions = .{ .size = 1, .alignment = 1 }},
-            .S16 => .{.local_storage = .register, .dimensions = .{ .size = 2, .alignment = 2 }},
-            .S32 => .{.local_storage = .register, .dimensions = .{ .size = 4, .alignment = 4 }},
-            .S64 => .{.local_storage = .register, .dimensions = .{ .size = 8, .alignment = 8 }},
+            .S8 => .{ .local_storage = .register, .dimensions = .{ .size = 1, .alignment = 1 } },
+            .S16 => .{ .local_storage = .register, .dimensions = .{ .size = 2, .alignment = 2 } },
+            .S32 => .{ .local_storage = .register, .dimensions = .{ .size = 4, .alignment = 4 } },
+            .S64 => .{ .local_storage = .register, .dimensions = .{ .size = 8, .alignment = 8 } },
 
-            .F32 => .{.local_storage = .register, .dimensions = .{ .size = 4, .alignment = 4 }},
-            .F64 => .{.local_storage = .register, .dimensions = .{ .size = 8, .alignment = 8 }},
+            .F32 => .{ .local_storage = .register, .dimensions = .{ .size = 4, .alignment = 4 } },
+            .F64 => .{ .local_storage = .register, .dimensions = .{ .size = 8, .alignment = 8 } },
 
-            .Block => .{.local_storage = .none, .dimensions = .fromNativeType(Rir.BlockId)},
-            .HandlerSet => .{.local_storage = .none, .dimensions = .fromNativeType(Rir.HandlerSetId)},
-            .Type => .{.local_storage = .none, .dimensions = .fromNativeType(Rir.TypeId)},
+            .Block => .{ .local_storage = .none, .dimensions = .fromNativeType(Rir.BlockId) },
+            .HandlerSet => .{ .local_storage = .none, .dimensions = .fromNativeType(Rir.HandlerSetId) },
+            .Type => .{ .local_storage = .none, .dimensions = .fromNativeType(Rir.TypeId) },
 
-            .Pointer => .{.local_storage = .register, .dimensions = .{ .size = 8, .alignment = 8 }},
+            .Pointer => .{ .local_storage = .register, .dimensions = .{ .size = 8, .alignment = 8 } },
             .Slice => .{
                 .local_storage = .fromRegisters(2),
                 .dimensions = .{ .size = 16, .alignment = 8 },
-                .field_offsets = try ir.allocator.dupe(Rir.Offset, &.{0, 8}),
+                .field_offsets = try ir.allocator.dupe(Rir.Offset, &.{ 0, 8 }),
             },
 
             .Array => |info| Array: {
@@ -714,17 +717,14 @@ pub const TypeInfo = union(enum) {
 
                 const size = utils.alignTo(elemLayout.dimensions.size, elemLayout.dimensions.alignment) * info.length;
 
-                break :Array .{
-                    .local_storage = .fromSize(size),
-                    .dimensions = .{
-                        .size = size,
-                        .alignment = elemLayout.dimensions.alignment,
-                    }
-                };
+                break :Array .{ .local_storage = .fromSize(size), .dimensions = .{
+                    .size = size,
+                    .alignment = elemLayout.dimensions.alignment,
+                } };
             },
 
             .Struct => |info| Struct: {
-                var dimensions = Rir.Dimensions {};
+                var dimensions = Rir.Dimensions{};
                 var maxAlignment: Rir.Alignment = 1;
 
                 const offsets = try ir.allocator.alloc(Rir.Offset, info.fields.len);
@@ -757,7 +757,7 @@ pub const TypeInfo = union(enum) {
             },
 
             .Union => |info| Union: {
-                var dimensions = Rir.Dimensions {};
+                var dimensions = Rir.Dimensions{};
 
                 const discriminatorLayout = try info.discriminator.getLayout();
 
@@ -793,7 +793,7 @@ pub const TypeInfo = union(enum) {
             },
 
             .Product => |type_set| Product: {
-                var dimensions = Rir.Dimensions {};
+                var dimensions = Rir.Dimensions{};
                 var maxAlignment: Rir.Alignment = 1;
 
                 const offsets = try ir.allocator.alloc(Rir.Offset, type_set.len);
@@ -822,7 +822,7 @@ pub const TypeInfo = union(enum) {
             },
 
             .Sum => |type_set| Sum: {
-                var dimensions = Rir.Dimensions {};
+                var dimensions = Rir.Dimensions{};
 
                 for (type_set) |T| {
                     const variantLayout = try T.getLayout();
@@ -837,10 +837,7 @@ pub const TypeInfo = union(enum) {
                 };
             },
 
-            .Function => .{
-                .local_storage = .register,
-                .dimensions = .{ .size = 2, .alignment = 2 }
-            },
+            .Function => .{ .local_storage = .register, .dimensions = .{ .size = 2, .alignment = 2 } },
         };
     }
 
@@ -851,21 +848,28 @@ pub const TypeInfo = union(enum) {
         switch (T) {
             void => return .Nil,
             bool => return .Bool,
-            u8 => return .U8, u16 => return .U16, u32 => return .U32, u64 => return .U64,
-            i8 => return .S8, i16 => return .S16, i32 => return .S32, i64 => return .S64,
-            f32 => return .F32, f64 => return .F64,
+            u8 => return .U8,
+            u16 => return .U16,
+            u32 => return .U32,
+            u64 => return .U64,
+            i8 => return .S8,
+            i16 => return .S16,
+            i32 => return .S32,
+            i64 => return .S64,
+            f32 => return .F32,
+            f64 => return .F64,
 
             else => switch (@typeInfo(T)) {
                 .pointer => |info| {
                     const elementType = try rir.createTypeIdFromNative(info.child, null, null);
-                    return Rir.TypeInfo { .Pointer = elementType.id };
+                    return Rir.TypeInfo{ .Pointer = elementType.id };
                 },
                 .array => |info| {
                     const elementType = try rir.createTypeIdFromNative(info.child, null, null);
-                    return Rir.TypeInfo { .Array = .{
+                    return Rir.TypeInfo{ .Array = .{
                         .length = info.len,
                         .element = elementType,
-                    }};
+                    } };
                 },
                 .@"struct" => |info| {
                     var field_types = try rir.allocator.alloc(Rir.TypeId, info.fields.len);
@@ -876,7 +880,7 @@ pub const TypeInfo = union(enum) {
                         field_types[i] = fieldType.id;
                     }
 
-                    return Rir.TypeInfo { .Product = field_types };
+                    return Rir.TypeInfo{ .Product = field_types };
                 },
                 .@"enum" => |info| return rir.typeFromNative(info.tag_type, null),
                 .@"union" => |info| {
@@ -890,12 +894,12 @@ pub const TypeInfo = union(enum) {
 
                     if (info.tag_type) |TT| {
                         const discType = try rir.createTypeFromNative(TT, null, null);
-                        return Rir.Type { .Union = .{
+                        return Rir.Type{ .Union = .{
                             .discriminator = discType.id,
                             .types = field_types,
                         } };
                     } else {
-                        return Rir.TypeInfo { .Sum = field_types };
+                        return Rir.TypeInfo{ .Sum = field_types };
                     }
                 },
                 .@"fn" => |info| {
@@ -911,15 +915,13 @@ pub const TypeInfo = union(enum) {
                     inline for (info.params, 0..) |param, i| {
                         const paramType = try rir.createTypeFromNative(param.type.?, null, null);
 
-                        parameters[i] = Rir.type_info.Parameter {
-                            .name =
-                                if (parameterNames) |names| names[i]
-                                else try rir.internName(std.fmt.comptimePrint("arg{}", .{i})),
+                        parameters[i] = Rir.type_info.Parameter{
+                            .name = if (parameterNames) |names| names[i] else try rir.internName(std.fmt.comptimePrint("arg{}", .{i})),
                             .type = paramType,
                         };
                     }
 
-                    return Rir.TypeInfo { .Function = .{
+                    return Rir.TypeInfo{ .Function = .{
                         .return_type = returnType,
                         .termination_type = terminationType,
                         .effects = effects,
@@ -928,11 +930,10 @@ pub const TypeInfo = union(enum) {
                 },
 
                 else => @compileError("cannot convert type `" ++ @typeName(T) ++ "` to Rir.Type"),
-            }
+            },
         }
     }
 };
-
 
 pub const Pointer = struct {
     alignment_override: ?Rir.Alignment = null,
@@ -971,7 +972,7 @@ pub const Struct = struct {
     fields: []const StructField,
 
     pub fn clone(self: *const Struct, allocator: std.mem.Allocator) !Struct {
-        return Struct {
+        return Struct{
             .fields = try allocator.dupe(StructField, self.fields),
         };
     }
@@ -1018,7 +1019,7 @@ pub const Union = struct {
     fields: []const UnionField,
 
     pub fn clone(self: *const Union, allocator: std.mem.Allocator) !Union {
-        return Union {
+        return Union{
             .discriminator = self.discriminator,
             .fields = try allocator.dupe(UnionField, self.fields),
         };
@@ -1067,7 +1068,7 @@ pub const Function = struct {
         const parameters = try allocator.dupe(Parameter, self.parameters);
         errdefer allocator.free(parameters);
 
-        return Function {
+        return Function{
             .return_type = self.return_type,
             .termination_type = self.termination_type,
             .effects = effects,

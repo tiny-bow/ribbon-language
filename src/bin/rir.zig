@@ -5,7 +5,7 @@ const RbcGenerator = @import("RbcGenerator");
 
 const log = std.log.scoped(.rir_main);
 
-pub const std_options = std.Options {
+pub const std_options = std.Options{
     .log_level = .debug,
 };
 
@@ -13,8 +13,6 @@ test {
     std.debug.print("rir-test\n", .{});
     try main();
 }
-
-
 
 pub fn main() !void {
     log.info("starting rir", .{});
@@ -40,20 +38,18 @@ pub fn main() !void {
     log.info("created S32 {}", .{S32});
 
     { // struct
-        const Foo = try ir.createType(try ir.internName("Foo"), Rir.TypeInfo {
-            .Struct = Rir.type_info.Struct {
-                .fields = &.{
-                    Rir.type_info.StructField {
-                        .name = try ir.internName("x"),
-                        .type = S32,
-                    },
-                    Rir.type_info.StructField {
-                        .name = try ir.internName("y"),
-                        .type = S32,
-                    },
+        const Foo = try ir.createType(try ir.internName("Foo"), Rir.TypeInfo{ .Struct = Rir.type_info.Struct{
+            .fields = &.{
+                Rir.type_info.StructField{
+                    .name = try ir.internName("x"),
+                    .type = S32,
                 },
-            }
-        });
+                Rir.type_info.StructField{
+                    .name = try ir.internName("y"),
+                    .type = S32,
+                },
+            },
+        } });
 
         log.info("created Foo {}", .{Foo});
 
@@ -157,7 +153,7 @@ pub fn main() !void {
 
         var gen = try RbcGenerator.init(arena.allocator(), ir);
 
-        const exports = [_]RbcGenerator.Export {
+        const exports = [_]RbcGenerator.Export{
             .@"export"(fib),
         };
 

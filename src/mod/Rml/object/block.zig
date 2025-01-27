@@ -3,8 +3,6 @@ const Rml = @import("../../Rml.zig");
 const std = @import("std");
 const utils = @import("utils");
 
-
-
 pub const BlockKind = enum {
     doc,
     curly,
@@ -58,7 +56,7 @@ pub const Block = struct {
     kind: BlockKind = .doc,
     array: std.ArrayListUnmanaged(Rml.Object) = .{},
 
-    pub fn create(rml: *Rml, kind: BlockKind, initialItems: []const Rml.Object) Rml.OOM! Block {
+    pub fn create(rml: *Rml, kind: BlockKind, initialItems: []const Rml.Object) Rml.OOM!Block {
         const allocator = rml.blobAllocator();
 
         var array: std.ArrayListUnmanaged(Rml.Object) = .{};
@@ -81,7 +79,7 @@ pub const Block = struct {
         return ord;
     }
 
-    pub fn format(self: *const Block, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+    pub fn format(self: *const Block, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror!void {
         const fmt = Rml.Format.fromStr(fmtStr) orelse .debug;
         const w = if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any();
         try w.writeAll(self.kind.toOpenStrFmt(fmt));
@@ -94,7 +92,6 @@ pub const Block = struct {
         }
         try w.writeAll(self.kind.toCloseStrFmt(fmt));
     }
-
 
     /// Length of the block.
     pub fn length(self: *const Block) Rml.Int {
@@ -109,7 +106,7 @@ pub const Block = struct {
     }
 
     /// Convert a block to an array.
-    pub fn toArray(self: *const Block) Rml.OOM! Rml.Obj(Rml.Array) {
+    pub fn toArray(self: *const Block) Rml.OOM!Rml.Obj(Rml.Array) {
         const allocator = Rml.getRml(self).blobAllocator();
         return try Rml.Obj(Rml.Array).wrap(Rml.getRml(self), Rml.getOrigin(self), try .create(allocator, self.items()));
     }
@@ -117,13 +114,13 @@ pub const Block = struct {
     /// Extend the block by 1 element.
     /// Allocates more memory as necessary.
     /// Invalidates element pointers if additional memory is needed.
-    pub fn append(self: *Block, obj: Rml.Object) Rml.OOM! void {
+    pub fn append(self: *Block, obj: Rml.Object) Rml.OOM!void {
         return self.array.append(self.allocator, obj);
     }
 
     /// Append the slice of items to the block. Allocates more memory as necessary.
     /// Invalidates element pointers if additional memory is needed.
-    pub fn appendSlice(self: *Block, slice: []const Rml.Object) Rml.OOM! void {
+    pub fn appendSlice(self: *Block, slice: []const Rml.Object) Rml.OOM!void {
         return self.array.appendSlice(self.allocator, slice);
     }
 };

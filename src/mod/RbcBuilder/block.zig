@@ -6,8 +6,6 @@ const std = @import("std");
 const utils = @import("utils");
 const Rbc = @import("Rbc");
 
-
-
 const InstrList = std.ArrayListUnmanaged(Rbc.Instruction);
 
 pub const BlockKind = union(enum) {
@@ -33,10 +31,10 @@ pub const Block = struct {
     pub fn init(func: *Builder.Function, parent: ?Rbc.BlockIndex, index: Rbc.BlockIndex, kind: BlockKind) std.mem.Allocator.Error!*Block {
         const ptr = try func.parent.allocator.create(Block);
 
-        var ops = InstrList {};
+        var ops = InstrList{};
         try ops.ensureTotalCapacity(func.parent.allocator, 256);
 
-        ptr.* = Block {
+        ptr.* = Block{
             .function = func,
             .parent = parent,
             .index = index,
@@ -47,7 +45,6 @@ pub const Block = struct {
 
         return ptr;
     }
-
 
     pub fn preassemble(self: *const Block) Builder.Error!usize {
         if (!self.exited) {
@@ -68,7 +65,6 @@ pub const Block = struct {
         return buf.ptr + start;
     }
 
-
     pub fn findRelativeBlockIndex(self: *const Block, absoluteBlockIndex: Rbc.BlockIndex) Builder.Error!Rbc.BlockIndex {
         if (self.index == absoluteBlockIndex) {
             return 0;
@@ -86,7 +82,7 @@ pub const Block = struct {
         return Builder.Error.InvalidIndex;
     }
 
-    pub fn extractBlockIndex(self: *const Block, b: anytype) Builder.Error! Rbc.BlockIndex {
+    pub fn extractBlockIndex(self: *const Block, b: anytype) Builder.Error!Rbc.BlockIndex {
         switch (@TypeOf(b)) {
             Block => return self.extractBlockIndex(&b),
             *Block => return self.extractBlockIndex(@as(*const Block, b)),
@@ -100,15 +96,9 @@ pub const Block = struct {
             *Rbc.BlockIndex => return self.extractBlockIndex(b.*),
             Rbc.BlockIndex => return b,
 
-            else => @compileError(std.fmt.comptimePrint(
-                "invalid block index parameter, expected either `Rbc.BlockIndex` or `*Builder.BlockBuilder`, got `{s}`",
-                .{@typeName(@TypeOf(b))}
-            )),
+            else => @compileError(std.fmt.comptimePrint("invalid block index parameter, expected either `Rbc.BlockIndex` or `*Builder.BlockBuilder`, got `{s}`", .{@typeName(@TypeOf(b))})),
         }
     }
-
-
-
 
     pub fn args(self: *Block, rArgs: anytype) Builder.Error!void {
         if (rArgs.len == 0) {
@@ -117,7 +107,7 @@ pub const Block = struct {
             return Builder.Error.TooManyRegisters;
         }
 
-        var acc = [1]Rbc.RegisterIndex {255} ** (@sizeOf(Rbc.Instruction) / @sizeOf(Rbc.RegisterIndex));
+        var acc = [1]Rbc.RegisterIndex{255} ** (@sizeOf(Rbc.Instruction) / @sizeOf(Rbc.RegisterIndex));
 
         comptime var i: usize = 0;
         inline while (i < rArgs.len) : (i += 1) {
@@ -133,7 +123,6 @@ pub const Block = struct {
         }
     }
 
-
     pub fn wideImmediate(self: *Block, w: anytype) Builder.Error!void {
         try self.ops.append(self.function.parent.allocator, @bitCast(wCast(w)));
     }
@@ -141,7 +130,7 @@ pub const Block = struct {
     pub fn op(self: *Block, code: Rbc.Code, data: *const anyopaque) Builder.Error!void {
         if (self.exited) return Builder.Error.InstructionsAfterExit;
 
-        try self.ops.append(self.function.parent.allocator, Rbc.Instruction {
+        try self.ops.append(self.function.parent.allocator, Rbc.Instruction{
             .code = code,
             .data = inline for (comptime std.meta.fieldNames(Rbc.Code)) |name| {
                 if (@field(Rbc.Code, name) == code) {
@@ -155,7 +144,7 @@ pub const Block = struct {
     pub fn exitOp(self: *Block, comptime code: Rbc.Code, data: *const anyopaque) Builder.Error!void {
         if (self.exited) return Builder.Error.MultipleExits;
 
-        try self.ops.append(self.function.parent.allocator, Rbc.Instruction {
+        try self.ops.append(self.function.parent.allocator, Rbc.Instruction{
             .code = code,
             .data = inline for (comptime std.meta.fieldNames(Rbc.Code)) |name| {
                 if (@field(Rbc.Code, name) == code) {
@@ -168,16 +157,13 @@ pub const Block = struct {
         self.exited = true;
     }
 
-
     pub fn bCast(b: anytype) u8 {
         return switch (@typeInfo(@TypeOf(b))) {
             .comptime_int => @as(u8, b),
-            .int => |info|
-                if (info.bits <= 8) switch (info.signedness) {
-                    .unsigned => @as(u8, b),
-                    .signed => @as(u8, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
-                }
-                else @bitCast(@as(std.meta.Int(info.signedness, 8), @intCast(b))),
+            .int => |info| if (info.bits <= 8) switch (info.signedness) {
+                .unsigned => @as(u8, b),
+                .signed => @as(u8, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
+            } else @bitCast(@as(std.meta.Int(info.signedness, 8), @intCast(b))),
             .@"enum" => bCast(@intFromEnum(b)),
             else => @as(u8, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(b))), @bitCast(b))),
         };
@@ -186,12 +172,10 @@ pub const Block = struct {
     pub fn sCast(b: anytype) u16 {
         return switch (@typeInfo(@TypeOf(b))) {
             .comptime_int => @as(u16, b),
-            .int => |info|
-                if (info.bits <= 16) switch (info.signedness) {
-                    .unsigned => @as(u16, b),
-                    .signed => @as(u16, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
-                }
-                else @bitCast(@as(std.meta.Int(info.signedness, 16), @intCast(b))),
+            .int => |info| if (info.bits <= 16) switch (info.signedness) {
+                .unsigned => @as(u16, b),
+                .signed => @as(u16, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
+            } else @bitCast(@as(std.meta.Int(info.signedness, 16), @intCast(b))),
             .@"enum" => bCast(@intFromEnum(b)),
             else => @as(u16, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(b))), @bitCast(b))),
         };
@@ -200,12 +184,10 @@ pub const Block = struct {
     pub fn iCast(b: anytype) u32 {
         return switch (@typeInfo(@TypeOf(b))) {
             .comptime_int => @as(u32, b),
-            .int => |info|
-                if (info.bits <= 32) switch (info.signedness) {
-                    .unsigned => @as(u32, b),
-                    .signed => @as(u32, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
-                }
-                else @bitCast(@as(std.meta.Int(info.signedness, 32), @intCast(b))),
+            .int => |info| if (info.bits <= 32) switch (info.signedness) {
+                .unsigned => @as(u32, b),
+                .signed => @as(u32, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
+            } else @bitCast(@as(std.meta.Int(info.signedness, 32), @intCast(b))),
             .@"enum" => bCast(@intFromEnum(b)),
             else => @as(u32, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(b))), @bitCast(b))),
         };
@@ -214,23 +196,18 @@ pub const Block = struct {
     pub fn wCast(b: anytype) u64 {
         return switch (@typeInfo(@TypeOf(b))) {
             .comptime_int => @as(u64, b),
-            .int => |info|
-                if (info.bits <= 64) switch (info.signedness) {
-                    .unsigned => @as(u64, b),
-                    .signed => @as(u64, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
-                }
-                else @bitCast(@as(std.meta.Int(info.signedness, 64), @intCast(b))),
+            .int => |info| if (info.bits <= 64) switch (info.signedness) {
+                .unsigned => @as(u64, b),
+                .signed => @as(u64, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
+            } else @bitCast(@as(std.meta.Int(info.signedness, 64), @intCast(b))),
             .@"enum" => bCast(@intFromEnum(b)),
             else => @as(u64, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(b))), @bitCast(b))),
         };
     }
 
-
-
     pub fn nop(self: *Block) Builder.Error!void {
         try self.op(.nop, &{});
     }
-
 
     pub fn halt(self: *Block) Builder.Error!void {
         try self.exitOp(.halt, &{});
@@ -258,7 +235,7 @@ pub const Block = struct {
 
     pub fn with(self: *Block, h: anytype) Builder.Error!*Block {
         const handlerSetIndex = try self.function.parent.extractHandlerSetIndex(h);
-        const newBlock = try self.function.newBlock(self.index, .{.with = handlerSetIndex});
+        const newBlock = try self.function.newBlock(self.index, .{ .with = handlerSetIndex });
 
         try self.op(.with, &.{ .B0 = newBlock.index, .H0 = handlerSetIndex });
 
@@ -267,7 +244,7 @@ pub const Block = struct {
 
     pub fn with_v(self: *Block, h: anytype, y: Rbc.RegisterIndex) Builder.Error!*Block {
         const handlerSetIndex = try self.function.parent.extractHandlerSetIndex(h);
-        const newBlock = try self.function.newBlock(self.index, .{.with_v = handlerSetIndex});
+        const newBlock = try self.function.newBlock(self.index, .{ .with_v = handlerSetIndex });
 
         try self.op(.with_v, &.{ .B0 = newBlock.index, .H0 = handlerSetIndex, .R0 = y });
 
@@ -493,7 +470,6 @@ pub const Block = struct {
         try self.exitOp(.term_im_w_v, {});
         try self.wideImmediate(w);
     }
-
 
     pub fn alloca(self: *Block, s: u16, x: Rbc.RegisterIndex) Builder.Error!void {
         try self.op(.alloca, &.{ .s0 = s, .R0 = x });
@@ -722,7 +698,6 @@ pub const Block = struct {
         try self.op(.copy_64_im, &.{ .R0 = x });
         try self.wideImmediate(w);
     }
-
 
     pub fn i_add_8(self: *Block, x: Rbc.RegisterIndex, y: Rbc.RegisterIndex, z: Rbc.RegisterIndex) Builder.Error!void {
         try self.op(.i_add_8, &.{ .R0 = x, .R1 = y, .R2 = z });
@@ -1176,7 +1151,6 @@ pub const Block = struct {
         try self.op(.f_neg_64, &.{ .R0 = x, .R1 = y });
     }
 
-
     pub fn band_8(self: *Block, x: Rbc.RegisterIndex, y: Rbc.RegisterIndex, z: Rbc.RegisterIndex) Builder.Error!void {
         try self.op(.band_8, &.{ .R0 = x, .R1 = y, .R2 = z });
     }
@@ -1441,7 +1415,6 @@ pub const Block = struct {
         try self.op(.s_bshiftr_64_im_b, &.{ .R0 = x, .R1 = y });
         try self.wideImmediate(w);
     }
-
 
     pub fn i_eq_8(self: *Block, x: Rbc.RegisterIndex, y: Rbc.RegisterIndex, z: Rbc.RegisterIndex) Builder.Error!void {
         try self.op(.i_eq_8, &.{ .R0 = x, .R1 = y, .R2 = z });
@@ -2046,7 +2019,6 @@ pub const Block = struct {
         try self.op(.f_ge_64_im_b, &.{ .R0 = x, .R1 = y });
         try self.wideImmediate(w);
     }
-
 
     pub fn u_ext_8_16(self: *Block, x: Rbc.RegisterIndex, y: Rbc.RegisterIndex) Builder.Error!void {
         try self.op(.u_ext_8_16, &.{ .R0 = x, .R1 = y });

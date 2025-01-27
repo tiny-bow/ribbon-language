@@ -5,8 +5,6 @@ const fmt = @This();
 const std = @import("std");
 const utils = @import("utils");
 
-
-
 pub const FormatError = anyerror;
 
 pub const Formatter = struct {
@@ -14,10 +12,10 @@ pub const Formatter = struct {
 
     state: *FormatterState,
 
-    pub fn init(ir: *Rir, writer: std.io.AnyWriter) error{OutOfMemory}! Formatter {
+    pub fn init(ir: *Rir, writer: std.io.AnyWriter) error{OutOfMemory}!Formatter {
         const state = try ir.allocator.create(FormatterState);
-        state.* = FormatterState { .ir = ir, .writer = writer };
-        return Formatter { .state = state };
+        state.* = FormatterState{ .ir = ir, .writer = writer };
+        return Formatter{ .state = state };
     }
 
     pub fn deinit(self: Formatter) void {
@@ -25,11 +23,11 @@ pub const Formatter = struct {
     }
 
     pub fn wrap(self: Formatter, data: anytype) Wrap(@TypeOf(data)) {
-        return Wrap(@TypeOf(data)) { .formatter = self, .data = data };
+        return Wrap(@TypeOf(data)){ .formatter = self, .data = data };
     }
 
     pub fn sliceWrap(self: Formatter, data: anytype) SliceWrap(@TypeOf(data)) {
-        return SliceWrap(@TypeOf(data)) { .formatter = self, .data = data };
+        return SliceWrap(@TypeOf(data)){ .formatter = self, .data = data };
     }
 
     pub fn getRir(self: Formatter) *Rir {
@@ -120,19 +118,18 @@ pub const Formatter = struct {
         return old;
     }
 
-    pub fn fmt(self: Formatter, value: anytype) FormatError! void {
+    pub fn fmt(self: Formatter, value: anytype) FormatError!void {
         const T = @TypeOf(value);
 
         if (std.meta.hasMethod(T, "onFormat")) {
             try value.onFormat(self);
-        } else switch(T) {
+        } else switch (T) {
             Rir.NameId => {
                 try self.writeAll(try self.getRir().getName(value));
             },
             Rir.ModuleId => {
                 const x = self.wrap((try self.getRir().getModule(value)).name);
-                if (self.getFlag(.show_ids)) try self.print("{}#{}", .{x, @intFromEnum(value)})
-                else try x.fmt();
+                if (self.getFlag(.show_ids)) try self.print("{}#{}", .{ x, @intFromEnum(value) }) else try x.fmt();
             },
             Rir.TypeId => {
                 const x = try self.getRir().getType(value);
@@ -141,8 +138,7 @@ pub const Formatter = struct {
             Rir.BlockId => {
                 if (self.getFunction()) |func| {
                     const x = self.wrap((try func.getBlock(value)).name);
-                    if (self.getFlag(.show_ids)) try self.print("{}#{}", .{x, @intFromEnum(value)})
-                    else try x.fmt();
+                    if (self.getFlag(.show_ids)) try self.print("{}#{}", .{ x, @intFromEnum(value) }) else try x.fmt();
                 } else |_| {
                     try self.print("#{}", .{@intFromEnum(value)});
                 }
@@ -150,8 +146,7 @@ pub const Formatter = struct {
             Rir.LocalId => {
                 if (self.getBlock()) |bl| {
                     const x = self.wrap((try bl.getLocal(value)).name);
-                    if (self.getFlag(.show_ids)) try self.print("{}#{}", .{x, @intFromEnum(value)})
-                    else try x.fmt();
+                    if (self.getFlag(.show_ids)) try self.print("{}#{}", .{ x, @intFromEnum(value) }) else try x.fmt();
                 } else |_| {
                     try self.print("#{}", .{@intFromEnum(value)});
                 }
@@ -159,8 +154,7 @@ pub const Formatter = struct {
             Rir.GlobalId => {
                 if (self.getModule()) |mod| {
                     const x = self.wrap((try mod.getGlobal(value)).name);
-                    if (self.getFlag(.show_ids)) try self.print("{}#{}", .{x, @intFromEnum(value)})
-                    else try x.fmt();
+                    if (self.getFlag(.show_ids)) try self.print("{}#{}", .{ x, @intFromEnum(value) }) else try x.fmt();
                 } else |_| {
                     try self.print("#{}", .{@intFromEnum(value)});
                 }
@@ -168,28 +162,23 @@ pub const Formatter = struct {
             Rir.FunctionId => {
                 if (self.getModule()) |mod| {
                     const x = self.wrap((try mod.getFunction(value)).name);
-                    if (self.getFlag(.show_ids)) try self.print("{}#{}", .{x, @intFromEnum(value)})
-                    else try x.fmt();
+                    if (self.getFlag(.show_ids)) try self.print("{}#{}", .{ x, @intFromEnum(value) }) else try x.fmt();
                 } else |_| {
                     try self.print("#{}", .{@intFromEnum(value)});
                 }
             },
-            else =>
-                if (std.meta.hasMethod(T, "format")) try self.print("{}", .{value})
-                else switch (@typeInfo(T)) {
-                    .@"enum" => try self.writeAll(@tagName(value)),
-                    else =>
-                        if (comptime utils.types.isString(T)) try self.writeAll(value)
-                        else try self.print("{any}", .{value})
-                },
+            else => if (std.meta.hasMethod(T, "format")) try self.print("{}", .{value}) else switch (@typeInfo(T)) {
+                .@"enum" => try self.writeAll(@tagName(value)),
+                else => if (comptime utils.types.isString(T)) try self.writeAll(value) else try self.print("{any}", .{value}),
+            },
         }
     }
 
-    pub fn commaList(self: Formatter, iterableWithFor: anytype) FormatError! void {
+    pub fn commaList(self: Formatter, iterableWithFor: anytype) FormatError!void {
         return self.list(", ", iterableWithFor);
     }
 
-    pub fn list(self: Formatter, separator: anytype, iterableWithFor: anytype) FormatError! void {
+    pub fn list(self: Formatter, separator: anytype, iterableWithFor: anytype) FormatError!void {
         var nth = false;
         for (iterableWithFor) |x| {
             if (nth) {
@@ -202,7 +191,7 @@ pub const Formatter = struct {
         }
     }
 
-    pub fn block(self: Formatter, iterableWithFor: anytype) FormatError! void {
+    pub fn block(self: Formatter, iterableWithFor: anytype) FormatError!void {
         var nth = false;
 
         try self.beginBlock();
@@ -218,25 +207,25 @@ pub const Formatter = struct {
         try self.endBlock();
     }
 
-    pub fn parens(self: Formatter, value: anytype) FormatError! void {
+    pub fn parens(self: Formatter, value: anytype) FormatError!void {
         try self.writeByte('(');
         try self.fmt(value);
         try self.writeByte(')');
     }
 
-    pub fn braces(self: Formatter, value: anytype) FormatError! void {
+    pub fn braces(self: Formatter, value: anytype) FormatError!void {
         try self.writeByte('{');
         try self.fmt(value);
         try self.writeByte('}');
     }
 
-    pub fn brackets(self: Formatter, value: anytype) FormatError! void {
+    pub fn brackets(self: Formatter, value: anytype) FormatError!void {
         try self.writeByte('[');
         try self.fmt(value);
         try self.writeByte(']');
     }
 
-    pub fn writeByte(self: Formatter, byte: u8) FormatError! void {
+    pub fn writeByte(self: Formatter, byte: u8) FormatError!void {
         try self.state.writer.writeByte(byte);
 
         if (byte == '\n') {
@@ -244,10 +233,10 @@ pub const Formatter = struct {
         }
     }
 
-    pub fn write(self: Formatter, bytes: []const u8) FormatError! usize {
+    pub fn write(self: Formatter, bytes: []const u8) FormatError!usize {
         for (bytes, 0..) |b, i| {
             if (b == '\n') {
-                const sub = bytes[0..i + 1];
+                const sub = bytes[0 .. i + 1];
                 try self.state.writer.writeAll(sub);
                 try self.state.writer.writeByteNTimes(' ', self.state.indent_size * self.state.indent_level);
 
@@ -267,27 +256,27 @@ pub const Formatter = struct {
         }
     }
 
-    pub fn writeAll(self: Formatter, bytes: []const u8) FormatError! void {
+    pub fn writeAll(self: Formatter, bytes: []const u8) FormatError!void {
         var index: usize = 0;
         while (index != bytes.len) {
             index += try self.write(bytes[index..]);
         }
     }
 
-    pub fn print(self: Formatter, comptime fmtStr: []const u8, args: anytype) FormatError! void {
+    pub fn print(self: Formatter, comptime fmtStr: []const u8, args: anytype) FormatError!void {
         return std.fmt.format(self, fmtStr, args);
     }
 
-    pub fn endLine(self: Formatter) FormatError! void {
+    pub fn endLine(self: Formatter) FormatError!void {
         try self.writeByte('\n');
     }
 
-    pub fn beginBlock(self: Formatter) FormatError! void {
+    pub fn beginBlock(self: Formatter) FormatError!void {
         self.state.indent_level += 1;
         try self.endLine();
     }
 
-    pub fn endBlock(self: Formatter) FormatError! void {
+    pub fn endBlock(self: Formatter) FormatError!void {
         self.state.indent_level -= 1;
     }
 };
@@ -319,7 +308,7 @@ const Flags = packed struct {
 
 pub const FlagKind = std.meta.FieldEnum(Flags);
 
-fn Wrap (comptime T: type) type {
+fn Wrap(comptime T: type) type {
     return struct {
         const Self = @This();
 
@@ -334,13 +323,13 @@ fn Wrap (comptime T: type) type {
             return self.fmt();
         }
 
-        pub fn fmt(self: Self) FormatError! void {
+        pub fn fmt(self: Self) FormatError!void {
             return self.formatter.fmt(self.data);
         }
     };
 }
 
-pub fn SliceWrap (comptime T: type) type {
+pub fn SliceWrap(comptime T: type) type {
     return struct {
         const Self = @This();
 
@@ -355,7 +344,7 @@ pub fn SliceWrap (comptime T: type) type {
             return self.fmt();
         }
 
-        pub fn fmt(self: Self) FormatError! void {
+        pub fn fmt(self: Self) FormatError!void {
             return self.formatter.commaList(self.data);
         }
     };

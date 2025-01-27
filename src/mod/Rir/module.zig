@@ -8,8 +8,6 @@ const Isa = @import("Isa");
 const RbcCore = @import("Rbc");
 const RbcBuilder = @import("RbcBuilder");
 
-
-
 const GlobalList = std.ArrayListUnmanaged(*Rir.Global);
 const FunctionList = std.ArrayListUnmanaged(*Rir.Function);
 const HandlerSetList = std.ArrayListUnmanaged(*Rir.HandlerSet);
@@ -26,11 +24,11 @@ pub const Module = struct {
     function_list: FunctionList = .{},
     handler_sets: HandlerSetList = .{},
 
-    pub fn init(ir: *Rir, id: Rir.ModuleId, name: Rir.NameId) error{OutOfMemory}! *Module {
+    pub fn init(ir: *Rir, id: Rir.ModuleId, name: Rir.NameId) error{OutOfMemory}!*Module {
         const ptr = try ir.allocator.create(Module);
         errdefer ir.allocator.destroy(ptr);
 
-        ptr.* = Module {
+        ptr.* = Module{
             .ir = ir,
             .id = id,
             .name = name,
@@ -53,7 +51,7 @@ pub const Module = struct {
         self.ir.allocator.destroy(self);
     }
 
-    pub fn onFormat(self: *const Module, formatter: Rir.Formatter) Rir.Formatter.Error! void {
+    pub fn onFormat(self: *const Module, formatter: Rir.Formatter) Rir.Formatter.Error!void {
         const oldActiveModule = formatter.swapModule(self);
         defer formatter.setModule(oldActiveModule);
 
@@ -63,15 +61,15 @@ pub const Module = struct {
         if (self.global_list.items.len > 0 or self.function_list.items.len > 0) {
             try formatter.writeAll(" =");
             try formatter.beginBlock();
-                if (self.global_list.items.len > 0) {
-                    try formatter.writeAll("globals =");
-                    try formatter.block(self.global_list.items);
-                    try formatter.endLine();
-                }
-                if (self.function_list.items.len > 0) {
-                    try formatter.writeAll("functions =");
-                    try formatter.block(self.function_list.items);
-                }
+            if (self.global_list.items.len > 0) {
+                try formatter.writeAll("globals =");
+                try formatter.block(self.global_list.items);
+                try formatter.endLine();
+            }
+            if (self.function_list.items.len > 0) {
+                try formatter.writeAll("functions =");
+                try formatter.block(self.function_list.items);
+            }
             try formatter.endBlock();
         }
     }
@@ -86,7 +84,7 @@ pub const Module = struct {
         };
     }
 
-    pub fn createGlobal(self: *Module, name: Rir.NameId, typeIr: *Rir.Type) error{TooManyGlobals, OutOfMemory}! *Rir.Global {
+    pub fn createGlobal(self: *Module, name: Rir.NameId, typeIr: *Rir.Type) error{ TooManyGlobals, OutOfMemory }!*Rir.Global {
         const index = self.global_list.items.len;
 
         if (index >= Rir.MAX_GLOBALS) {
@@ -101,7 +99,7 @@ pub const Module = struct {
         return global;
     }
 
-    pub fn getGlobal(self: *const Module, id: Rir.GlobalId) error{InvalidGlobal}! *Rir.Global {
+    pub fn getGlobal(self: *const Module, id: Rir.GlobalId) error{InvalidGlobal}!*Rir.Global {
         if (@intFromEnum(id) >= self.global_list.items.len) {
             return error.InvalidGlobal;
         }
@@ -109,7 +107,7 @@ pub const Module = struct {
         return self.global_list.items[@intFromEnum(id)];
     }
 
-    pub fn createFunction(self: *Module, name: Rir.NameId, typeIr: *Rir.Type) error{ExpectedFunctionType, TooManyFunctions, OutOfMemory}! *Rir.Function {
+    pub fn createFunction(self: *Module, name: Rir.NameId, typeIr: *Rir.Type) error{ ExpectedFunctionType, TooManyFunctions, OutOfMemory }!*Rir.Function {
         const index = self.function_list.items.len;
 
         if (index >= Rir.MAX_FUNCTIONS) {
@@ -123,7 +121,7 @@ pub const Module = struct {
         return builder;
     }
 
-    pub fn getFunction(self: *const Module, id: Rir.FunctionId) error{InvalidFunction}! *Rir.Function {
+    pub fn getFunction(self: *const Module, id: Rir.FunctionId) error{InvalidFunction}!*Rir.Function {
         if (@intFromEnum(id) >= self.function_list.items.len) {
             return error.InvalidFunction;
         }
@@ -131,7 +129,7 @@ pub const Module = struct {
         return self.function_list.items[@intFromEnum(id)];
     }
 
-    pub fn createHandlerSet(self: *Module) error{TooManyHandlerSets, OutOfMemory}! *Rir.HandlerSet {
+    pub fn createHandlerSet(self: *Module) error{ TooManyHandlerSets, OutOfMemory }!*Rir.HandlerSet {
         const index = self.handler_sets.items.len;
 
         if (index >= Rir.MAX_HANDLER_SETS) {
@@ -145,7 +143,7 @@ pub const Module = struct {
         return builder;
     }
 
-    pub fn getHandlerSet(self: *const Module, id: Rir.HandlerSetId) error{InvalidHandlerSet}! *Rir.HandlerSet {
+    pub fn getHandlerSet(self: *const Module, id: Rir.HandlerSetId) error{InvalidHandlerSet}!*Rir.HandlerSet {
         if (@intFromEnum(id) >= self.handler_sets.items.len) {
             return error.InvalidHandlerSet;
         }

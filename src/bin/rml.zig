@@ -3,7 +3,7 @@ const Rml = @import("Rml");
 
 const log = std.log.scoped(.rml_main);
 
-pub const std_options = std.Options {
+pub const std_options = std.Options{
     .log_level = .info,
 };
 
@@ -12,9 +12,7 @@ test {
     try main();
 }
 
-
-
-pub fn main () !void {
+pub fn main() !void {
     log.info("starting rml", .{});
 
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
@@ -42,14 +40,13 @@ pub fn main () !void {
     log.debug("evaluation_env: {}", .{rml.main_interpreter.data.evaluation_env});
 
     try rml.main_interpreter.data.evaluation_env.data.bind(
-        try Rml.Obj(Rml.Symbol).wrap(rml, rml.data.origin, try .create(rml,"print-int")),
-        (try Rml.bindgen.toObjectConst(rml, rml.data.origin, &struct{
+        try Rml.Obj(Rml.Symbol).wrap(rml, rml.data.origin, try .create(rml, "print-int")),
+        (try Rml.bindgen.toObjectConst(rml, rml.data.origin, &struct {
             pub fn func(int: Rml.Int) void {
                 log.info("print-int: {}", .{int});
             }
         }.func)).typeErase(),
     );
-
 
     const srcText: []const u8 = try std.fs.cwd().readFileAlloc(rml.blobAllocator(), "test.rml", std.math.maxInt(u16));
 
@@ -58,7 +55,7 @@ pub fn main () !void {
     while (true) {
         const blob = parser.data.nextBlob() catch |err| {
             if (diagnostic) |diag| {
-                log.err("{s} {}: {s}", .{@errorName(err), diag.error_origin, diag.message_mem[0..diag.message_len]});
+                log.err("{s} {}: {s}", .{ @errorName(err), diag.error_origin, diag.message_mem[0..diag.message_len] });
             } else {
                 log.err("requested parser diagnostic is null", .{});
             }
@@ -78,7 +75,7 @@ pub fn main () !void {
         } else |err| {
             log.err("on eval, {s}", .{@errorName(err)});
             if (diagnostic) |diag| {
-                log.err("{s} {}: {s}", .{@errorName(err), diag.error_origin, diag.message_mem[0..diag.message_len]});
+                log.err("{s} {}: {s}", .{ @errorName(err), diag.error_origin, diag.message_mem[0..diag.message_len] });
             } else {
                 log.err("requested interpreter diagnostic is null", .{});
             }

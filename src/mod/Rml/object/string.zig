@@ -3,17 +3,14 @@ const Rml = @import("../../Rml.zig");
 const std = @import("std");
 const utils = @import("utils");
 
-
-
 pub const NativeString = std.ArrayListUnmanaged(u8);
 pub const NativeWriter = NativeString.Writer;
 pub const String = struct {
     allocator: std.mem.Allocator,
     native_string: NativeString = .{},
 
-
-    pub fn create(rml: *Rml, str: []const u8) Rml.OOM! String {
-        var self = String {.allocator = rml.blobAllocator()};
+    pub fn create(rml: *Rml, str: []const u8) Rml.OOM!String {
+        var self = String{ .allocator = rml.blobAllocator() };
         try self.appendSlice(str);
         return self;
     }
@@ -33,18 +30,18 @@ pub const String = struct {
         return utils.compare(self.text(), other.text());
     }
 
-    pub fn onFormat(self: *const String, fmt: Rml.Format, w: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *const String, fmt: Rml.Format, w: std.io.AnyWriter) anyerror!void {
         switch (fmt) {
             .message => try w.print("{s}", .{self.text()}),
             inline else => {
                 try w.writeAll("\"");
                 try utils.text.escapeStrWrite(w, self.text(), .Double);
                 try w.writeAll("\"");
-            }
+            },
         }
     }
 
-    pub fn format(self: *const String, comptime fmt: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror! void {
+    pub fn format(self: *const String, comptime fmt: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror!void {
         return self.onFormat(comptime Rml.Format.fromStr(fmt) orelse Rml.Format.debug, if (@TypeOf(w) == std.io.AnyWriter) w else w.any());
     }
 
@@ -56,17 +53,17 @@ pub const String = struct {
         return @intCast(self.text().len);
     }
 
-    pub fn append(self: *String, ch: Rml.Char) Rml.OOM! void {
+    pub fn append(self: *String, ch: Rml.Char) Rml.OOM!void {
         var buf = [1]u8{0} ** 4;
         const len = utils.text.encode(ch, &buf) catch @panic("invalid ch");
         return self.native_string.appendSlice(self.allocator, buf[0..len]);
     }
 
-    pub fn appendSlice(self: *String, str: []const u8) Rml.OOM! void {
+    pub fn appendSlice(self: *String, str: []const u8) Rml.OOM!void {
         return self.native_string.appendSlice(self.allocator, str);
     }
 
-    pub fn makeInternedSlice(self: *const String) Rml.OOM! []const u8 {
+    pub fn makeInternedSlice(self: *const String) Rml.OOM![]const u8 {
         return try Rml.getRml(self).data.intern(self.text());
     }
 
@@ -74,4 +71,3 @@ pub const String = struct {
         return self.native_string.writer(self.allocator);
     }
 };
-

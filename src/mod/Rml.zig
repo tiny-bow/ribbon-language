@@ -23,8 +23,6 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-
-
 data: Storage,
 cwd: ?std.fs.Dir,
 out: ?std.io.AnyWriter,
@@ -33,13 +31,12 @@ global_env: Obj(Env) = undefined,
 main_interpreter: Obj(Interpreter) = undefined,
 diagnostic: ?*?Diagnostic = null,
 
-
 /// caller must close cwd and out
-pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWriter, diagnostic: ?*?Diagnostic, args: []const []const u8) OOM! *Rml {
+pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWriter, diagnostic: ?*?Diagnostic, args: []const []const u8) OOM!*Rml {
     const self = try allocator.create(Rml);
     errdefer allocator.destroy(self);
 
-    self.* = Rml {
+    self.* = Rml{
         .data = try Storage.init(allocator),
         .cwd = cwd,
         .out = out,
@@ -51,26 +48,23 @@ pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWrit
 
     log.debug("initializing interpreter ...", .{});
 
-    self.global_env = try Obj(Env).wrap(self, self.data.origin, .{.allocator = self.data.permanent.allocator()});
-    self.namespace_env = try Obj(Env).wrap(self, self.data.origin, .{.allocator = self.data.permanent.allocator()});
+    self.global_env = try Obj(Env).wrap(self, self.data.origin, .{ .allocator = self.data.permanent.allocator() });
+    self.namespace_env = try Obj(Env).wrap(self, self.data.origin, .{ .allocator = self.data.permanent.allocator() });
 
-    bindgen.bindObjectNamespaces(self, self.namespace_env, builtin.types)
-        catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => @panic(@errorName(err)),
-        };
+    bindgen.bindObjectNamespaces(self, self.namespace_env, builtin.types) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => @panic(@errorName(err)),
+    };
 
-    bindgen.bindObjectNamespaces(self, self.namespace_env, builtin.namespaces)
-        catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => @panic(@errorName(err)),
-        };
+    bindgen.bindObjectNamespaces(self, self.namespace_env, builtin.namespaces) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => @panic(@errorName(err)),
+    };
 
-    bindgen.bindGlobals(self, self.global_env, builtin.global)
-        catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => @panic(@errorName(err)),
-        };
+    bindgen.bindGlobals(self, self.global_env, builtin.global) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => @panic(@errorName(err)),
+    };
 
     // TODO args
     _ = args;
@@ -85,7 +79,7 @@ pub fn init(allocator: std.mem.Allocator, cwd: ?std.fs.Dir, out: ?std.io.AnyWrit
     }
 }
 
-pub fn deinit(self: *Rml) MemoryLeak! void {
+pub fn deinit(self: *Rml) MemoryLeak!void {
     log.debug("deinitializing Rml", .{});
 
     self.data.deinit();
@@ -93,14 +87,12 @@ pub fn deinit(self: *Rml) MemoryLeak! void {
     self.data.long_term.destroy(self);
 }
 
-
-
 pub const TypeId = bindgen.TypeId;
 
 pub const IOError = utils.IOError;
 
 pub const Nil = extern struct {
-    pub fn onFormat(_: *Nil, _: Format, w: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(_: *Nil, _: Format, w: std.io.AnyWriter) anyerror!void {
         return w.print("nil", .{});
     }
 
@@ -117,9 +109,9 @@ pub const str = []const u8;
 
 pub const Result = Signal || Error;
 pub const Error = IOError || OOM || EvalError || SyntaxError || Unexpected;
-pub const Signal = error { Cancel };
+pub const Signal = error{Cancel};
 
-pub const EvalError = error {
+pub const EvalError = error{
     Panic,
     TypeError,
     PatternFailed,
@@ -128,7 +120,7 @@ pub const EvalError = error {
     InvalidArgumentCount,
 };
 
-pub const SyntaxError = error {
+pub const SyntaxError = error{
     Sentinel,
     UnexpectedInput,
     UnexpectedEOF,
@@ -139,13 +131,13 @@ pub fn isSyntaxError(err: anyerror) bool {
     return utils.types.isInErrorSet(SyntaxError, err);
 }
 
-pub const OOM = error { OutOfMemory };
-pub const MemoryLeak = error { MemoryLeak };
-pub const Unexpected = error { Unexpected };
+pub const OOM = error{OutOfMemory};
+pub const MemoryLeak = error{MemoryLeak};
+pub const Unexpected = error{Unexpected};
 
-pub const SymbolError  = UnboundSymbol || SymbolAlreadyBound;
-pub const UnboundSymbol = error { UnboundSymbol };
-pub const SymbolAlreadyBound = error { SymbolAlreadyBound };
+pub const SymbolError = UnboundSymbol || SymbolAlreadyBound;
+pub const UnboundSymbol = error{UnboundSymbol};
+pub const SymbolAlreadyBound = error{SymbolAlreadyBound};
 
 pub const NativeFunction = bindgen.NativeFunction;
 
@@ -192,7 +184,6 @@ pub const coerceBool = object.coerceBool;
 pub const coerceArray = object.coerceArray;
 pub const isArrayLike = object.isArrayLike;
 
-
 pub const Diagnostic = struct {
     pub const MAX_LENGTH = 256;
 
@@ -214,24 +205,21 @@ pub const Diagnostic = struct {
 
         pub fn log(self: Formatter, logger: anytype) void {
             if (self.err) |err| {
-                logger.err("{s} {}: {s}", .{@errorName(err), self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len]});
+                logger.err("{s} {}: {s}", .{ @errorName(err), self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len] });
             } else {
-                logger.err("{}: {s}", .{self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len]});
+                logger.err("{}: {s}", .{ self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len] });
             }
         }
 
-        pub fn format(self: Formatter, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror! void {
+        pub fn format(self: Formatter, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) anyerror!void {
             if (self.err) |err| {
-                return w.print("{s} {}: {s}", .{@errorName(err), self.diag.error_origin,self. diag.message_mem[0..self.diag.message_len]});
+                return w.print("{s} {}: {s}", .{ @errorName(err), self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len] });
             } else {
-                return w.print("{}: {s}", .{self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len]});
+                return w.print("{}: {s}", .{ self.diag.error_origin, self.diag.message_mem[0..self.diag.message_len] });
             }
         }
     };
 };
-
-
-
 
 pub fn expectedOutput(self: *Rml, comptime fmt: []const u8, args: anytype) void {
     if (self.out) |out| {
@@ -239,7 +227,6 @@ pub fn expectedOutput(self: *Rml, comptime fmt: []const u8, args: anytype) void 
         out.print(fmt ++ "\n", args) catch @panic("failed to write to host-provided out");
     }
 }
-
 
 pub fn beginBlob(self: *Rml) void {
     log.debug("beginBlob", .{});
@@ -260,24 +247,23 @@ pub fn blobAllocator(self: *Rml) std.mem.Allocator {
 }
 
 // TODO run
-pub fn runString(self: *Rml, fileName: []const u8, text: []const u8) Error! Object {
+pub fn runString(self: *Rml, fileName: []const u8, text: []const u8) Error!Object {
     log.info("running [{s}] ...", .{fileName});
-    const result = try utils.todo(noreturn, .{self, text});
+    const result = try utils.todo(noreturn, .{ self, text });
     log.info("... finished [{s}], result: {}", .{ fileName, result });
 
     return result;
 }
 
-pub fn runFile(self: *Rml, fileName: []const u8) Error! Object {
+pub fn runFile(self: *Rml, fileName: []const u8) Error!Object {
     const src = try self.readFile(fileName);
 
     return self.runString(fileName, src);
 }
 
-pub fn readFile(self: *Rml, fileName: []const u8) Error! []const u8 {
+pub fn readFile(self: *Rml, fileName: []const u8) Error![]const u8 {
     log.info("reading [{s}] ...", .{fileName});
-    return if (self.data.read_file_callback) |cb| try cb(self, fileName)
-        else error.AccessDenied;
+    return if (self.data.read_file_callback) |cb| try cb(self, fileName) else error.AccessDenied;
 }
 
 pub fn errorCast(err: anyerror) Error {

@@ -4,8 +4,6 @@ const types = @This();
 
 const std = @import("std");
 
-
-
 pub fn CopyConst(comptime Dest: type, comptime Src: type) type {
     comptime {
         var DestInfo = @typeInfo(Dest).pointer;
@@ -13,14 +11,14 @@ pub fn CopyConst(comptime Dest: type, comptime Src: type) type {
 
         DestInfo.is_const = SrcInfo.is_const;
 
-        return @Type(.{.pointer = DestInfo});
+        return @Type(.{ .pointer = DestInfo });
     }
 }
 
 pub fn TupleArray(comptime N: comptime_int, comptime T: type) type {
-    comptime var fields = [1]std.builtin.Type.StructField {undefined} ** N;
+    comptime var fields = [1]std.builtin.Type.StructField{undefined} ** N;
     inline for (0..N) |i| {
-        fields[i] = std.builtin.Type.StructField {
+        fields[i] = std.builtin.Type.StructField{
             .name = std.fmt.comptimePrint("{}", .{i}),
             .type = T,
             .default_value = null,
@@ -28,12 +26,12 @@ pub fn TupleArray(comptime N: comptime_int, comptime T: type) type {
             .alignment = @alignOf(T),
         };
     }
-    return @Type(.{.@"struct" = std.builtin.Type.Struct {
+    return @Type(.{ .@"struct" = std.builtin.Type.Struct{
         .decls = &.{},
         .fields = &fields,
         .is_tuple = true,
         .layout = .auto,
-    }});
+    } });
 }
 
 pub fn zero(comptime T: type) T {
@@ -41,19 +39,18 @@ pub fn zero(comptime T: type) T {
         .@"struct" => .{},
         .@"union" => .{},
         .pointer => &.{},
-        .array => |info| [1]info.child {zero(info.child)} ** info.len,
+        .array => |info| [1]info.child{zero(info.child)} ** info.len,
         .@"enum" => @enumFromInt(0),
         .bool => false,
         else => 0,
     };
 }
 
-
 pub const TypeId = struct {
     typename: [*:0]const u8,
 
     pub fn of(comptime T: type) TypeId {
-        return TypeId { .typename = @typeName(T).ptr };
+        return TypeId{ .typename = @typeName(T).ptr };
     }
 
     pub fn name(self: TypeId) []const u8 {
@@ -91,18 +88,18 @@ pub fn isTuple(comptime T: type) bool {
 }
 
 pub fn ToBytes(comptime T: type) type {
-    return [@sizeOf(T)] u8;
+    return [@sizeOf(T)]u8;
 }
 
 pub fn DropSelf(comptime T: type, comptime ArgsTuple: type) type {
     const info = @typeInfo(ArgsTuple).@"struct";
     if (hasSelf(T, ArgsTuple)) {
-        return @Type(.{.@"struct" = std.builtin.Type.Struct {
+        return @Type(.{ .@"struct" = std.builtin.Type.Struct{
             .decls = &.{},
             .fields = if (info.is_tuple) adjustFields: {
-                var newFields = [1]std.builtin.Type.StructField {undefined} ** (info.fields.len - 1);
+                var newFields = [1]std.builtin.Type.StructField{undefined} ** (info.fields.len - 1);
                 for (info.fields[1..], 0..) |field, i| {
-                    newFields[i] = std.builtin.Type.StructField {
+                    newFields[i] = std.builtin.Type.StructField{
                         .alignment = field.alignment,
                         .default_value = field.default_value,
                         .is_comptime = field.is_comptime,
@@ -114,7 +111,7 @@ pub fn DropSelf(comptime T: type, comptime ArgsTuple: type) type {
             } else info.fields[1..],
             .is_tuple = info.is_tuple,
             .layout = info.layout,
-        }});
+        } });
     }
     return ArgsTuple;
 }
@@ -123,10 +120,9 @@ pub fn hasSelf(comptime T: type, comptime ArgsTuple: type) bool {
     const info = @typeInfo(ArgsTuple).@"struct";
     const field0 = info.fields[0];
     const fInfo = @typeInfo(field0.type);
-    return std.mem.eql(u8, field0.name, "self")
-        or if (fInfo == .pointer) ptr: {
-            break :ptr fInfo.pointer.child == T;
-        } else false;
+    return std.mem.eql(u8, field0.name, "self") or if (fInfo == .pointer) ptr: {
+        break :ptr fInfo.pointer.child == T;
+    } else false;
 }
 
 pub fn supportsDecls(comptime T: type) bool {
@@ -146,8 +142,7 @@ pub fn causesErrors(comptime T: type) bool {
 pub fn isInErrorSet(comptime E: type, err: anyerror) bool {
     if (err == error.Unknown) return false;
 
-    const es = @typeInfo(E).error_set
-        orelse [0]std.builtin.Type.Error {};
+    const es = @typeInfo(E).error_set orelse [0]std.builtin.Type.Error{};
 
     inline for (es) |e| {
         const err2 = @field(E, e.name);
@@ -160,8 +155,7 @@ pub fn isInErrorSet(comptime E: type, err: anyerror) bool {
 pub fn narrowErrorSet(comptime E: type, err: anyerror) ?E {
     if (err == error.Unknown) return null;
 
-    const es = @typeInfo(E).error_set
-        orelse [0]std.builtin.Type.Error {};
+    const es = @typeInfo(E).error_set orelse [0]std.builtin.Type.Error{};
 
     inline for (es) |e| {
         const err2 = @field(E, e.name);
@@ -172,9 +166,10 @@ pub fn narrowErrorSet(comptime E: type, err: anyerror) ?E {
 }
 
 pub fn forceErrorSet(comptime E: type, err: anyerror) E {
-    const buf = &struct{ threadlocal var x = [1]u8{0} ** 128; }.x;
-    return narrowErrorSet(E, err)
-        orelse @panic(std.fmt.bufPrint(buf, "unexpected error {s}", .{@errorName(err)}) catch buf);
+    const buf = &struct {
+        threadlocal var x = [1]u8{0} ** 128;
+    }.x;
+    return narrowErrorSet(E, err) orelse @panic(std.fmt.bufPrint(buf, "unexpected error {s}", .{@errorName(err)}) catch buf);
 }
 
 const MAX_DECLS = 10_000;
@@ -202,7 +197,7 @@ pub fn structConcat(subs: anytype) TypeOfStructConcat(@TypeOf(subs)) {
 }
 
 pub fn StructConcat(comptime subs: anytype) type {
-    comptime var fullFields = ([1]std.builtin.Type.StructField {undefined}) ** MAX_DECLS;
+    comptime var fullFields = ([1]std.builtin.Type.StructField{undefined}) ** MAX_DECLS;
     comptime var fullIndex: comptime_int = 0;
 
     var tuple = false;
@@ -235,7 +230,7 @@ pub fn StructConcat(comptime subs: anytype) type {
             }
 
             for (structFields) |structField| {
-                fullFields[fullIndex] = std.builtin.Type.StructField {
+                fullFields[fullIndex] = std.builtin.Type.StructField{
                     .name = if (tuple) std.fmt.comptimePrint("{}", .{fullIndex}) else structField.name,
                     .type = structField.type,
                     .default_value = structField.default_value,
@@ -248,17 +243,17 @@ pub fn StructConcat(comptime subs: anytype) type {
         }
     }
 
-    return @Type(std.builtin.Type { .@"struct" = .{
+    return @Type(std.builtin.Type{ .@"struct" = .{
         .layout = .auto,
         .backing_integer = null,
         .fields = fullFields[0..fullIndex],
-        .decls = &[0]std.builtin.Type.Declaration {},
+        .decls = &[0]std.builtin.Type.Declaration{},
         .is_tuple = tuple,
     } });
 }
 
 pub fn TypeOfStructConcat(comptime subs: type) type {
-    comptime var fullFields = ([1]std.builtin.Type.StructField {undefined}) ** MAX_DECLS;
+    comptime var fullFields = ([1]std.builtin.Type.StructField{undefined}) ** MAX_DECLS;
     comptime var fullIndex: comptime_int = 0;
 
     const subsInfo = @typeInfo(subs);
@@ -299,7 +294,7 @@ pub fn TypeOfStructConcat(comptime subs: type) type {
             }
 
             for (structFields) |structField| {
-                fullFields[fullIndex] = std.builtin.Type.StructField {
+                fullFields[fullIndex] = std.builtin.Type.StructField{
                     .name = if (tuple) std.fmt.comptimePrint("{}", .{fullIndex}) else structField.name,
                     .type = structField.type,
                     .default_value = structField.default_value,
@@ -312,11 +307,11 @@ pub fn TypeOfStructConcat(comptime subs: type) type {
         }
     }
 
-    return @Type(std.builtin.Type { .@"struct" = .{
+    return @Type(std.builtin.Type{ .@"struct" = .{
         .layout = .auto,
         .backing_integer = null,
         .fields = fullFields[0..fullIndex],
-        .decls = &[0]std.builtin.Type.Declaration {},
+        .decls = &[0]std.builtin.Type.Declaration{},
         .is_tuple = tuple,
     } });
 }

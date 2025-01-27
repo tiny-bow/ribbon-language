@@ -6,8 +6,6 @@ const std = @import("std");
 const utils = @import("utils");
 const Rbc = @import("Rbc");
 
-
-
 const BlockList = std.ArrayListUnmanaged(*Builder.Block);
 
 pub const Function = struct {
@@ -20,14 +18,13 @@ pub const Function = struct {
     num_locals: usize = 0,
     num_upvalues: usize = 0,
 
-
     pub fn init(parent: *Builder, index: Rbc.FunctionIndex) Builder.Error!*Function {
         const ptr = try parent.allocator.create(Function);
 
-        var blocks = BlockList {};
+        var blocks = BlockList{};
         try blocks.ensureTotalCapacity(parent.allocator, Rbc.MAX_BLOCKS);
 
-        ptr.* = Function {
+        ptr.* = Function{
             .parent = parent,
             .index = index,
             .blocks = blocks,
@@ -59,8 +56,7 @@ pub const Function = struct {
             blocks[i] = block;
         }
 
-
-        return Rbc.Function {
+        return Rbc.Function{
             .num_arguments = @truncate(self.num_arguments),
             .num_registers = @truncate(self.num_arguments + self.num_locals),
             .bytecode = .{

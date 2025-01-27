@@ -20,8 +20,6 @@ test {
     std.testing.refAllDeclsRecursive(Rir);
 }
 
-
-
 allocator: std.mem.Allocator,
 interner: Interner = .{},
 type_map: TypeMap = .{},
@@ -29,11 +27,10 @@ layout_map: LayoutMap = .{},
 foreign_list: ForeignList = .{},
 module_list: ModuleList = .{},
 
-
-pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}! *Rir {
+pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!*Rir {
     var self = try allocator.create(Rir);
 
-    self.* = Rir {
+    self.* = Rir{
         .allocator = allocator,
     };
     errdefer self.deinit();
@@ -75,8 +72,6 @@ pub fn deinit(self: *Rir) void {
     self.allocator.destroy(self);
 }
 
-
-
 pub const MAX_MODULES = std.math.maxInt(std.meta.Tag(ModuleId));
 pub const MAX_TYPES = std.math.maxInt(std.meta.Tag(TypeId));
 pub const MAX_GLOBALS = std.math.maxInt(std.meta.Tag(GlobalId));
@@ -88,9 +83,10 @@ pub const MAX_BLOCKS = Rbc.MAX_BLOCKS;
 pub const MAX_REGISTERS = Rbc.MAX_REGISTERS;
 pub const MAX_LOCALS = std.math.maxInt(std.meta.Tag(LocalId));
 pub const MAX_NAMES = std.math.maxInt(std.meta.Tag(NameId));
-pub const MAX_MULTI_REGISTER = std.math.maxInt(MultiRegisterIndex);pub const Block = block.Block;
+pub const MAX_MULTI_REGISTER = std.math.maxInt(MultiRegisterIndex);
+pub const Block = block.Block;
 
-pub const Error = std.mem.Allocator.Error || error {
+pub const Error = std.mem.Allocator.Error || error{
     InvalidIndex,
 
     InvalidType,
@@ -178,7 +174,6 @@ pub const LocalId = NewType("LocalId", u16, Local);
 pub const NameId = NewType("NameId", u16, [:0]const u8);
 pub const FieldId = NewType("FieldId", u16, void);
 
-
 pub const RegisterOffset = Rbc.RegisterLocalOffset;
 /// 2 ^ 2 = max of 4 registers per multi-register entity
 pub const MultiRegisterIndex = std.meta.Int(.unsigned, 2);
@@ -188,7 +183,7 @@ pub const Dimensions = packed struct {
     alignment: Alignment = 1,
 
     pub fn fromNativeType(comptime T: type) Dimensions {
-        return Dimensions {
+        return Dimensions{
             .size = @sizeOf(T),
             .alignment = @intCast(@alignOf(T)),
         };
@@ -205,7 +200,7 @@ pub const Layout = struct {
     }
 
     pub fn format(self: *const Layout, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("{}x{}", .{self.dimensions.size, self.dimensions.alignment});
+        try writer.print("{}x{}", .{ self.dimensions.size, self.dimensions.alignment });
     }
 
     pub fn canUseMemory(self: *const Layout, memory: []const u8) bool {
@@ -213,7 +208,7 @@ pub const Layout = struct {
     }
 
     pub fn fromDimensions(dimensions: Dimensions) Layout {
-        return Layout {
+        return Layout{
             .local_storage = .fromSize(dimensions.size),
             .dimensions = dimensions,
         };
@@ -237,7 +232,7 @@ pub const Layout = struct {
             inline else => &[0]Offset{},
         };
 
-        return Layout {
+        return Layout{
             .dimensions = dimensions,
             .field_offsets = field_offsets,
         };
@@ -252,8 +247,8 @@ fn NewType(comptime NewTypeName: []const u8, comptime Tag: type, comptime Data: 
 
         _,
 
-        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) ! void {
-            return writer.print("{s}-{x}", .{NewTypeName, @intFromEnum(self)});
+        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            return writer.print("{s}-{x}", .{ NewTypeName, @intFromEnum(self) });
         }
     };
 }
@@ -276,8 +271,7 @@ const TypeContext = struct {
 const Interner = std.ArrayHashMapUnmanaged([:0]const u8, void, InternerContext, true);
 const InternerContext = struct {
     pub fn eql(_: InternerContext, a: anytype, b: anytype, _: anytype) bool {
-        return @intFromPtr(a.ptr) == @intFromPtr(b.ptr)
-            or (a.len == b.len and std.mem.eql(u8, a.ptr[0..a.len], b.ptr[0..b.len]));
+        return @intFromPtr(a.ptr) == @intFromPtr(b.ptr) or (a.len == b.len and std.mem.eql(u8, a.ptr[0..a.len], b.ptr[0..b.len]));
     }
 
     pub fn hash(_: InternerContext, a: anytype) u32 {
@@ -285,10 +279,7 @@ const InternerContext = struct {
     }
 };
 
-
-
-
-pub fn onFormat(self: *const Rir, formatter: Formatter) Formatter.Error! void {
+pub fn onFormat(self: *const Rir, formatter: Formatter) Formatter.Error!void {
     if (self.type_map.count() > 0) {
         const oldTypeMode = formatter.swapFlag(.show_nominative_type_bodies, true);
         defer formatter.setFlag(.show_nominative_type_bodies, oldTypeMode);
@@ -316,9 +307,8 @@ pub fn onFormat(self: *const Rir, formatter: Formatter) Formatter.Error! void {
     }
 }
 
-
 /// Intern a string, yielding a Name
-pub fn internName(self: *Rir, name: []const u8) error{TooManyNames, OutOfMemory}! NameId {
+pub fn internName(self: *Rir, name: []const u8) error{ TooManyNames, OutOfMemory }!NameId {
     if (self.interner.getIndexAdapted(name, InternerContext{})) |interned| {
         return @enumFromInt(interned);
     }
@@ -337,7 +327,7 @@ pub fn internName(self: *Rir, name: []const u8) error{TooManyNames, OutOfMemory}
     return @enumFromInt(index);
 }
 
-pub fn getName(self: *const Rir, id: NameId) error{InvalidName}! []const u8 {
+pub fn getName(self: *const Rir, id: NameId) error{InvalidName}![]const u8 {
     if (@intFromEnum(id) >= self.interner.count()) {
         return error.InvalidName;
     }
@@ -346,7 +336,7 @@ pub fn getName(self: *const Rir, id: NameId) error{InvalidName}! []const u8 {
 }
 
 /// Calls `Type.clone` on the input, if the type is not found in the map
-pub fn createType(self: *Rir, name: ?NameId, info: TypeInfo) error{OutOfMemory, TooManyTypes}! *Type {
+pub fn createType(self: *Rir, name: ?NameId, info: TypeInfo) error{ OutOfMemory, TooManyTypes }!*Type {
     const index = self.type_map.count();
 
     if (index >= MAX_TYPES) {
@@ -355,7 +345,7 @@ pub fn createType(self: *Rir, name: ?NameId, info: TypeInfo) error{OutOfMemory, 
 
     const hash = utils.fnv1a_32(info);
 
-    var ty = Type {
+    var ty = Type{
         .ir = self,
         .id = @enumFromInt(index),
         .name = name,
@@ -374,14 +364,14 @@ pub fn createType(self: *Rir, name: ?NameId, info: TypeInfo) error{OutOfMemory, 
 }
 
 /// Does not call `Type.clone` on the input
-pub fn createTypePreallocated(self: *Rir, name: ?NameId, deinitInfoIfExisting: bool, info: TypeInfo) error{OutOfMemory, TooManyTypes}! *Type {
+pub fn createTypePreallocated(self: *Rir, name: ?NameId, deinitInfoIfExisting: bool, info: TypeInfo) error{ OutOfMemory, TooManyTypes }!*Type {
     const index = self.type_map.count();
 
     if (index >= MAX_TYPES) {
         return error.TooManyTypes;
     }
 
-    const ty = Type {
+    const ty = Type{
         .ir = self,
         .id = @enumFromInt(index),
         .name = name,
@@ -400,14 +390,14 @@ pub fn createTypePreallocated(self: *Rir, name: ?NameId, deinitInfoIfExisting: b
     return getOrPut.key_ptr;
 }
 
-pub fn createTypeFromNative(self: *Rir, comptime T: type, name: ?NameId, parameterNames: ?[]const NameId) error{TooManyTypes, TooManyNames, OutOfMemory}! *Type {
+pub fn createTypeFromNative(self: *Rir, comptime T: type, name: ?NameId, parameterNames: ?[]const NameId) error{ TooManyTypes, TooManyNames, OutOfMemory }!*Type {
     const info = try TypeInfo.fromNative(T, self, parameterNames);
     errdefer info.deinit(self.allocator);
 
     return self.createTypePreallocated(name, true, info);
 }
 
-pub fn getType(self: *const Rir, id: TypeId) error{InvalidType}! *Type {
+pub fn getType(self: *const Rir, id: TypeId) error{InvalidType}!*Type {
     if (@intFromEnum(id) >= self.type_map.count()) {
         return error.InvalidType;
     }
@@ -415,7 +405,7 @@ pub fn getType(self: *const Rir, id: TypeId) error{InvalidType}! *Type {
     return &self.type_map.keys()[@intFromEnum(id)];
 }
 
-pub fn getTypeLayout(self: *Rir, id: TypeId) error{InvalidType, OutOfMemory}! *const Layout {
+pub fn getTypeLayout(self: *Rir, id: TypeId) error{ InvalidType, OutOfMemory }!*const Layout {
     const getOrPut = try self.layout_map.getOrPut(self.allocator, id);
 
     if (!getOrPut.found_existing) {
@@ -427,7 +417,7 @@ pub fn getTypeLayout(self: *Rir, id: TypeId) error{InvalidType, OutOfMemory}! *c
     return getOrPut.value_ptr;
 }
 
-pub fn createForeign(self: *Rir, name: NameId, typeIr: *Type) error{TooManyForeignAddresses, OutOfMemory}! *ForeignAddress {
+pub fn createForeign(self: *Rir, name: NameId, typeIr: *Type) error{ TooManyForeignAddresses, OutOfMemory }!*ForeignAddress {
     const index = self.foreign_list.items.len;
 
     if (index >= MAX_FOREIGN_ADDRESSES) {
@@ -442,7 +432,7 @@ pub fn createForeign(self: *Rir, name: NameId, typeIr: *Type) error{TooManyForei
     return f;
 }
 
-pub fn getForeign(self: *Rir, id: ForeignId) error{InvalidForeign}! *ForeignAddress {
+pub fn getForeign(self: *Rir, id: ForeignId) error{InvalidForeign}!*ForeignAddress {
     if (@intFromEnum(id) >= self.foreign_list.items.len) {
         return error.InvalidForeign;
     }
@@ -450,8 +440,7 @@ pub fn getForeign(self: *Rir, id: ForeignId) error{InvalidForeign}! *ForeignAddr
     return self.foreign_list.items[@intFromEnum(id)];
 }
 
-
-pub fn createModule(self: *Rir, name: NameId) error{InvalidModule, OutOfMemory}! *Module {
+pub fn createModule(self: *Rir, name: NameId) error{ InvalidModule, OutOfMemory }!*Module {
     const id = self.module_list.items.len;
 
     if (id >= MAX_MODULES) {
@@ -466,7 +455,7 @@ pub fn createModule(self: *Rir, name: NameId) error{InvalidModule, OutOfMemory}!
     return mod;
 }
 
-pub fn getModule(self: *const Rir, id: ModuleId) error{InvalidModule}! *Module {
+pub fn getModule(self: *const Rir, id: ModuleId) error{InvalidModule}!*Module {
     if (@intFromEnum(id) >= self.module_list.items.len) {
         return error.InvalidModule;
     }

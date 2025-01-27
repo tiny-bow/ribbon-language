@@ -4,8 +4,6 @@ const variable = @This();
 
 const Rbc = @import("Rbc");
 
-
-
 /// Describes where a `Local` variable is stored
 pub const LocalStorage = union(enum) {
     /// The Local is not stored anywhere
@@ -39,7 +37,7 @@ pub const LocalStorage = union(enum) {
 
     /// Shortcut to create `LocalStorage.n_registers`
     pub fn fromRegisters(n: u2) LocalStorage {
-        return .{.n_registers = n};
+        return .{ .n_registers = n };
     }
 
     /// Determine a generic `LocalStorage` for a given value size
@@ -52,9 +50,7 @@ pub const LocalStorage = union(enum) {
     /// | 1 ..= sizeOf(Rbc.Register) | `register` |
     /// | > | `stack` |
     pub fn fromSize(size: usize) LocalStorage {
-        return if (size == 0) .zero_size
-          else if (size <= @sizeOf(Rbc.Register)) .register
-          else .stack;
+        return if (size == 0) .zero_size else if (size <= @sizeOf(Rbc.Register)) .register else .stack;
     }
 
     /// Determine whether a `Local` with this `Storage` can be coerced to a single `Register`
@@ -87,12 +83,12 @@ pub const Local = struct {
     register: ?*Rir.Register = null,
     storage: LocalStorage = .none,
 
-    pub fn init(block: *Rir.Block, id: Rir.LocalId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}! *Local {
+    pub fn init(block: *Rir.Block, id: Rir.LocalId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}!*Local {
         const ir = block.ir;
 
         const self = try ir.allocator.create(Local);
 
-        self.* = Local {
+        self.* = Local{
             .ir = ir,
             .block = block,
             .id = id,
@@ -122,12 +118,11 @@ pub const Upvalue = struct {
     name: Rir.NameId,
     type: *Rir.Type,
 
-
-    pub fn init(block: *Rir.Block, id: Rir.UpvalueId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}! *Upvalue {
+    pub fn init(block: *Rir.Block, id: Rir.UpvalueId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}!*Upvalue {
         const ir = block.ir;
         const self = try ir.allocator.create(Upvalue);
 
-        self.* = Upvalue {
+        self.* = Upvalue{
             .ir = ir,
             .block = block,
             .id = id,
@@ -162,20 +157,19 @@ pub const Global = struct {
     mutability: Mutability = .immutable,
 
     pub fn getRef(self: *const Global) Rir.value.OpRef(Rir.Global) {
-        return Rir.value.OpRef(Rir.Global) {
+        return Rir.value.OpRef(Rir.Global){
             .module_id = self.module.id,
             .id = self.id,
         };
     }
 
-
-    pub fn init(moduleIr: *Rir.Module, id: Rir.GlobalId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}! *Global {
+    pub fn init(moduleIr: *Rir.Module, id: Rir.GlobalId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}!*Global {
         const ir = moduleIr.ir;
 
         const self = try ir.allocator.create(Global);
         errdefer ir.allocator.destroy(self);
 
-        self.* = Global {
+        self.* = Global{
             .ir = ir,
             .module = moduleIr,
 
@@ -215,12 +209,11 @@ pub const Global = struct {
     /// - The global is `immutable`
     /// - The `initial_value` is not `null`
     pub fn isComptimeKnown(self: *const Global) bool {
-        return self.mutability == .immutable
-           and self.initial_value != null;
+        return self.mutability == .immutable and self.initial_value != null;
     }
 
     /// Initialize a `Global` with a native value
-    pub fn initializerFromNative(self: *Global, value: anytype) error{TypeMismatch, TooManyGlobals, TooManyTypes, TooManyNames, OutOfMemory}! void {
+    pub fn initializerFromNative(self: *Global, value: anytype) error{ TypeMismatch, TooManyGlobals, TooManyTypes, TooManyNames, OutOfMemory }!void {
         const T = @TypeOf(value);
         const typeIr = try self.ir.createTypeFromNative(T, null, null);
 

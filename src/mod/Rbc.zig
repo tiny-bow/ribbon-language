@@ -9,15 +9,12 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-
-
 globals: []const [*]u8,
 global_memory: []u8,
 functions: []const Function,
 foreign_functions: []const Foreign,
 handler_sets: []const HandlerSet,
 main: FunctionIndex,
-
 
 pub fn deinit(self: Rbc, allocator: std.mem.Allocator) void {
     allocator.free(self.globals);
@@ -39,8 +36,6 @@ pub fn deinit(self: Rbc, allocator: std.mem.Allocator) void {
     allocator.free(self.handler_sets);
 }
 
-
-
 pub const Register = u64;
 pub const RegisterIndex = u8;
 pub const RegisterLocalOffset = u16;
@@ -59,7 +54,6 @@ pub const EvidenceIndex = u16;
 pub const MemorySize = u48;
 pub const ForeignId = u48;
 pub const Alignment = u12;
-
 
 pub const MAX_BLOCKS: comptime_int = 1024;
 pub const MAX_REGISTERS: comptime_int = 255;
@@ -119,7 +113,7 @@ pub const Data = op_data: {
 
                 if (instr.operands.len > 0) {
                     var size = 0;
-                    var operandCounts = [1]u8 {0} ** std.meta.fieldNames(Isa.OperandDescriptor).len;
+                    var operandCounts = [1]u8{0} ** std.meta.fieldNames(Isa.OperandDescriptor).len;
                     for (instr.operands) |operand| {
                         const opType = switch (operand) {
                             .register => RegisterIndex,
@@ -136,8 +130,8 @@ pub const Data = op_data: {
 
                         size += @bitSizeOf(opType);
 
-                        operands = operands ++ [1]std.builtin.Type.StructField { .{
-                            .name = std.fmt.comptimePrint("{u}{}", .{switch (operand) {
+                        operands = operands ++ [1]std.builtin.Type.StructField{.{
+                            .name = std.fmt.comptimePrint("{u}{}", .{ switch (operand) {
                                 .register => 'R',
                                 .byte => 'b',
                                 .short => 's',
@@ -148,19 +142,18 @@ pub const Data = op_data: {
                                 .upvalue_index => 'U',
                                 .function_index => 'F',
                                 .block_index => 'B',
-                            }, operandCounts[@intFromEnum(operand)]}),
+                            }, operandCounts[@intFromEnum(operand)] }),
                             .type = opType,
                             .is_comptime = false,
                             .default_value = null,
                             .alignment = 0,
-                        } };
+                        }};
 
                         operandCounts[@intFromEnum(operand)] += 1;
                     }
 
                     if (size > 48) {
-                        @compileError("Operand set size too large in instruction `"
-                            ++ name ++ "`");
+                        @compileError("Operand set size too large in instruction `" ++ name ++ "`");
                     }
 
                     const backingType = std.meta.Int(.unsigned, size);
@@ -168,23 +161,23 @@ pub const Data = op_data: {
                         .layout = .@"packed",
                         .backing_integer = backingType,
                         .fields = operands,
-                        .decls = &[0]std.builtin.Type.Declaration {},
+                        .decls = &[0]std.builtin.Type.Declaration{},
                         .is_tuple = false,
                     } });
 
                     // @compileLog(std.fmt.comptimePrint("{s} {s}", .{name, std.meta.fieldNames(ty)}));
 
-                    fields = fields ++ [1]std.builtin.Type.UnionField { .{
+                    fields = fields ++ [1]std.builtin.Type.UnionField{.{
                         .name = name,
                         .type = ty,
                         .alignment = @alignOf(backingType),
-                    } };
+                    }};
                 } else {
-                    fields = fields ++ [1]std.builtin.Type.UnionField { .{
+                    fields = fields ++ [1]std.builtin.Type.UnionField{.{
                         .name = name,
                         .type = void,
                         .alignment = 0,
-                    } };
+                    }};
                 }
 
                 i += 1;
@@ -196,7 +189,7 @@ pub const Data = op_data: {
         .layout = .@"packed",
         .tag_type = null,
         .fields = fields,
-        .decls = &[0]std.builtin.Type.Declaration {},
+        .decls = &[0]std.builtin.Type.Declaration{},
     } });
 };
 
@@ -208,10 +201,10 @@ pub const Code = op_code: {
         for (category.kinds) |kind| {
             for (kind.instructions) |instr| {
                 const name = Isa.computeInstructionName(kind, instr);
-                fields = fields ++ [1]std.builtin.Type.EnumField { .{
+                fields = fields ++ [1]std.builtin.Type.EnumField{.{
                     .name = name,
                     .value = i,
-                } };
+                }};
 
                 i += 1;
             }
@@ -221,12 +214,12 @@ pub const Code = op_code: {
     break :op_code @Type(.{ .@"enum" = .{
         .tag_type = u16,
         .fields = fields,
-        .decls = &[0]std.builtin.Type.Declaration {},
+        .decls = &[0]std.builtin.Type.Declaration{},
         .is_exhaustive = true,
     } });
 };
 
-pub fn DataOf(comptime code: Code) type  {
+pub fn DataOf(comptime code: Code) type {
     @setEvalBranchQuota(2000);
     inline for (std.meta.fieldNames(Code)) |name| {
         if (@field(Code, name) == code) {

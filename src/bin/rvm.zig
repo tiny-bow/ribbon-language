@@ -6,7 +6,7 @@ const Builder = @import("RbcBuilder");
 
 const log = std.log.scoped(.rvm_main);
 
-pub const std_options = std.Options {
+pub const std_options = std.Options{
     .log_level = .info,
 };
 
@@ -14,8 +14,6 @@ test {
     std.debug.print("rvm-test\n", .{});
     try main();
 }
-
-
 
 const n: i64 = 12;
 const expected: i64 = calc: {
@@ -46,7 +44,6 @@ pub fn main() !void {
 
     const func = try builder.main();
 
-
     const arg = try func.arg();
     const cond = try func.local();
     const two_loaded = try func.local();
@@ -74,20 +71,17 @@ pub fn main() !void {
     const program = try builder.assemble(arena.allocator());
     // defer program.deinit(arena.allocator());
 
-
     const fiber = try Rvm.Fiber.init(rvm, &program, &.{});
     defer fiber.deinit();
 
-
     const start = std.time.nanoTimestamp();
 
-    const result = try fiber.invoke(i64, program.main, .{ n });
+    const result = try fiber.invoke(i64, program.main, .{n});
 
     const end = std.time.nanoTimestamp();
 
     const time = @as(f64, @floatFromInt(end - start)) / std.time.ns_per_s;
 
-
-    try std.io.getStdOut().writer().print("result: {} (in {d:.3}s)\n", .{result, time});
+    try std.io.getStdOut().writer().print("result: {} (in {d:.3}s)\n", .{ result, time });
     try std.testing.expectEqual(expected, result);
 }

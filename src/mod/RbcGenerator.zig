@@ -17,8 +17,6 @@ test {
     std.testing.refAllDeclsRecursive(RbcGenerator);
 }
 
-
-
 allocator: std.mem.Allocator,
 
 ir: *Rir,
@@ -29,18 +27,15 @@ evidence_lookup: std.ArrayHashMapUnmanaged(Rir.EvidenceId, Rbc.EvidenceIndex, ut
 module_lookup: std.ArrayHashMapUnmanaged(Rir.ModuleId, *Module, utils.SimpleHashContext, false) = .{},
 foreign_lookup: std.ArrayHashMapUnmanaged(Rir.ForeignId, Rbc.ForeignId, utils.SimpleHashContext, false) = .{},
 
-
 /// The allocator provided should be an arena,
 /// or a similar allocator that doesn't care about freeing individual allocations
-pub fn init(allocator: std.mem.Allocator, ir: *Rir) error{OutOfMemory} !RbcGenerator {
-    return RbcGenerator {
+pub fn init(allocator: std.mem.Allocator, ir: *Rir) error{OutOfMemory}!RbcGenerator {
+    return RbcGenerator{
         .allocator = allocator,
         .builder = try RbcBuilder.init(allocator),
         .ir = ir,
     };
 }
-
-
 
 pub const MAX_FRESH_NAME_LEN = 128;
 
@@ -61,13 +56,14 @@ pub const Export = union(enum) {
             *const Rir.Global => return .{ .global = @constCast(value) },
             *Rir.Global => return .{ .global = value },
 
-            else => @compileError("Invalid export type " ++ @typeName(@TypeOf(value) ++ ", must be a pointer to an Rir.Function or Rir.Global"),),
+            else => @compileError(
+                "Invalid export type " ++ @typeName(@TypeOf(value) ++ ", must be a pointer to an Rir.Function or Rir.Global"),
+            ),
         }
     }
 };
 
-
-pub const Error = Rir.Error || RbcBuilder.Error || error {
+pub const Error = Rir.Error || RbcBuilder.Error || error{
     StackOverflow,
     StackUnderflow,
     StackNotCleared,
@@ -78,13 +74,11 @@ pub const Error = Rir.Error || RbcBuilder.Error || error {
     AddressOfRegister,
 };
 
-
-
 /// Allocator provided does not have to be the allocator used to create the generator,
 /// a long term allocator is preferred.
 ///
 /// In the event of an error, this function cleans up any allocations it created.
-pub fn generate(self: *RbcGenerator, allocator: std.mem.Allocator, exports: []const Export) Error! Rbc {
+pub fn generate(self: *RbcGenerator, allocator: std.mem.Allocator, exports: []const Export) Error!Rbc {
     for (exports) |exp| {
         switch (exp) {
             .function => |ref| _ = try self.getFunction(ref),
@@ -95,7 +89,7 @@ pub fn generate(self: *RbcGenerator, allocator: std.mem.Allocator, exports: []co
     return try self.builder.assemble(allocator);
 }
 
-pub fn getModule(self: *RbcGenerator, modId: Rir.ModuleId) error{InvalidModule, OutOfMemory}! *Module {
+pub fn getModule(self: *RbcGenerator, modId: Rir.ModuleId) error{ InvalidModule, OutOfMemory }!*Module {
     const getOrPut = try self.module_lookup.getOrPut(self.allocator, modId);
 
     if (!getOrPut.found_existing) {
@@ -106,11 +100,11 @@ pub fn getModule(self: *RbcGenerator, modId: Rir.ModuleId) error{InvalidModule, 
     return getOrPut.value_ptr.*;
 }
 
-pub fn getGlobal(self: *RbcGenerator, gRef: *Rir.Global) Error! *Global {
+pub fn getGlobal(self: *RbcGenerator, gRef: *Rir.Global) Error!*Global {
     return (try self.getModule(gRef.module.id)).getGlobal(gRef.id);
 }
 
-pub fn getFunction(self: *RbcGenerator, fRef: *Rir.Function) Error! *Function {
+pub fn getFunction(self: *RbcGenerator, fRef: *Rir.Function) Error!*Function {
     return (try self.getModule(fRef.module.id)).getFunction(fRef.id);
 }
 
@@ -135,8 +129,7 @@ pub fn getForeign(self: *RbcGenerator, foreignAddressIr: *Rir.ForeignAddress) !R
     return getOrPut.value_ptr.*;
 }
 
-
-pub fn freshName(self: *RbcGenerator, args: anytype) Error! Rir.NameId {
+pub fn freshName(self: *RbcGenerator, args: anytype) Error!Rir.NameId {
     var buf = [1]u8{0} ** MAX_FRESH_NAME_LEN;
 
     var fbs = std.io.fixedBufferStream(&buf);
@@ -148,16 +141,14 @@ pub fn freshName(self: *RbcGenerator, args: anytype) Error! Rir.NameId {
 
     inline for (0..args.len) |i| {
         if (i > 0) {
-            formatter.writeAll("-")
-                catch |err| {
-                    return utils.types.forceErrorSet(Error, err);
-                };
-        }
-
-        formatter.fmt(args[i])
-            catch |err| {
+            formatter.writeAll("-") catch |err| {
                 return utils.types.forceErrorSet(Error, err);
             };
+        }
+
+        formatter.fmt(args[i]) catch |err| {
+            return utils.types.forceErrorSet(Error, err);
+        };
     }
 
     const str = fbs.getWritten();

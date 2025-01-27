@@ -5,8 +5,6 @@ const block = @This();
 const std = @import("std");
 const utils = @import("utils");
 
-
-
 const LocalMap = std.ArrayHashMapUnmanaged(Rir.LocalId, *Rir.Local, utils.SimpleHashContext, false);
 
 pub const Block = struct {
@@ -24,14 +22,13 @@ pub const Block = struct {
     local_map: LocalMap = .{},
     instructions: std.ArrayListUnmanaged(Rir.Instruction) = .{},
 
-
     pub fn init(function: *Rir.Function, parent: ?*Block, id: Rir.BlockId, name: Rir.NameId) !*Block {
         const ir = function.ir;
 
         const ptr = try ir.allocator.create(Block);
         errdefer ir.allocator.destroy(ptr);
 
-        ptr.* = Block {
+        ptr.* = Block{
             .ir = ir,
             .function = function,
             .parent = parent,
@@ -58,14 +55,13 @@ pub const Block = struct {
         if (formatter.getFlag(.show_ids)) try formatter.print("#{}", .{@intFromEnum(self.id)});
         try formatter.writeAll(" =");
         try formatter.beginBlock();
-            for (self.instructions.items, 0..) |inst, i| {
-                if (formatter.getFlag(.show_indices)) try formatter.print("{d: <4} ", .{i});
-                try formatter.fmt(inst);
-                if (i < self.instructions.items.len - 1) try formatter.endLine();
-            }
+        for (self.instructions.items, 0..) |inst, i| {
+            if (formatter.getFlag(.show_indices)) try formatter.print("{d: <4} ", .{i});
+            try formatter.fmt(inst);
+            if (i < self.instructions.items.len - 1) try formatter.endLine();
+        }
         try formatter.endBlock();
     }
-
 
     pub fn length(self: *const Block) Rir.Offset {
         return @intCast(self.instructions.items.len);
@@ -75,8 +71,7 @@ pub const Block = struct {
         return self.local_map.count();
     }
 
-
-    pub fn getLocal(self: *const Block, id: Rir.LocalId) error{InvalidLocal}! *Rir.Local {
+    pub fn getLocal(self: *const Block, id: Rir.LocalId) error{InvalidLocal}!*Rir.Local {
         if (self.local_map.get(id)) |x| {
             return x;
         } else if (self.parent) |p| {
@@ -86,7 +81,7 @@ pub const Block = struct {
         }
     }
 
-    pub fn createLocal(self: *Block, name: Rir.NameId, typeIr: *Rir.Type) error{TooManyLocals, OutOfMemory}! *Rir.Local {
+    pub fn createLocal(self: *Block, name: Rir.NameId, typeIr: *Rir.Type) error{ TooManyLocals, OutOfMemory }!*Rir.Local {
         const id = try self.function.freshLocalId();
 
         const local = try Rir.Local.init(self, id, name, typeIr);
@@ -96,8 +91,6 @@ pub const Block = struct {
 
         return local;
     }
-
-
 
     pub fn nop(self: *Block) !void {
         try op(self, .nop, {});
@@ -315,11 +308,9 @@ pub const Block = struct {
         try op(self, .ref_upvalue, x.id);
     }
 
-
     pub fn im(self: *Block, x: anytype) !void {
         const size = @bitSizeOf(@TypeOf(x));
-        return if (comptime size > 32) @call(.always_inline, im_w, .{self, x})
-        else @call(.always_inline, im_i, .{self, x});
+        return if (comptime size > 32) @call(.always_inline, im_w, .{ self, x }) else @call(.always_inline, im_i, .{ self, x });
     }
 
     pub fn im_i(self: *Block, x: anytype) !void {
@@ -337,13 +328,11 @@ pub const Block = struct {
         });
     }
 
-
-
     pub fn op(self: *Block, comptime code: Rir.OpCode, data: Rir.value.OpData.Of(code)) !void {
         try @call(.always_inline, std.ArrayListUnmanaged(Rir.Instruction).append, .{
             &self.instructions,
             self.ir.allocator,
-            Rir.Instruction {
+            Rir.Instruction{
                 .code = code,
                 .data = @unionInit(Rir.OpData, @tagName(code), data),
             },

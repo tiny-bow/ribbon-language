@@ -8,8 +8,6 @@ const Rir = @import("Rir");
 const Rbc = @import("Rbc");
 const RbcBuilder = @import("RbcBuilder");
 
-
-
 pub const Global = struct {
     generator: *Generator,
     module: *Generator.Module,
@@ -17,12 +15,11 @@ pub const Global = struct {
     ir: *Rir.Global,
     builder: *RbcBuilder.Global,
 
-
-    pub fn init(module: *Generator.Module, globalIr: *Rir.Global, globalBuilder: *RbcBuilder.Global) error{OutOfMemory}! *Global {
+    pub fn init(module: *Generator.Module, globalIr: *Rir.Global, globalBuilder: *RbcBuilder.Global) error{OutOfMemory}!*Global {
         const generator = module.generator;
         const self = try generator.allocator.create(Global);
 
-        self.* = Global {
+        self.* = Global{
             .generator = generator,
             .module = module,
 
@@ -32,7 +29,6 @@ pub const Global = struct {
 
         return self;
     }
-
 
     pub fn generate(_: *Global) !void {
         @panic("TODO: Implement Global.generate");

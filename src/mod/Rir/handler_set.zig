@@ -5,8 +5,6 @@ const handler_set = @This();
 const std = @import("std");
 const utils = @import("utils");
 
-
-
 const HandlerList = std.ArrayHashMapUnmanaged(Rir.EvidenceId, *Rir.Function, utils.SimpleHashContext, false);
 
 pub const HandlerSet = struct {
@@ -27,7 +25,7 @@ pub const HandlerSet = struct {
         const ptr = try ir.allocator.create(HandlerSet);
         errdefer ir.allocator.destroy(ptr);
 
-        ptr.* = HandlerSet {
+        ptr.* = HandlerSet{
             .ir = ir,
             .module = module,
             .id = id,

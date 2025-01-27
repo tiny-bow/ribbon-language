@@ -4,8 +4,6 @@ const ansi = @This();
 
 const std = @import("std");
 
-
-
 pub const Scl = struct {
     pub const Bell: u8 = 0x07;
     pub const Backspace: u8 = 0x08;
@@ -256,8 +254,6 @@ pub const StyleT = struct { Reset: []const u8, Decoration: struct {
         Default: []const u8,
     };
 } };
-
-
 
 test {
     std.testing.refAllDeclsRecursive(@This());

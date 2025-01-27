@@ -13,19 +13,16 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-
-
 pub const Unit = extern struct {};
 
-pub const IOError = std.fs.File.WriteError || std.fs.File.ReadError || std.fs.File.OpenError || error {
+pub const IOError = std.fs.File.WriteError || std.fs.File.ReadError || std.fs.File.OpenError || error{
     StreamTooLong,
 };
 
 pub fn isIOError(err: anyerror) bool {
     if (err == error.Unknown) return false;
 
-    const es = @typeInfo(IOError).error_set
-        orelse [0]std.builtin.Type.Error {};
+    const es = @typeInfo(IOError).error_set orelse [0]std.builtin.Type.Error{};
 
     inline for (es) |e| {
         const err2 = @field(IOError, e.name);
@@ -38,8 +35,7 @@ pub fn isIOError(err: anyerror) bool {
 pub fn asIOError(err: anyerror) ?IOError {
     if (err == error.Unknown) return null;
 
-    const es = @typeInfo(IOError).error_set
-        orelse [0]std.builtin.Type.Error {};
+    const es = @typeInfo(IOError).error_set orelse [0]std.builtin.Type.Error{};
 
     inline for (es) |e| {
         const err2 = @field(IOError, e.name);
@@ -53,7 +49,7 @@ pub inline fn todo(comptime T: type, _: anytype) T {
     @panic("not yet implemented");
 }
 
-pub fn FilteredLogger(comptime scopes: []const u8) fn(
+pub fn FilteredLogger(comptime scopes: []const u8) fn (
     comptime level: std.log.Level,
     comptime scope: @Type(.enum_literal),
     comptime format: []const u8,
@@ -363,8 +359,7 @@ pub fn hashWith(hasher: anytype, a: anytype) void {
         .pointer => |info| {
             switch (info.size) {
                 .One, .C => {
-                    if (info.child == anyopaque
-                    or @typeInfo(info.child) == .@"fn") {
+                    if (info.child == anyopaque or @typeInfo(info.child) == .@"fn") {
                         return hashWith(hasher, @intFromPtr(a));
                     } else {
                         return hashWith(hasher, a.*);
@@ -557,27 +552,26 @@ pub fn compare(a: anytype, b: @TypeOf(a)) CompareResult(@TypeOf(a)) {
                         return Ordering.Equal;
                     }
                 },
-                .Many =>
-                    if (comptime info.sentinel) |sentinel| {
-                        const sent = @as(*const info.child, @ptrCast(sentinel)).*;
-                        var i: usize = 0;
-                        while (true) {
-                            if (a[i] == sent) {
-                                if (b[i] == sent) {
-                                    return Ordering.Equal;
-                                } else {
-                                    return Ordering.Less;
-                                }
-                            } else if (b[i] == sent) {
-                                return Ordering.Greater;
+                .Many => if (comptime info.sentinel) |sentinel| {
+                    const sent = @as(*const info.child, @ptrCast(sentinel)).*;
+                    var i: usize = 0;
+                    while (true) {
+                        if (a[i] == sent) {
+                            if (b[i] == sent) {
+                                return Ordering.Equal;
+                            } else {
+                                return Ordering.Less;
                             }
-                            const result = compare(a[i], b[i]);
-                            if (result != Ordering.Equal) {
-                                return result;
-                            }
-                            i += 1;
+                        } else if (b[i] == sent) {
+                            return Ordering.Greater;
                         }
-                    } else return compare(@intFromPtr(a), @intFromPtr(b)),
+                        const result = compare(a[i], b[i]);
+                        if (result != Ordering.Equal) {
+                            return result;
+                        }
+                        i += 1;
+                    }
+                } else return compare(@intFromPtr(a), @intFromPtr(b)),
             }
         },
         .array => |info| {

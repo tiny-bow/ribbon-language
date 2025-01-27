@@ -4,8 +4,6 @@ const foreign = @This();
 
 const std = @import("std");
 
-
-
 pub const Foreign = struct {
     pub const Id = Rir.ForeignId;
 
@@ -14,12 +12,11 @@ pub const Foreign = struct {
     name: Rir.NameId,
     type: *Rir.Type,
 
-
-    pub fn init(root: *Rir, id: Rir.ForeignId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}! *Foreign {
+    pub fn init(root: *Rir, id: Rir.ForeignId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}!*Foreign {
         const ptr = try root.allocator.create(Foreign);
         errdefer root.allocator.destroy(ptr);
 
-        ptr.* = Foreign {
+        ptr.* = Foreign{
             .root = root,
             .id = id,
             .name = name,

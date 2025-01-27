@@ -14,8 +14,6 @@ test {
     std.testing.refAllDecls(@This());
 }
 
-
-
 allocator: std.mem.Allocator,
 globals: GlobalList,
 functions: FunctionList,
@@ -23,20 +21,19 @@ handler_sets: HandlerSetList,
 evidences: usize,
 main_function: ?Rbc.FunctionIndex,
 
-
 /// The allocator provided should be an arena,
 /// or a similar allocator that doesn't care about freeing individual allocations
 pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!RbcBuilder {
-    var globals = GlobalList {};
+    var globals = GlobalList{};
     try globals.ensureTotalCapacity(allocator, 256);
 
-    var functions = FunctionList {};
+    var functions = FunctionList{};
     try functions.ensureTotalCapacity(allocator, 256);
 
-    var handler_sets = HandlerSetList {};
+    var handler_sets = HandlerSetList{};
     try handler_sets.ensureTotalCapacity(allocator, 256);
 
-    return RbcBuilder {
+    return RbcBuilder{
         .allocator = allocator,
         .globals = globals,
         .functions = functions,
@@ -45,8 +42,6 @@ pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!RbcBuilder {
         .main_function = null,
     };
 }
-
-
 
 pub const Block = block.Block;
 pub const Function = function.Function;
@@ -58,8 +53,7 @@ pub const Global = struct {
     initial: []u8,
 };
 
-
-pub const Error = std.mem.Allocator.Error || error {
+pub const Error = std.mem.Allocator.Error || error{
     TooManyGlobals,
     TooManyFunctions,
     TooManyBlocks,
@@ -86,12 +80,9 @@ pub const Error = std.mem.Allocator.Error || error {
     UnfinishedBlock,
 };
 
-
 const GlobalList = std.ArrayListUnmanaged(Global);
 const FunctionList = std.ArrayListUnmanaged(*Function);
 const HandlerSetList = std.ArrayListUnmanaged(*HandlerSet);
-
-
 
 /// this does not have to be the same allocator as the one passed to `init`,
 /// a long-term allocator is preferred. In the event of an error, the builder
@@ -152,7 +143,7 @@ pub fn generateGlobalSet(self: *const RbcBuilder, allocator: std.mem.Allocator) 
     return .{ values, memory };
 }
 
-pub fn generateFunctionLists(self: *const RbcBuilder, allocator: std.mem.Allocator) Error!struct {[]Rbc.Function, []Rbc.Foreign} {
+pub fn generateFunctionLists(self: *const RbcBuilder, allocator: std.mem.Allocator) Error!struct { []Rbc.Function, []Rbc.Foreign } {
     var functions = std.ArrayListUnmanaged(Rbc.Function){};
     var foreign_functions = std.ArrayListUnmanaged(Rbc.Foreign){};
 
@@ -167,7 +158,7 @@ pub fn generateFunctionLists(self: *const RbcBuilder, allocator: std.mem.Allocat
         try functions.append(allocator, final);
     }
 
-    return .{try functions.toOwnedSlice(allocator), try foreign_functions.toOwnedSlice(allocator)};
+    return .{ try functions.toOwnedSlice(allocator), try foreign_functions.toOwnedSlice(allocator) };
 }
 
 pub fn generateHandlerSetList(self: *const RbcBuilder, allocator: std.mem.Allocator) Error![]Rbc.HandlerSet {
@@ -186,7 +177,7 @@ pub fn generateHandlerSetList(self: *const RbcBuilder, allocator: std.mem.Alloca
     return handlerSets;
 }
 
-pub fn getGlobal(self: *const RbcBuilder, index: Rbc.GlobalIndex) Error! *Global {
+pub fn getGlobal(self: *const RbcBuilder, index: Rbc.GlobalIndex) Error!*Global {
     if (index >= self.globals.items.len) {
         return Error.InvalidIndex;
     }
@@ -194,7 +185,7 @@ pub fn getGlobal(self: *const RbcBuilder, index: Rbc.GlobalIndex) Error! *Global
     return &self.globals.items[index];
 }
 
-pub fn globalBytes(self: *RbcBuilder, alignment: Rbc.Alignment, initial: []u8) Error! *Global {
+pub fn globalBytes(self: *RbcBuilder, alignment: Rbc.Alignment, initial: []u8) Error!*Global {
     const index = self.globals.items.len;
     if (index >= std.math.maxInt(Rbc.GlobalIndex)) {
         return Error.TooManyGlobals;
@@ -209,14 +200,14 @@ pub fn globalBytes(self: *RbcBuilder, alignment: Rbc.Alignment, initial: []u8) E
     return &self.globals.items[index];
 }
 
-pub fn globalNative(self: *RbcBuilder, value: anytype) Error! *Global {
+pub fn globalNative(self: *RbcBuilder, value: anytype) Error!*Global {
     const T = @TypeOf(value);
     const initial = try self.allocator.create(T);
     initial.* = value;
     return self.globalBytes(@alignOf(T), @as([*]u8, @ptrCast(initial))[0..@sizeOf(T)]);
 }
 
-pub fn getFunction(self: *const RbcBuilder, index: Rbc.FunctionIndex) Error! *Function {
+pub fn getFunction(self: *const RbcBuilder, index: Rbc.FunctionIndex) Error!*Function {
     if (index >= self.functions.items.len) {
         return Error.InvalidIndex;
     }
@@ -224,7 +215,7 @@ pub fn getFunction(self: *const RbcBuilder, index: Rbc.FunctionIndex) Error! *Fu
     return self.functions.items[index];
 }
 
-pub fn createFunction(self: *RbcBuilder) Error! *Function {
+pub fn createFunction(self: *RbcBuilder) Error!*Function {
     const index = self.functions.items.len;
     if (index >= std.math.maxInt(Rbc.FunctionIndex)) {
         return Error.TooManyFunctions;
@@ -241,7 +232,7 @@ pub fn hasMain(self: *const RbcBuilder) bool {
     return self.main_function != null;
 }
 
-pub fn main(self: *RbcBuilder) Error! *Function {
+pub fn main(self: *RbcBuilder) Error!*Function {
     if (self.hasMain()) return Error.MultipleMains;
 
     const func = try self.createFunction();
@@ -265,7 +256,7 @@ pub fn main(self: *RbcBuilder) Error! *Function {
 //     return &func.foreign;
 // }
 
-pub fn evidence(self: *RbcBuilder) Error! Rbc.EvidenceIndex {
+pub fn evidence(self: *RbcBuilder) Error!Rbc.EvidenceIndex {
     const index = self.evidences;
     if (index >= Rbc.EVIDENCE_SENTINEL) {
         return Error.TooManyEvidences;
@@ -274,8 +265,7 @@ pub fn evidence(self: *RbcBuilder) Error! Rbc.EvidenceIndex {
     return @truncate(index);
 }
 
-
-pub fn getHandlerSet(self: *const RbcBuilder, index: Rbc.HandlerSetIndex) Error! *HandlerSet {
+pub fn getHandlerSet(self: *const RbcBuilder, index: Rbc.HandlerSetIndex) Error!*HandlerSet {
     if (index >= self.handler_sets.items.len) {
         return Error.InvalidIndex;
     }
@@ -283,7 +273,7 @@ pub fn getHandlerSet(self: *const RbcBuilder, index: Rbc.HandlerSetIndex) Error!
     return self.handler_sets.items[index];
 }
 
-pub fn createHandlerSet(self: *RbcBuilder) Error! *HandlerSet {
+pub fn createHandlerSet(self: *RbcBuilder) Error!*HandlerSet {
     const index = self.handler_sets.items.len;
     if (index >= std.math.maxInt(Rbc.HandlerSetIndex)) {
         return Error.TooManyHandlerSets;
@@ -296,8 +286,7 @@ pub fn createHandlerSet(self: *RbcBuilder) Error! *HandlerSet {
     return handlerSet;
 }
 
-
-pub fn extractFunctionIndex(self: *const RbcBuilder, f: anytype) Error! Rbc.FunctionIndex {
+pub fn extractFunctionIndex(self: *const RbcBuilder, f: anytype) Error!Rbc.FunctionIndex {
     switch (@TypeOf(f)) {
         *Rbc.FunctionIndex => return extractFunctionIndex(self, f.*),
         Rbc.FunctionIndex => {
@@ -316,14 +305,11 @@ pub fn extractFunctionIndex(self: *const RbcBuilder, f: anytype) Error! Rbc.Func
             return f.index;
         },
 
-        else => @compileError(std.fmt.comptimePrint(
-            "invalid block index parameter, expected either `Rbc.FunctionIndex` or `*RbcBuilder.Function`, got `{s}`",
-            .{@typeName(@TypeOf(f))}
-        )),
+        else => @compileError(std.fmt.comptimePrint("invalid block index parameter, expected either `Rbc.FunctionIndex` or `*RbcBuilder.Function`, got `{s}`", .{@typeName(@TypeOf(f))})),
     }
 }
 
-pub fn extractHandlerSetIndex(self: *const RbcBuilder, h: anytype) Error! Rbc.HandlerSetIndex {
+pub fn extractHandlerSetIndex(self: *const RbcBuilder, h: anytype) Error!Rbc.HandlerSetIndex {
     switch (@TypeOf(h)) {
         *Rbc.HandlerSetIndex => return extractHandlerSetIndex(self, h.*),
         Rbc.HandlerSetIndex => {
@@ -342,9 +328,6 @@ pub fn extractHandlerSetIndex(self: *const RbcBuilder, h: anytype) Error! Rbc.Ha
             return h.index;
         },
 
-        else => @compileError(std.fmt.comptimePrint(
-            "invalid handler set index parameter, expected either `Rbc.HandlerSetIndex` or `*RbcBuilder.HandlerSetBuilder`, got `{s}`",
-            .{@typeName(@TypeOf(h))}
-        )),
+        else => @compileError(std.fmt.comptimePrint("invalid handler set index parameter, expected either `Rbc.HandlerSetIndex` or `*RbcBuilder.HandlerSetBuilder`, got `{s}`", .{@typeName(@TypeOf(h))})),
     }
 }

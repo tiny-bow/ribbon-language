@@ -3,8 +3,6 @@ const Rml = @import("../../Rml.zig");
 const std = @import("std");
 const utils = @import("utils");
 
-
-
 pub const Cell = struct {
     value: Rml.Object,
 
@@ -23,7 +21,7 @@ pub const Cell = struct {
         return self.value.compare(other.value);
     }
 
-    pub fn onFormat(self: *Cell, fmt: Rml.Format, w: std.io.AnyWriter) anyerror! void {
+    pub fn onFormat(self: *Cell, fmt: Rml.Format, w: std.io.AnyWriter) anyerror!void {
         if (fmt == .debug) {
             try w.print("Cell({s})", .{self.value});
         } else {
@@ -31,7 +29,7 @@ pub const Cell = struct {
         }
     }
 
-    pub fn format(self: *Cell, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+    pub fn format(self: *Cell, comptime fmtStr: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror!void {
         const fmt = Rml.Format.fromStr(fmtStr) orelse .debug;
         const w = if (@TypeOf(writer) == std.io.AnyWriter) writer else writer.any();
         try self.onFormat(fmt, w);

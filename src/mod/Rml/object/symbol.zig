@@ -3,16 +3,14 @@ const Rml = @import("../../Rml.zig");
 const std = @import("std");
 const utils = @import("utils");
 
-
-
 pub const Symbol = struct {
     str: Rml.str,
 
-    pub fn create(rml: *Rml, str: []const u8) Rml.OOM! Symbol {
+    pub fn create(rml: *Rml, str: []const u8) Rml.OOM!Symbol {
         return .{ .str = try rml.data.intern(str) };
     }
 
-    pub fn format(self: *const Symbol, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror! void {
+    pub fn format(self: *const Symbol, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror!void {
         return writer.writeAll(self.text());
     }
 
@@ -24,4 +22,3 @@ pub const Symbol = struct {
         return @intCast(self.str.len);
     }
 };
-

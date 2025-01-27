@@ -6,8 +6,6 @@ const std = @import("std");
 const utils = @import("utils");
 const Rbc = @import("Rbc");
 
-
-
 pub const HandlerMap = std.ArrayHashMapUnmanaged(Rbc.EvidenceIndex, Rbc.FunctionIndex, utils.SimpleHashContext, false);
 
 pub const HandlerSet = struct {
@@ -18,10 +16,10 @@ pub const HandlerSet = struct {
     pub fn init(parent: *Builder, index: Rbc.HandlerSetIndex) std.mem.Allocator.Error!*HandlerSet {
         const ptr = try parent.allocator.create(HandlerSet);
 
-        var handler_map = HandlerMap {};
+        var handler_map = HandlerMap{};
         try handler_map.ensureTotalCapacity(parent.allocator, 8);
 
-        ptr.* = HandlerSet {
+        ptr.* = HandlerSet{
             .parent = parent,
             .index = index,
             .handler_map = handler_map,
@@ -36,7 +34,7 @@ pub const HandlerSet = struct {
 
         for (self.handler_map.keys(), 0..) |e, i| {
             const funIndex = try self.getHandler(e);
-            handlerSet[i] = Rbc.HandlerBinding { .id = e, .handler = funIndex };
+            handlerSet[i] = Rbc.HandlerBinding{ .id = e, .handler = funIndex };
         }
 
         return handlerSet;
