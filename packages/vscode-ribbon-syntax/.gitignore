@@ -1,5 +1,0 @@
-dist
-node_modules
-*.vsix
-package-lock.json
-yarn.lock

@@ -2,8 +2,10 @@
     .name = "ribbon",
     .version = "0.0.0",
     .dependencies = .{
-        .Rli = .{ .path = "packages/rli/" },
-        .Utils = .{ .path = "packages/utils/" },
+        .zg = .{
+            .url = "https://github.com/noxabellus/zg/archive/ef8408e8b9e4bd8495e0fcb61e5e4456212d023a.tar.gz",
+            .hash = "1220c7d2266fcf257b1700e4875227a81cbf79cc284a1f1af11455d58d4e26f29efa",
+        },
     },
     .paths = .{
         "build.zig",
