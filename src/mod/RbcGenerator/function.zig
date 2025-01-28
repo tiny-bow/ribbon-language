@@ -50,7 +50,7 @@ pub const Function = struct {
 
             break :createBlockBuilder try self.builder.newBlock(
                 parent,
-                if (blockIr.handler_set) |handlerSetIr| RbcBuilder.block.BlockKind{
+                if (blockIr.handler_set) |handlerSetIr| RbcBuilder.BlockKind{
                     .with = (try self.module.getHandlerSet(handlerSetIr)).index,
                 } else .basic,
             );

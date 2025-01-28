@@ -397,7 +397,6 @@ pub fn hashWith(hasher: anytype, a: anytype) void {
     }
 }
 
-
 pub fn partialCompareSlice(a: anytype, b: @TypeOf(a)) ?std.math.Order {
     if (a.len < b.len) {
         return .lt;
@@ -587,10 +586,9 @@ pub fn compare(a: anytype, b: @TypeOf(a)) CompareResult(@TypeOf(a)) {
                 },
                 else => @compileError("Cannot do compare for type `" ++ @typeName(T) ++ "`"),
             }
-        }
+        },
     }
 }
-
 
 pub inline fn less(a: anytype, b: @TypeOf(a)) bool {
     return compare(a, b) == .lt;
