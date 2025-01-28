@@ -998,7 +998,7 @@ pub fn @"<"(
     for (args[1..]) |aN| {
         const b = aN;
 
-        if (utils.compare(a, b) != .Less) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+        if (utils.compare(a, b) != .lt) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
 
         a = b;
     }
@@ -1023,7 +1023,7 @@ pub fn @"<="(
     for (args[1..]) |aN| {
         const b = aN;
 
-        if (utils.compare(a, b) == .Greater) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+        if (utils.compare(a, b) == .gt) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
 
         a = b;
     }
@@ -1048,7 +1048,7 @@ pub fn @">"(
     for (args[1..]) |aN| {
         const b = aN;
 
-        if (utils.compare(a, b) != .Greater) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+        if (utils.compare(a, b) != .gt) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
 
         a = b;
     }
@@ -1073,7 +1073,7 @@ pub fn @">="(
     for (args[1..]) |aN| {
         const b = aN;
 
-        if (utils.compare(a, b) == .Less) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
+        if (utils.compare(a, b) == .lt) return (try Rml.Obj(Rml.Bool).wrap(Rml.getRml(interpreter), origin, false)).typeErase();
 
         a = b;
     }

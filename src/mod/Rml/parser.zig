@@ -24,10 +24,10 @@ pub const Parser = struct {
         };
     }
 
-    pub fn onCompare(a: *const Parser, other: Rml.Object) utils.Ordering {
+    pub fn onCompare(a: *const Parser, other: Rml.Object) std.math.Order {
         var ord = utils.compare(Rml.getTypeId(a), other.getTypeId());
 
-        if (ord == .Equal) {
+        if (ord == .eq) {
             const b = Rml.forceObj(Parser, other);
             ord = utils.compare(@intFromPtr(a), @intFromPtr(b.data));
         }

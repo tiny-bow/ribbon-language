@@ -33,10 +33,10 @@ pub const Quote = struct {
     kind: QuoteKind,
     body: Rml.Object,
 
-    pub fn compare(self: Quote, other: Quote) utils.Ordering {
+    pub fn compare(self: Quote, other: Quote) std.math.Order {
         var ord = utils.compare(self.kind, other.kind);
 
-        if (ord == .Equal) {
+        if (ord == .eq) {
             ord = self.body.compare(other.body);
         }
 

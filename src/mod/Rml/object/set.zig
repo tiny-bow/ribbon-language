@@ -21,10 +21,10 @@ pub fn TypedSet(comptime K: type) type {
             return self;
         }
 
-        pub fn compare(self: Self, other: Self) utils.Ordering {
+        pub fn compare(self: Self, other: Self) std.math.Order {
             var ord = utils.compare(self.keys().len, other.keys().len);
 
-            if (ord == .Equal) {
+            if (ord == .eq) {
                 ord = utils.compare(self.keys(), other.keys());
             }
 

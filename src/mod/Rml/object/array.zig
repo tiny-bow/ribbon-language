@@ -20,7 +20,7 @@ pub fn TypedArray(comptime T: type) type {
             return self;
         }
 
-        pub fn compare(self: Self, other: Self) utils.Ordering {
+        pub fn compare(self: Self, other: Self) std.math.Order {
             return utils.compare(self.native_array.items, other.native_array.items);
         }
 

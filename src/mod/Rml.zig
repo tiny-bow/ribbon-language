@@ -96,7 +96,7 @@ pub const Nil = extern struct {
         return w.print("nil", .{});
     }
 
-    pub fn onCompare(_: *Nil, other: Object) utils.Ordering {
+    pub fn onCompare(_: *Nil, other: Object) std.math.Order {
         return utils.compare(TypeId.of(Nil), other.getTypeId());
     }
 };

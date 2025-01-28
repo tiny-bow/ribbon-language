@@ -32,10 +32,10 @@ pub fn Support(comptime T: type) type {
     return struct {
         pub const onCompare = switch (@typeInfo(T)) {
             else => struct {
-                pub fn onCompare(a: *const T, obj: Rml.Object) utils.Ordering {
+                pub fn onCompare(a: *const T, obj: Rml.Object) std.math.Order {
                     var ord = utils.compare(Rml.getTypeId(a), obj.getTypeId());
 
-                    if (ord == .Equal) {
+                    if (ord == .eq) {
                         ord = utils.compare(a.*, Rml.forceObj(T, obj).data.*);
                     }
 

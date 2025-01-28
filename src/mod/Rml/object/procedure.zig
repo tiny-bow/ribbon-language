@@ -101,18 +101,18 @@ pub const Procedure = union(ProcedureKind) {
     native_function: Rml.bindgen.NativeFunction,
     cancellation: Rml.WithId,
 
-    pub fn compare(self: Procedure, other: Procedure) utils.Ordering {
+    pub fn compare(self: Procedure, other: Procedure) std.math.Order {
         var ord = utils.compare(std.meta.activeTag(self), std.meta.activeTag(other));
 
-        if (ord == .Equal) {
+        if (ord == .eq) {
             switch (self) {
                 .macro => |macro| {
                     ord = utils.compare(macro.env, other.macro.env);
-                    if (ord == .Equal) ord = utils.compare(macro.cases, other.macro.cases);
+                    if (ord == .eq) ord = utils.compare(macro.cases, other.macro.cases);
                 },
                 .function => |function| {
                     ord = utils.compare(function.env, other.function.env);
-                    if (ord == .Equal) ord = utils.compare(function.cases, other.function.cases);
+                    if (ord == .eq) ord = utils.compare(function.cases, other.function.cases);
                 },
                 .native_macro => |native| {
                     ord = utils.compare(native, other.native_macro);

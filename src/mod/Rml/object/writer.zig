@@ -12,7 +12,7 @@ pub const Writer = struct {
         return Writer{ .native = native_writer };
     }
 
-    pub fn compare(self: Writer, other: Writer) utils.Ordering {
+    pub fn compare(self: Writer, other: Writer) std.math.Order {
         return utils.compare(self.native, other.native);
     }
 

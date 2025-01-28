@@ -24,7 +24,7 @@ pub const Interpreter = struct {
         };
     }
 
-    pub fn onCompare(a: *Interpreter, other: Rml.Object) utils.Ordering {
+    pub fn onCompare(a: *Interpreter, other: Rml.Object) std.math.Order {
         return utils.compare(@intFromPtr(a), @intFromPtr(other.data));
     }
 

@@ -11,10 +11,10 @@ pub const Env = struct {
     allocator: std.mem.Allocator,
     table: CellTable = .{},
 
-    pub fn compare(self: Env, other: Env) utils.Ordering {
+    pub fn compare(self: Env, other: Env) std.math.Order {
         var ord = utils.compare(self.keys(), other.keys());
 
-        if (ord == .Equal) {
+        if (ord == .eq) {
             ord = utils.compare(self.cells(), other.cells());
         }
 

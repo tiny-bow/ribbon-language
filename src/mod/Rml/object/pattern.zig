@@ -7,10 +7,10 @@ pub const Alias = struct {
     sym: Rml.Obj(Rml.Symbol),
     sub: Rml.Object,
 
-    pub fn compare(self: Alias, other: Alias) utils.Ordering {
+    pub fn compare(self: Alias, other: Alias) std.math.Order {
         var ord = self.sym.compare(other.sym);
 
-        if (ord == .Equal) {
+        if (ord == .eq) {
             ord = self.sub.onCompare(other.sub);
         }
 
@@ -58,10 +58,10 @@ pub const Pattern = union(enum) {
     // (| patt patt)        ;alternation ;outer block is not-a-block
     alternation: Rml.Obj(Rml.Array),
 
-    pub fn compare(self: Pattern, other: Pattern) utils.Ordering {
+    pub fn compare(self: Pattern, other: Pattern) std.math.Order {
         var ord = utils.compare(std.meta.activeTag(self), std.meta.activeTag(other));
 
-        if (ord == .Equal) {
+        if (ord == .eq) {
             ord = switch (self) {
                 .wildcard => ord,
                 .symbol => |x| x.compare(other.symbol),
@@ -340,7 +340,7 @@ pub fn runPattern(
             const input = objects[offset.*];
             offset.* += 1;
 
-            if (value_literal.onCompare(input) != .Equal)
+            if (value_literal.onCompare(input) != .eq)
                 return patternAbort(diag, input.getOrigin(), "expected `{}`, got `{}`", .{ value_literal, input });
         },
 
@@ -366,21 +366,21 @@ pub fn runPattern(
             switch (quote.data.kind) {
                 .basic => {
                     const patt = quote.data.body;
-                    if (patt.onCompare(input) != .Equal) return patternAbort(diag, input.getOrigin(), "expected `{}`, got `{}`", .{ patt, input });
+                    if (patt.onCompare(input) != .eq) return patternAbort(diag, input.getOrigin(), "expected `{}`, got `{}`", .{ patt, input });
                 },
                 .quasi => {
                     const w = try Rml.object.quote.runQuasi(interpreter, quote.data.body, null);
-                    if (w.onCompare(input) != .Equal) return patternAbort(diag, input.getOrigin(), "expected `{}`, got `{}`", .{ w, input });
+                    if (w.onCompare(input) != .eq) return patternAbort(diag, input.getOrigin(), "expected `{}`, got `{}`", .{ w, input });
                 },
                 .to_quote => {
                     const v = try interpreter.eval(quote.data.body);
                     const q = try Rml.Obj(Rml.Quote).wrap(Rml.getRml(interpreter), quote.getOrigin(), .{ .kind = .basic, .body = v });
-                    if (q.onCompare(input) != .Equal) return patternAbort(diag, input.getOrigin(), "expected `{}`, got `{}`", .{ q, input });
+                    if (q.onCompare(input) != .eq) return patternAbort(diag, input.getOrigin(), "expected `{}`, got `{}`", .{ q, input });
                 },
                 .to_quasi => {
                     const v = try interpreter.eval(quote.data.body);
                     const q = try Rml.Obj(Rml.Quote).wrap(Rml.getRml(interpreter), quote.getOrigin(), .{ .kind = .quasi, .body = v });
-                    if (q.onCompare(input) != .Equal) return patternAbort(diag, input.getOrigin(), "expected `{}`, got `{}`", .{ q, input });
+                    if (q.onCompare(input) != .eq) return patternAbort(diag, input.getOrigin(), "expected `{}`, got `{}`", .{ q, input });
                 },
                 .unquote, .unquote_splice => try interpreter.abort(quote.getOrigin(), error.UnexpectedInput, "unquote syntax is not allowed in this context, found `{}`", .{quote}),
             }

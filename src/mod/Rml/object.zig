@@ -56,7 +56,7 @@ pub const Header = struct {
         };
     }
 
-    pub fn onCompare(self: *Header, other: *Header) utils.Ordering {
+    pub fn onCompare(self: *Header, other: *Header) std.math.Order {
         const obj = other.getObject();
         return self.vtable.onCompare(self, obj);
     }
@@ -85,7 +85,7 @@ pub const VTable = struct {
     pub const ObjMemoryFunctions = struct {};
 
     pub const ObjDataFunctions = struct {
-        onCompare: ?*const fn (*const ObjData, Rml.Object) utils.Ordering = null,
+        onCompare: ?*const fn (*const ObjData, Rml.Object) std.math.Order = null,
         onFormat: ?*const fn (*const ObjData, Rml.Format, std.io.AnyWriter) anyerror!void = null,
     };
 
@@ -159,7 +159,7 @@ pub const VTable = struct {
         return &x.vtable;
     }
 
-    pub fn onCompare(self: *const VTable, header: *Header, other: Object) utils.Ordering {
+    pub fn onCompare(self: *const VTable, header: *Header, other: Object) std.math.Order {
         const data = header.getData();
         return self.obj_data.onCompare.?(data, other);
     }
@@ -219,7 +219,7 @@ pub fn Obj(comptime T: type) type {
             return Self{ .data = memory.getData() };
         }
 
-        pub fn compare(self: Self, other: Obj(T)) utils.Ordering {
+        pub fn compare(self: Self, other: Obj(T)) std.math.Order {
             return self.getHeader().onCompare(other.getHeader());
         }
 
@@ -247,7 +247,7 @@ pub fn Obj(comptime T: type) type {
             return self.getHeader().rml;
         }
 
-        pub fn onCompare(self: Self, other: Object) utils.Ordering {
+        pub fn onCompare(self: Self, other: Object) std.math.Order {
             return self.getHeader().onCompare(other.getHeader());
         }
 

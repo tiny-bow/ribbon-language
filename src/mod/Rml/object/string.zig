@@ -15,10 +15,10 @@ pub const String = struct {
         return self;
     }
 
-    pub fn onCompare(self: *const String, other: Rml.Object) utils.Ordering {
+    pub fn onCompare(self: *const String, other: Rml.Object) std.math.Order {
         var ord = utils.compare(Rml.TypeId.of(String), other.getTypeId());
 
-        if (ord == .Equal) {
+        if (ord == .eq) {
             const otherStr = Rml.forceObj(String, other);
             ord = utils.compare(self.text(), otherStr.data.text());
         }
@@ -26,7 +26,7 @@ pub const String = struct {
         return ord;
     }
 
-    pub fn compare(self: String, other: String) utils.Ordering {
+    pub fn compare(self: String, other: String) std.math.Order {
         return utils.compare(self.text(), other.text());
     }
 

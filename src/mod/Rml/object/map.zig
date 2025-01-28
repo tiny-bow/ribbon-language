@@ -17,14 +17,14 @@ pub fn TypedMap(comptime K: type, comptime V: type) type {
         pub const NativeIter = NativeMap.Iterator;
         pub const NativeMap = std.ArrayHashMapUnmanaged(Rml.Obj(K), Rml.Obj(V), utils.SimpleHashContext, true);
 
-        pub fn compare(self: Self, other: Self) utils.Ordering {
+        pub fn compare(self: Self, other: Self) std.math.Order {
             var ord = utils.compare(self.keys().len, other.keys().len);
 
-            if (ord == .Equal) {
+            if (ord == .eq) {
                 ord = utils.compare(self.keys(), other.keys());
             }
 
-            if (ord == .Equal) {
+            if (ord == .eq) {
                 ord = utils.compare(self.values(), other.values());
             }
 

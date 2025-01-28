@@ -39,10 +39,10 @@ pub const Type = struct {
         utils.hashWith(hasher, self.hash);
     }
 
-    pub fn compare(self: Type, other: Type) utils.Ordering {
+    pub fn compare(self: Type, other: Type) std.math.Order {
         const ord = utils.compare(std.meta.activeTag(self.info), std.meta.activeTag(other.info));
 
-        if (ord != .Equal or self.info.isBasic()) return ord;
+        if (ord != .eq or self.info.isBasic()) return ord;
 
         return switch (self.info) {
             .Pointer => utils.compare(self.info.Pointer, other.info.Pointer),
@@ -147,13 +147,13 @@ pub const Type = struct {
         }
     }
 
-    pub fn compareMemory(self: *const Type, a: []const u8, b: []const u8) !utils.Ordering {
-        if (a.ptr == b.ptr and a.len == b.len) return .Equal;
+    pub fn compareMemory(self: *const Type, a: []const u8, b: []const u8) !std.math.Order {
+        if (a.ptr == b.ptr and a.len == b.len) return .eq;
 
         const layout = try self.ir.getTypeLayout(self.id);
 
         switch (self.info) {
-            .Nil => return .Equal,
+            .Nil => return .eq,
 
             .Bool => return utils.compare(a[0], b[0]),
 
@@ -188,11 +188,11 @@ pub const Type = struct {
                 const bLength: *const Rir.Size = @alignCast(@ptrCast(b.ptr + 8));
                 const bBuf: []const u8 = bPtr.*[0..bLength.*];
 
-                if (aPtr.* == bPtr.* and aLength.* == bLength.*) return .Equal;
+                if (aPtr.* == bPtr.* and aLength.* == bLength.*) return .eq;
 
                 var ord = utils.compare(aLength.*, bLength.*);
 
-                if (ord == .Equal) {
+                if (ord == .eq) {
                     for (0..aLength.*) |i| {
                         const j = i * elemLayout.dimensions.size;
                         const aElem = aBuf[j .. j + elemLayout.dimensions.size];
@@ -200,7 +200,7 @@ pub const Type = struct {
 
                         ord = try info.element.compareMemory(aElem, bElem);
 
-                        if (ord != .Equal) break;
+                        if (ord != .eq) break;
                     }
                 }
 
@@ -216,10 +216,10 @@ pub const Type = struct {
                     const bElem = b[j .. j + elemLayout.dimensions.size];
 
                     const ord = try info.element.compareMemory(aElem, bElem);
-                    if (ord != .Equal) return ord;
+                    if (ord != .eq) return ord;
                 }
 
-                return .Equal;
+                return .eq;
             },
 
             .Struct => |info| {
@@ -230,10 +230,10 @@ pub const Type = struct {
                     const fieldMemoryB = b[fieldOffset .. fieldOffset + fieldLayout.dimensions.size];
 
                     const ord = try field.type.compareMemory(fieldMemoryA, fieldMemoryB);
-                    if (ord != .Equal) return ord;
+                    if (ord != .eq) return ord;
                 }
 
-                return .Equal;
+                return .eq;
             },
             .Union => |info| {
                 const discriminatorLayout = try info.discriminator.getLayout();
@@ -241,12 +241,12 @@ pub const Type = struct {
                 const discMemB = b[0..discriminatorLayout.dimensions.size];
 
                 const discOrd = try info.discriminator.compareMemory(discMemA, discMemB);
-                if (discOrd != .Equal) return discOrd;
+                if (discOrd != .eq) return discOrd;
 
                 for (info.fields) |field| {
                     const fieldDiscMem = field.discriminant.getMemory();
 
-                    if (try info.discriminator.compareMemory(discMemA, fieldDiscMem) == .Equal) {
+                    if (try info.discriminator.compareMemory(discMemA, fieldDiscMem) == .eq) {
                         const fieldLayout = try field.type.getLayout();
                         const fieldMemoryA = a[layout.field_offsets[1] .. layout.field_offsets[1] + fieldLayout.dimensions.size];
                         const fieldMemoryB = b[layout.field_offsets[1] .. layout.field_offsets[1] + fieldLayout.dimensions.size];
@@ -266,10 +266,10 @@ pub const Type = struct {
                     const memoryB = b[offset .. offset + TLayout.dimensions.size];
 
                     const ord = try T.compareMemory(memoryA, memoryB);
-                    if (ord != .Equal) return ord;
+                    if (ord != .eq) return ord;
                 }
 
-                return .Equal;
+                return .eq;
             },
 
             .Sum => |_| return utils.compare(a, b),
@@ -358,7 +358,7 @@ pub const Type = struct {
                 for (info.fields) |field| {
                     const fieldDiscMem = field.discriminant.getMemory();
 
-                    if (try info.discriminator.compareMemory(discMem, fieldDiscMem) == .Equal) {
+                    if (try info.discriminator.compareMemory(discMem, fieldDiscMem) == .eq) {
                         const fieldLayout = try field.type.getLayout();
                         const fieldMemory = (memory.ptr + layout.field_offsets[1])[0..fieldLayout.dimensions.size];
 
@@ -404,7 +404,7 @@ pub const Type = struct {
     pub fn checkNative(self: *const Type, comptime T: type) error{ TypeMismatch, TooManyTypes, TooManyNames, OutOfMemory }!void {
         const t = try self.ir.createTypeFromNative(T, null, null);
 
-        if (t.compare(self.*) != .Equal) {
+        if (t.compare(self.*) != .eq) {
             return error.TypeMismatch;
         }
     }

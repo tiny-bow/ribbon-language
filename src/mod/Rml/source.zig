@@ -40,10 +40,10 @@ pub const Origin = struct {
         return Origin{ .filename = comptime std.fmt.comptimePrint(fmt, args) };
     }
 
-    pub fn compare(self: Origin, other: Origin) utils.Ordering {
+    pub fn compare(self: Origin, other: Origin) std.math.Order {
         var res = utils.compare(self.filename, other.filename);
 
-        if (res == .Equal) {
+        if (res == .eq) {
             res = utils.compare(self.range, other.range);
         }
 
@@ -92,10 +92,10 @@ pub const Range = struct {
     start: ?Pos = null,
     end: ?Pos = null,
 
-    pub fn compare(self: Range, other: Range) utils.Ordering {
+    pub fn compare(self: Range, other: Range) std.math.Order {
         var res = utils.compare(self.start, other.start);
 
-        if (res == .Equal) {
+        if (res == .eq) {
             res = utils.compare(self.end, other.end);
         }
 
@@ -133,7 +133,7 @@ pub const Pos = struct {
     offset: u32 = 0,
     indentation: u32 = 0,
 
-    pub fn compare(self: Pos, other: Pos) utils.Ordering {
+    pub fn compare(self: Pos, other: Pos) std.math.Order {
         return utils.compare(self.offset, other.offset);
     }
 

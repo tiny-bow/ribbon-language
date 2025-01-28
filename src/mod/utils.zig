@@ -397,22 +397,17 @@ pub fn hashWith(hasher: anytype, a: anytype) void {
     }
 }
 
-pub const Ordering = enum(u8) {
-    Less,
-    Equal,
-    Greater,
-};
 
-pub fn partialCompareSlice(a: anytype, b: @TypeOf(a)) ?Ordering {
+pub fn partialCompareSlice(a: anytype, b: @TypeOf(a)) ?std.math.Order {
     if (a.len < b.len) {
-        return .Less;
+        return .lt;
     } else if (a.len > b.len) {
-        return .Greater;
+        return .gt;
     }
 
     for (0..a.len) |i| {
         if (compare(a[i], b[i])) |ord| {
-            if (ord != .Equal) {
+            if (ord != .eq) {
                 return ord;
             }
         } else {
@@ -420,327 +415,205 @@ pub fn partialCompareSlice(a: anytype, b: @TypeOf(a)) ?Ordering {
         }
     }
 
-    return .Equal;
+    return .eq;
 }
 
 pub fn CompareResult(comptime T: type) type {
-    if (comptime std.meta.hasFn(T, "compare")) {
-        switch (@typeInfo(@TypeOf(@field(T, "compare")))) {
-            .@"fn" => |info| return info.return_type.?,
-            .pointer => |info| return @typeInfo(info.child).@"fn".return_type.?,
-            else => @compileError("Invalid compare function type"),
+    if (T != std.math.Order) {
+        if (comptime std.meta.hasFn(T, "compare")) {
+            switch (@typeInfo(@TypeOf(@field(T, "compare")))) {
+                .@"fn" => |info| return info.return_type.?,
+                .pointer => |info| return @typeInfo(info.child).@"fn".return_type.?,
+                else => @compileError("Invalid compare function type"),
+            }
         }
-    } else {
-        return Ordering;
     }
+
+    return std.math.Order;
 }
 
 pub fn compare(a: anytype, b: @TypeOf(a)) CompareResult(@TypeOf(a)) {
     const T = @TypeOf(a);
 
-    if (comptime std.meta.hasFn(T, "compare")) {
-        return T.compare(a, b);
-    }
+    switch (T) {
+        std.math.Order => {
+            return compare(@intFromEnum(a), @intFromEnum(b));
+        },
+        else => {
+            if (comptime std.meta.hasFn(T, "compare")) {
+                return T.compare(a, b);
+            }
 
-    switch (@typeInfo(T)) {
-        .void, .undefined, .noreturn => return Ordering.Equal,
-        .error_set => {
-            if (a == b) {
-                return Ordering.Equal;
-            } else if (@intFromError(a) < @intFromError(b)) {
-                return Ordering.Less;
-            } else {
-                return Ordering.Greater;
-            }
-        },
-        .bool => {
-            if (a == b) {
-                return Ordering.Equal;
-            } else if (a) {
-                return Ordering.Greater;
-            } else {
-                return Ordering.Less;
-            }
-        },
-        .int, .float, .comptime_int, .comptime_float, .vector => {
-            if (a < b) {
-                return Ordering.Less;
-            } else if (a > b) {
-                return Ordering.Greater;
-            } else {
-                return Ordering.Equal;
-            }
-        },
-        .@"enum" => {
-            if (@intFromEnum(a) < @intFromEnum(b)) {
-                return Ordering.Less;
-            } else if (@intFromEnum(a) > @intFromEnum(b)) {
-                return Ordering.Greater;
-            } else {
-                return Ordering.Equal;
-            }
-        },
-        .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                const result = compare(@field(a, field.name), @field(b, field.name));
-                if (result != Ordering.Equal) {
-                    return result;
-                }
-            }
-            return Ordering.Equal;
-        },
-        .@"union" => |info| {
-            if (info.tag_type) |TT| {
-                const tagA = @as(TT, a);
-                const tagB = @as(TT, b);
-                const result = compare(tagA, tagB);
-                if (result == Ordering.Equal) {
+            switch (@typeInfo(T)) {
+                .void, .undefined, .noreturn => return .eq,
+                .error_set => {
+                    if (a == b) {
+                        return .eq;
+                    } else if (@intFromError(a) < @intFromError(b)) {
+                        return .lt;
+                    } else {
+                        return .gt;
+                    }
+                },
+                .bool => {
+                    if (a == b) {
+                        return .eq;
+                    } else if (a) {
+                        return .gt;
+                    } else {
+                        return .lt;
+                    }
+                },
+                .int, .float, .comptime_int, .comptime_float, .vector => {
+                    if (a < b) {
+                        return .lt;
+                    } else if (a > b) {
+                        return .gt;
+                    } else {
+                        return .eq;
+                    }
+                },
+                .@"enum" => {
+                    if (@intFromEnum(a) < @intFromEnum(b)) {
+                        return .lt;
+                    } else if (@intFromEnum(a) > @intFromEnum(b)) {
+                        return .gt;
+                    } else {
+                        return .eq;
+                    }
+                },
+                .@"struct" => |info| {
                     inline for (info.fields) |field| {
-                        if (tagA == @field(TT, field.name)) {
-                            return compare(@field(a, field.name), @field(b, field.name));
-                        }
-                    }
-                }
-                return result;
-            } else if (info.layout == .@"packed") {
-                const I = std.meta.Int(.unsigned, @bitSizeOf(T));
-                const aInt: I = @bitCast(a);
-                const bInt: I = @bitCast(b);
-                return compare(aInt, bInt);
-            } else {
-                @compileError("Cannot do compare for union type `" ++ @typeName(T) ++ "` without tag or packed layout");
-            }
-        },
-        .optional => {
-            if (a == null) {
-                if (b == null) {
-                    return Ordering.Equal;
-                } else {
-                    return Ordering.Less;
-                }
-            } else if (b == null) {
-                return Ordering.Greater;
-            } else {
-                return compare(a.?, b.?);
-            }
-        },
-        .pointer => |info| {
-            switch (info.size) {
-                .One, .C => {
-                    if (@intFromPtr(a) == @intFromPtr(b)) {
-                        return Ordering.Equal;
-                    } else if (info.child == anyopaque or (@typeInfo(info.child) == .@"fn")) {
-                        return compare(@intFromPtr(a), @intFromPtr(b));
-                    } else {
-                        return compare(a.*, b.*);
-                    }
-                },
-                .Slice => {
-                    if (@intFromPtr(a.ptr) == @intFromPtr(b.ptr)) {
-                        return Ordering.Equal;
-                    } else if (a.len < b.len) {
-                        return Ordering.Less;
-                    } else if (a.len > b.len) {
-                        return Ordering.Greater;
-                    } else {
-                        for (0..a.len) |i| {
-                            const result = compare(a[i], b[i]);
-                            if (result != Ordering.Equal) {
-                                return result;
-                            }
-                        }
-                        return Ordering.Equal;
-                    }
-                },
-                .Many => if (comptime info.sentinel) |sentinel| {
-                    const sent = @as(*const info.child, @ptrCast(sentinel)).*;
-                    var i: usize = 0;
-                    while (true) {
-                        if (a[i] == sent) {
-                            if (b[i] == sent) {
-                                return Ordering.Equal;
-                            } else {
-                                return Ordering.Less;
-                            }
-                        } else if (b[i] == sent) {
-                            return Ordering.Greater;
-                        }
-                        const result = compare(a[i], b[i]);
-                        if (result != Ordering.Equal) {
+                        const result = compare(@field(a, field.name), @field(b, field.name));
+                        if (result != .eq) {
                             return result;
                         }
-                        i += 1;
                     }
-                } else return compare(@intFromPtr(a), @intFromPtr(b)),
-            }
-        },
-        .array => |info| {
-            for (0..info.len) |i| {
-                const result = compare(a[i], b[i]);
-                if (result != Ordering.Equal) {
-                    return result;
-                }
-            }
-            return Ordering.Equal;
-        },
-        else => @compileError("Cannot do compare for type `" ++ @typeName(T) ++ "`"),
-    }
-}
-
-pub fn compareAddress(a: anytype, b: @TypeOf(a)) Ordering {
-    const T = @TypeOf(a);
-
-    if (comptime std.meta.hasFn(T, "compareAddress")) {
-        return T.compareAddress(a, b);
-    }
-
-    switch (@typeInfo(T)) {
-        .void, .undefined, .noreturn => return Ordering.Equal,
-        .error_set => {
-            if (a == b) {
-                return Ordering.Equal;
-            } else if (@intFromError(a) < @intFromError(b)) {
-                return Ordering.Less;
-            } else {
-                return Ordering.Greater;
-            }
-        },
-        .bool => {
-            if (a == b) {
-                return Ordering.Equal;
-            } else if (a) {
-                return Ordering.Greater;
-            } else {
-                return Ordering.Less;
-            }
-        },
-        .int, .float, .comptime_int, .comptime_float, .vector => {
-            if (a < b) {
-                return Ordering.Less;
-            } else if (a > b) {
-                return Ordering.Greater;
-            } else {
-                return Ordering.Equal;
-            }
-        },
-        .@"enum" => {
-            if (@intFromEnum(a) < @intFromEnum(b)) {
-                return Ordering.Less;
-            } else if (@intFromEnum(a) > @intFromEnum(b)) {
-                return Ordering.Greater;
-            } else {
-                return Ordering.Equal;
-            }
-        },
-        .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                const result = compareAddress(@field(a, field.name), @field(b, field.name));
-                if (result != Ordering.Equal) {
-                    return result;
-                }
-            }
-            return Ordering.Equal;
-        },
-        .@"union" => |info| {
-            if (info.tag_type) |TT| {
-                const tagA = @as(TT, a);
-                const tagB = @as(TT, b);
-                const result = compareAddress(tagA, tagB);
-                if (result == Ordering.Equal) {
-                    inline for (info.fields) |field| {
-                        if (comptime tagA == @field(TT, field.name)) {
-                            return compareAddress(@field(a, field.name), @field(b, field.name));
+                    return .eq;
+                },
+                .@"union" => |info| {
+                    if (info.tag_type) |TT| {
+                        const tagA = @as(TT, a);
+                        const tagB = @as(TT, b);
+                        const result = compare(tagA, tagB);
+                        if (result == .eq) {
+                            inline for (info.fields) |field| {
+                                if (tagA == @field(TT, field.name)) {
+                                    return compare(@field(a, field.name), @field(b, field.name));
+                                }
+                            }
+                        }
+                        return result;
+                    } else if (info.layout == .@"packed") {
+                        const I = std.meta.Int(.unsigned, @bitSizeOf(T));
+                        const aInt: I = @bitCast(a);
+                        const bInt: I = @bitCast(b);
+                        return compare(aInt, bInt);
+                    } else {
+                        @compileError("Cannot do compare for union type `" ++ @typeName(T) ++ "` without tag or packed layout");
+                    }
+                },
+                .optional => {
+                    if (a == null) {
+                        if (b == null) {
+                            return .eq;
+                        } else {
+                            return .lt;
+                        }
+                    } else if (b == null) {
+                        return .gt;
+                    } else {
+                        return compare(a.?, b.?);
+                    }
+                },
+                .pointer => |info| {
+                    switch (info.size) {
+                        .One, .C => {
+                            if (@intFromPtr(a) == @intFromPtr(b)) {
+                                return .eq;
+                            } else if (info.child == anyopaque or (@typeInfo(info.child) == .@"fn")) {
+                                return compare(@intFromPtr(a), @intFromPtr(b));
+                            } else {
+                                return compare(a.*, b.*);
+                            }
+                        },
+                        .Slice => {
+                            if (@intFromPtr(a.ptr) == @intFromPtr(b.ptr)) {
+                                return .eq;
+                            } else if (a.len < b.len) {
+                                return .lt;
+                            } else if (a.len > b.len) {
+                                return .gt;
+                            } else {
+                                for (0..a.len) |i| {
+                                    const result = compare(a[i], b[i]);
+                                    if (result != .eq) {
+                                        return result;
+                                    }
+                                }
+                                return .eq;
+                            }
+                        },
+                        .Many => if (comptime info.sentinel) |sentinel| {
+                            const sent = @as(*const info.child, @ptrCast(sentinel)).*;
+                            var i: usize = 0;
+                            while (true) {
+                                if (a[i] == sent) {
+                                    if (b[i] == sent) {
+                                        return .eq;
+                                    } else {
+                                        return .lt;
+                                    }
+                                } else if (b[i] == sent) {
+                                    return .gt;
+                                }
+                                const result = compare(a[i], b[i]);
+                                if (result != .eq) {
+                                    return result;
+                                }
+                                i += 1;
+                            }
+                        } else return compare(@intFromPtr(a), @intFromPtr(b)),
+                    }
+                },
+                .array => |info| {
+                    for (0..info.len) |i| {
+                        const result = compare(a[i], b[i]);
+                        if (result != .eq) {
+                            return result;
                         }
                     }
-                }
-                return result;
-            } else if (info.layout == .@"packed") {
-                const I = std.meta.Int(.unsigned, @bitSizeOf(T));
-                const aInt: I = @bitCast(a);
-                const bInt: I = @bitCast(b);
-                return compareAddress(aInt, bInt);
-            } else {
-                @compileError("Cannot do compareAddress for union type `" ++ @typeName(T) ++ "` without tag or packed layout");
+                    return .eq;
+                },
+                else => @compileError("Cannot do compare for type `" ++ @typeName(T) ++ "`"),
             }
-        },
-        .optional => {
-            if (a == null) {
-                if (b == null) {
-                    return Ordering.Equal;
-                } else {
-                    return Ordering.Less;
-                }
-            } else if (b == null) {
-                return Ordering.Greater;
-            } else {
-                return compare(a.?, b.?);
-            }
-        },
-        .pointer => |info| {
-            switch (info.size) {
-                .One, .C, .Many => return compare(@intFromPtr(a), @intFromPtr(b)),
-                .Slice => return compare(@intFromPtr(a.ptr), @intFromPtr(b.ptr)),
-            }
-        },
-        .array => |info| {
-            for (0..info.len) |i| {
-                const result = compareAddress(a[i], b[i]);
-                if (result != Ordering.Equal) {
-                    return result;
-                }
-            }
-            return Ordering.Equal;
-        },
-        else => @compileError("Cannot do compareAddress for type `" ++ @typeName(T) ++ "`"),
+        }
     }
 }
 
+
 pub inline fn less(a: anytype, b: @TypeOf(a)) bool {
-    return compare(a, b) == Ordering.Less;
+    return compare(a, b) == .lt;
 }
 
 pub inline fn greater(a: anytype, b: @TypeOf(a)) bool {
-    return compare(a, b) == Ordering.Greater;
+    return compare(a, b) == .gt;
 }
 
 pub inline fn greaterOrEqual(a: anytype, b: @TypeOf(a)) bool {
-    return compare(a, b) != Ordering.Less;
+    return compare(a, b) != .lt;
 }
 
 pub inline fn lessOrEqual(a: anytype, b: @TypeOf(a)) bool {
-    return compare(a, b) != Ordering.Greater;
+    return compare(a, b) != .gt;
 }
 
 pub inline fn equal(a: anytype, b: @TypeOf(a)) bool {
-    return compare(a, b) == Ordering.Equal;
+    return compare(a, b) == .eq;
 }
 
 pub inline fn notEqual(a: anytype, b: @TypeOf(a)) bool {
-    return compare(a, b) != Ordering.Equal;
-}
-
-pub inline fn lessAddress(a: anytype, b: @TypeOf(a)) bool {
-    return compareAddress(a, b) == Ordering.Less;
-}
-
-pub inline fn greaterAddress(a: anytype, b: @TypeOf(a)) bool {
-    return compareAddress(a, b) == Ordering.Greater;
-}
-
-pub inline fn greaterOrEqualAddress(a: anytype, b: @TypeOf(a)) bool {
-    return compareAddress(a, b) != Ordering.Less;
-}
-
-pub inline fn lessOrEqualAddress(a: anytype, b: @TypeOf(a)) bool {
-    return compareAddress(a, b) != Ordering.Greater;
-}
-
-pub inline fn equalAddress(a: anytype, b: @TypeOf(a)) bool {
-    return compareAddress(a, b) == Ordering.Equal;
-}
-
-pub inline fn notEqualAddress(a: anytype, b: @TypeOf(a)) bool {
-    return compareAddress(a, b) != Ordering.Equal;
+    return compare(a, b) != .eq;
 }
 
 test {

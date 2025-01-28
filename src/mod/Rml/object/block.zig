@@ -9,8 +9,8 @@ pub const BlockKind = enum {
     square,
     paren,
 
-    pub fn compare(a: BlockKind, b: BlockKind) utils.Ordering {
-        if (a == .doc or b == .doc) return .Equal;
+    pub fn compare(a: BlockKind, b: BlockKind) std.math.Order {
+        if (a == .doc or b == .doc) return .eq;
         return utils.compare(@intFromEnum(a), @intFromEnum(b));
     }
 
@@ -69,10 +69,10 @@ pub const Block = struct {
         };
     }
 
-    pub fn compare(self: Block, other: Block) utils.Ordering {
+    pub fn compare(self: Block, other: Block) std.math.Order {
         var ord = BlockKind.compare(self.kind, other.kind);
 
-        if (ord == .Equal) {
+        if (ord == .eq) {
             ord = utils.compare(self.array.items, other.array.items);
         }
 
