@@ -10,8 +10,8 @@ pub const log = std.log.scoped(.rbc_generator);
 
 pub const block = @import("RbcGenerator/block.zig");
 pub const function = @import("RbcGenerator/function.zig");
-pub const global = @import("RbcGenerator/global.zig");
 pub const module = @import("RbcGenerator/module.zig");
+pub const variable = @import("RbcGenerator/variable.zig");
 
 test {
     std.testing.refAllDeclsRecursive(RbcGenerator);
@@ -20,19 +20,16 @@ test {
 allocator: std.mem.Allocator,
 
 ir: *Rir,
-builder: RbcBuilder,
 
-// TODO: rename to _map, type aliases
-evidence_lookup: std.ArrayHashMapUnmanaged(Rir.EvidenceId, Rbc.EvidenceIndex, utils.SimpleHashContext, false) = .{},
-module_lookup: std.ArrayHashMapUnmanaged(Rir.ModuleId, *Module, utils.SimpleHashContext, false) = .{},
-foreign_lookup: std.ArrayHashMapUnmanaged(Rir.ForeignId, Rbc.ForeignId, utils.SimpleHashContext, false) = .{},
+evidence_map: EvidenceMap = .{},
+module_map: ModuleMap = .{},
+foreign_map: ForeignMap = .{},
 
 /// The allocator provided should be an arena,
 /// or a similar allocator that doesn't care about freeing individual allocations
 pub fn init(allocator: std.mem.Allocator, ir: *Rir) error{OutOfMemory}!RbcGenerator {
     return RbcGenerator{
         .allocator = allocator,
-        .builder = try RbcBuilder.init(allocator),
         .ir = ir,
     };
 }
@@ -41,8 +38,41 @@ pub const MAX_FRESH_NAME_LEN = 128;
 
 pub const Block = block.Block;
 pub const Function = function.Function;
-pub const Global = global.Global;
 pub const Module = module.Module;
+pub const Global = variable.Global;
+pub const Upvalue = variable.Upvalue;
+
+const EvidenceMap = std.ArrayHashMapUnmanaged(Rir.EvidenceId, Rbc.EvidenceIndex, utils.SimpleHashContext, false);
+const ModuleMap = std.ArrayHashMapUnmanaged(Rir.ModuleId, *Module, utils.SimpleHashContext, false);
+const ForeignMap = std.ArrayHashMapUnmanaged(Rir.ForeignId, Rbc.ForeignIndex, utils.SimpleHashContext, false);
+
+pub const HandlerSet = struct {
+    generator: *RbcGenerator,
+    module: *Module,
+
+    ir: *Rir.HandlerSet,
+
+    index: Rbc.HandlerSetIndex,
+
+    pub fn init(moduleGen: *Module, ir: *Rir.HandlerSet) !*HandlerSet {
+        const generator = moduleGen.generator;
+        const self = try generator.allocator.create(HandlerSet);
+
+        self.* = HandlerSet{
+            .generator = generator,
+            .module = moduleGen,
+
+            .ir = ir,
+            .index = @intFromEnum(ir.id), // FIXME: this is a placeholder
+        };
+
+        return self;
+    }
+
+    pub fn generate(self: *HandlerSet) !void {
+        utils.todo(noreturn, self);
+    }
+};
 
 pub const Export = union(enum) {
     function: *Rir.Function,
@@ -64,6 +94,7 @@ pub const Export = union(enum) {
 };
 
 pub const Error = Rir.Error || RbcBuilder.Error || error{
+    TypeMismatch,
     StackOverflow,
     StackUnderflow,
     StackNotCleared,
@@ -86,11 +117,11 @@ pub fn generate(self: *RbcGenerator, allocator: std.mem.Allocator, exports: []co
         }
     }
 
-    return try self.builder.assemble(allocator);
+    utils.todo(noreturn, allocator);
 }
 
 pub fn getModule(self: *RbcGenerator, modId: Rir.ModuleId) error{ InvalidModule, OutOfMemory }!*Module {
-    const getOrPut = try self.module_lookup.getOrPut(self.allocator, modId);
+    const getOrPut = try self.module_map.getOrPut(self.allocator, modId);
 
     if (!getOrPut.found_existing) {
         const modIr = try self.ir.getModule(modId);
@@ -109,18 +140,17 @@ pub fn getFunction(self: *RbcGenerator, fRef: *Rir.Function) Error!*Function {
 }
 
 pub fn getEvidence(self: *RbcGenerator, evId: Rir.EvidenceId) !Rbc.EvidenceIndex {
-    const getOrPut = try self.evidence_lookup.getOrPut(self.allocator, evId);
+    const getOrPut = try self.evidence_map.getOrPut(self.allocator, evId);
 
     if (!getOrPut.found_existing) {
-        const index = try self.builder.evidence();
-        getOrPut.value_ptr.* = index;
+        getOrPut.value_ptr.* = @intFromEnum(evId); // FIXME: this is a placeholder
     }
 
     return getOrPut.value_ptr.*;
 }
 
-pub fn getForeign(self: *RbcGenerator, foreignAddressIr: *Rir.ForeignAddress) !Rbc.ForeignId {
-    const getOrPut = try self.foreign_lookup.getOrPut(self.allocator, foreignAddressIr.id);
+pub fn getForeign(self: *RbcGenerator, foreignAddressIr: *Rir.Foreign) !Rbc.ForeignIndex {
+    const getOrPut = try self.foreign_map.getOrPut(self.allocator, foreignAddressIr.id);
 
     if (!getOrPut.found_existing) {
         @panic("TODO: Implement Generator.getForeign");

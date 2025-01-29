@@ -49,6 +49,10 @@ pub inline fn todo(comptime T: type, _: anytype) T {
     @panic("not yet implemented");
 }
 
+pub inline fn offsetPointer(ptr: anytype, offset: isize) @TypeOf(ptr) { // TODO: this is stupid..?
+    return @ptrFromInt(@as(usize, @bitCast(@as(isize, @bitCast(@intFromPtr(ptr))) + offset)));
+}
+
 pub fn FilteredLogger(comptime scopes: []const u8) fn (
     comptime level: std.log.Level,
     comptime scope: @Type(.enum_literal),

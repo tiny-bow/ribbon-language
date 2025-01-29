@@ -81,18 +81,11 @@ const BINARIES: []const Binary = &.{
         },
     },
     .{
-        .name = "rir",
+        .name = "backend",
         .dependencies = &.{
+            .internal("Rvm"),
             .internal("Rir"),
             .internal("RbcGenerator"),
-        },
-    },
-    .{
-        .name = "rvm",
-        .dependencies = &.{
-            .internal("utils"),
-            .internal("Rvm"),
-            .internal("RbcBuilder"),
         },
     },
 };

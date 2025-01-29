@@ -12,7 +12,7 @@ test {
 globals: []const [*]u8,
 global_memory: []u8,
 functions: []const Function,
-foreign_functions: []const Foreign,
+foreign: []const *const anyopaque,
 handler_sets: []const HandlerSet,
 main: FunctionIndex,
 
@@ -27,7 +27,7 @@ pub fn deinit(self: Rbc, allocator: std.mem.Allocator) void {
 
     allocator.free(self.functions);
 
-    allocator.free(self.foreign_functions);
+    allocator.free(self.foreign);
 
     for (self.handler_sets) |handlerSet| {
         allocator.free(handlerSet);
@@ -46,17 +46,20 @@ pub const UpvalueBaseOffset = u32;
 pub const GlobalIndex = u16;
 pub const GlobalLocalOffset = u16;
 pub const GlobalBaseOffset = u32;
-pub const BlockIndex = u16;
-pub const LayoutTableSize = RegisterBaseOffset;
+pub const JumpOffset = i16;
 pub const FunctionIndex = u16;
+pub const ForeignIndex = u16;
 pub const HandlerSetIndex = u16;
 pub const EvidenceIndex = u16;
 pub const MemorySize = u48;
-pub const ForeignId = u48;
+pub const LayoutTableSize = RegisterBaseOffset;
 pub const Alignment = u12;
 
-pub const MAX_BLOCKS: comptime_int = 1024;
-pub const MAX_REGISTERS: comptime_int = 255;
+pub const ReturnStyle = Isa.ReturnStyle;
+pub const ZeroCheck = Isa.ZeroCheck;
+
+pub const MAX_REGISTERS = 255;
+pub const MAX_JUMP_OFFSET = @min(@abs(std.math.minInt(JumpOffset)), std.math.maxInt(JumpOffset));
 
 pub const EVIDENCE_SENTINEL = std.math.maxInt(EvidenceIndex);
 pub const HANDLER_SET_SENTINEL = std.math.maxInt(HandlerSetIndex);
@@ -68,28 +71,20 @@ pub const Instruction = packed struct {
 };
 
 pub const Bytecode = struct {
-    blocks: []const [*]const Instruction,
     instructions: []const Instruction,
 
     pub fn deinit(self: Bytecode, allocator: std.mem.Allocator) void {
-        allocator.free(self.blocks);
         allocator.free(self.instructions);
     }
 };
 
 pub const Function = struct {
-    num_arguments: RegisterIndex,
     num_registers: RegisterIndex,
     bytecode: Bytecode,
 
     pub fn deinit(self: Function, allocator: std.mem.Allocator) void {
         self.bytecode.deinit(allocator);
     }
-};
-
-pub const Foreign = struct {
-    num_arguments: RegisterIndex,
-    num_registers: RegisterIndex,
 };
 
 pub const HandlerSet = []const HandlerBinding;
@@ -106,15 +101,15 @@ pub const Data = op_data: {
 
     for (Isa.Instructions) |category| {
         for (category.kinds) |kind| {
-            for (kind.instructions) |instr| {
-                const name = Isa.computeInstructionName(kind, instr);
+            for (kind.instructions) |instruction| {
+                const name = Isa.computeInstructionName(kind, instruction);
 
                 var operands: []const std.builtin.Type.StructField = &[0]std.builtin.Type.StructField{};
 
-                if (instr.operands.len > 0) {
+                if (instruction.operands.len > 0) {
                     var size = 0;
                     var operandCounts = [1]u8{0} ** std.meta.fieldNames(Isa.OperandDescriptor).len;
-                    for (instr.operands) |operand| {
+                    for (instruction.operands) |operand| {
                         const opType = switch (operand) {
                             .register => RegisterIndex,
                             .byte => u8,
@@ -125,24 +120,14 @@ pub const Data = op_data: {
                             .global_index => GlobalIndex,
                             .upvalue_index => UpvalueIndex,
                             .function_index => FunctionIndex,
-                            .block_index => BlockIndex,
+                            .foreign_index => ForeignIndex,
+                            .jump_offset => JumpOffset,
                         };
 
                         size += @bitSizeOf(opType);
 
                         operands = operands ++ [1]std.builtin.Type.StructField{.{
-                            .name = std.fmt.comptimePrint("{u}{}", .{ switch (operand) {
-                                .register => 'R',
-                                .byte => 'b',
-                                .short => 's',
-                                .immediate => 'i',
-                                .handler_set_index => 'H',
-                                .evidence_index => 'E',
-                                .global_index => 'G',
-                                .upvalue_index => 'U',
-                                .function_index => 'F',
-                                .block_index => 'B',
-                            }, operandCounts[@intFromEnum(operand)] }),
+                            .name = std.fmt.comptimePrint("{u}{}", .{ Isa.getAbbreviation(operand), operandCounts[@intFromEnum(operand)] }),
                             .type = opType,
                             .is_comptime = false,
                             .default_value = null,
@@ -199,8 +184,8 @@ pub const Code = op_code: {
     var i: u16 = 0;
     for (Isa.Instructions) |category| {
         for (category.kinds) |kind| {
-            for (kind.instructions) |instr| {
-                const name = Isa.computeInstructionName(kind, instr);
+            for (kind.instructions) |instruction| {
+                const name = Isa.computeInstructionName(kind, instruction);
                 fields = fields ++ [1]std.builtin.Type.EnumField{.{
                     .name = name,
                     .value = i,
@@ -232,4 +217,16 @@ pub fn DataOf(comptime code: Code) type {
         }
     }
     unreachable;
+}
+
+pub fn instr(code: Code, data: *const anyopaque) Instruction {
+    return Instruction{
+        .code = code,
+        .data = inline for (comptime std.meta.fieldNames(Code)) |name| {
+            if (@field(Code, name) == code) {
+                const T = @TypeOf(@field(@as(Data, undefined), name));
+                break @unionInit(Data, name, if (T == void) {} else @as(*align(1) const T, @ptrCast(@alignCast(data))).*);
+            }
+        } else unreachable,
+    };
 }

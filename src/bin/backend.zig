@@ -1,6 +1,6 @@
 const std = @import("std");
 const Rir = @import("Rir");
-const Rbc = @import("Rbc");
+const Rvm = @import("Rvm");
 const RbcGenerator = @import("RbcGenerator");
 
 const log = std.log.scoped(.rir_main);
@@ -10,8 +10,17 @@ pub const std_options = std.Options{
 };
 
 test {
-    std.debug.print("rir-test\n", .{});
+    std.debug.print("backend-test\n", .{});
     try main();
+}
+
+const n: i64 = 12;
+const expected: i64 = calc: {
+    break :calc nativeFib(n);
+};
+
+fn nativeFib(i: i64) i64 {
+    return if (i < 2) i else nativeFib(i - 1) + nativeFib(i - 2);
 }
 
 pub fn main() !void {
@@ -147,7 +156,7 @@ pub fn main() !void {
 
     log.info("formatting complete", .{});
 
-    { // codegen
+    var program = program: { // codegen
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
 
@@ -158,10 +167,36 @@ pub fn main() !void {
         };
 
         const program = try gen.generate(allocator, &exports);
-        defer program.deinit(allocator);
 
         std.debug.print("{}", .{program});
-    }
+
+        break :program program;
+    };
+    defer program.deinit(allocator);
 
     log.info("codegen complete", .{});
+
+    log.info("starting rvm", .{});
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    log.info("created arena", .{});
+
+    const rvm = try Rvm.init(arena.allocator());
+    // defer program.deinit(arena.allocator());
+
+    const fiber = try Rvm.Fiber.init(rvm, &program);
+    defer fiber.deinit();
+
+    const start = std.time.nanoTimestamp();
+
+    const result = try fiber.invoke(i64, program.main, .{n});
+
+    const end = std.time.nanoTimestamp();
+
+    const time = @as(f64, @floatFromInt(end - start)) / std.time.ns_per_s;
+
+    try std.io.getStdOut().writer().print("result: {} (in {d:.3}s)\n", .{ result, time });
+    try std.testing.expectEqual(expected, result);
 }

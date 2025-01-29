@@ -8,6 +8,9 @@ const Rir = @import("Rir");
 const Rbc = @import("Rbc");
 const RbcBuilder = @import("RbcBuilder");
 
+const BlockMap = std.ArrayHashMapUnmanaged(Rir.BlockId, *Generator.Block, utils.SimpleHashContext, false);
+const UpvalueMap = std.ArrayHashMapUnmanaged(Rir.UpvalueId, *Generator.Upvalue, utils.SimpleHashContext, false);
+
 pub const Function = struct {
     generator: *Generator,
     module: *Generator.Module,
@@ -15,12 +18,16 @@ pub const Function = struct {
     ir: *Rir.Function,
     builder: *RbcBuilder.Function,
 
-    block_lookup: std.ArrayHashMapUnmanaged(Rir.BlockId, *Generator.Block, utils.SimpleHashContext, false) = .{},
+    block_map: BlockMap = .{},
+    upvalue_map: UpvalueMap = .{},
 
-    pub fn init(module: *Generator.Module, functionIr: *Rir.Function, functionBuilder: *RbcBuilder.Function) error{OutOfMemory}!*Function {
+    pub fn init(module: *Generator.Module, functionIr: *Rir.Function) error{OutOfMemory}!*Function {
         const generator = module.generator;
 
+        const functionBuilder = try RbcBuilder.Function.init(generator.allocator, @intFromEnum(functionIr.id));
+
         const self = try generator.allocator.create(Function);
+
 
         self.* = Function{
             .generator = generator,
@@ -33,32 +40,29 @@ pub const Function = struct {
     }
 
     pub fn generate(self: *Function) !void {
-        _ = try self.compileBlock(self.ir.blocks.items[0]);
+        const blockIr = self.ir.blocks.items[0];
+        const blockBuilder = try self.builder.getBlock(0);
+        _ = try self.compileBlock(blockIr, blockBuilder);
     }
 
-    pub fn getBlock(self: *Function, blockIr: *Rir.Block) error{InvalidBlock}!*Generator.Block {
-        return self.block_lookup.get(blockIr.id) orelse error.InvalidBlock;
+    pub fn getBlock(self: *Function, blockIr: *Rir.Block) error{InvalidBlock}! *Generator.Block {
+        return self.block_map.get(blockIr.id) orelse error.InvalidBlock;
     }
 
-    pub fn compileBlock(self: *Function, blockIr: *Rir.Block) Generator.Error!*Generator.Block {
-        const blockBuilder =
-            if (@intFromEnum(blockIr.id) == 0) try self.builder.getBlock(0) else createBlockBuilder: {
-            const parent = if (blockIr.parent) |parentBlock| getParent: {
-                const blockGenerator = try self.getBlock(parentBlock);
-                break :getParent blockGenerator.builder.index;
-            } else null;
+    pub fn getUpvalue(self: *Function, upvalueIr: *Rir.Upvalue) error{InvalidUpvalue}! *Generator.Upvalue {
+        return self.upvalue_map.get(upvalueIr.id) orelse error.InvalidUpvalue;
+    }
 
-            break :createBlockBuilder try self.builder.newBlock(
-                parent,
-                if (blockIr.handler_set) |handlerSetIr| RbcBuilder.BlockKind{
-                    .with = (try self.module.getHandlerSet(handlerSetIr)).index,
-                } else .basic,
-            );
-        };
+    pub fn setupBlock(self: *Function, blockIr: *Rir.Block, blockBuilder: ?*RbcBuilder.Block) error{TooManyBlocks, OutOfMemory}! *Generator.Block {
+        const blockGenerator = try Generator.Block.init(null, self, blockIr, blockBuilder);
 
-        var blockGenerator = try Generator.Block.init(null, self, blockIr, blockBuilder);
+        try self.block_map.put(self.generator.allocator, blockIr.id, blockGenerator);
 
-        try self.block_lookup.put(self.generator.allocator, blockIr.id, blockGenerator);
+        return blockGenerator;
+    }
+
+    pub fn compileBlock(self: *Function, blockIr: *Rir.Block, blockBuilder: ?*RbcBuilder.Block) Generator.Error! *Generator.Block {
+        const blockGenerator = try self.setupBlock(blockIr, blockBuilder);
 
         try blockGenerator.generate();
 

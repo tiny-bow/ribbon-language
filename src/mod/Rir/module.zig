@@ -79,7 +79,7 @@ pub const Module = struct {
             Rir.Global => try self.getGlobal(id),
             Rir.Function => try self.getFunction(id),
             Rir.HandlerSet => try self.getHandlerSet(id),
-            Rir.ForeignAddress => try self.ir.getForeign(id),
+            Rir.Foreign => try self.ir.getForeign(id),
             else => @compileError("Unsupported type for Module.get: " ++ @typeName(T)),
         };
     }

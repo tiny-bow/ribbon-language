@@ -11,6 +11,7 @@ const RbcBuilder = @import("RbcBuilder");
 
 const Stack = std.ArrayListUnmanaged(Rir.Operand);
 const RegisterList = std.ArrayListUnmanaged(*Rir.Register);
+const BlockBuilderList = std.ArrayListUnmanaged(*RbcBuilder.Block);
 
 pub const Block = struct {
     generator: *Generator,
@@ -19,15 +20,20 @@ pub const Block = struct {
     parent: ?*Block,
 
     ir: *Rir.Block,
-    builder: *RbcBuilder.Block,
+
+    active_builder: *RbcBuilder.Block,
+    builders: BlockBuilderList,
 
     register_list: RegisterList,
 
     stack: Stack = .{},
 
-    pub fn init(parent: ?*Block, function: *Generator.Function, blockIr: *Rir.Block, blockBuilder: *RbcBuilder.Block) error{OutOfMemory}!*Block {
+    pub fn init(parent: ?*Block, function: *Generator.Function, blockIr: *Rir.Block, entryBlockBuilder: ?*RbcBuilder.Block) error{ TooManyBlocks, OutOfMemory }!*Block {
         const generator = function.generator;
         const self = try generator.allocator.create(Block);
+
+        const blockBuilder = entryBlockBuilder
+            orelse try function.builder.createBlock();
 
         self.* = Block{
             .function = function,
@@ -36,15 +42,20 @@ pub const Block = struct {
             .parent = parent,
 
             .ir = blockIr,
-            .builder = blockBuilder,
+
+            .active_builder = blockBuilder,
+            .builders = try BlockBuilderList.initCapacity(generator.allocator, 16),
 
             .register_list = try RegisterList.initCapacity(generator.allocator, Rir.MAX_REGISTERS),
         };
+
+        self.builders.appendAssumeCapacity(self.active_builder);
 
         return self;
     }
 
     pub fn deinit(self: *Block) void {
+        self.builders.deinit(self.generator.allocator);
         self.register_list.deinit(self.generator.allocator);
         self.stack.deinit(self.generator.allocator);
 
@@ -60,205 +71,141 @@ pub const Block = struct {
             i += 1;
 
             switch (instr.code) {
-                .nop => try self.builder.nop(),
-                .halt => try self.builder.halt(),
-                .trap => try self.builder.trap(),
+                .nop => try self.active_builder.nop(),
+
+                .halt => {
+                    try self.active_builder.halt();
+
+                    if (i < instrs.len) Generator.log.warn("dead code at {}/{}/{}/{}", .{self.function.module.ir.id, self.function.ir.id, self.ir.id, i});
+
+                    break;
+                },
+
+                .trap => {
+                    try self.active_builder.trap();
+
+                    if (i < instrs.len) Generator.log.warn("dead code at {}/{}/{}/{}", .{self.function.module.ir.id, self.function.ir.id, self.ir.id, i});
+
+                    break;
+                },
+
 
                 .block => {
                     const blockIr = try (try self.pop(.meta)).forceBlock();
-                    const child = try self.function.compileBlock(blockIr);
+                    const blockGen = try self.function.setupBlock(blockIr, null);
+                    const blockEntryIndex = blockGen.active_builder.index;
+                    try blockGen.generate();
 
-                    if (child.stackDepth() == 0) {
-                        try self.builder.op(.block, &.{ .B0 = child.builder.index });
-                    } else {
-                        const operand = try child.pop(null);
+                    const finallyBlockBuilder = try self.function.builder.createBlock();
+                    try self.builders.append(self.generator.allocator, finallyBlockBuilder);
 
-                        if (child.stackDepth() != 0) return error.StackNotCleared;
+                    try self.active_builder.br(blockEntryIndex);
 
-                        const operandType = try operand.getType();
+                    self.active_builder = finallyBlockBuilder;
 
-                        const resultRegister = try self.allocRegister(operandType); // FIXME: see NOTES.md#1
-
-                        try self.builder.op(.block_v, &.{ .B0 = child.builder.index, .R0 = resultRegister.getIndex() });
+                    if (try self.phi(&.{blockGen})) |out| {
+                        try self.push(out);
                     }
                 },
+
                 .with => {
+                    const bodyBlockIr = try (try self.pop(.meta)).forceBlock();
+                    const bodyBlockGen = try self.function.setupBlock(bodyBlockIr, null);
+                    const bodyBlockEntryIndex = bodyBlockGen.active_builder.index;
+                    try bodyBlockGen.generate();
+
                     const handlerSetIr = try (try self.pop(.meta)).forceHandlerSet();
-                    const blockIr = try (try self.pop(.meta)).forceBlock();
+                    const handlerSetGen = try self.function.module.getHandlerSet(handlerSetIr.id);
 
-                    const child = try self.function.compileBlock(blockIr);
+                    const finallyBlockBuilder = try self.function.builder.createBlock();
+                    try self.builders.append(self.generator.allocator, finallyBlockBuilder);
 
-                    const handlerSetBuilder = try self.function.module.getHandlerSet(handlerSetIr);
+                    const entryBuilder = self.active_builder;
+                    self.active_builder = finallyBlockBuilder;
 
-                    if (child.stackDepth() == 0) {
-                        try self.builder.op(.with, &.{ .B0 = child.builder.index, .H0 = handlerSetBuilder.index });
+                    if (try self.phi(&.{bodyBlockGen})) |out| {
+                        try self.push(out);
+
+                        try entryBuilder.push_set_v(finallyBlockBuilder.index, handlerSetGen.index, out.getIndex());
                     } else {
-                        const operand = try child.pop(null);
-
-                        if (child.stackDepth() != 0) return error.StackNotCleared;
-
-                        const operandType = try operand.getType();
-
-                        const resultRegister = try self.allocRegister(operandType); // FIXME: see NOTES.md#1
-
-                        try self.builder.op(.with_v, &.{ .B0 = child.builder.index, .H0 = handlerSetBuilder.index, .R0 = resultRegister.getIndex() });
+                        try entryBuilder.push_set(finallyBlockBuilder.index, handlerSetGen.index);
                     }
+
+                    try entryBuilder.br(bodyBlockEntryIndex);
                 },
+
                 .@"if" => {
                     const zeroCheck = instr.data.@"if";
 
-                    const condReg = try (try self.pop(.l_value)).forceRegister();
                     const thenBlockIr = try (try self.pop(.meta)).forceBlock();
+                    const thenBlockGen = try self.function.setupBlock(thenBlockIr, null);
+                    const thenBlockEntryIndex = thenBlockGen.active_builder.index;
+                    try thenBlockGen.generate();
+
                     const elseBlockIr = try (try self.pop(.meta)).forceBlock();
+                    const elseBlockGen = try self.function.setupBlock(elseBlockIr, null);
+                    const elseBlockEntryIndex = elseBlockGen.active_builder.index;
+                    try elseBlockGen.generate();
 
-                    const thenChild = try self.function.compileBlock(thenBlockIr);
-                    const elseChild = try self.function.compileBlock(elseBlockIr);
+                    const condOperand = try self.pop(null);
+                    const condRegister = try self.coerceRegister(condOperand);
 
-                    if (thenChild.stackDepth() != elseChild.stackDepth()) return error.StackBranchMismatch;
+                    const finallyBlockBuilder = try self.function.builder.createBlock();
+                    try self.builders.append(self.generator.allocator, finallyBlockBuilder);
 
-                    if (thenChild.stackDepth() == 0) {
-                        try self.builder.op(
-                            switch (zeroCheck) {
-                                .zero => .if_z,
-                                .non_zero => .if_nz,
-                            },
-                            &.{ .R0 = condReg.getIndex(), .B0 = thenChild.builder.index, .B1 = elseChild.builder.index },
-                        );
-                    } else {
-                        const thenOperand = try thenChild.pop(null);
-                        const elseOperand = try elseChild.pop(null);
+                    switch (zeroCheck) {
+                        .zero => try self.active_builder.br_z(thenBlockEntryIndex, elseBlockEntryIndex, condRegister.getIndex()),
+                        .non_zero => try self.active_builder.br_nz(thenBlockEntryIndex, elseBlockEntryIndex, condRegister.getIndex()),
+                    }
 
-                        if (thenChild.stackDepth() != 0) {
-                            return error.StackNotCleared;
-                        }
+                    self.active_builder = finallyBlockBuilder;
 
-                        const operandType = try thenOperand.getType();
-                        const elseOperandType = try elseOperand.getType();
-
-                        if (operandType.id != elseOperandType.id) {
-                            return error.StackBranchMismatch;
-                        }
-
-                        const resultRegister = try self.allocRegister(operandType); // FIXME: see NOTES.md#1
-
-                        try self.builder.op(
-                            switch (zeroCheck) {
-                                .zero => .if_z_v,
-                                .non_zero => .if_nz_v,
-                            },
-                            &.{ .R0 = condReg.getIndex(), .R1 = resultRegister.getIndex(), .B0 = thenChild.builder.index, .B1 = elseChild.builder.index },
-                        );
+                    if (try self.phi(&.{thenBlockGen, elseBlockGen})) |out| {
+                        try self.push(out);
                     }
                 },
+
                 .when => {
-                    const zeroCheck = instr.data.when;
+                    const zeroCheck = instr.data.@"when";
 
-                    const condReg = try (try self.pop(.l_value)).forceRegister();
                     const thenBlockIr = try (try self.pop(.meta)).forceBlock();
+                    const thenBlockGen = try self.function.compileBlock(thenBlockIr, null);
 
-                    const thenChild = try self.function.compileBlock(thenBlockIr);
+                    const condOperand = try self.pop(null);
+                    const condRegister = try self.coerceRegister(condOperand);
 
-                    if (thenChild.stackDepth() == 0) {
-                        try self.builder.op(
-                            switch (zeroCheck) {
-                                .zero => .when_z,
-                                .non_zero => .when_nz,
-                            },
-                            &.{ .R0 = condReg.getIndex(), .B0 = thenChild.builder.index },
-                        );
-                    } else {
-                        return error.StackBranchMismatch;
-                    }
-                },
-
-                .re => {
-                    const zeroCheck = instr.data.re;
+                    const finallyBlockBuilder = try self.function.builder.createBlock();
+                    try self.builders.append(self.generator.allocator, finallyBlockBuilder);
 
                     switch (zeroCheck) {
-                        .none => {
-                            const blockIr = try (try self.pop(.meta)).forceBlock();
-                            const blockGen = try self.function.getBlock(blockIr);
+                        .zero => try self.active_builder.br_z(thenBlockGen.active_builder.index, finallyBlockBuilder.index, condRegister.getIndex()),
+                        .non_zero => try self.active_builder.br_nz(thenBlockGen.active_builder.index, finallyBlockBuilder.index, condRegister.getIndex()),
+                    }
 
-                            try self.builder.re(blockGen.builder);
-                        },
-                        .zero => {
-                            const condReg = try (try self.pop(.l_value)).forceRegister();
-                            const blockIr = try (try self.pop(.meta)).forceBlock();
-                            const blockGen = try self.function.getBlock(blockIr);
+                    self.active_builder = finallyBlockBuilder;
 
-                            try self.builder.re_z(blockGen.builder, condReg.getIndex());
-                        },
-                        .non_zero => {
-                            const condReg = try (try self.pop(.l_value)).forceRegister();
-                            const blockIr = try (try self.pop(.meta)).forceBlock();
-                            const blockGen = try self.function.getBlock(blockIr);
-
-                            try self.builder.re_nz(blockGen.builder, condReg.getIndex());
-                        },
+                    if (try self.phi(&.{thenBlockGen})) |out| {
+                        try self.push(out);
                     }
                 },
 
-                .br => {
-                    const zeroCheck = instr.data.br;
 
-                    const blockIr = try (try self.pop(.meta)).forceBlock();
-                    const blockGen = try self.function.getBlock(blockIr);
+                .re => @panic("re nyi"),
 
-                    switch (zeroCheck) {
-                        .none => try self.builder.br(blockGen.builder),
-                        .zero => switch (self.stackDepth()) {
-                            0 => return error.StackUnderflow,
-                            1 => {
-                                const condReg = try (try self.pop(.l_value)).forceRegister();
-
-                                try self.builder.br_z(blockGen.builder, condReg.getIndex());
-                            },
-                            2 => {
-                                const elseOperand: Rir.Operand = try self.pop(null);
-
-                                const condReg = try (try self.pop(.l_value)).forceRegister();
-
-                                switch (elseOperand) {
-                                    .meta => return error.InvalidOperand,
-                                    .r_value => |r| switch (r) {
-                                        .immediate => |im| try self.builder.br_z_im_v(blockGen.builder, condReg.getIndex(), im.data),
-                                        .foreign => |f| {
-                                            const foreignId = try self.generator.getForeign(f);
-                                            try self.builder.br_z_im_v(blockGen.builder, condReg.getIndex(), foreignId);
-                                        },
-                                        .function => |f| {
-                                            const function = try self.generator.getFunction(f);
-                                            try self.builder.br_z_im_v(blockGen.builder, condReg.getIndex(), function.builder.index);
-                                        },
-                                    },
-                                    .l_value => |l| switch (l) {
-                                        .register => |r| try self.builder.br_z_v(blockGen.builder, condReg.getIndex(), r.getIndex()),
-                                        .multi_register => @panic("multi_register nyi"),
-                                        .local => @panic("local nyi"),
-                                        .upvalue => @panic("upvalue nyi"),
-                                        .global => @panic("global nyi"),
-                                    },
-                                }
-                            },
-                            else => return error.StackNotCleared,
-                        },
-                        .non_zero => @panic("br non_zero nyi"),
-                    }
-                },
+                .br => @panic("br nyi"),
 
                 .call => @panic("call nyi"),
                 .prompt => @panic("prompt nyi"),
                 .ret => @panic("ret nyi"),
-                .term => @panic("term nyi"),
+                .cancel => @panic("cancel nyi"),
 
                 .alloca => {
                     const typeIr = try (try self.pop(.meta)).forceType();
-
                     const typeLayout = try typeIr.getLayout();
 
                     const register = try self.allocRegister(typeIr);
 
-                    try self.builder.alloca(@intCast(typeLayout.dimensions.size), register.getIndex());
+                    try self.active_builder.alloca(@intCast(typeLayout.dimensions.size), register.getIndex());
 
                     try self.push(register);
                 },
@@ -270,6 +217,8 @@ pub const Block = struct {
                     const pointerType = try operandType.createPointer();
 
                     switch (operand) {
+                        .meta => return error.InvalidOperand,
+
                         .l_value => |l| switch (l) {
                             .local => |localIr| {
                                 switch (localIr.storage) {
@@ -286,29 +235,46 @@ pub const Block = struct {
                                 const globalGen = try self.generator.getGlobal(globalIr);
 
                                 const outReg = try self.allocRegister(pointerType);
+                                try self.active_builder.addr_global(globalGen.index, outReg.getIndex());
 
-                                try self.builder.addr_global(globalGen.builder.index, outReg.getIndex());
                                 try self.push(outReg);
                             },
 
-                            .upvalue => { // FIXME: see NOTES.md#2
-                                @panic("addr upvalue nyi");
-                                // const upvalueGen = try self.function.getUpvalue(upvalueIr);
+                            .upvalue => |upvalueIr| {
+                                const upvalueGen = try self.function.getUpvalue(upvalueIr);
 
-                                // const outReg = try self.allocRegister(pointerType);
+                                const outReg = try self.allocRegister(pointerType);
+                                try self.active_builder.addr_upvalue(upvalueGen.index, outReg.getIndex());
 
-                                // try self.builder.addr_upvalue(upvalueGen.builder.index, outReg.getIndex());
-                                // try self.push(outReg);
+                                try self.push(outReg);
                             },
 
                             else => return error.InvalidOperand,
                         },
-                        else => @panic("addr meta/r_value nyi"),
+
+                        .r_value => |r| switch (r) {
+                            .immediate => return error.InvalidOperand,
+                            .foreign => |foreignIr| {
+                                const foreignIndex = try self.generator.getForeign(foreignIr);
+
+                                const outReg = try self.allocRegister(pointerType);
+                                try self.active_builder.addr_foreign(foreignIndex, outReg.getIndex());
+
+                                try self.push(outReg);
+                            },
+                            .function => |functionIr| {
+                                const functionGen = try self.generator.getFunction(functionIr);
+
+                                const outReg = try self.allocRegister(pointerType);
+                                try self.active_builder.addr_function(functionGen.builder.index, outReg.getIndex());
+
+                                try self.push(outReg);
+                            },
+                        },
                     }
                 },
 
                 .read => @panic("read nyi"),
-
                 .write => @panic("write nyi"),
 
                 .load => @panic("load nyi"),
@@ -368,22 +334,57 @@ pub const Block = struct {
 
                 .new_local => {
                     const name = instr.data.new_local;
-
                     const typeIr = try (try self.pop(.meta)).forceType();
+                    const localIr = try self.createLocal(name, typeIr);
 
-                    const local = try self.createLocal(name, typeIr);
-
-                    try self.push(local.id);
+                    try self.push(localIr);
                 },
 
-                .ref_local => try self.push(instr.data.ref_local),
-                .ref_block => try self.push(instr.data.ref_block),
-                .ref_function => try self.push(instr.data.ref_function),
-                .ref_foreign => try self.push(instr.data.ref_foreign),
-                .ref_global => try self.push(instr.data.ref_global),
-                .ref_upvalue => try self.push(instr.data.ref_upvalue),
+                .ref_local => {
+                    const id = instr.data.ref_local;
+                    const localIr = try self.getLocal(id);
 
-                .im_i => try self.push(instr.data.im_i),
+                    try self.push(localIr);
+                },
+                .ref_block => {
+                    const id = instr.data.ref_block;
+                    const blockIr = try self.function.ir.getBlock(id);
+
+                    try self.push(blockIr);
+                },
+                .ref_function => {
+                    const ref = instr.data.ref_function;
+                    const moduleGen = try self.generator.getModule(ref.module_id);
+                    const functionGen = try moduleGen.getFunction(ref.id);
+
+                    try self.push(functionGen.ir);
+                },
+                .ref_foreign => {
+                    const id = instr.data.ref_foreign;
+                    const foreignIr = try self.generator.ir.getForeign(id);
+
+                    try self.push(foreignIr);
+                },
+                .ref_global => {
+                    const ref = instr.data.ref_global;
+                    const moduleGen = try self.generator.getModule(ref.module_id);
+                    const globalGen = try moduleGen.getGlobal(ref.id);
+
+                    try self.push(globalGen.ir);
+                },
+                .ref_upvalue => {
+                    const id = instr.data.ref_upvalue;
+                    const upvalueIr = try self.function.ir.getUpvalue(id);
+
+                    try self.push(upvalueIr);
+                },
+
+                .im_i => {
+                    const im = instr.data.im_i;
+                    const typeIr = try self.generator.ir.getType(im.type_id);
+
+                    try self.push(Rir.Immediate{ .type = typeIr, .data = im.data });
+                },
                 .im_w => @panic("im_w nyi"),
             }
         }
@@ -397,11 +398,33 @@ pub const Block = struct {
         try self.stack.append(self.generator.allocator, Rir.Operand.from(operand));
     }
 
-    pub fn pop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand)) !if (kind) |k| switch (k) {
-        .meta => Rir.Meta,
-        .l_value => Rir.LValue,
-        .r_value => Rir.RValue,
-    } else Rir.Operand {
+    pub fn tryPop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand))
+        error{InvalidOperand}!
+            ? if (kind) |k| switch (k) {
+                .meta => Rir.Meta,
+                .l_value => Rir.LValue,
+                .r_value => Rir.RValue,
+            } else Rir.Operand
+    {
+        if (self.stack.popOrNull()) |operand| {
+            return if (comptime kind) |k| switch (operand) {
+                .meta => |m| if (k == .meta) m else error.InvalidOperand,
+                .l_value => |l| if (k == .l_value) l else error.InvalidOperand,
+                .r_value => |r| if (k == .r_value) r else error.InvalidOperand,
+            } else operand;
+        }
+
+        return null;
+    }
+
+    pub fn pop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand))
+        error{InvalidOperand, StackUnderflow}!
+            if (kind) |k| switch (k){
+                .meta => Rir.Meta,
+                .l_value => Rir.LValue,
+                .r_value => Rir.RValue,
+            } else Rir.Operand
+    {
         if (self.stack.popOrNull()) |operand| {
             return if (comptime kind) |k| switch (operand) {
                 .meta => |m| if (k == .meta) m else error.InvalidOperand,
@@ -455,5 +478,25 @@ pub const Block = struct {
 
     pub fn generateSetLocal(_: *Block, _: Rir.LocalId, _: Rir.Operand) error{ TooManyLocals, OutOfMemory }!void {
         @panic("setLocal nyi");
+    }
+
+    pub fn compileImmediate(self: *Block, im: Rir.Immediate) !void {
+        utils.todo(noreturn, .{self, im});
+    }
+
+    pub fn load(self: *Block, register: *Rir.Register) !Rir.Operand {
+        utils.todo(noreturn, .{self, register});
+    }
+
+    pub fn store(self: *Block, register: *Rir.Register, value: Rir.Operand) !void {
+        utils.todo(noreturn, .{self, register, value});
+    }
+
+    pub fn coerceRegister(self: *Block, operand: Rir.Operand) !*Rir.Register {
+        utils.todo(noreturn, .{self, operand});
+    }
+
+    pub fn phi(self: *Block, blockGens: []const *Block) ! ?*Rir.Register {
+        utils.todo(noreturn, .{self, blockGens});
     }
 };

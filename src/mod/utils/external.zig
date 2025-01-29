@@ -48,20 +48,25 @@ pub fn Option(comptime T: type) type {
     };
 }
 
-pub const UStr = extern struct {
-    ptr: [*]const u8,
-    len: usize,
+pub fn Slice(comptime mutability: enum { constant, mutable }, comptime T: type) type {
+    return extern struct {
+        pub const Buffer = if (mutability == .constant) [*]const T else [*]T;
+        pub const Native = if (mutability == .constant) []const T else []T;
 
-    const Self = @This();
+        ptr: Buffer,
+        len: usize,
 
-    pub inline fn fromNative(slice: []const u8) Self {
-        return .{ .ptr = slice.ptr, .len = slice.len };
-    }
+        const Self = @This();
 
-    pub inline fn toNative(self: Self) []const u8 {
-        return self.ptr[0..self.len];
-    }
-};
+        pub inline fn fromNative(slice: Native) Self {
+            return .{ .ptr = slice.ptr, .len = slice.len };
+        }
+
+        pub inline fn toNative(self: Self) Native {
+            return self.ptr[0..self.len];
+        }
+    };
+}
 
 pub const Hasher = extern struct {
     state: u32,

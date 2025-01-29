@@ -79,7 +79,7 @@ pub const MAX_FOREIGN_ADDRESSES = std.math.maxInt(std.meta.Tag(ForeignId));
 pub const MAX_FUNCTIONS = std.math.maxInt(std.meta.Tag(FunctionId));
 pub const MAX_HANDLER_SETS = std.math.maxInt(std.meta.Tag(HandlerSetId));
 pub const MAX_EVIDENCE = Rbc.EVIDENCE_SENTINEL;
-pub const MAX_BLOCKS = Rbc.MAX_BLOCKS;
+pub const MAX_BLOCKS = std.math.maxInt(std.meta.Tag(BlockId));
 pub const MAX_REGISTERS = Rbc.MAX_REGISTERS;
 pub const MAX_LOCALS = std.math.maxInt(std.meta.Tag(LocalId));
 pub const MAX_NAMES = std.math.maxInt(std.meta.Tag(NameId));
@@ -129,7 +129,7 @@ pub const Error = std.mem.Allocator.Error || error{
     ExpectedName,
 };
 
-pub const ForeignAddress = foreign.Foreign;
+pub const Foreign = foreign.Foreign;
 pub const Formatter = fmt.Formatter;
 pub const Function = function.Function;
 pub const HandlerSet = handler_set.HandlerSet;
@@ -160,19 +160,136 @@ pub const Alignment = u12; // 2^12 = 4096 = page size; should be enough for anyo
 pub const Size = u64;
 pub const Offset = u64;
 
-pub const TypeId = NewType("TypeId", u16, Type);
-pub const ModuleId = NewType("ModuleId", u16, Module);
-pub const RegisterId = NewType("RegisterId", Rbc.RegisterIndex, Register);
-pub const HandlerSetId = NewType("HandlerSetId", Rbc.HandlerSetIndex, HandlerSet);
-pub const BlockId = NewType("BlockId", Rbc.BlockIndex, Block);
-pub const FunctionId = NewType("FunctionId", Rbc.FunctionIndex, Function);
-pub const ForeignId = NewType("ForeignId", Rbc.ForeignId, ForeignAddress);
-pub const GlobalId = NewType("GlobalId", Rbc.GlobalIndex, Global);
-pub const UpvalueId = NewType("UpvalueId", Rbc.UpvalueIndex, Upvalue);
-pub const EvidenceId = NewType("EvidenceId", Rbc.EvidenceIndex, Local);
-pub const LocalId = NewType("LocalId", u16, Local);
-pub const NameId = NewType("NameId", u16, [:0]const u8);
-pub const FieldId = NewType("FieldId", u16, void);
+pub const TypeId = enum(u16) {
+    pub const DataType = Type;
+
+    _,
+
+    pub fn format(self: TypeId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("TypeId-{x}", .{ @intFromEnum(self) });
+    }
+};
+pub const ModuleId = enum(u16) {
+    pub const DataType = Module;
+
+    _,
+
+    pub fn format(self: ModuleId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("ModuleId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
+pub const RegisterId = enum(Rbc.RegisterIndex) {
+    pub const DataType = Register;
+
+    _,
+
+    pub fn format(self: RegisterId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("RegisterId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
+pub const HandlerSetId = enum(Rbc.HandlerSetIndex) {
+    pub const DataType = HandlerSet;
+
+    _,
+
+    pub fn format(self: HandlerSetId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("HandlerSetId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
+pub const BlockId = enum(u16) {
+    pub const DataType = Block;
+
+    entry = 0,
+    _,
+
+    pub fn format(self: BlockId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("BlockId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
+pub const FunctionId = enum(Rbc.FunctionIndex) {
+    pub const DataType = Function;
+
+    _,
+
+    pub fn format(self: FunctionId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("FunctionId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
+pub const ForeignId = enum(Rbc.ForeignIndex) {
+    pub const DataType = Foreign;
+
+    _,
+
+    pub fn format(self: ForeignId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("ForeignId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
+pub const GlobalId = enum(Rbc.GlobalIndex) {
+    pub const DataType = Global;
+
+    _,
+
+    pub fn format(self: GlobalId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("GlobalId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
+pub const UpvalueId = enum(Rbc.UpvalueIndex) {
+    pub const DataType = Upvalue;
+
+    _,
+
+    pub fn format(self: UpvalueId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("UpvalueId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
+pub const EvidenceId = enum(Rbc.EvidenceIndex) {
+    pub const DataType = Local;
+
+    _,
+
+    pub fn format(self: EvidenceId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("EvidenceId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
+pub const LocalId = enum(u16) {
+    pub const DataType = Local;
+
+    _,
+
+    pub fn format(self: LocalId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("LocalId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
+pub const NameId = enum(u16) {
+    pub const DataType = [:0]const u8;
+
+    _,
+
+    pub fn format(self: NameId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("NameId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
+pub const FieldId = enum(u16) {
+    pub const DataType = void;
+
+    _,
+
+    pub fn format(self: FieldId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("FieldId-{x}", .{ @intFromEnum(self) });
+    }
+};
+
 
 pub const RegisterOffset = Rbc.RegisterLocalOffset;
 /// 2 ^ 2 = max of 4 registers per multi-register entity
@@ -239,23 +356,9 @@ pub const Layout = struct {
     }
 };
 
-fn NewType(comptime NewTypeName: []const u8, comptime Tag: type, comptime Data: type) type {
-    return enum(Tag) {
-        const Self = @This();
-
-        pub const DataType = Data;
-
-        _,
-
-        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-            return writer.print("{s}-{x}", .{ NewTypeName, @intFromEnum(self) });
-        }
-    };
-}
-
 const LayoutMap = std.ArrayHashMapUnmanaged(TypeId, Layout, utils.SimpleHashContext, false);
 const TypeMap = std.ArrayHashMapUnmanaged(Type, void, TypeContext, false);
-const ForeignList = std.ArrayListUnmanaged(*ForeignAddress);
+const ForeignList = std.ArrayListUnmanaged(*Foreign);
 const ModuleList = std.ArrayListUnmanaged(*Module);
 
 const TypeContext = struct {
@@ -417,14 +520,14 @@ pub fn getTypeLayout(self: *Rir, id: TypeId) error{ InvalidType, OutOfMemory }!*
     return getOrPut.value_ptr;
 }
 
-pub fn createForeign(self: *Rir, name: NameId, typeIr: *Type) error{ TooManyForeignAddresses, OutOfMemory }!*ForeignAddress {
+pub fn createForeign(self: *Rir, name: NameId, typeIr: *Type) error{ TooManyForeignAddresses, OutOfMemory }!*Foreign {
     const index = self.foreign_list.items.len;
 
     if (index >= MAX_FOREIGN_ADDRESSES) {
         return error.TooManyForeignAddresses;
     }
 
-    const f = try ForeignAddress.init(self, @enumFromInt(index), name, typeIr);
+    const f = try Foreign.init(self, @enumFromInt(index), name, typeIr);
     errdefer self.allocator.destroy(f);
 
     try self.foreign_list.append(self.allocator, f);
@@ -432,7 +535,7 @@ pub fn createForeign(self: *Rir, name: NameId, typeIr: *Type) error{ TooManyFore
     return f;
 }
 
-pub fn getForeign(self: *Rir, id: ForeignId) error{InvalidForeign}!*ForeignAddress {
+pub fn getForeign(self: *Rir, id: ForeignId) error{InvalidForeign}!*Foreign {
     if (@intFromEnum(id) >= self.foreign_list.items.len) {
         return error.InvalidForeign;
     }

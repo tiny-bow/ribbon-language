@@ -148,8 +148,8 @@ pub const Block = struct {
         try exitOp(self, .ret, {});
     }
 
-    pub fn term(self: *Block) !void {
-        try exitOp(self, .term, {});
+    pub fn cancel(self: *Block) !void {
+        try exitOp(self, .cancel, {});
     }
 
     pub fn alloca(self: *Block) !void {
@@ -292,7 +292,7 @@ pub const Block = struct {
         try op(self, .ref_function, .{ .module_id = m.id, .id = x.id });
     }
 
-    pub fn ref_foreign(self: *Block, x: *Rir.ForeignAddress) !void {
+    pub fn ref_foreign(self: *Block, x: *Rir.Foreign) !void {
         try op(self, .ref_foreign, x.id);
     }
 
@@ -310,7 +310,8 @@ pub const Block = struct {
 
     pub fn im(self: *Block, x: anytype) !void {
         const size = @bitSizeOf(@TypeOf(x));
-        return if (comptime size > 32) @call(.always_inline, im_w, .{ self, x }) else @call(.always_inline, im_i, .{ self, x });
+        return if (comptime size > 32) @call(.always_inline, im_w, .{ self, x })
+             else @call(.always_inline, im_i, .{ self, x });
     }
 
     pub fn im_i(self: *Block, x: anytype) !void {

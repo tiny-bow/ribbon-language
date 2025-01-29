@@ -4,7 +4,6 @@ const value = @This();
 
 const std = @import("std");
 const utils = @import("utils");
-const Isa = @import("Isa");
 const Rbc = @import("Rbc");
 
 pub const ZeroCheck = enum(u1) { zero, non_zero };
@@ -41,40 +40,40 @@ pub const OpCode = enum(u8) {
     nop,
     halt,
     trap,
-    block,
-    with,
-    @"if",
-    when,
-    re,
-    br,
+
     call,
     prompt,
     ret,
-    term,
+    cancel,
+
     alloca,
     addr,
     read,
     write,
     load,
     store,
+
     add,
     sub,
     mul,
     div,
     rem,
     neg,
+
     band,
     bor,
     bxor,
     bnot,
     bshiftl,
     bshiftr,
+
     eq,
     ne,
     lt,
     gt,
     le,
     ge,
+
     ext,
     trunc,
     cast,
@@ -85,6 +84,13 @@ pub const OpCode = enum(u8) {
     copy,
 
     // Rir-specific instructions:
+    block,
+    with,
+    @"if",
+    when,
+    br,
+    re,
+
     new_local,
 
     ref_local,
@@ -109,18 +115,6 @@ pub const OpCode = enum(u8) {
         }
     }
 };
-
-comptime {
-    for (Isa.Instructions) |category| {
-        for (category.kinds) |kind| {
-            const name = kind.humanFriendlyName();
-
-            if (!@hasField(OpCode, name)) {
-                @compileError("missing OpCode: `" ++ name ++ "`");
-            }
-        }
-    }
-}
 
 pub fn OpRef(comptime T: type) type {
     return packed struct {
@@ -186,40 +180,40 @@ pub const OpData = packed union {
     nop: void,
     halt: void,
     trap: void,
-    block: void,
-    with: void,
-    @"if": ZeroCheck,
-    when: ZeroCheck,
-    re: OptZeroCheck,
-    br: OptZeroCheck,
+
     call: void,
     prompt: void,
     ret: void,
-    term: void,
+    cancel: void,
+
     alloca: void,
     addr: void,
     read: void,
     write: void,
     load: void,
     store: void,
+
     add: void,
     sub: void,
     mul: void,
     div: void,
     rem: void,
     neg: void,
+
     band: void,
     bor: void,
     bxor: void,
     bnot: void,
     bshiftl: void,
     bshiftr: void,
+
     eq: void,
     ne: void,
     lt: void,
     gt: void,
     le: void,
     ge: void,
+
     ext: BitSize,
     trunc: BitSize,
     cast: void,
@@ -227,6 +221,13 @@ pub const OpData = packed union {
     clear: Rir.Index,
     swap: Rir.Index,
     copy: Rir.Index,
+
+    block: void,
+    with: void,
+    @"if": ZeroCheck,
+    when: ZeroCheck,
+    br: OptZeroCheck,
+    re: OptZeroCheck,
 
     new_local: Rir.NameId,
 
@@ -250,7 +251,7 @@ pub const OpData = packed union {
             .call,
             .prompt,
             .ret,
-            .term,
+            .cancel,
             .alloca,
             .addr,
             .read,
@@ -557,7 +558,7 @@ pub const LValue = union(enum) {
 /// * Un-addressable
 pub const RValue = union(enum) {
     immediate: Immediate,
-    foreign: *Rir.ForeignAddress,
+    foreign: *Rir.Foreign,
     function: *Rir.Function,
 
     pub fn getType(self: RValue) *Rir.Type {
@@ -569,7 +570,7 @@ pub const RValue = union(enum) {
     pub fn getMemory(self: anytype) []const u8 {
         return switch (self) {
             .immediate => |x| x.getMemory(),
-            .foreign => |x| @as([*]align(@alignOf(Rir.ForeignAddress)) const u8, @ptrCast(x))[0..@sizeOf(Rir.ForeignAddress)],
+            .foreign => |x| @as([*]align(@alignOf(Rir.Foreign)) const u8, @ptrCast(x))[0..@sizeOf(Rir.Foreign)],
             .function => |x| @as([*]align(@alignOf(Rir.Function)) const u8, @ptrCast(x))[0..@sizeOf(Rir.Function)],
         };
     }
@@ -583,7 +584,7 @@ pub const RValue = union(enum) {
     }
 
     // Extract a `ForeignAddress` from an `RValue` or return `error.ExpectedForeign`
-    pub fn forceForeign(self: RValue) error{ExpectedForeign}!*Rir.ForeignAddress {
+    pub fn forceForeign(self: RValue) error{ExpectedForeign}!*Rir.Foreign {
         return switch (self) {
             .foreign => |x| x,
             inline else => return error.ExpectedForeign,
@@ -669,8 +670,27 @@ pub const Operand = union(enum) {
         };
     }
 
-    pub fn from(_: anytype) Operand {
-        @panic("from NYI");
+    pub fn from(val: anytype) Operand {
+        const T = @TypeOf(val);
+        return switch (T) {
+            Operand => val,
+
+            *Rir.Type => .{ .meta = .{ .type = val } },
+            *Rir.Block => .{ .meta = .{ .block = val } },
+            *Rir.HandlerSet => .{ .meta = .{ .handler_set = val } },
+
+            *Rir.Register => .{ .l_value = .{ .register = val } },
+            *Rir.MultiRegister => .{ .l_value = .{ .multi_register = val } },
+            *Rir.Local => .{ .l_value = .{ .local = val } },
+            *Rir.Upvalue => .{ .l_value = .{ .upvalue = val } },
+            *Rir.Global => .{ .l_value = .{ .global = val } },
+
+            Immediate => .{ .r_value = .{ .immediate = val } },
+            *Rir.Foreign => .{ .r_value = .{ .foreign = val } },
+            *Rir.Function => .{ .r_value = .{ .function = val } },
+
+            else => @compileError("Invalid operand type " ++ @typeName(T)),
+        };
     }
 
     /// Extract a `Meta` value from an `Operand` or return `error.ExpectedMeta`

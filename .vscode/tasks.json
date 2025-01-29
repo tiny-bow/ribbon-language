@@ -19,18 +19,9 @@
             }
         },
         {
-            "label": "run-rvm",
+            "label": "run-backend",
             "type": "shell",
-            "command": "zig build run-rvm -freference-trace --prominent-compile-errors",
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            }
-        },
-        {
-            "label": "run-rir",
-            "type": "shell",
-            "command": "zig build run-rir -freference-trace --prominent-compile-errors",
+            "command": "zig build run-backend -freference-trace --prominent-compile-errors",
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -42,7 +33,7 @@
             "command": "zig build run-rml -freference-trace --prominent-compile-errors",
             "group": {
                 "kind": "build",
-                "isDefault": true
+                "isDefault": false
             }
         },
         // {

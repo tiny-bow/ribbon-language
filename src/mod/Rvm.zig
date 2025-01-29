@@ -7,100 +7,80 @@ const Rbc = @import("Rbc");
 pub const log = std.log.scoped(.rvm);
 
 test {
-    std.testing.refAllDecls(@This());
+    std.testing.refAllDeclsRecursive(@This());
 }
 
-allocator: std.mem.Allocator,
+fiber_allocator: std.mem.Allocator,
+user_data: *anyopaque,
 
 pub fn init(allocator: std.mem.Allocator) !*Rvm {
-    const ptr = try allocator.create(Rvm);
+    const self = try allocator.create(Rvm);
 
-    ptr.* = Rvm{
-        .allocator = allocator,
-    };
+    self.fiber_allocator = allocator;
 
-    return ptr;
+    return self;
 }
 
 pub fn deinit(self: *Rvm) void {
-    self.allocator.destroy(self);
+    self.fiber_allocator.destroy(self);
 }
-
-const ZeroCheck = enum { zero, non_zero };
-
-const ReturnStyle = enum { v, no_v };
 
 pub const Trap = error{
     ForeignUnknown,
     Unreachable,
-    Underflow,
     Overflow,
-    OutOfBounds,
-    MissingEvidence,
-    OutValueMismatch,
-    BadEncoding,
-    ArgCountMismatch,
-    BadAlignment,
-    InvalidBlockRestart,
 };
 
+pub const MAX_BLOCKS = 256;
 pub const CALL_STACK_SIZE: usize = 1024;
-pub const BLOCK_STACK_SIZE: usize = CALL_STACK_SIZE * Rbc.MAX_BLOCKS;
+pub const BLOCK_STACK_SIZE: usize = CALL_STACK_SIZE * MAX_BLOCKS;
 pub const EVIDENCE_VECTOR_SIZE: usize = std.math.maxInt(Rbc.EvidenceIndex);
 pub const DATA_STACK_SIZE: usize = CALL_STACK_SIZE * Rbc.MAX_REGISTERS;
 
-pub const DataStack = Stack(Rbc.Register, false);
-pub const CallStack = Stack(CallFrame, true);
-pub const BlockStack = Stack(BlockFrame, true);
+// NOTE: fiber parameter has to be anyopaque because zig gets confused
+pub const ForeignFunction =
+    *const fn (
+    fiber: *anyopaque,
+    call: *ForeignCall,
+) callconv(.C) ForeignControl;
 
-pub const ForeignFunction = *const fn (*anyopaque, Rbc.BlockIndex, *ForeignOut) callconv(.C) ForeignControl;
-
-pub const ForeignControl = enum(u32) {
-    step,
-    done,
-    done_v,
-    trap,
+pub const ForeignCall = extern struct {
+    arguments: utils.external.Slice(.constant, Rbc.Register),
+    out: ForeignOut = undefined,
 };
 
 pub const ForeignOut = extern union {
-    step: Rbc.BlockIndex,
-    done: void,
-    done_v: Rbc.RegisterIndex,
+    value: Rbc.Register,
     trap: utils.external.Error,
 };
 
-pub fn convertForeignError(e: utils.external.Error) Rvm.Trap {
-    const i = @intFromError(e.toNative());
+pub const ForeignControl = enum(i32) {
+    trap = -1,
+    done = 0,
+    done_v = 1,
+    cancel = 2,
+    cancel_v = 3,
+};
 
-    inline for (comptime std.meta.fieldNames(Rvm.Trap)) |trapName| {
-        if (i == @intFromError(@field(Rvm.Trap, trapName))) {
-            return @field(Rvm.Trap, trapName);
-        }
-    }
+pub const Location = struct {
+    function: *const Rbc.Function,
+    ip: [*]const Rbc.Instruction,
+};
 
-    return Rvm.Trap.ForeignUnknown;
-}
-
-pub fn Stack(comptime T: type, comptime PRE_INCR: bool) type {
+pub fn Stack(comptime T: type, comptime STACK_SIZE: comptime_int, comptime PRE_INCR: bool) type {
     return struct {
-        top_ptr: [*]T,
-
-        base_ptr: [*]T,
-        max_ptr: [*]T,
-
         const Self = @This();
 
-        pub fn init(allocator: std.mem.Allocator, size: usize) !Self {
-            const buf = try allocator.alloc(T, size);
-            return .{
-                .top_ptr = if (comptime PRE_INCR) buf.ptr - 1 else buf.ptr,
-                .base_ptr = buf.ptr,
-                .max_ptr = buf.ptr + size,
-            };
-        }
+        top_ptr: [*]T,
+        max_ptr: [*]T,
 
-        pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
-            allocator.free(self.base_ptr[0 .. (@intFromPtr(self.max_ptr) - @intFromPtr(self.base_ptr)) / @sizeOf(T)]);
+        memory: [STACK_SIZE]T,
+
+        pub fn init(self: *Self) void {
+            const buf: []T = &self.memory;
+
+            self.top_ptr = if (comptime PRE_INCR) buf.ptr - 1 else buf.ptr;
+            self.max_ptr = buf.ptr + buf.len;
         }
 
         pub fn push(self: *Self, value: T) void {
@@ -132,7 +112,7 @@ pub fn Stack(comptime T: type, comptime PRE_INCR: bool) type {
         pub fn decr(self: *Self, count: usize) void {
             if (comptime !PRE_INCR) {
                 self.top_ptr -= count;
-            }
+            } else unreachable;
         }
 
         pub fn decrGet(self: *Self, count: usize) *T {
@@ -190,123 +170,91 @@ pub fn Stack(comptime T: type, comptime PRE_INCR: bool) type {
 }
 
 pub const Evidence = struct {
+    frame: *SetFrame,
     handler: *const Rbc.Function,
-    call: *CallFrame,
-    block: *BlockFrame,
-    data: [*]Rbc.Register,
+    previous: ?*Evidence,
 };
 
-pub const BlockFrame = struct {
-    base: [*]const Rbc.Instruction,
-    ip: [*]const Rbc.Instruction,
+pub const SetFrame = struct {
+    call: *CallFrame,
+    handler_set: *const Rbc.HandlerSet,
+    cancellation_address: [*]const Rbc.Instruction,
+    data: [*]Rbc.Register,
     out: Rbc.RegisterIndex,
-    handler_set: ?*const Rbc.HandlerSet,
 };
 
 pub const CallFrame = struct {
     function: *const Rbc.Function,
-    evidence: *Evidence,
-    block: *BlockFrame,
+    sets: [*]SetFrame,
+    evidence: ?*Evidence,
     data: [*]Rbc.Register,
+    ip: [*]const Rbc.Instruction,
+    out: Rbc.RegisterIndex,
 };
 
+pub const DataStack = Stack(Rbc.Register, DATA_STACK_SIZE, false);
+pub const CallStack = Stack(CallFrame, CALL_STACK_SIZE, true);
+pub const SetStack = Stack(SetFrame, BLOCK_STACK_SIZE, true);
+
+// TODO: Fiber is currently sitting at about ~36mb of memory usage, which is a bit high
 pub const Fiber = struct {
-    rvm: *const Rvm,
-    program: *const Rbc,
+    rvm: *Rvm,
+    program: *Rbc,
 
     data: DataStack,
     calls: CallStack,
-    blocks: BlockStack,
+    sets: SetStack,
 
-    evidence: [*]Evidence,
+    evidence: [EVIDENCE_VECTOR_SIZE]?*Evidence,
 
-    foreign: []const ForeignFunction,
+    register_scratch_space: [Rbc.MAX_REGISTERS]u64,
 
-    pub fn init(rvm: *const Rvm, program: *const Rbc, foreign: []const ForeignFunction) !*Fiber {
-        const ptr = try rvm.allocator.create(Fiber);
-        errdefer rvm.allocator.destroy(ptr);
+    userdata: *anyopaque,
 
-        const data = try DataStack.init(rvm.allocator, DATA_STACK_SIZE);
-        errdefer data.deinit(rvm.allocator);
+    pub fn init(rvm: *Rvm, program: *Rbc) !*Fiber {
+        const self = try rvm.fiber_allocator.create(Fiber);
 
-        const calls = try CallStack.init(rvm.allocator, CALL_STACK_SIZE);
-        errdefer calls.deinit(rvm.allocator);
+        self.rvm = rvm;
+        self.program = program;
 
-        const blocks = try BlockStack.init(rvm.allocator, BLOCK_STACK_SIZE);
-        errdefer blocks.deinit(rvm.allocator);
+        DataStack.init(&self.data);
+        CallStack.init(&self.calls);
+        SetStack.init(&self.sets);
 
-        const evidence = try rvm.allocator.alloc(Evidence, EVIDENCE_VECTOR_SIZE);
-        errdefer rvm.allocator.free(evidence);
-
-        ptr.* = Fiber{
-            .program = program,
-            .rvm = rvm,
-            .data = data,
-            .calls = calls,
-            .blocks = blocks,
-            .evidence = evidence.ptr,
-            .foreign = foreign,
-        };
-
-        return ptr;
+        return self;
     }
 
     pub fn deinit(self: *Fiber) void {
-        self.data.deinit(self.rvm.allocator);
-        self.calls.deinit(self.rvm.allocator);
-        self.blocks.deinit(self.rvm.allocator);
-
-        self.rvm.allocator.free(self.evidence[0..EVIDENCE_VECTOR_SIZE]);
-
-        self.rvm.allocator.destroy(self);
+        self.rvm.fiber_allocator.destroy(self);
     }
 
-    pub fn run(self: *Fiber) Rvm.Trap!void {
-        return Rvm.stepBytecode(true, self);
+    pub fn run(self: *Fiber) Trap!void {
+        return stepBytecode(true, self);
     }
 
-    pub fn step(self: *Fiber) Rvm.Trap!bool {
-        return Rvm.stepBytecode(false, self);
+    pub fn step(self: *Fiber) Trap!bool {
+        return stepBytecode(false, self);
     }
 
-    pub fn getLocation(self: *const Fiber) Rbc.Info.Location {
+    pub fn getLocation(self: *const Fiber) Location {
         const callFrame = &self.calls.top_ptr[0];
-        const blockFrame = &self.blocks.top_ptr[0];
 
         return .{
             .function = callFrame.function,
-            .block = blockFrame.base,
-            .ip = blockFrame.ip,
+            .ip = callFrame.ip,
         };
     }
 
-    pub fn getForeign(self: *const Fiber, index: Rbc.ForeignId) ForeignFunction {
-        return self.foreign[index];
-    }
-
-    pub fn boundsCheck(self: *Fiber, address: anytype, size: Rbc.RegisterLocalOffset) Rvm.Trap!void {
+    pub fn boundsCheck(self: *Fiber, address: anytype, size: Rbc.RegisterLocalOffset) Trap!void {
         utils.todo(noreturn, .{ self, address, size });
     }
 
-    pub fn removeAnyHandlerSet(self: *Fiber, blockFrame: *const BlockFrame) void {
-        if (blockFrame.handler_set) |handlerSet| {
-            self.removeHandlerSet(handlerSet);
-        }
-    }
-
-    pub fn removeHandlerSet(self: *Fiber, handlerSet: *const Rbc.HandlerSet) void {
-        const oldHandlerStorage: [*]Evidence = @ptrCast(self.data.decrGet(handlerSet.len * (@sizeOf(Evidence) / @sizeOf(Rbc.Register))));
-        for (handlerSet.*, 0..) |binding, i| {
-            self.evidence[binding.id] = oldHandlerStorage[i];
-        }
-    }
-
-    pub fn invoke(self: *Rvm.Fiber, comptime T: type, functionIndex: Rbc.FunctionIndex, arguments: anytype) Rvm.Trap!T {
+    pub fn invoke(self: *Fiber, comptime T: type, functionIndex: Rbc.FunctionIndex, arguments: anytype) Trap!T {
         const function = &self.program.functions[functionIndex];
 
         if ((self.calls.hasSpaceU1(2) & self.data.hasSpaceU1(function.num_registers + 1)) != 1) {
             @branchHint(.cold);
-            return Rvm.Trap.Overflow;
+            return Trap.Overflow;
         }
 
         const wrapperInstructions = [_]Rbc.Instruction{
@@ -314,40 +262,30 @@ pub const Fiber = struct {
         };
 
         const wrapper = Rbc.Function{
-            .num_arguments = 0,
             .num_registers = 1,
-            .bytecode = .{ .blocks = &[_][*]const Rbc.Instruction{&wrapperInstructions}, .instructions = &wrapperInstructions },
+            .bytecode = .{ .instructions = &wrapperInstructions },
         };
 
         var dataBase = self.data.incrGet(1);
-        const wrapperBlock = self.blocks.pushGet(BlockFrame{
-            .base = &wrapperInstructions,
-            .ip = &wrapperInstructions,
-            .out = undefined,
-            .handler_set = null,
-        });
 
         self.calls.push(CallFrame{
             .function = &wrapper,
-            .evidence = undefined,
-            .block = wrapperBlock,
+            .sets = self.sets.top_ptr,
+            .evidence = null,
             .data = @ptrCast(dataBase),
+            .ip = &wrapperInstructions,
+            .out = undefined,
         });
 
         dataBase = self.data.incrGet(function.num_registers);
 
-        const blockFrame = self.blocks.pushGet(BlockFrame{
-            .base = function.bytecode.blocks[0],
-            .ip = function.bytecode.blocks[0],
-            .out = 0,
-            .handler_set = null,
-        });
-
         self.calls.push(CallFrame{
             .function = function,
-            .evidence = undefined,
-            .block = blockFrame,
+            .sets = self.sets.top_ptr,
+            .evidence = null,
             .data = @ptrCast(dataBase),
+            .ip = function.bytecode.instructions.ptr,
+            .out = 0,
         });
 
         inline for (0..arguments.len) |i| {
@@ -361,7 +299,7 @@ pub const Fiber = struct {
         const frame = self.calls.popGet();
         self.data.top_ptr = frame.data;
 
-        self.blocks.pop();
+        self.sets.pop();
 
         return result;
     }
@@ -379,15 +317,15 @@ pub const Fiber = struct {
     }
 
     pub fn readUpvalue(self: *Fiber, comptime T: type, u: Rbc.UpvalueIndex) T {
-        return readReg(T, self.calls.top().evidence.call, u);
+        return readReg(T, self.calls.top().evidence.?.frame.call, u);
     }
 
     pub fn writeUpvalue(self: *Fiber, u: Rbc.UpvalueIndex, value: anytype) void {
-        return writeReg(self.calls.top().evidence.call, u, value);
+        return writeReg(self.calls.top().evidence.?.frame.call, u, value);
     }
 
     pub fn addrUpvalue(self: *Fiber, u: Rbc.UpvalueIndex) *u64 {
-        return addrReg(self.calls.top().evidence.call, u);
+        return addrReg(self.calls.top().evidence.?.frame.call, u);
     }
 
     pub fn addrGlobal(self: *Fiber, g: Rbc.GlobalIndex) [*]u8 {
@@ -415,206 +353,185 @@ pub fn writeReg(frame: *const CallFrame, r: Rbc.RegisterIndex, value: anytype) v
     @as(*@TypeOf(value), @ptrCast(addrReg(frame, r))).* = value;
 }
 
-// TODO: reimplement foreign calls as an instruction
-fn stepBytecode(comptime reswitch: bool, fiber: *Rvm.Fiber) Rvm.Trap!if (reswitch) void else bool {
+fn stepBytecode(comptime reswitch: bool, fiber: *Fiber) Trap!if (reswitch) void else bool {
     @setEvalBranchQuota(10_000);
 
     var lastData: Rbc.Data = undefined;
 
-    var registerScratchSpace = [1]u64{undefined} ** Rbc.MAX_REGISTERS;
-
     reswitch: switch (decodeInstr(fiber, &lastData)) {
         .nop => if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData),
 
+        .eof => return Trap.Unreachable,
+
         .halt => if (comptime !reswitch) return false,
 
-        .trap => return Rvm.Trap.Unreachable,
+        .trap => return Trap.Unreachable,
 
-        .block => {
-            block(fiber, lastData.block.B0, undefined);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .block_v => {
-            block(fiber, lastData.block_v.B0, lastData.block_v.R0);
+        .push_set => {
+            try push_set(fiber, lastData.push_set.B0, lastData.push_set.H0, undefined);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
-        .with => {
-            try with(fiber, lastData.with.B0, lastData.with.H0, undefined);
+        .push_set_v => {
+            try push_set(fiber, lastData.push_set_v.B0, lastData.push_set_v.H0, lastData.push_set_v.R0);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
-        .with_v => {
-            try with(fiber, lastData.with_v.B0, lastData.with_v.H0, lastData.with_v.R0);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .if_nz => {
-            @"if"(fiber, lastData.if_nz.B0, lastData.if_nz.B1, lastData.if_nz.R0, .non_zero, undefined);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .if_nz_v => {
-            @"if"(fiber, lastData.if_nz_v.B0, lastData.if_nz_v.B1, lastData.if_nz_v.R0, .non_zero, lastData.if_nz_v.R1);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .if_z => {
-            @"if"(fiber, lastData.if_z.B0, lastData.if_z.B1, lastData.if_z.R0, .zero, undefined);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .if_z_v => {
-            @"if"(fiber, lastData.if_z_v.B0, lastData.if_z_v.B1, lastData.if_z_v.R0, .zero, lastData.if_z_v.R1);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .when_nz => {
-            when(fiber, lastData.when_nz.B0, lastData.when_nz.R0, .non_zero);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .when_z => {
-            when(fiber, lastData.when_z.B0, lastData.when_z.R0, .zero);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .re => {
-            re(fiber, lastData.re.B0, undefined, null);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .re_nz => {
-            re(fiber, lastData.re_nz.B0, lastData.re_nz.R0, .non_zero);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .re_z => {
-            re(fiber, lastData.re_z.B0, lastData.re_z.R0, .zero);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
+        .pop_set => {
+            try pop_set(fiber);
         },
 
         .br => {
-            br(fiber, lastData.br.B0, undefined, null, undefined, .no_v);
+            br(fiber, lastData.br.B0, undefined, null);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
         .br_nz => {
-            br(fiber, lastData.br_nz.B0, lastData.br_nz.R0, .non_zero, undefined, .no_v);
+            br(fiber, lastData.br_nz.B0, lastData.br_nz.R0, .non_zero);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
         .br_z => {
-            br(fiber, lastData.br_z.B0, lastData.br_z.R0, .zero, undefined, .no_v);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .br_v => {
-            br(fiber, lastData.br_v.B0, undefined, null, fiber.readLocal(u64, lastData.br_v.R0), .v);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .br_nz_v => {
-            br(fiber, lastData.br_nz_v.B0, lastData.br_nz_v.R0, .non_zero, fiber.readLocal(u64, lastData.br_nz_v.R1), .v);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .br_z_v => {
-            br(fiber, lastData.br_z_v.B0, lastData.br_z_v.R0, .zero, fiber.readLocal(u64, lastData.br_z_v.R1), .v);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .br_im_v => {
-            br(fiber, lastData.br_im_v.B0, undefined, null, lastData.br_im_v.i0, .v);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .br_im_w_v => {
-            br(fiber, lastData.br_im_w_v.B0, undefined, null, decodeWideImmediate(fiber), .v);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .br_nz_im_v => {
-            br(fiber, lastData.br_nz_im_v.B0, lastData.br_nz_im_v.R0, .non_zero, decodeWideImmediate(fiber), .v);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .br_z_im_v => {
-            br(fiber, lastData.br_z_im_v.B0, lastData.br_z_im_v.R0, .zero, decodeWideImmediate(fiber), .v);
+            br(fiber, lastData.br_z.B0, lastData.br_z.R0, .zero);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
         .call => {
             const f = fiber.readLocal(Rbc.FunctionIndex, lastData.call.R0);
-            try call(fiber, &fiber.program.functions[f], undefined);
+            const as = decodeArguments(fiber, lastData.call.b0);
+
+            try call(fiber, &fiber.program.functions[f], as, undefined);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
         .call_v => {
             const f = fiber.readLocal(Rbc.FunctionIndex, lastData.call_v.R0);
-            try call(fiber, &fiber.program.functions[f], lastData.call_v.R1);
+            const as = decodeArguments(fiber, lastData.call_v.b0);
+
+            try call(fiber, &fiber.program.functions[f], as, lastData.call_v.R1);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
         .call_im => {
-            try call(fiber, &fiber.program.functions[lastData.call_im.F0], undefined);
+            const f = &fiber.program.functions[lastData.call_im.F0];
+            const as = decodeArguments(fiber, lastData.call_im.b0);
+
+            try call(fiber, f, as, undefined);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
         .call_im_v => {
-            try call(fiber, &fiber.program.functions[lastData.call_im_v.F0], lastData.call_im_v.R0);
+            const f = &fiber.program.functions[lastData.call_im_v.F0];
+            const as = decodeArguments(fiber, lastData.call_im_v.b0);
+
+            try call(fiber, f, as, lastData.call_im_v.R0);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
         .tail_call => {
             const f = fiber.readLocal(Rbc.FunctionIndex, lastData.tail_call.R0);
-            try tail_call(fiber, &registerScratchSpace, &fiber.program.functions[f]);
+            const as = decodeArguments(fiber, lastData.tail_call.b0);
+
+            try tail_call(fiber, &fiber.program.functions[f], as);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
         .tail_call_im => {
-            try tail_call(fiber, &registerScratchSpace, &fiber.program.functions[lastData.tail_call_im.F0]);
+            const f = &fiber.program.functions[lastData.tail_call_im.F0];
+            const as = decodeArguments(fiber, lastData.tail_call_im.b0);
+
+            try tail_call(fiber, f, as);
+
+            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
+        },
+
+        .foreign_call => {
+            const x = fiber.readLocal(Rbc.ForeignIndex, lastData.foreign_call.R0);
+            const as = decodeArguments(fiber, lastData.foreign_call.b0);
+
+            try foreign_call(fiber, fiber.program.foreign[x], as, undefined);
+
+            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
+        },
+
+        .foreign_call_v => {
+            const x = fiber.readLocal(Rbc.ForeignIndex, lastData.foreign_call_v.R0);
+            const as = decodeArguments(fiber, lastData.foreign_call_v.b0);
+
+            try foreign_call(fiber, fiber.program.foreign[x], as, lastData.foreign_call_v.R1);
+
+            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
+        },
+
+        .foreign_call_im => {
+            const x = fiber.program.foreign[lastData.foreign_call_im.X0];
+            const as = decodeArguments(fiber, lastData.foreign_call_im.b0);
+
+            try foreign_call(fiber, x, as, undefined);
+
+            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
+        },
+
+        .foreign_call_im_v => {
+            const x = fiber.program.foreign[lastData.foreign_call_im_v.X0];
+            const as = decodeArguments(fiber, lastData.foreign_call_im_v.b0);
+
+            try foreign_call(fiber, x, as, lastData.foreign_call_im_v.R0);
+
+            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
+        },
+
+        .tail_foreign_call => {
+            const x = fiber.readLocal(Rbc.FunctionIndex, lastData.tail_foreign_call.R0);
+            const as = decodeArguments(fiber, lastData.tail_foreign_call.b0);
+
+            try tail_foreign_call(fiber, fiber.program.foreign[x], as);
+
+            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
+        },
+
+        .tail_foreign_call_im => {
+            const x = fiber.program.foreign[lastData.tail_foreign_call_im.X0];
+            const as = decodeArguments(fiber, lastData.tail_foreign_call_im.b0);
+
+            try tail_foreign_call(fiber, x, as);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
         .prompt => {
-            try prompt(fiber, lastData.prompt.E0, undefined);
+            const e = fiber.evidence[lastData.prompt.E0].?;
+            const as = decodeArguments(fiber, lastData.prompt.b0);
+
+            try prompt(fiber, e, as, undefined);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
         .prompt_v => {
-            try prompt(fiber, lastData.prompt_v.E0, lastData.prompt_v.R0);
+            const e = fiber.evidence[lastData.prompt_v.E0].?;
+            const as = decodeArguments(fiber, lastData.prompt_v.b0);
+
+            try prompt(fiber, e, as, lastData.prompt_v.R0);
+
+            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
+        },
+
+        .tail_prompt => {
+            const e = fiber.evidence[lastData.tail_prompt.E0].?;
+            const as = decodeArguments(fiber, lastData.tail_prompt.b0);
+
+            try tail_prompt(fiber, e, as);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
@@ -643,26 +560,32 @@ fn stepBytecode(comptime reswitch: bool, fiber: *Rvm.Fiber) Rvm.Trap!if (reswitc
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
-        .term => {
-            term(fiber, undefined, .no_v);
+        .cancel => {
+            cancel(fiber, undefined, .no_v);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
-        .term_v => {
-            term(fiber, fiber.readLocal(u64, lastData.term_v.R0), .v);
+        .cancel_v => {
+            const value = fiber.readLocal(u64, lastData.cancel_v.R0);
+
+            cancel(fiber, value, .v);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
-        .term_im_v => {
-            term(fiber, lastData.term_im_v.i0, .v);
+        .cancel_im_v => {
+            const value = lastData.cancel_im_v.i0;
+
+            cancel(fiber, value, .v);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
-        .term_im_w_v => {
-            term(fiber, decodeWideImmediate(fiber), .v);
+        .cancel_im_w_v => {
+            const value = decodeWideImmediate(fiber);
+
+            cancel(fiber, value, .v);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
@@ -685,8 +608,14 @@ fn stepBytecode(comptime reswitch: bool, fiber: *Rvm.Fiber) Rvm.Trap!if (reswitc
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
-        .addr_local => {
-            addr_local(fiber, lastData.addr_local.R0, lastData.addr_local.R1);
+        .addr_foreign => {
+            fiber.writeLocal(lastData.addr_foreign.R0, lastData.addr_foreign.X0);
+
+            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
+        },
+
+        .addr_function => {
+            fiber.writeLocal(lastData.addr_function.R0, lastData.addr_function.F0);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
@@ -3213,50 +3142,19 @@ fn stepBytecode(comptime reswitch: bool, fiber: *Rvm.Fiber) Rvm.Trap!if (reswitc
     if (comptime !reswitch) return true;
 }
 
-// pub fn stepForeign(fiber: *Rvm.Fiber) Rvm.Trap!void {
-//     const currentCallFrame = fiber.stack.call.topPtrUnchecked();
-//     const foreign = fiber.getForeign(currentCallFrame.function.value.foreign);
-
-//     const currentBlockFrame = fiber.blocks.getPtrUnchecked(currentCallFrame.root_block);
-
-//     var foreignOut: Rvm.ForeignOut = undefined;
-//     const control = foreign(fiber, currentBlockFrame.index, &foreignOut);
-
-//     switch (control) {
-//         .trap => return Rvm.convertForeignError(foreignOut.trap),
-//         .step => currentBlockFrame.index = foreignOut.step,
-//         .done => {
-//             fiber.stack.data.ptr = currentCallFrame.stack.base;
-//             fiber.stack.call.ptr -= 1;
-//             fiber.blocks.ptr = currentCallFrame.root_block;
-//         },
-//         .done_v => {
-//             const rootBlockFrame = fiber.blocks.getPtrUnchecked(currentCallFrame.root_block);
-
-//             const out = fiber.readLocal(u64, foreignOut.done_v);
-
-//             fiber.writeReg(fiber.stack.call.ptr -| 2, rootBlockFrame.out, out);
-
-//             fiber.stack.data.ptr = currentCallFrame.stack.base;
-//             fiber.stack.call.ptr -= 1;
-//             fiber.blocks.ptr = currentCallFrame.root_block;
-//         },
-//     }
-// }
-
-fn decodeWideImmediate(fiber: *Rvm.Fiber) u64 {
-    const currentBlockFrame = fiber.blocks.top();
-    const instr = currentBlockFrame.ip[0];
-    currentBlockFrame.ip += 1;
+fn decodeWideImmediate(fiber: *Fiber) u64 {
+    const currentCallFrame = fiber.calls.top();
+    const instr = currentCallFrame.ip[0];
+    currentCallFrame.ip += 1;
     return @bitCast(instr);
 }
 
-fn decodeInstr(fiber: *Rvm.Fiber, out_data: *Rbc.Data) Rbc.Code {
-    const currentBlockFrame = fiber.blocks.top();
-    const instr = currentBlockFrame.ip[0];
+fn decodeInstr(fiber: *Fiber, out_data: *Rbc.Data) Rbc.Code {
+    const currentCallFrame = fiber.calls.top();
+    const instr = currentCallFrame.ip[0];
     out_data.* = instr.data;
-    // std.debug.print("{}\t|\t{s} {any}\n", .{@intFromPtr(currentBlockFrame.ip), @tagName(instr.code), @call(.never_ Rbc.Info.extractInstructionInfo, .{instr})});
-    currentBlockFrame.ip += 1;
+    // std.debug.print("{}\t|\t{s} {any}\n", .{@intFromPtr(currentCallFrame.ip), @tagName(instr.code), @call(.never_ Rbc.Info.extractInstructionInfo, .{instr})});
+    currentCallFrame.ip += 1;
     return instr.code;
 }
 
@@ -3266,22 +3164,22 @@ fn byteSizeToWordSize(byteSize: usize) usize {
     return byteOffset + padding;
 }
 
-fn decodeArguments(fiber: *Rvm.Fiber, count: usize) [*]const Rbc.RegisterIndex {
-    const currentBlockFrame = fiber.blocks.top();
+fn decodeArguments(fiber: *Fiber, count: usize) []const Rbc.RegisterIndex {
+    const currentCallFrame = fiber.calls.top();
 
-    const out: [*]const Rbc.RegisterIndex = @ptrCast(currentBlockFrame.ip);
+    const out: [*]const Rbc.RegisterIndex = @ptrCast(currentCallFrame.ip);
 
-    currentBlockFrame.ip += byteSizeToWordSize(count * @sizeOf(Rbc.RegisterIndex));
+    currentCallFrame.ip += byteSizeToWordSize(count * @sizeOf(Rbc.RegisterIndex));
 
-    return out;
+    return out[0..count];
 }
 
-fn alloca(fiber: *Rvm.Fiber, size: u16, y: Rbc.RegisterIndex) Rvm.Trap!void {
+fn alloca(fiber: *Fiber, size: u16, y: Rbc.RegisterIndex) Trap!void {
     const wordSize = byteSizeToWordSize(size);
 
     if (!fiber.data.hasSpace(wordSize)) {
         @branchHint(.cold);
-        return Rvm.Trap.Overflow;
+        return Trap.Overflow;
     }
 
     const ptr = fiber.data.incrGet(wordSize);
@@ -3289,76 +3187,61 @@ fn alloca(fiber: *Rvm.Fiber, size: u16, y: Rbc.RegisterIndex) Rvm.Trap!void {
     fiber.writeLocal(y, ptr);
 }
 
-fn addr_global(fiber: *Rvm.Fiber, g: Rbc.GlobalIndex, x: Rbc.RegisterIndex) void {
+fn addr_global(fiber: *Fiber, g: Rbc.GlobalIndex, x: Rbc.RegisterIndex) void {
     const global = fiber.addrGlobal(g);
     fiber.writeLocal(x, global);
 }
 
-fn addr_upvalue(fiber: *Rvm.Fiber, u: Rbc.UpvalueIndex, x: Rbc.RegisterIndex) void {
+fn addr_upvalue(fiber: *Fiber, u: Rbc.UpvalueIndex, x: Rbc.RegisterIndex) void {
     const upvalue = fiber.addrUpvalue(u);
     fiber.writeLocal(x, upvalue);
 }
 
-fn addr_local(fiber: *Rvm.Fiber, x: Rbc.RegisterIndex, y: Rbc.RegisterIndex) void {
+fn addr_local(fiber: *Fiber, x: Rbc.RegisterIndex, y: Rbc.RegisterIndex) void {
     const local = fiber.addrLocal(x);
     fiber.writeLocal(y, local);
 }
 
-fn read_global(comptime T: type, fiber: *Rvm.Fiber, g: Rbc.GlobalIndex, x: Rbc.RegisterIndex) void {
+fn read_reg(comptime T: type, fiber: *Fiber, x: Rbc.RegisterIndex, y: Rbc.RegisterIndex) void {
+    const reg = readReg(T, fiber.calls.top(), x);
+    fiber.writeLocal(y, reg);
+}
+
+fn read_global(comptime T: type, fiber: *Fiber, g: Rbc.GlobalIndex, x: Rbc.RegisterIndex) void {
     const global = fiber.readGlobal(T, g);
     fiber.writeLocal(x, global);
 }
 
-fn read_upvalue(comptime T: type, fiber: *Rvm.Fiber, u: Rbc.UpvalueIndex, x: Rbc.RegisterIndex) void {
+fn read_upvalue(comptime T: type, fiber: *Fiber, u: Rbc.UpvalueIndex, x: Rbc.RegisterIndex) void {
     const upvalue = fiber.readUpvalue(T, u);
     fiber.writeLocal(x, upvalue);
 }
 
-fn load(comptime T: type, fiber: *Rvm.Fiber, x: Rbc.RegisterIndex, y: Rbc.RegisterIndex) Rvm.Trap!void {
+fn load(comptime T: type, fiber: *Fiber, x: Rbc.RegisterIndex, y: Rbc.RegisterIndex) Trap!void {
     const in = fiber.readLocal(*T, x);
     try fiber.boundsCheck(in, @sizeOf(T));
     fiber.writeLocal(y, in.*);
 }
 
-fn store(fiber: *Rvm.Fiber, x: anytype, y: Rbc.RegisterIndex) Rvm.Trap!void {
+fn store(fiber: *Fiber, x: anytype, y: Rbc.RegisterIndex) Trap!void {
     const T = @TypeOf(x);
     const out = fiber.readLocal(*T, y);
     try fiber.boundsCheck(out, @sizeOf(T));
     out.* = x;
 }
 
-fn clear(comptime T: type, fiber: *Rvm.Fiber, x: Rbc.RegisterIndex) void {
+fn clear(comptime T: type, fiber: *Fiber, x: Rbc.RegisterIndex) void {
     fiber.writeLocal(x, @as(T, 0));
 }
 
-fn swap(comptime T: type, fiber: *Rvm.Fiber, x: Rbc.RegisterIndex, y: Rbc.RegisterIndex) void {
+fn swap(comptime T: type, fiber: *Fiber, x: Rbc.RegisterIndex, y: Rbc.RegisterIndex) void {
     const temp = fiber.readLocal(T, x);
     const yVal = fiber.readLocal(T, y);
     fiber.writeLocal(x, yVal);
     fiber.writeLocal(y, temp);
 }
 
-fn when(fiber: *Rvm.Fiber, newBlockIndex: Rbc.BlockIndex, x: Rbc.RegisterIndex, comptime zeroCheck: ZeroCheck) void {
-    const cond = fiber.readLocal(u8, x);
-
-    const newBlock = fiber.calls.top().function.bytecode.blocks[newBlockIndex];
-
-    const newBlockFrame = Rvm.BlockFrame{
-        .base = newBlock,
-        .ip = newBlock,
-        .out = undefined,
-        .handler_set = null,
-    };
-
-    switch (zeroCheck) {
-        .zero => if (cond == 0) fiber.blocks.push(newBlockFrame),
-        .non_zero => if (cond != 0) fiber.blocks.push(newBlockFrame),
-    }
-}
-
-fn br(fiber: *Rvm.Fiber, terminatedBlockOffset: Rbc.BlockIndex, x: Rbc.RegisterIndex, comptime zeroCheck: ?ZeroCheck, y: u64, comptime style: ReturnStyle) void {
-    const terminatedBlockPtr: [*]Rvm.BlockFrame = fiber.blocks.top_ptr - terminatedBlockOffset;
-
+fn br(fiber: *Fiber, jumpOffset: Rbc.JumpOffset, x: Rbc.RegisterIndex, comptime zeroCheck: ?Rbc.ZeroCheck) void {
     if (comptime zeroCheck) |zc| {
         const cond = fiber.readLocal(u8, x);
 
@@ -3368,168 +3251,115 @@ fn br(fiber: *Rvm.Fiber, terminatedBlockOffset: Rbc.BlockIndex, x: Rbc.RegisterI
         }
     }
 
-    if (comptime style == .v) {
-        fiber.writeLocal(terminatedBlockPtr[0].out, y);
-    }
+    const callFrame = fiber.calls.top();
 
-    fiber.removeAnyHandlerSet(@ptrCast(terminatedBlockPtr));
-
-    fiber.blocks.top_ptr = terminatedBlockPtr;
+    callFrame.ip = utils.offsetPointer(callFrame.ip, jumpOffset);
 }
 
-fn re(fiber: *Rvm.Fiber, restartedBlockOffset: Rbc.BlockIndex, x: Rbc.RegisterIndex, comptime zeroCheck: ?ZeroCheck) void {
-    const restartedBlockPtr: [*]Rvm.BlockFrame = fiber.blocks.top_ptr - restartedBlockOffset;
-
-    if (zeroCheck) |zc| {
-        const cond = fiber.readLocal(u8, x);
-
-        switch (zc) {
-            .zero => if (cond != 0) return,
-            .non_zero => if (cond == 0) return,
-        }
-    }
-
-    restartedBlockPtr[0].ip = restartedBlockPtr[0].base;
-    fiber.blocks.top_ptr = restartedBlockPtr;
-}
-
-fn block(fiber: *Rvm.Fiber, newBlockIndex: Rbc.BlockIndex, y: Rbc.RegisterIndex) void {
-    const newBlock = fiber.calls.top().function.bytecode.blocks[newBlockIndex];
-
-    const newBlockFrame = Rvm.BlockFrame{
-        .base = newBlock,
-        .ip = newBlock,
-        .out = y,
-        .handler_set = null,
-    };
-
-    fiber.blocks.push(newBlockFrame);
-}
-
-fn with(fiber: *Rvm.Fiber, newBlockIndex: Rbc.BlockIndex, handlerSetIndex: Rbc.HandlerSetIndex, y: Rbc.RegisterIndex) Rvm.Trap!void {
+fn push_set(fiber: *Fiber, cancelOffset: Rbc.JumpOffset, handlerSetIndex: Rbc.HandlerSetIndex, y: Rbc.RegisterIndex) Trap!void {
+    const callFrame = fiber.calls.top();
     const handlerSet = &fiber.program.handler_sets[handlerSetIndex];
 
-    const newBlock = fiber.calls.top().function.bytecode.blocks[newBlockIndex];
-
-    const newBlockFrame = Rvm.BlockFrame{
-        .base = newBlock,
-        .ip = newBlock,
-        .out = y,
+    const newSetFrame = fiber.sets.pushGet(SetFrame{
+        .call = callFrame,
         .handler_set = handlerSet,
-    };
-
-    fiber.blocks.push(newBlockFrame);
+        .cancellation_address = utils.offsetPointer(callFrame.ip, cancelOffset),
+        .out = y,
+        .data = fiber.data.top_ptr,
+    });
 
     if (!fiber.data.hasSpace(handlerSet.len)) {
         @branchHint(.cold);
-        return Rvm.Trap.Overflow;
+        return Trap.Overflow;
     }
 
-    const oldHandlerStorage: [*]Rvm.Evidence = @ptrCast(fiber.data.incrGet(handlerSet.len * (@sizeOf(Rvm.Evidence) / @sizeOf(Rbc.Register))));
+    const newEvidenceStorage: [*]Evidence = @ptrCast(fiber.data.incrGet(handlerSet.len * (@sizeOf(Evidence) / @sizeOf(Rbc.Register))));
 
     for (handlerSet.*, 0..) |binding, i| {
-        oldHandlerStorage[i] = fiber.evidence[binding.id];
-        fiber.evidence[binding.id] = Rvm.Evidence{
+        const oldEvidence = fiber.evidence[binding.id];
+        const newEvidence = &newEvidenceStorage[i];
+
+        newEvidence.* = Evidence{
+            .frame = newSetFrame,
             .handler = &fiber.program.functions[binding.handler],
-            .call = fiber.calls.top(),
-            .block = fiber.blocks.top(),
-            .data = fiber.data.top_ptr,
+            .previous = oldEvidence,
         };
+
+        fiber.evidence[binding.id] = newEvidence;
     }
 }
 
-fn @"if"(fiber: *Rvm.Fiber, thenBlockIndex: Rbc.BlockIndex, elseBlockIndex: Rbc.BlockIndex, x: Rbc.RegisterIndex, comptime zeroCheck: ZeroCheck, y: Rbc.RegisterIndex) void {
-    const cond = fiber.readLocal(u8, x);
+fn pop_set(fiber: *Fiber) Trap!void {
+    const setFrame = fiber.sets.popGet();
 
-    const newBlockIndex = switch (zeroCheck) {
-        .zero => if (cond == 0) thenBlockIndex else elseBlockIndex,
-        .non_zero => if (cond != 0) thenBlockIndex else elseBlockIndex,
-    };
+    const handlerSet = setFrame.handler_set;
 
-    const newBlock = fiber.calls.top().function.bytecode.blocks[newBlockIndex];
+    for (handlerSet.*) |binding| {
+        const evidence = &fiber.evidence[binding.id];
 
-    const newBlockFrame = Rvm.BlockFrame{
-        .base = newBlock,
-        .ip = newBlock,
-        .out = y,
-        .handler_set = null,
-    };
+        if (evidence.*.?.previous) |prev| {
+            evidence.* = prev;
+        } else {
+            evidence.* = null;
+        }
+    }
 
-    fiber.blocks.push(newBlockFrame);
+    fiber.data.top_ptr = setFrame.data;
 }
 
-fn call(fiber: *Rvm.Fiber, newFunction: *const Rbc.Function, y: Rbc.RegisterIndex) Rvm.Trap!void {
+fn call(fiber: *Fiber, newFunction: *const Rbc.Function, arguments: []const Rbc.RegisterIndex, out: Rbc.RegisterIndex) Trap!void {
     if ((fiber.data.hasSpaceU1(newFunction.num_registers) & fiber.calls.hasSpaceU1(1)) != 1) {
         @branchHint(.cold);
         if (!fiber.data.hasSpace(newFunction.num_registers)) {
-            std.debug.print("stack overflow @{}\n", .{Rvm.DATA_STACK_SIZE});
+            std.debug.print("stack overflow @{}\n", .{DATA_STACK_SIZE});
         }
         if (!fiber.calls.hasSpace(1)) {
-            std.debug.print("call overflow @{}\n", .{Rvm.CALL_STACK_SIZE});
+            std.debug.print("call overflow @{}\n", .{CALL_STACK_SIZE});
         }
-        return Rvm.Trap.Overflow;
+        return Trap.Overflow;
     }
-
-    const arguments = decodeArguments(fiber, newFunction.num_arguments);
 
     const data = fiber.data.incrGetMulti(newFunction.num_registers);
 
-    const newBlock = newFunction.bytecode.blocks[0];
-
-    const newBlockFrame = fiber.blocks.pushGet(Rvm.BlockFrame{
-        .base = newBlock,
-        .ip = newBlock,
-        .out = y,
-        .handler_set = null,
-    });
-
     const oldCallFrame = fiber.calls.top();
 
-    fiber.calls.push(Rvm.CallFrame{
+    const newCallFrame = fiber.calls.pushGet(CallFrame{
         .function = newFunction,
-        .evidence = undefined,
-        .block = newBlockFrame,
+        .sets = fiber.sets.top_ptr,
+        .evidence = null,
+        .ip = newFunction.bytecode.instructions.ptr,
         .data = data,
+        .out = out,
     });
 
-    for (0..newFunction.num_arguments) |i| {
-        const value = Rvm.readReg(u64, oldCallFrame, arguments[i]);
-        Rvm.writeReg(fiber.calls.top(), @truncate(i), value);
+    for (arguments, 0..) |arg, i| {
+        const value = readReg(u64, oldCallFrame, arg);
+        writeReg(newCallFrame, @truncate(i), value);
     }
 }
 
-fn tail_call(fiber: *Rvm.Fiber, registerScratchSpace: [*]u64, newFunction: *const Rbc.Function) Rvm.Trap!void {
+fn tail_call(fiber: *Fiber, newFunction: *const Rbc.Function, arguments: []const Rbc.RegisterIndex) Trap!void {
     const callFrame = fiber.calls.top();
-    const blockFrame = fiber.blocks.top();
 
     const oldFunction = callFrame.function;
 
     if (!fiber.data.hasSpace(newFunction.num_registers -| oldFunction.num_registers)) {
         @branchHint(.cold);
-        std.debug.print("stack overflow @{}\n", .{Rvm.DATA_STACK_SIZE});
-        return Rvm.Trap.Overflow;
+        std.debug.print("stack overflow @{}\n", .{DATA_STACK_SIZE});
+        return Trap.Overflow;
     }
 
-    const arguments = decodeArguments(fiber, newFunction.num_arguments);
-
-    for (0..newFunction.num_arguments) |i| {
-        const value = fiber.readLocal(u64, arguments[i]);
-        registerScratchSpace[i] = value;
+    for (arguments, 0..) |arg, i| {
+        const value = fiber.readLocal(u64, arg);
+        fiber.register_scratch_space[i] = value;
     }
 
-    for (0..newFunction.num_arguments) |i| {
-        fiber.writeLocal(@truncate(i), registerScratchSpace[i]);
+    for (0..arguments.len) |i| { // TODO: could be a memcpy?
+        fiber.writeLocal(@truncate(i), fiber.register_scratch_space[i]);
     }
 
-    const newBlock = newFunction.bytecode.blocks[0];
-    blockFrame.base = newBlock;
-    blockFrame.ip = newBlock;
-    blockFrame.handler_set = null;
-
-    callFrame.evidence = undefined;
+    callFrame.evidence = null;
     callFrame.function = newFunction;
-
-    fiber.blocks.top_ptr = @ptrCast(blockFrame);
 
     fiber.data.top_ptr =
         if (oldFunction.num_registers > newFunction.num_registers)
@@ -3538,43 +3368,69 @@ fn tail_call(fiber: *Rvm.Fiber, registerScratchSpace: [*]u64, newFunction: *cons
         fiber.data.top_ptr + (newFunction.num_registers - oldFunction.num_registers);
 }
 
-fn prompt(fiber: *Rvm.Fiber, evIndex: Rbc.EvidenceIndex, y: Rbc.RegisterIndex) Rvm.Trap!void {
-    const ev = &fiber.evidence[evIndex];
+fn foreign_call(fiber: *Fiber, newFunction: *const anyopaque, arguments: []const Rbc.RegisterIndex, y: Rbc.RegisterIndex) Trap!void {
+    const foreignFunction: ForeignFunction = @ptrCast(newFunction);
 
-    try call(fiber, ev.handler, y);
+    for (arguments, 0..) |arg, i| {
+        fiber.register_scratch_space[i] = fiber.readLocal(u64, arg);
+    }
+
+    var foreignCall = ForeignCall{
+        .arguments = .fromNative(fiber.register_scratch_space[0..arguments.len]),
+    };
+
+    switch (foreignFunction(fiber, &foreignCall)) {
+        .trap => return utils.types.narrowErrorSet(Trap, foreignCall.out.trap.toNative()) orelse Trap.ForeignUnknown,
+        .done => return,
+        .done_v => fiber.writeLocal(y, foreignCall.out.value),
+        .cancel => cancel(fiber, undefined, .no_v),
+        .cancel_v => cancel(fiber, foreignCall.out.value, .v),
+    }
+}
+
+fn tail_foreign_call(fiber: *Fiber, newFunction: *const anyopaque, arguments: []const Rbc.RegisterIndex) Trap!void {
+    utils.todo(noreturn, .{ fiber, newFunction, arguments });
+}
+
+fn prompt(fiber: *Fiber, ev: *Evidence, arguments: []const Rbc.RegisterIndex, y: Rbc.RegisterIndex) Trap!void {
+    try call(fiber, ev.handler, arguments, y);
 
     fiber.calls.top().evidence = ev;
 }
 
-fn ret(fiber: *Rvm.Fiber, y: u64, comptime style: ReturnStyle) void {
+fn tail_prompt(fiber: *Fiber, ev: *Evidence, arguments: []const Rbc.RegisterIndex) Trap!void {
+    try tail_call(fiber, ev.handler, arguments);
+
+    fiber.calls.top().evidence = ev;
+}
+
+fn ret(fiber: *Fiber, y: u64, comptime style: Rbc.ReturnStyle) void {
     const currentCallFrame = fiber.calls.top();
 
-    const rootBlockFrame = currentCallFrame.block;
-
     if (comptime style == .v) {
-        Rvm.writeReg(@ptrCast(fiber.calls.top_ptr - 1), rootBlockFrame.out, y);
+        writeReg(@ptrCast(fiber.calls.top_ptr - 1), currentCallFrame.out, y);
     }
 
+    fiber.sets.top_ptr = currentCallFrame.sets;
     fiber.data.top_ptr = currentCallFrame.data;
     fiber.calls.pop();
-    fiber.blocks.top_ptr = @as([*]Rvm.BlockFrame, @ptrCast(rootBlockFrame)) - 1;
 }
 
-fn term(fiber: *Rvm.Fiber, y: u64, comptime style: ReturnStyle) void {
+fn cancel(fiber: *Fiber, value: Rbc.Register, comptime style: Rbc.ReturnStyle) void {
     const currentCallFrame = fiber.calls.top();
 
-    const ev = currentCallFrame.evidence;
+    const ev = currentCallFrame.evidence.?;
 
     if (comptime style == .v) {
-        Rvm.writeReg(ev.call, ev.block.out, y);
+        writeReg(ev.frame.call, ev.frame.out, value);
     }
 
-    fiber.calls.top_ptr = @ptrCast(ev.call);
-    fiber.blocks.top_ptr = @as([*]Rvm.BlockFrame, @ptrCast(ev.block)) - 1;
-    fiber.data.top_ptr = ev.data;
+    fiber.sets.top_ptr = @as([*]SetFrame, @ptrCast(ev.frame.call.sets));
+    fiber.data.top_ptr = ev.frame.data;
+    fiber.calls.top_ptr = @ptrCast(ev.frame.call);
 }
 
-fn cast(comptime X: type, comptime Y: type, fiber: *Rvm.Fiber, xOp: Rbc.RegisterIndex, yOp: Rbc.RegisterIndex) void {
+fn cast(comptime X: type, comptime Y: type, fiber: *Fiber, xOp: Rbc.RegisterIndex, yOp: Rbc.RegisterIndex) void {
     const x = fiber.readLocal(X, xOp);
 
     const xKind = @as(std.builtin.TypeId, @typeInfo(X));
@@ -3586,11 +3442,11 @@ fn cast(comptime X: type, comptime Y: type, fiber: *Rvm.Fiber, xOp: Rbc.Register
     fiber.writeLocal(yOp, y);
 }
 
-fn unary(fiber: *Rvm.Fiber, comptime op: []const u8, x: anytype, y: Rbc.RegisterIndex) void {
+fn unary(fiber: *Fiber, comptime op: []const u8, x: anytype, y: Rbc.RegisterIndex) void {
     fiber.writeLocal(y, @field(ops, op)(x));
 }
 
-fn binary(fiber: *Rvm.Fiber, comptime op: []const u8, x: anytype, y: @TypeOf(x), z: Rbc.RegisterIndex) void {
+fn binary(fiber: *Fiber, comptime op: []const u8, x: anytype, y: @TypeOf(x), z: Rbc.RegisterIndex) void {
     fiber.writeLocal(z, @field(ops, op)(x, y));
 }
 
@@ -3721,3 +3577,15 @@ const ops = struct {
         return a >= b;
     }
 };
+
+pub fn convertForeignError(e: utils.external.Error) Trap {
+    const i = @intFromError(e.toNative());
+
+    inline for (comptime std.meta.fieldNames(Trap)) |trapName| {
+        if (i == @intFromError(@field(Trap, trapName))) {
+            return @field(Trap, trapName);
+        }
+    }
+
+    return Trap.ForeignUnknown;
+}
