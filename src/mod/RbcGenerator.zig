@@ -103,6 +103,7 @@ pub const Error = Rir.Error || RbcBuilder.Error || error{
     LocalNotAssignedRegister,
     ExpectedRegister,
     AddressOfRegister,
+    InvalidBranch,
 };
 
 /// Allocator provided does not have to be the allocator used to create the generator,

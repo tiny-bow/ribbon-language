@@ -50,8 +50,11 @@ pub const Function = struct {
 
         const funcTyInfo = try self.getTypeInfo();
 
-        const entryName = ir.internName("entry") // shouldn't be able to get error.TooManyNames here; every function has an entry
-        catch |err| return utils.types.forceErrorSet(error{OutOfMemory}, err);
+        if (funcTyInfo.call_conv == .foreign) {
+            return error.ExpectedFunctionType;
+        }
+
+        const entryName = try ir.internName("entry");
 
         const entryBlock = try Rir.Block.init(self, null, @enumFromInt(0), entryName);
         errdefer entryBlock.deinit();

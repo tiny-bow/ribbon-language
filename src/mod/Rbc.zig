@@ -56,7 +56,6 @@ pub const LayoutTableSize = RegisterBaseOffset;
 pub const Alignment = u12;
 
 pub const ReturnStyle = Isa.ReturnStyle;
-pub const ZeroCheck = Isa.ZeroCheck;
 
 pub const MAX_REGISTERS = 255;
 pub const MAX_JUMP_OFFSET = @min(@abs(std.math.minInt(JumpOffset)), std.math.maxInt(JumpOffset));

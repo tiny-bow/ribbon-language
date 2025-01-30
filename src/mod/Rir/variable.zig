@@ -213,7 +213,7 @@ pub const Global = struct {
     }
 
     /// Initialize a `Global` with a native value
-    pub fn initializerFromNative(self: *Global, value: anytype) error{ TypeMismatch, TooManyGlobals, TooManyTypes, TooManyNames, OutOfMemory }!void {
+    pub fn initializerFromNative(self: *Global, value: anytype) error{ TypeMismatch, TooManyGlobals, TooManyTypes, OutOfMemory }!void {
         const T = @TypeOf(value);
         const typeIr = try self.ir.createTypeFromNative(T, null, null);
 

@@ -138,22 +138,21 @@ pub const Branch = union(enum) {
     },
     br: struct {
         B0: BlockIndex,
-        B1: ?BlockIndex = null,
-        zero_check: ?struct {
-            kind: Rbc.ZeroCheck,
+        @"if": ?struct {
+            B1: BlockIndex,
             R0: Rbc.RegisterIndex,
-        },
+        } = null,
     },
 
     pub fn assemble(self: Branch, offsetTable: []const BlockOffset, offset: BlockOffset) error{ JumpTooLarge, InvalidIndex }!Rbc.Instruction {
         return switch (self) {
-            .push_set => |x| if (x.R0) |R0| Rbc.instr(.push_set_v, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .H0 = x.H0, .R0 = R0 }) else Rbc.instr(.push_set, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .H0 = x.H0 }),
-            .br => |x| if (x.zero_check) |y| switch (y.kind) {
-                .zero => Rbc.instr(.br_z, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .B1 = try calcOffset(offsetTable, offset, x.B1.?), .R0 = y.R0 }),
-                .non_zero => Rbc.instr(.br_nz, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .B1 = try calcOffset(offsetTable, offset, x.B1.?), .R0 = y.R0 }),
-            } else Rbc.instr(.br, &.{
-                .B0 = try calcOffset(offsetTable, offset, x.B0),
-            }),
+            .push_set => |x|
+                if (x.R0) |R0| Rbc.instr(.push_set_v, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .H0 = x.H0, .R0 = R0 })
+                else Rbc.instr(.push_set, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .H0 = x.H0 }),
+            .br => |x|
+                if (x.@"if") |y|
+                    Rbc.instr(.br_if, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .B1 = try calcOffset(offsetTable, offset, y.B1), .R0 = y.R0 })
+                else Rbc.instr(.br, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0) }),
         };
     }
 
@@ -263,26 +262,26 @@ pub const Block = struct {
         }
     }
 
-    pub fn args(self: *Block, rArgs: anytype) error{ TooManyRegisters, OutOfMemory }!void {
+    pub fn args(self: *Block, rArgs: []const Rbc.RegisterIndex) error{ TooManyRegisters, OutOfMemory }!void {
         if (rArgs.len == 0) {
             return;
         } else if (rArgs.len > Rbc.MAX_REGISTERS) {
             return error.TooManyRegisters;
         }
 
-        var acc = [1]Rbc.RegisterIndex{255} ** (@sizeOf(Rbc.Instruction) / @sizeOf(Rbc.RegisterIndex));
+        var acc = [1]Rbc.RegisterIndex{Rbc.MAX_REGISTERS} ** (@sizeOf(Rbc.Instruction) / @sizeOf(Rbc.RegisterIndex));
 
-        comptime var i: BlockOffset = 0;
-        inline while (i < rArgs.len) : (i += 1) {
+        var i: BlockOffset = 0;
+        while (i < rArgs.len) : (i += 1) {
             acc[i % acc.len] = rArgs[i];
             if (i != 0 and i % acc.len == 0) {
-                try self.ops.append(self.function.allocator, @as(Rbc.Instruction, @bitCast(acc)));
+                try self.ops.append(self.function.allocator, Instruction { .instruction = @as(Rbc.Instruction, @bitCast(acc)) });
             }
         }
 
         if (i % acc.len != 0) {
-            for ((i % acc.len)..acc.len) |j| acc[j] = 255;
-            try self.ops.append(self.function.allocator, @as(Rbc.Instruction, @bitCast(acc)));
+            for ((i % acc.len)..acc.len) |j| acc[j] = Rbc.MAX_REGISTERS;
+            try self.ops.append(self.function.allocator, Instruction { .instruction = @as(Rbc.Instruction, @bitCast(acc)) });
         }
     }
 
@@ -332,97 +331,91 @@ pub const Block = struct {
 
     pub fn br(self: *Block, b: BlockIndex) error{ InstructionsAfterExit, OutOfMemory }!void {
         if (self.exited) return error.InstructionsAfterExit;
-        try self.ops.append(self.function.allocator, .{ .labeled = .{ .br = .{ .B0 = b, .zero_check = null } } });
+        try self.ops.append(self.function.allocator, .{ .labeled = .{ .br = .{ .B0 = b } } });
         self.exited = true;
     }
 
-    pub fn br_nz(self: *Block, t: BlockIndex, e: BlockIndex, x: Rbc.RegisterIndex) error{ InstructionsAfterExit, OutOfMemory }!void {
+    pub fn br_if(self: *Block, t: BlockIndex, e: BlockIndex, x: Rbc.RegisterIndex) error{ InstructionsAfterExit, OutOfMemory }!void {
         if (self.exited) return error.InstructionsAfterExit;
-        try self.ops.append(self.function.allocator, .{ .labeled = .{ .br = .{ .B0 = t, .B1 = e, .zero_check = .{ .kind = .non_zero, .R0 = x } } } });
+        try self.ops.append(self.function.allocator, .{ .labeled = .{ .br = .{ .B0 = t, .@"if" = .{ .B1 = e, .R0 = x } } } });
         self.exited = true;
     }
 
-    pub fn br_z(self: *Block, t: BlockIndex, e: BlockIndex, x: Rbc.RegisterIndex) error{ InstructionsAfterExit, OutOfMemory }!void {
-        if (self.exited) return error.InstructionsAfterExit;
-        try self.ops.append(self.function.allocator, .{ .labeled = .{ .br = .{ .B0 = t, .B1 = e, .zero_check = .{ .kind = .zero, .R0 = x } } } });
-        self.exited = true;
-    }
-
-    pub fn call(self: *Block, f: Rbc.RegisterIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.call, &.{ .F0 = f });
+    pub fn call(self: *Block, f: Rbc.RegisterIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.call, &.{ .b0 = @as(u8, @truncate(as.len)), .F0 = f });
         try self.args(as);
     }
 
-    pub fn call_v(self: *Block, f: Rbc.RegisterIndex, y: Rbc.RegisterIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.call_v, &.{ .F0 = f, .R0 = y });
+    pub fn call_v(self: *Block, f: Rbc.RegisterIndex, y: Rbc.RegisterIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.call_v, &.{ .b0 = @as(u8, @truncate(as.len)), .F0 = f, .R0 = y });
         try self.args(as);
     }
 
-    pub fn call_im(self: *Block, f: Rbc.FunctionIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.call_im, &.{ .F0 = f });
+    pub fn call_im(self: *Block, f: Rbc.FunctionIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.call_im, &.{ .b0 = @as(u8, @truncate(as.len)), .F0 = f });
         try self.args(as);
     }
 
-    pub fn call_im_v(self: *Block, f: Rbc.FunctionIndex, y: Rbc.RegisterIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.call_im_v, &.{ .F0 = f, .R0 = y });
+    pub fn call_im_v(self: *Block, f: Rbc.FunctionIndex, y: Rbc.RegisterIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.call_im_v, &.{ .b0 = @as(u8, @truncate(as.len)), .F0 = f, .R0 = y });
         try self.args(as);
     }
 
-    pub fn tail_call(self: *Block, f: Rbc.RegisterIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.tail_call, &.{ .R0 = f });
+    pub fn tail_call(self: *Block, f: Rbc.RegisterIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.tail_call, &.{ .b0 = @as(u8, @truncate(as.len)), .R0 = f });
         try self.args(as);
         self.exited = true;
     }
 
-    pub fn tail_call_im(self: *Block, f: Rbc.FunctionIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.tail_call_im, &.{ .F0 = f });
+    pub fn tail_call_im(self: *Block, f: Rbc.FunctionIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.tail_call_im, &.{ .b0 = @as(u8, @truncate(as.len)), .F0 = f });
         try self.args(as);
         self.exited = true;
     }
 
-    pub fn foreign_call(self: *Block, f: Rbc.RegisterIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.foreign_call, &.{ .F0 = f });
+    pub fn foreign_call(self: *Block, f: Rbc.RegisterIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.foreign_call, &.{ .b0 = @as(u8, @truncate(as.len)), .F0 = f });
         try self.args(as);
     }
 
-    pub fn foreign_call_v(self: *Block, f: Rbc.RegisterIndex, y: Rbc.RegisterIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.foreign_call_v, &.{ .F0 = f, .R0 = y });
+    pub fn foreign_call_v(self: *Block, f: Rbc.RegisterIndex, y: Rbc.RegisterIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.foreign_call_v, &.{ .b0 = @as(u8, @truncate(as.len)), .F0 = f, .R0 = y });
         try self.args(as);
     }
 
-    pub fn foreign_call_im(self: *Block, f: Rbc.ForeignIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.foreign_call_im, &.{ .F0 = f });
+    pub fn foreign_call_im(self: *Block, f: Rbc.ForeignIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.foreign_call_im, &.{ .b0 = @as(u8, @truncate(as.len)), .F0 = f });
         try self.args(as);
     }
 
-    pub fn foreign_call_im_v(self: *Block, f: Rbc.ForeignIndex, y: Rbc.RegisterIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.foreign_call_im_v, &.{ .F0 = f, .R0 = y });
+    pub fn foreign_call_im_v(self: *Block, f: Rbc.ForeignIndex, y: Rbc.RegisterIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.foreign_call_im_v, &.{ .b0 = @as(u8, @truncate(as.len)), .F0 = f, .R0 = y });
         try self.args(as);
     }
 
-    pub fn tail_foreign_call(self: *Block, f: Rbc.RegisterIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.tail_foreign_call, &.{ .R0 = f });
-        try self.args(as);
-        self.exited = true;
-    }
-
-    pub fn tail_foreign_call_im(self: *Block, f: Rbc.ForeignIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.tail_foreign_call_im, &.{ .F0 = f });
+    pub fn tail_foreign_call(self: *Block, f: Rbc.RegisterIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.tail_foreign_call, &.{ .b0 = @as(u8, @truncate(as.len)), .R0 = f });
         try self.args(as);
         self.exited = true;
     }
 
-    pub fn prompt(self: *Block, e: Rbc.EvidenceIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.prompt, &.{ .E0 = e });
+    pub fn tail_foreign_call_im(self: *Block, f: Rbc.ForeignIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.tail_foreign_call_im, &.{ .b0 = @as(u8, @truncate(as.len)), .F0 = f });
+        try self.args(as);
+        self.exited = true;
+    }
+
+    pub fn prompt(self: *Block, e: Rbc.EvidenceIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.prompt, &.{ .b0 = @as(u8, @truncate(as.len)), .E0 = e });
         try self.args(as);
     }
 
-    pub fn prompt_v(self: *Block, e: Rbc.EvidenceIndex, y: Rbc.RegisterIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.prompt_v, &.{ .E0 = e, .R0 = y });
+    pub fn prompt_v(self: *Block, e: Rbc.EvidenceIndex, y: Rbc.RegisterIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
+        try self.op(.prompt_v, &.{ .b0 = @as(u8, @truncate(as.len)), .E0 = e, .R0 = y });
         try self.args(as);
     }
 
-    pub fn tail_prompt(self: *Block, e: Rbc.EvidenceIndex, as: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
+    pub fn tail_prompt(self: *Block, e: Rbc.EvidenceIndex, as: []const Rbc.RegisterIndex) error{ TooManyRegisters, InstructionsAfterExit, OutOfMemory }!void {
         try self.op(.prompt, &.{ .E0 = e });
         try self.args(as);
     }

@@ -42,6 +42,7 @@ pub fn main() !void {
 
     log.info("created module {}", .{module});
 
+    const Nil = try ir.createTypeFromNative(void, null, null);
     const S32 = try ir.createTypeFromNative(i32, null, null);
 
     log.info("created S32 {}", .{S32});
@@ -106,7 +107,7 @@ pub fn main() !void {
         try entry.lt();
         try entry.ref_block(thenBlock);
         try entry.ref_block(elseBlock);
-        try entry.@"if"(.non_zero);
+        try entry.@"if"(Nil);
 
         try thenBlock.ref_local(arg);
         try thenBlock.ret();
@@ -115,13 +116,13 @@ pub fn main() !void {
         try elseBlock.im(@as(i32, 1));
         try elseBlock.sub();
         try elseBlock.ref_function(func);
-        try elseBlock.call();
+        try elseBlock.call(1);
 
         try elseBlock.ref_local(arg);
         try elseBlock.im(@as(i32, 2));
         try elseBlock.sub();
         try elseBlock.ref_function(func);
-        try elseBlock.call();
+        try elseBlock.call(1);
 
         try elseBlock.add();
         try elseBlock.ret();

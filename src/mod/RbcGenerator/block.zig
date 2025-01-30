@@ -13,6 +13,12 @@ const Stack = std.ArrayListUnmanaged(Rir.Operand);
 const RegisterList = std.ArrayListUnmanaged(*Rir.Register);
 const BlockBuilderList = std.ArrayListUnmanaged(*RbcBuilder.Block);
 
+pub const PhiNode = struct {
+    register: ?*Rir.Register,
+    entry: *RbcBuilder.Block,
+    exit: *RbcBuilder.Block,
+};
+
 pub const Block = struct {
     generator: *Generator,
     function: *Generator.Function,
@@ -22,10 +28,12 @@ pub const Block = struct {
     ir: *Rir.Block,
 
     active_builder: *RbcBuilder.Block,
+    entry_builder: *RbcBuilder.Block,
     builders: BlockBuilderList,
 
     register_list: RegisterList,
 
+    phi_node: ?PhiNode = null,
     stack: Stack = .{},
 
     pub fn init(parent: ?*Block, function: *Generator.Function, blockIr: *Rir.Block, entryBlockBuilder: ?*RbcBuilder.Block) error{ TooManyBlocks, OutOfMemory }!*Block {
@@ -44,6 +52,7 @@ pub const Block = struct {
             .ir = blockIr,
 
             .active_builder = blockBuilder,
+            .entry_builder = blockBuilder,
             .builders = try BlockBuilderList.initCapacity(generator.allocator, 16),
 
             .register_list = try RegisterList.initCapacity(generator.allocator, Rir.MAX_REGISTERS),
@@ -65,10 +74,12 @@ pub const Block = struct {
     pub fn generate(self: *Block) Generator.Error!void {
         const instrs = self.ir.instructions.items;
 
-        var i: usize = 0;
-        while (i < instrs.len) {
-            const instr = instrs[i];
-            i += 1;
+        var offset: Rir.Offset = 0;
+        while (offset < instrs.len) {
+            const instr = instrs[offset];
+            offset += 1;
+
+            const nextInstr = if (offset < instrs.len) instrs[offset] else null;
 
             switch (instr.code) {
                 .nop => try self.active_builder.nop(),
@@ -76,7 +87,7 @@ pub const Block = struct {
                 .halt => {
                     try self.active_builder.halt();
 
-                    if (i < instrs.len) Generator.log.warn("dead code at {}/{}/{}/{}", .{self.function.module.ir.id, self.function.ir.id, self.ir.id, i});
+                    if (offset < instrs.len) Generator.log.warn("dead code at {}/{}/{}/{}", .{self.function.module.ir.id, self.function.ir.id, self.ir.id, offset});
 
                     break;
                 },
@@ -84,118 +95,265 @@ pub const Block = struct {
                 .trap => {
                     try self.active_builder.trap();
 
-                    if (i < instrs.len) Generator.log.warn("dead code at {}/{}/{}/{}", .{self.function.module.ir.id, self.function.ir.id, self.ir.id, i});
+                    if (offset < instrs.len) Generator.log.warn("dead code at {}/{}/{}/{}", .{self.function.module.ir.id, self.function.ir.id, self.ir.id, offset});
 
                     break;
                 },
 
 
                 .block => {
+                    const blockTypeId = instr.data.block;
+                    const blockTypeIr = try self.generator.ir.getType(blockTypeId);
+
                     const blockIr = try (try self.pop(.meta)).forceBlock();
                     const blockGen = try self.function.setupBlock(blockIr, null);
-                    const blockEntryIndex = blockGen.active_builder.index;
+
+                    const phiNode = try self.phi(blockTypeIr, &.{blockGen});
+
                     try blockGen.generate();
 
-                    const finallyBlockBuilder = try self.function.builder.createBlock();
-                    try self.builders.append(self.generator.allocator, finallyBlockBuilder);
-
-                    try self.active_builder.br(blockEntryIndex);
-
-                    self.active_builder = finallyBlockBuilder;
-
-                    if (try self.phi(&.{blockGen})) |out| {
-                        try self.push(out);
+                    if (phiNode.register) |reg| {
+                        try self.push(reg);
                     }
+
+                    try phiNode.entry.br(blockGen.entry_builder.index);
                 },
 
                 .with => {
-                    const bodyBlockIr = try (try self.pop(.meta)).forceBlock();
-                    const bodyBlockGen = try self.function.setupBlock(bodyBlockIr, null);
-                    const bodyBlockEntryIndex = bodyBlockGen.active_builder.index;
-                    try bodyBlockGen.generate();
+                    const blockTypeId = instr.data.with;
+                    const blockTypeIr = try self.generator.ir.getType(blockTypeId);
 
                     const handlerSetIr = try (try self.pop(.meta)).forceHandlerSet();
                     const handlerSetGen = try self.function.module.getHandlerSet(handlerSetIr.id);
 
-                    const finallyBlockBuilder = try self.function.builder.createBlock();
-                    try self.builders.append(self.generator.allocator, finallyBlockBuilder);
+                    const blockIr = try (try self.pop(.meta)).forceBlock();
+                    const blockGen = try self.function.setupBlock(blockIr, null);
 
-                    const entryBuilder = self.active_builder;
-                    self.active_builder = finallyBlockBuilder;
+                    const phiNode = try self.phi(blockTypeIr, &.{blockGen});
 
-                    if (try self.phi(&.{bodyBlockGen})) |out| {
-                        try self.push(out);
+                    try blockGen.generate();
 
-                        try entryBuilder.push_set_v(finallyBlockBuilder.index, handlerSetGen.index, out.getIndex());
+                    if (phiNode.register) |reg| {
+                        try phiNode.entry.push_set_v(blockGen.entry_builder.index, handlerSetGen.index, reg.getIndex());
+                        try self.push(reg);
                     } else {
-                        try entryBuilder.push_set(finallyBlockBuilder.index, handlerSetGen.index);
+                        try phiNode.entry.push_set(blockGen.entry_builder.index, handlerSetGen.index);
                     }
 
-                    try entryBuilder.br(bodyBlockEntryIndex);
+                    try phiNode.entry.br(blockGen.entry_builder.index);
                 },
 
                 .@"if" => {
-                    const zeroCheck = instr.data.@"if";
+                    const blockTypeId = instr.data.@"if";
+                    const blockTypeIr = try self.generator.ir.getType(blockTypeId);
+
+                    const condOperand = try self.pop(null);
+                    const condReg = try self.coerceRegister(condOperand);
 
                     const thenBlockIr = try (try self.pop(.meta)).forceBlock();
                     const thenBlockGen = try self.function.setupBlock(thenBlockIr, null);
-                    const thenBlockEntryIndex = thenBlockGen.active_builder.index;
-                    try thenBlockGen.generate();
 
                     const elseBlockIr = try (try self.pop(.meta)).forceBlock();
                     const elseBlockGen = try self.function.setupBlock(elseBlockIr, null);
-                    const elseBlockEntryIndex = elseBlockGen.active_builder.index;
+
+                    const phiNode = try self.phi(blockTypeIr, &.{thenBlockGen, elseBlockGen});
+
+                    try thenBlockGen.generate();
                     try elseBlockGen.generate();
 
-                    const condOperand = try self.pop(null);
-                    const condRegister = try self.coerceRegister(condOperand);
-
-                    const finallyBlockBuilder = try self.function.builder.createBlock();
-                    try self.builders.append(self.generator.allocator, finallyBlockBuilder);
-
-                    switch (zeroCheck) {
-                        .zero => try self.active_builder.br_z(thenBlockEntryIndex, elseBlockEntryIndex, condRegister.getIndex()),
-                        .non_zero => try self.active_builder.br_nz(thenBlockEntryIndex, elseBlockEntryIndex, condRegister.getIndex()),
+                    if (phiNode.register) |reg| {
+                        try self.push(reg);
                     }
 
-                    self.active_builder = finallyBlockBuilder;
-
-                    if (try self.phi(&.{thenBlockGen, elseBlockGen})) |out| {
-                        try self.push(out);
-                    }
+                    try phiNode.entry.br_if(thenBlockGen.entry_builder.index, elseBlockGen.entry_builder.index, condReg.getIndex());
                 },
 
                 .when => {
-                    const zeroCheck = instr.data.@"when";
-
-                    const thenBlockIr = try (try self.pop(.meta)).forceBlock();
-                    const thenBlockGen = try self.function.compileBlock(thenBlockIr, null);
+                    const Nil = try self.generator.ir.createType(null, .Nil);
 
                     const condOperand = try self.pop(null);
-                    const condRegister = try self.coerceRegister(condOperand);
+                    const condReg = try self.coerceRegister(condOperand);
 
-                    const finallyBlockBuilder = try self.function.builder.createBlock();
-                    try self.builders.append(self.generator.allocator, finallyBlockBuilder);
+                    const blockIr = try (try self.pop(.meta)).forceBlock();
+                    const blockGen = try self.function.setupBlock(blockIr, null);
 
-                    switch (zeroCheck) {
-                        .zero => try self.active_builder.br_z(thenBlockGen.active_builder.index, finallyBlockBuilder.index, condRegister.getIndex()),
-                        .non_zero => try self.active_builder.br_nz(thenBlockGen.active_builder.index, finallyBlockBuilder.index, condRegister.getIndex()),
-                    }
+                    const phiNode = try self.phi(Nil, &.{blockGen});
 
-                    self.active_builder = finallyBlockBuilder;
+                    try blockGen.generate();
 
-                    if (try self.phi(&.{thenBlockGen})) |out| {
-                        try self.push(out);
-                    }
+                    try phiNode.entry.br_if(blockGen.entry_builder.index, phiNode.exit.index, condReg.getIndex());
                 },
 
 
+                .br => {
+                    const check = instr.data.br;
+
+                    switch (check) {
+                        .none => {
+                            const blockIr = try (try self.pop(.meta)).forceBlock();
+                            const blockGen = try self.function.getBlock(blockIr);
+
+                            const phiNode = blockGen.phi_node orelse return error.InvalidBranch;
+
+                            if (phiNode.register) |outReg| {
+                                const resultOperand = try self.pop(null);
+                                const resultType = try resultOperand.getType();
+
+                                if (utils.notEqual(resultType, outReg.type)) {
+                                    return error.TypeMismatch;
+                                }
+
+                                try self.write(.from(outReg), resultOperand);
+                            }
+
+                            try self.active_builder.br(phiNode.exit.index);
+                        },
+                        .non_zero => {
+                            const condOperand = try self.pop(null);
+                            const condReg = try self.coerceRegister(condOperand);
+
+                            const blockIr = try (try self.pop(.meta)).forceBlock();
+                            const blockGen = try self.function.getBlock(blockIr);
+
+                            const phiNode = blockGen.phi_node orelse return error.InvalidBranch;
+
+                            const restBuilder = try self.function.builder.createBlock();
+                            try self.builders.append(self.generator.allocator, restBuilder);
+
+                            if (phiNode.register) |outReg| {
+                                const resultOperand = try self.pop(null);
+                                const resultType = try resultOperand.getType();
+
+                                if (utils.notEqual(resultType, outReg.type)) {
+                                    return error.TypeMismatch;
+                                }
+
+                                const storeBlockGen = try self.function.builder.createBlock();
+                                try self.builders.append(self.generator.allocator, storeBlockGen);
+
+                                try self.active_builder.br_if(storeBlockGen.index, restBuilder.index, condReg.getIndex());
+
+                                self.active_builder = storeBlockGen;
+
+                                try self.write(.from(outReg), resultOperand);
+
+                                try self.active_builder.br(phiNode.exit.index);
+                            } else {
+                                if (self.stackDepth() > 0) {
+                                    return error.StackNotCleared;
+                                }
+
+                                try self.active_builder.br_if(phiNode.exit.index, restBuilder.index, condReg.getIndex());
+                            }
+
+                            self.active_builder = restBuilder;
+                        },
+                    }
+                },
+
                 .re => @panic("re nyi"),
 
-                .br => @panic("br nyi"),
 
-                .call => @panic("call nyi"),
-                .prompt => @panic("prompt nyi"),
+                .call => {
+                    const arity = instr.data.call;
+
+                    const Nil = try self.generator.ir.createType(null, .Nil);
+
+                    const functionOperand = try self.pop(null);
+                    const functionType = try functionOperand.getType();
+                    const functionTypeInfo = try functionType.info.forceFunction();
+
+                    var resultRegister: ?*Rir.Register = null;
+
+                    call: {
+                        if (nextInstr) |next| {
+                            if (next.code == .ret) {
+                                offset += 1;
+
+                                const argOperands = try self.popN(arity);
+                                const argRegisters = try self.typecheckCall(functionType, argOperands);
+
+                                switch (functionOperand) {
+                                    .meta => return error.InvalidOperand,
+                                    .l_value => |l| switch (l) {
+                                        .register => |functionRegister| {
+                                            try self.active_builder.tail_call(functionRegister.getIndex(), argRegisters);
+                                        },
+                                        .multi_register => return error.InvalidOperand,
+                                        .local => |localIr| {
+                                            const functionRegister = try self.coerceRegister(.from(localIr));
+
+                                            try self.active_builder.tail_call(functionRegister.getIndex(), argRegisters);
+                                        },
+                                        .global => |globalIr| {
+                                            const globalRegister = try self.coerceRegister(.from(globalIr));
+
+                                            try self.active_builder.tail_call(globalRegister.getIndex(), argRegisters);
+                                        },
+                                        .upvalue => |upvalueIr| {
+                                            const upvalueRegister = try self.coerceRegister(.from(upvalueIr));
+
+                                            try self.active_builder.tail_call(upvalueRegister.getIndex(), argRegisters);
+                                        },
+                                    },
+                                    .r_value => |r| switch (r) {
+                                        .immediate => return error.InvalidOperand,
+                                        .foreign => |foreignIr| {
+                                            const foreignIndex = try self.generator.getForeign(foreignIr);
+
+                                            try self.active_builder.tail_foreign_call_im(foreignIndex, argRegisters);
+                                        },
+                                        .function => |functionIr| {
+                                            const functionGen = try self.generator.getFunction(functionIr);
+
+                                            try self.active_builder.tail_call_im(functionGen.builder.index, argRegisters);
+                                        },
+                                    },
+                                }
+
+                                break :call;
+                            }
+                        }
+
+                        // NOTE: allocating here will never allocate an input register as the output
+                        if (utils.notEqual(functionTypeInfo.return_type, Nil)) {
+                            resultRegister = try self.allocRegister(offset, functionTypeInfo.return_type);
+                        }
+
+                        const argOperands = try self.popN(arity);
+                        const argRegisters = try self.typecheckCall(functionType, argOperands);
+
+                        switch (functionOperand) {
+                            .meta => return error.InvalidOperand,
+                            .l_value => |l| switch (l) { else => @panic("call lvalue nyi"), },
+                            .r_value => |r| switch (r) {
+                                .immediate => return error.InvalidOperand,
+                                .foreign => |foreignIr| {
+                                    const foreignIndex = try self.generator.getForeign(foreignIr);
+
+                                    if (resultRegister) |out| {
+                                        try self.active_builder.foreign_call_im_v(foreignIndex, out.getIndex(), argRegisters);
+                                    } else {
+                                        try self.active_builder.foreign_call_im(foreignIndex, argRegisters);
+                                    }
+                                },
+                                .function => |functionIr| {
+                                    const functionGen = try self.generator.getFunction(functionIr);
+
+                                    if (resultRegister) |out| {
+                                        try self.active_builder.call_im_v(functionGen.builder.index, out.getIndex(), argRegisters);
+                                    } else {
+                                        try self.active_builder.call_im(functionGen.builder.index, argRegisters);
+                                    }
+                                },
+                            },
+                        }
+                    }
+
+                    if (resultRegister) |out| {
+                        try self.push(out);
+                    }
+                },
                 .ret => @panic("ret nyi"),
                 .cancel => @panic("cancel nyi"),
 
@@ -203,7 +361,7 @@ pub const Block = struct {
                     const typeIr = try (try self.pop(.meta)).forceType();
                     const typeLayout = try typeIr.getLayout();
 
-                    const register = try self.allocRegister(typeIr);
+                    const register = try self.allocRegister(offset, typeIr);
 
                     try self.active_builder.alloca(@intCast(typeLayout.dimensions.size), register.getIndex());
 
@@ -213,65 +371,7 @@ pub const Block = struct {
                 .addr => {
                     const operand: Rir.Operand = try self.pop(null);
 
-                    const operandType = try operand.getType();
-                    const pointerType = try operandType.createPointer();
-
-                    switch (operand) {
-                        .meta => return error.InvalidOperand,
-
-                        .l_value => |l| switch (l) {
-                            .local => |localIr| {
-                                switch (localIr.storage) {
-                                    .none => return error.InvalidOperand,
-                                    .zero_size => try self.push(Rir.Immediate.zero(pointerType)),
-                                    .register => return error.AddressOfRegister,
-                                    .n_registers => return error.AddressOfRegister,
-                                    .stack => try self.push(localIr.register orelse return error.LocalNotAssignedRegister),
-                                    .@"comptime" => return error.InvalidOperand, // TODO: create global?
-                                }
-                            },
-
-                            .global => |globalIr| {
-                                const globalGen = try self.generator.getGlobal(globalIr);
-
-                                const outReg = try self.allocRegister(pointerType);
-                                try self.active_builder.addr_global(globalGen.index, outReg.getIndex());
-
-                                try self.push(outReg);
-                            },
-
-                            .upvalue => |upvalueIr| {
-                                const upvalueGen = try self.function.getUpvalue(upvalueIr);
-
-                                const outReg = try self.allocRegister(pointerType);
-                                try self.active_builder.addr_upvalue(upvalueGen.index, outReg.getIndex());
-
-                                try self.push(outReg);
-                            },
-
-                            else => return error.InvalidOperand,
-                        },
-
-                        .r_value => |r| switch (r) {
-                            .immediate => return error.InvalidOperand,
-                            .foreign => |foreignIr| {
-                                const foreignIndex = try self.generator.getForeign(foreignIr);
-
-                                const outReg = try self.allocRegister(pointerType);
-                                try self.active_builder.addr_foreign(foreignIndex, outReg.getIndex());
-
-                                try self.push(outReg);
-                            },
-                            .function => |functionIr| {
-                                const functionGen = try self.generator.getFunction(functionIr);
-
-                                const outReg = try self.allocRegister(pointerType);
-                                try self.active_builder.addr_function(functionGen.builder.index, outReg.getIndex());
-
-                                try self.push(outReg);
-                            },
-                        },
-                    }
+                    try self.coerceAddress(offset, operand);
                 },
 
                 .read => @panic("read nyi"),
@@ -333,9 +433,9 @@ pub const Block = struct {
                 },
 
                 .new_local => {
-                    const name = instr.data.new_local;
-                    const typeIr = try (try self.pop(.meta)).forceType();
-                    const localIr = try self.createLocal(name, typeIr);
+                    const opLocal = instr.data.new_local;
+                    const typeIr = try self.generator.ir.getType(opLocal.type_id);
+                    const localIr = try self.createLocal(opLocal.name, typeIr);
 
                     try self.push(localIr);
                 },
@@ -346,12 +446,14 @@ pub const Block = struct {
 
                     try self.push(localIr);
                 },
+
                 .ref_block => {
                     const id = instr.data.ref_block;
                     const blockIr = try self.function.ir.getBlock(id);
 
                     try self.push(blockIr);
                 },
+
                 .ref_function => {
                     const ref = instr.data.ref_function;
                     const moduleGen = try self.generator.getModule(ref.module_id);
@@ -359,12 +461,14 @@ pub const Block = struct {
 
                     try self.push(functionGen.ir);
                 },
+
                 .ref_foreign => {
                     const id = instr.data.ref_foreign;
                     const foreignIr = try self.generator.ir.getForeign(id);
 
                     try self.push(foreignIr);
                 },
+
                 .ref_global => {
                     const ref = instr.data.ref_global;
                     const moduleGen = try self.generator.getModule(ref.module_id);
@@ -372,6 +476,7 @@ pub const Block = struct {
 
                     try self.push(globalGen.ir);
                 },
+
                 .ref_upvalue => {
                     const id = instr.data.ref_upvalue;
                     const upvalueIr = try self.function.ir.getUpvalue(id);
@@ -379,12 +484,14 @@ pub const Block = struct {
                     try self.push(upvalueIr);
                 },
 
+
                 .im_i => {
                     const im = instr.data.im_i;
                     const typeIr = try self.generator.ir.getType(im.type_id);
 
                     try self.push(Rir.Immediate{ .type = typeIr, .data = im.data });
                 },
+
                 .im_w => @panic("im_w nyi"),
             }
         }
@@ -398,7 +505,7 @@ pub const Block = struct {
         try self.stack.append(self.generator.allocator, Rir.Operand.from(operand));
     }
 
-    pub fn tryPop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand))
+    pub fn maybePop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand))
         error{InvalidOperand}!
             ? if (kind) |k| switch (k) {
                 .meta => Rir.Meta,
@@ -436,16 +543,29 @@ pub const Block = struct {
         return error.StackUnderflow;
     }
 
-    pub fn takeFreeRegister(self: *Block) ?*Rir.Register {
-        for (self.register_list.items) |reg| {
-            if (reg.ref_count == 0) return reg;
+    /// slice returned is valid until next push
+    pub fn popN(self: *Block, n: usize) error{StackUnderflow}! []const Rir.Operand {
+        if (self.stack.items.len < n) return error.StackUnderflow;
+
+        const out = self.stack.items[self.stack.items.len - n..];
+
+        self.stack.shrinkRetainingCapacity(self.stack.items.len - n);
+
+        std.mem.reverse(Rir.Operand, out);
+
+        return out;
+    }
+
+    pub fn takeFreeRegister(self: *Block, offset: Rir.Offset) ?*Rir.Register {
+        for (0..Rbc.MAX_REGISTERS) |regIndex| {
+            if (!self.hasReference(offset, @intCast(regIndex))) return self.register_list.items[regIndex];
         }
 
         return null;
     }
 
-    pub fn allocRegister(self: *Block, typeIr: *Rir.Type) error{ InvalidType, TooManyRegisters, OutOfMemory }!*Rir.Register {
-        if (self.takeFreeRegister()) |reg| {
+    pub fn allocRegister(self: *Block, offset: Rir.Offset, typeIr: *Rir.Type) error{ InvalidType, TooManyRegisters, OutOfMemory }! *Rir.Register {
+        if (self.takeFreeRegister(offset)) |reg| {
             reg.type = typeIr;
             return reg;
         }
@@ -476,27 +596,151 @@ pub const Block = struct {
         return self.ir.getLocal(id);
     }
 
-    pub fn generateSetLocal(_: *Block, _: Rir.LocalId, _: Rir.Operand) error{ TooManyLocals, OutOfMemory }!void {
-        @panic("setLocal nyi");
+    pub fn referenceCount(self: *Block, offset: Rir.Offset, registerIndex: Rbc.RegisterIndex) usize {
+        var count: usize = 0;
+
+        if (self.phi_node) |phiNode| {
+            if (phiNode.register) |reg| {
+                if (reg.getIndex() == registerIndex) count += 1;
+            }
+        }
+
+        for (self.stack.items) |operand| {
+            switch (operand) {
+                .meta => {},
+                .l_value => |l| switch (l) {
+                    .register => |reg| {
+                        if (reg.getIndex() == registerIndex) count += 1;
+                    },
+                    .multi_register => {},
+                    .local => |localIr| {
+                        if (localIr.register) |reg| {
+                            if (reg.getIndex() == registerIndex) count += 1;
+                        }
+                    },
+                    .global => {},
+                    .upvalue => {},
+                },
+                .r_value => {},
+            }
+        }
+
+        return count + self.ir.referenceCount(offset, registerIndex);
+    }
+
+    pub fn hasReference(self: *Block, offset: Rir.Offset, registerIndex: Rbc.RegisterIndex) bool {
+        if (self.phi_node) |phiNode| {
+            if (phiNode.register) |reg| {
+                if (reg.getIndex() == registerIndex) return true;
+            }
+        }
+
+        for (self.stack.items) |operand| {
+            switch (operand) {
+                .meta => {},
+                .l_value => |l| switch (l) {
+                    .register => |reg| {
+                        if (reg.getIndex() == registerIndex) return true;
+                    },
+                    .multi_register => {},
+                    .local => |localIr| {
+                        if (localIr.register) |reg| {
+                            if (reg.getIndex() == registerIndex) return true;
+                        }
+                    },
+                    .global => {},
+                    .upvalue => {},
+                },
+                .r_value => {},
+            }
+        }
+
+        return self.ir.hasReference(offset, registerIndex);
     }
 
     pub fn compileImmediate(self: *Block, im: Rir.Immediate) !void {
         utils.todo(noreturn, .{self, im});
     }
 
-    pub fn load(self: *Block, register: *Rir.Register) !Rir.Operand {
-        utils.todo(noreturn, .{self, register});
+    pub fn read(self: *Block, source: Rir.Operand) !Rir.Operand {
+        utils.todo(noreturn, .{self, source});
     }
 
-    pub fn store(self: *Block, register: *Rir.Register, value: Rir.Operand) !void {
-        utils.todo(noreturn, .{self, register, value});
+    pub fn write(self: *Block, destination: Rir.Operand, value: Rir.Operand) !void {
+        utils.todo(noreturn, .{self, destination, value});
     }
 
     pub fn coerceRegister(self: *Block, operand: Rir.Operand) !*Rir.Register {
         utils.todo(noreturn, .{self, operand});
     }
 
-    pub fn phi(self: *Block, blockGens: []const *Block) ! ?*Rir.Register {
-        utils.todo(noreturn, .{self, blockGens});
+    pub fn typecheckCall(self: *Block, functionTypeIr: *Rir.Type, operand: []const Rir.Operand) ![]const Rbc.RegisterIndex {
+        utils.todo(noreturn, .{self, functionTypeIr, operand});
+    }
+
+    pub fn coerceAddress(self: *Block, offset: Rir.Offset, operand: Rir.Operand) !void {
+        const operandType = try operand.getType();
+        const pointerType = try operandType.createPointer();
+
+        switch (operand) {
+            .meta => return error.InvalidOperand,
+
+            .l_value => |l| switch (l) {
+                .local => |localIr| {
+                    switch (localIr.storage) {
+                        .none => return error.InvalidOperand,
+                        .zero_size => try self.push(Rir.Immediate.zero(pointerType)),
+                        .register => return error.AddressOfRegister,
+                        .n_registers => return error.AddressOfRegister,
+                        .stack => try self.push(localIr.register orelse return error.LocalNotAssignedRegister),
+                        .@"comptime" => return error.InvalidOperand, // TODO: create global?
+                    }
+                },
+
+                .global => |globalIr| {
+                    const globalGen = try self.generator.getGlobal(globalIr);
+
+                    const outReg = try self.allocRegister(offset, pointerType);
+                    try self.active_builder.addr_global(globalGen.index, outReg.getIndex());
+
+                    try self.push(outReg);
+                },
+
+                .upvalue => |upvalueIr| {
+                    const upvalueGen = try self.function.getUpvalue(upvalueIr);
+
+                    const outReg = try self.allocRegister(offset, pointerType);
+                    try self.active_builder.addr_upvalue(upvalueGen.index, outReg.getIndex());
+
+                    try self.push(outReg);
+                },
+
+                else => return error.InvalidOperand,
+            },
+
+            .r_value => |r| switch (r) {
+                .immediate => return error.InvalidOperand,
+                .foreign => |foreignIr| {
+                    const foreignIndex = try self.generator.getForeign(foreignIr);
+
+                    const outReg = try self.allocRegister(offset, pointerType);
+                    try self.active_builder.addr_foreign(foreignIndex, outReg.getIndex());
+
+                    try self.push(outReg);
+                },
+                .function => |functionIr| {
+                    const functionGen = try self.generator.getFunction(functionIr);
+
+                    const outReg = try self.allocRegister(offset, pointerType);
+                    try self.active_builder.addr_function(functionGen.builder.index, outReg.getIndex());
+
+                    try self.push(outReg);
+                },
+            },
+        }
+    }
+
+    pub fn phi(self: *Block, blockTypeIr: *Rir.Type, blockGens: []const *Block) ! PhiNode {
+        utils.todo(noreturn, .{self, blockTypeIr, blockGens});
     }
 };

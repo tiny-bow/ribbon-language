@@ -6,8 +6,7 @@ const std = @import("std");
 const utils = @import("utils");
 const Rbc = @import("Rbc");
 
-pub const ZeroCheck = enum(u1) { zero, non_zero };
-pub const OptZeroCheck = enum(u2) { none, zero, non_zero };
+pub const Check = enum(u1) { none, non_zero };
 pub const BitSize = enum(u2) { b8, b16, b32, b64 };
 
 pub const Instruction = packed struct {
@@ -36,22 +35,21 @@ pub const Instruction = packed struct {
 };
 
 pub const OpCode = enum(u8) {
-    // Isa instructions matching Isa semantics:
     nop,
     halt,
     trap,
 
     call,
-    prompt,
     ret,
     cancel,
 
     alloca,
     addr,
-    read,
-    write,
     load,
     store,
+
+    read,
+    write,
 
     add,
     sub,
@@ -78,12 +76,10 @@ pub const OpCode = enum(u8) {
     trunc,
     cast,
 
-    // re-purposed Isa instructions:
     clear,
     swap,
     copy,
 
-    // Rir-specific instructions:
     block,
     with,
     @"if",
@@ -123,6 +119,19 @@ pub fn OpRef(comptime T: type) type {
     };
 }
 
+pub const OpLocal = packed struct {
+    name: Rir.NameId,
+    type_id: Rir.TypeId,
+
+    pub fn onFormat(self: OpLocal, formatter: Rir.Formatter) !void {
+        try formatter.writeAll("{");
+        try formatter.fmt(self.name);
+        try formatter.writeAll(" : ");
+        try formatter.fmt(self.type_id);
+        try formatter.writeAll("}");
+    }
+};
+
 pub const OpImmediate = packed struct {
     data: u32,
     type_id: Rir.TypeId,
@@ -147,7 +156,7 @@ pub const OpImmediate = packed struct {
         };
     }
 
-    pub fn fromNative(typeIr: *Rir.Type, val: anytype) error{ TypeMismatch, TooManyTypes, TooManyNames, OutOfMemory }!OpImmediate {
+    pub fn fromNative(typeIr: *Rir.Type, val: anytype) error{ TypeMismatch, TooManyTypes, OutOfMemory }!OpImmediate {
         try typeIr.checkNative(@TypeOf(val));
 
         return OpImmediate{
@@ -181,17 +190,17 @@ pub const OpData = packed union {
     halt: void,
     trap: void,
 
-    call: void,
-    prompt: void,
+    call: Rir.Arity,
     ret: void,
     cancel: void,
 
-    alloca: void,
+    alloca: Rir.TypeId,
     addr: void,
-    read: void,
-    write: void,
     load: void,
     store: void,
+
+    read: void,
+    write: void,
 
     add: void,
     sub: void,
@@ -216,20 +225,21 @@ pub const OpData = packed union {
 
     ext: BitSize,
     trunc: BitSize,
-    cast: void,
+    cast: Rir.TypeId,
 
     clear: Rir.Index,
     swap: Rir.Index,
     copy: Rir.Index,
 
-    block: void,
-    with: void,
-    @"if": ZeroCheck,
-    when: ZeroCheck,
-    br: OptZeroCheck,
-    re: OptZeroCheck,
+    block: Rir.TypeId,
+    with: Rir.TypeId,
+    @"if": Rir.TypeId,
+    when: void,
 
-    new_local: Rir.NameId,
+    br: Check,
+    re: Check,
+
+    new_local: OpLocal,
 
     ref_local: Rir.LocalId,
     ref_block: Rir.BlockId,
@@ -243,55 +253,60 @@ pub const OpData = packed union {
 
     pub fn formatWith(self: OpData, formatter: Rir.Formatter, code: OpCode) Rir.Formatter.Error!void {
         switch (code) {
-            inline .nop,
-            .halt,
-            .trap,
-            .block,
-            .with,
-            .call,
-            .prompt,
-            .ret,
-            .cancel,
-            .alloca,
-            .addr,
-            .read,
-            .write,
-            .load,
-            .store,
-            .add,
-            .sub,
-            .mul,
-            .div,
-            .rem,
-            .neg,
-            .band,
-            .bor,
-            .bxor,
-            .bnot,
-            .bshiftl,
-            .bshiftr,
-            .eq,
-            .ne,
-            .lt,
-            .gt,
-            .le,
-            .ge,
-            .new_local,
-            => return,
+            .nop => {},
+            .halt => {},
+            .trap => {},
 
-            .@"if" => try formatter.fmt(self.@"if"),
-            .when => try formatter.fmt(self.when),
-            .re => try formatter.fmt(self.re),
-            .br => try formatter.fmt(self.br),
+            .call => try formatter.fmt(self.call),
+            .ret => {},
+            .cancel => {},
+
+            .alloca => try formatter.fmt(self.alloca),
+            .addr => {},
+            .load => {},
+            .store => {},
+
+            .read => {},
+            .write => {},
+
+            .add => {},
+            .sub => {},
+            .mul => {},
+            .div => {},
+            .rem => {},
+            .neg => {},
+
+            .band => {},
+            .bor => {},
+            .bxor => {},
+            .bnot => {},
+            .bshiftl => {},
+            .bshiftr => {},
+
+            .eq => {},
+            .ne => {},
+            .lt => {},
+            .gt => {},
+            .le => {},
+            .ge => {},
 
             .ext => try formatter.fmt(self.ext),
             .trunc => try formatter.fmt(self.trunc),
-
             .cast => try formatter.fmt(self.cast),
 
             .clear => try formatter.fmt(self.clear),
             .swap => try formatter.fmt(self.swap),
             .copy => try formatter.fmt(self.copy),
+
+            .block => try formatter.fmt(self.block),
+            .with => try formatter.fmt(self.with),
+            .@"if" => try formatter.fmt(self.@"if"),
+            .when => {},
+
+            .br => try formatter.fmt(self.br),
+            .re => try formatter.fmt(self.re),
+
+            .new_local => try formatter.fmt(self.new_local),
 
             .ref_local => try formatter.fmt(self.ref_local),
             .ref_block => try formatter.fmt(self.ref_block),
@@ -300,7 +315,7 @@ pub const OpData = packed union {
             .ref_global => try formatter.fmt(self.ref_global),
             .ref_upvalue => try formatter.fmt(self.ref_upvalue),
 
-            .im_i => try formatter.fmt(self.im_i),
+            .im_i => try self.im_i.onFormat(formatter),
             .im_w => try formatter.fmt(self.im_w),
         }
     }
@@ -342,8 +357,6 @@ pub const MultiRegister = struct {
     type: *Rir.Type,
     indices: [Rir.MAX_MULTI_REGISTER]Rbc.RegisterIndex,
 
-    ref_count: usize = 1,
-
     pub fn getType(self: *const MultiRegister) *Rir.Type {
         return self.type;
     }
@@ -377,14 +390,11 @@ pub const Register = struct {
     id: Rir.RegisterId,
     type: *Rir.Type,
 
-    ref_count: usize = 1,
-
     pub fn getType(self: *const Register) *Rir.Type {
         return self.type;
     }
 
     pub fn getIndex(self: *const Register) Rbc.RegisterIndex {
-        std.debug.assert(self.ref_count > 0);
         return @intFromEnum(self.id);
     }
 
@@ -425,7 +435,7 @@ pub const Immediate = struct {
         };
     }
 
-    pub fn fromNative(rir: *Rir, val: anytype) error{ TooManyTypes, TooManyNames, OutOfMemory }!Immediate {
+    pub fn fromNative(rir: *Rir, val: anytype) error{ TooManyTypes, OutOfMemory }!Immediate {
         return Immediate{
             .type = try rir.createTypeFromNative(@TypeOf(val), null, null),
             .data = convert(val),

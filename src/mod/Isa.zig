@@ -92,14 +92,9 @@ pub const Instructions = &[_]InstructionCategory {
                 \\Jump to the designated offset
              , .operands = &[_]OperandDescriptor { .jump_offset }
             },
-            .{ .suffix = "nz"
+            .{ .suffix = "if"
              , .description =
                 \\If the value in the designated register is not zero, jump to the first offset, otherwise jump to the second offset
-             , .operands = &[_]OperandDescriptor { .jump_offset, .jump_offset, .register }
-            },
-            .{ .suffix = "z"
-             , .description =
-                \\If the value in the designated register is zero, jump to the first offset, otherwise jump to the second offset
              , .operands = &[_]OperandDescriptor { .jump_offset, .jump_offset, .register }
             },
          }
@@ -3032,8 +3027,6 @@ pub fn getAbbreviation(operandDescriptor: OperandDescriptor) u8 {
 }
 
 
-
-pub const ZeroCheck = enum { zero, non_zero };
 
 pub const ReturnStyle = enum { v, no_v };
 

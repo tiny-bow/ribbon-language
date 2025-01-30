@@ -21,14 +21,35 @@ pub const Type = struct {
 
     info: TypeInfo,
 
-    pub fn init(ir: *Rir, id: Rir.TypeId, name: ?Rir.NameId, info: TypeInfo) Type {
-        return Type{
+    pub fn init(ir: *Rir, id: Rir.TypeId, name: ?Rir.NameId, hash: u32, info: TypeInfo) error{ OutOfMemory }! *Type {
+        const self = try ir.allocator.create(Type);
+
+        self.* = Type{
             .ir = ir,
             .id = id,
-            .name = name,
-            .hash = utils.fnv1a_32(info),
+            .name = name orelse switch (info) {
+                .Nil => try ir.internName("Nil"),
+                .Bool => try ir.internName("Bool"),
+                .U8 => try ir.internName("U8"),
+                .U16 => try ir.internName("U16"),
+                .U32 => try ir.internName("U32"),
+                .U64 => try ir.internName("U64"),
+                .S8 => try ir.internName("S8"),
+                .S16 => try ir.internName("S16"),
+                .S32 => try ir.internName("S32"),
+                .S64 => try ir.internName("S64"),
+                .F32 => try ir.internName("F32"),
+                .F64 => try ir.internName("F64"),
+                .Block => try ir.internName("Block"),
+                .HandlerSet => try ir.internName("HandlerSet"),
+                .Type => try ir.internName("Type"),
+                else => null,
+            },
+            .hash = hash,
             .info = info,
         };
+
+        return self;
     }
 
     pub fn deinit(self: Type) void {
@@ -401,7 +422,7 @@ pub const Type = struct {
         return self.ir.createType(null, .{ .Pointer = .{ .element = @constCast(self) } });
     }
 
-    pub fn checkNative(self: *const Type, comptime T: type) error{ TypeMismatch, TooManyTypes, TooManyNames, OutOfMemory }!void {
+    pub fn checkNative(self: *const Type, comptime T: type) error{ TypeMismatch, TooManyTypes, OutOfMemory }!void {
         const t = try self.ir.createTypeFromNative(T, null, null);
 
         if (t.compare(self.*) != .eq) {
@@ -922,6 +943,7 @@ pub const TypeInfo = union(enum) {
                     }
 
                     return Rir.TypeInfo{ .Function = .{
+                        .call_conv = .foreign,
                         .return_type = returnType,
                         .termination_type = terminationType,
                         .effects = effects,
@@ -1050,7 +1072,13 @@ pub const Parameter = struct {
     }
 };
 
+pub const CallConv = enum {
+    auto,
+    foreign,
+};
+
 pub const Function = struct {
+    call_conv: CallConv,
     return_type: *Rir.Type,
     termination_type: *Rir.Type,
     effects: []const *Rir.Type,
@@ -1069,6 +1097,7 @@ pub const Function = struct {
         errdefer allocator.free(parameters);
 
         return Function{
+            .call_conv = self.call_conv,
             .return_type = self.return_type,
             .termination_type = self.termination_type,
             .effects = effects,
@@ -1077,6 +1106,9 @@ pub const Function = struct {
     }
 
     pub fn onFormat(self: Function, formatter: Rir.Formatter) !void {
+        if (self.call_conv != .auto) {
+            try formatter.writeAll(@tagName(self.call_conv));
+        }
         try formatter.writeAll("(");
         try formatter.commaList(self.parameters);
         try formatter.writeAll(" -> ");

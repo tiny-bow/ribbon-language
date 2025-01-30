@@ -12,9 +12,15 @@ pub const Foreign = struct {
     name: Rir.NameId,
     type: *Rir.Type,
 
-    pub fn init(root: *Rir, id: Rir.ForeignId, name: Rir.NameId, typeIr: *Rir.Type) error{OutOfMemory}!*Foreign {
+    pub fn init(root: *Rir, id: Rir.ForeignId, name: Rir.NameId, typeIr: *Rir.Type) error{InvalidCallConv, ExpectedFunctionType, OutOfMemory}! *Foreign {
         const ptr = try root.allocator.create(Foreign);
         errdefer root.allocator.destroy(ptr);
+
+        const functionTypeInfo = try typeIr.info.forceFunction();
+
+        if (functionTypeInfo.call_conv != .foreign) {
+            return error.InvalidCallConv;
+        }
 
         ptr.* = Foreign{
             .root = root,

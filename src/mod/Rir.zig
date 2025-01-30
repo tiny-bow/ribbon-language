@@ -111,7 +111,6 @@ pub const Error = std.mem.Allocator.Error || error{
     TooManyForeignAddresses,
     TooManyBlocks,
     TooManyHandlerSets,
-    TooManyNames,
 
     MultipleExits,
 
@@ -127,6 +126,30 @@ pub const Error = std.mem.Allocator.Error || error{
     ExpectedBlock,
     ExpectedHandlerSet,
     ExpectedName,
+
+    ExpectedNilType,
+    ExpectedBoolType,
+    ExpectedU8Type,
+    ExpectedU16Type,
+    ExpectedU32Type,
+    ExpectedU64Type,
+    ExpectedS8Type,
+    ExpectedS16Type,
+    ExpectedS32Type,
+    ExpectedS64Type,
+    ExpectedF32Type,
+    ExpectedF64Type,
+    ExpectedBlockType,
+    ExpectedHandlerSetType,
+    ExpectedTypeType,
+    ExpectedPointerType,
+    ExpectedSliceType,
+    ExpectedArrayType,
+    ExpectedStructType,
+    ExpectedUnionType,
+    ExpectedProductType,
+    ExpectedSumType,
+    ExpectedFunctionType,
 };
 
 pub const Foreign = foreign.Foreign;
@@ -357,17 +380,29 @@ pub const Layout = struct {
 };
 
 const LayoutMap = std.ArrayHashMapUnmanaged(TypeId, Layout, utils.SimpleHashContext, false);
-const TypeMap = std.ArrayHashMapUnmanaged(Type, void, TypeContext, false);
+const TypeMap = std.ArrayHashMapUnmanaged(*Type, void, TypeContext, false);
 const ForeignList = std.ArrayListUnmanaged(*Foreign);
 const ModuleList = std.ArrayListUnmanaged(*Module);
 
 const TypeContext = struct {
-    pub fn hash(_: TypeContext, v: Type) u32 {
+    pub fn hash(_: TypeContext, v: *Type) u32 {
         return v.hash;
     }
 
-    pub fn eql(_: TypeContext, a: Type, b: Type, _: anytype) bool {
+    pub fn eql(_: TypeContext, a: *Type, b: *Type, _: anytype) bool {
         return utils.equal(a.info, b.info);
+    }
+};
+
+const TypeLookupContext = struct {
+    const Lookup = struct { *const TypeInfo, u32 };
+
+    pub fn hash(_: TypeLookupContext, v: Lookup) u32 {
+        return v[1];
+    }
+
+    pub fn eql(_: TypeLookupContext, a: Lookup, b: *Type, _: anytype) bool {
+        return a[1] == b.hash and utils.equal(a[0].*, b.info);
     }
 };
 
@@ -411,14 +446,14 @@ pub fn onFormat(self: *const Rir, formatter: Formatter) Formatter.Error!void {
 }
 
 /// Intern a string, yielding a Name
-pub fn internName(self: *Rir, name: []const u8) error{ TooManyNames, OutOfMemory }!NameId {
+pub fn internName(self: *Rir, name: []const u8) error{ OutOfMemory }!NameId {
     if (self.interner.getIndexAdapted(name, InternerContext{})) |interned| {
         return @enumFromInt(interned);
     }
 
     const index = self.interner.count();
     if (index >= MAX_NAMES) {
-        return error.TooManyNames;
+        return error.OutOfMemory;
     }
 
     const interned = try self.allocator.allocWithOptions(u8, name.len, 1, 0);
@@ -438,8 +473,7 @@ pub fn getName(self: *const Rir, id: NameId) error{InvalidName}![]const u8 {
     return self.interner.keys()[@intFromEnum(id)];
 }
 
-/// Calls `Type.clone` on the input, if the type is not found in the map
-pub fn createType(self: *Rir, name: ?NameId, info: TypeInfo) error{ OutOfMemory, TooManyTypes }!*Type {
+pub fn createType(self: *Rir, name: ?NameId, info: TypeInfo) error{ TooManyTypes, OutOfMemory }!*Type {
     const index = self.type_map.count();
 
     if (index >= MAX_TYPES) {
@@ -448,56 +482,22 @@ pub fn createType(self: *Rir, name: ?NameId, info: TypeInfo) error{ OutOfMemory,
 
     const hash = utils.fnv1a_32(info);
 
-    var ty = Type{
-        .ir = self,
-        .id = @enumFromInt(index),
-        .name = name,
-        .hash = hash,
-        .info = info,
-    };
-
-    const getOrPut = try self.type_map.getOrPut(self.allocator, ty);
+    const getOrPut = try self.type_map.getOrPutAdapted(self.allocator, TypeLookupContext.Lookup{&info, hash}, TypeLookupContext{});
 
     if (!getOrPut.found_existing) {
-        getOrPut.key_ptr.info = try ty.info.clone(self.allocator);
-        getOrPut.value_ptr.* = {};
+        const typeIr = try Type.init(self, @enumFromInt(index), name, hash, info);
+
+        getOrPut.key_ptr.* = typeIr;
     }
 
-    return getOrPut.key_ptr;
+    return getOrPut.key_ptr.*;
 }
 
-/// Does not call `Type.clone` on the input
-pub fn createTypePreallocated(self: *Rir, name: ?NameId, deinitInfoIfExisting: bool, info: TypeInfo) error{ OutOfMemory, TooManyTypes }!*Type {
-    const index = self.type_map.count();
-
-    if (index >= MAX_TYPES) {
-        return error.TooManyTypes;
-    }
-
-    const ty = Type{
-        .ir = self,
-        .id = @enumFromInt(index),
-        .name = name,
-        .hash = utils.fnv1a_32(info),
-        .info = info,
-    };
-
-    const getOrPut = try self.type_map.getOrPut(self.allocator, ty);
-
-    if (!getOrPut.found_existing) {
-        getOrPut.value_ptr.* = {};
-    } else if (deinitInfoIfExisting) {
-        info.deinit(self.allocator);
-    }
-
-    return getOrPut.key_ptr;
-}
-
-pub fn createTypeFromNative(self: *Rir, comptime T: type, name: ?NameId, parameterNames: ?[]const NameId) error{ TooManyTypes, TooManyNames, OutOfMemory }!*Type {
+pub fn createTypeFromNative(self: *Rir, comptime T: type, name: ?NameId, parameterNames: ?[]const NameId) error{ TooManyTypes, OutOfMemory }!*Type {
     const info = try TypeInfo.fromNative(T, self, parameterNames);
     errdefer info.deinit(self.allocator);
 
-    return self.createTypePreallocated(name, true, info);
+    return self.createType(name, info);
 }
 
 pub fn getType(self: *const Rir, id: TypeId) error{InvalidType}!*Type {
@@ -505,7 +505,7 @@ pub fn getType(self: *const Rir, id: TypeId) error{InvalidType}!*Type {
         return error.InvalidType;
     }
 
-    return &self.type_map.keys()[@intFromEnum(id)];
+    return self.type_map.keys()[@intFromEnum(id)];
 }
 
 pub fn getTypeLayout(self: *Rir, id: TypeId) error{ InvalidType, OutOfMemory }!*const Layout {
@@ -520,7 +520,7 @@ pub fn getTypeLayout(self: *Rir, id: TypeId) error{ InvalidType, OutOfMemory }!*
     return getOrPut.value_ptr;
 }
 
-pub fn createForeign(self: *Rir, name: NameId, typeIr: *Type) error{ TooManyForeignAddresses, OutOfMemory }!*Foreign {
+pub fn createForeign(self: *Rir, name: NameId, typeIr: *Type) error{ InvalidCallConv, ExpectedFunctionType, TooManyForeignAddresses, OutOfMemory }!*Foreign {
     const index = self.foreign_list.items.len;
 
     if (index >= MAX_FOREIGN_ADDRESSES) {

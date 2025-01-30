@@ -384,19 +384,13 @@ fn stepBytecode(comptime reswitch: bool, fiber: *Fiber) Trap!if (reswitch) void 
         },
 
         .br => {
-            br(fiber, lastData.br.B0, undefined, null);
+            br(fiber, lastData.br.B0, undefined, undefined, false);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
 
-        .br_nz => {
-            br(fiber, lastData.br_nz.B0, lastData.br_nz.R0, .non_zero);
-
-            if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
-        },
-
-        .br_z => {
-            br(fiber, lastData.br_z.B0, lastData.br_z.R0, .zero);
+        .br_if => {
+            br(fiber, lastData.br_if.B0, lastData.br_if.B1, lastData.br_if.R0, true);
 
             if (comptime reswitch) continue :reswitch decodeInstr(fiber, &lastData);
         },
@@ -3241,19 +3235,18 @@ fn swap(comptime T: type, fiber: *Fiber, x: Rbc.RegisterIndex, y: Rbc.RegisterIn
     fiber.writeLocal(y, temp);
 }
 
-fn br(fiber: *Fiber, jumpOffset: Rbc.JumpOffset, x: Rbc.RegisterIndex, comptime zeroCheck: ?Rbc.ZeroCheck) void {
-    if (comptime zeroCheck) |zc| {
-        const cond = fiber.readLocal(u8, x);
-
-        switch (zc) {
-            .zero => if (cond != 0) return,
-            .non_zero => if (cond == 0) return,
-        }
-    }
-
+fn br(fiber: *Fiber, thenOffset: Rbc.JumpOffset, elseOffset: Rbc.JumpOffset, x: Rbc.RegisterIndex, comptime check: bool) void {
     const callFrame = fiber.calls.top();
 
-    callFrame.ip = utils.offsetPointer(callFrame.ip, jumpOffset);
+    if (comptime check) {
+        const cond = fiber.readLocal(u8, x);
+
+        callFrame.ip =
+            if (cond != 0) utils.offsetPointer(callFrame.ip, thenOffset)
+            else utils.offsetPointer(callFrame.ip, elseOffset);
+    } else {
+        callFrame.ip = utils.offsetPointer(callFrame.ip, thenOffset);
+    }
 }
 
 fn push_set(fiber: *Fiber, cancelOffset: Rbc.JumpOffset, handlerSetIndex: Rbc.HandlerSetIndex, y: Rbc.RegisterIndex) Trap!void {

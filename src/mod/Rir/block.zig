@@ -3,6 +3,7 @@ const Rir = @import("../Rir.zig");
 const block = @This();
 
 const std = @import("std");
+const Rbc = @import("Rbc");
 const utils = @import("utils");
 
 const LocalMap = std.ArrayHashMapUnmanaged(Rir.LocalId, *Rir.Local, utils.SimpleHashContext, false);
@@ -92,6 +93,64 @@ pub const Block = struct {
         return local;
     }
 
+    pub fn referenceCount(self: *Block, offset: Rir.Offset, registerIndex: Rbc.RegisterIndex) usize {
+        var count: usize = 0;
+
+        var i = offset;
+        while (i < self.instructions.items.len) {
+            const instr = self.instructions.items[i];
+            i += 1;
+
+            switch (instr.code) {
+                .ref_block => {
+                    const blockId = instr.data.ref_block;
+                    const blockIr = self.function.getBlock(blockId) catch continue;
+
+                    count += blockIr.referenceCount(0, registerIndex);
+                },
+                .ref_local => {
+                    const localId = instr.data.ref_local;
+                    const localIr = self.getLocal(localId) catch continue;
+
+                    if (localIr.register) |reg| {
+                        if (reg.getIndex() == registerIndex) count += 1;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        return count;
+    }
+
+    pub fn hasReference(self: *Block, offset: Rir.Offset, registerIndex: Rbc.RegisterIndex) bool {
+        var i = offset;
+        while (i < self.instructions.items.len) {
+            const instr = self.instructions.items[i];
+            i += 1;
+
+            switch (instr.code) {
+                .ref_block => {
+                    const blockId = instr.data.ref_block;
+                    const blockIr = self.function.getBlock(blockId) catch continue;
+
+                    if (blockIr.hasReference(0, registerIndex)) return true;
+                },
+                .ref_local => {
+                    const localId = instr.data.ref_local;
+                    const localIr = self.getLocal(localId) catch continue;
+
+                    if (localIr.register) |reg| {
+                        if (reg.getIndex() == registerIndex) return true;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        return false;
+    }
+
     pub fn nop(self: *Block) !void {
         try op(self, .nop, {});
     }
@@ -104,23 +163,23 @@ pub const Block = struct {
         try exitOp(self, .trap, {});
     }
 
-    pub fn block(self: *Block) !void {
-        try op(self, .block, {});
+    pub fn block(self: *Block, x: *Rir.Type) !void {
+        try op(self, .block, x.id);
     }
 
-    pub fn with(self: *Block) !void {
-        try op(self, .with, {});
+    pub fn with(self: *Block, x: *Rir.Type) !void {
+        try op(self, .with, x.id);
     }
 
-    pub fn @"if"(self: *Block, x: Rir.value.ZeroCheck) !void {
-        try op(self, .@"if", x);
+    pub fn @"if"(self: *Block, x: *Rir.Type) !void {
+        try op(self, .@"if", x.id);
     }
 
-    pub fn when(self: *Block, x: Rir.value.ZeroCheck) !void {
-        try op(self, .when, x);
+    pub fn when(self: *Block) !void {
+        try op(self, .when, {});
     }
 
-    pub fn re(self: *Block, x: Rir.value.OptZeroCheck) !void {
+    pub fn re(self: *Block, x: Rir.value.Check) !void {
         if (x != .none) {
             try op(self, .re, x);
         } else {
@@ -128,7 +187,7 @@ pub const Block = struct {
         }
     }
 
-    pub fn br(self: *Block, x: Rir.value.OptZeroCheck) !void {
+    pub fn br(self: *Block, x: Rir.value.Check) !void {
         if (x != .none) {
             try op(self, .br, x);
         } else {
@@ -136,12 +195,8 @@ pub const Block = struct {
         }
     }
 
-    pub fn call(self: *Block) !void {
-        try op(self, .call, {});
-    }
-
-    pub fn prompt(self: *Block) !void {
-        try op(self, .prompt, {});
+    pub fn call(self: *Block, x: Rir.Arity) !void {
+        try op(self, .call, x);
     }
 
     pub fn ret(self: *Block) !void {
@@ -152,8 +207,8 @@ pub const Block = struct {
         try exitOp(self, .cancel, {});
     }
 
-    pub fn alloca(self: *Block) !void {
-        try op(self, .alloca, {});
+    pub fn alloca(self: *Block, x: *Rir.Type) !void {
+        try op(self, .alloca, x.id);
     }
 
     pub fn addr(self: *Block) !void {
@@ -256,8 +311,8 @@ pub const Block = struct {
         try op(self, .trunc, x);
     }
 
-    pub fn cast(self: *Block) !void {
-        try op(self, .cast, {});
+    pub fn cast(self: *Block, x: *Rir.Type) !void {
+        try op(self, .cast, x.id);
     }
 
     pub fn clear(self: *Block, count: Rir.Index) !void {
@@ -272,7 +327,7 @@ pub const Block = struct {
         try op(self, .copy, index);
     }
 
-    pub fn new_local(self: *Block, x: Rir.NameId) !void {
+    pub fn new_local(self: *Block, x: Rir.value.OpLocal) !void {
         try op(self, .new_local, x);
     }
 
