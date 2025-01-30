@@ -146,13 +146,11 @@ pub const Branch = union(enum) {
 
     pub fn assemble(self: Branch, offsetTable: []const BlockOffset, offset: BlockOffset) error{ JumpTooLarge, InvalidIndex }!Rbc.Instruction {
         return switch (self) {
-            .push_set => |x|
-                if (x.R0) |R0| Rbc.instr(.push_set_v, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .H0 = x.H0, .R0 = R0 })
-                else Rbc.instr(.push_set, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .H0 = x.H0 }),
-            .br => |x|
-                if (x.@"if") |y|
-                    Rbc.instr(.br_if, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .B1 = try calcOffset(offsetTable, offset, y.B1), .R0 = y.R0 })
-                else Rbc.instr(.br, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0) }),
+            .push_set => |x| if (x.R0) |R0| Rbc.instr(.push_set_v, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .H0 = x.H0, .R0 = R0 }) else Rbc.instr(.push_set, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .H0 = x.H0 }),
+            .br => |x| if (x.@"if") |y|
+                Rbc.instr(.br_if, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0), .B1 = try calcOffset(offsetTable, offset, y.B1), .R0 = y.R0 })
+            else
+                Rbc.instr(.br, &.{ .B0 = try calcOffset(offsetTable, offset, x.B0) }),
         };
     }
 
@@ -275,13 +273,13 @@ pub const Block = struct {
         while (i < rArgs.len) : (i += 1) {
             acc[i % acc.len] = rArgs[i];
             if (i != 0 and i % acc.len == 0) {
-                try self.ops.append(self.function.allocator, Instruction { .instruction = @as(Rbc.Instruction, @bitCast(acc)) });
+                try self.ops.append(self.function.allocator, Instruction{ .instruction = @as(Rbc.Instruction, @bitCast(acc)) });
             }
         }
 
         if (i % acc.len != 0) {
             for ((i % acc.len)..acc.len) |j| acc[j] = Rbc.MAX_REGISTERS;
-            try self.ops.append(self.function.allocator, Instruction { .instruction = @as(Rbc.Instruction, @bitCast(acc)) });
+            try self.ops.append(self.function.allocator, Instruction{ .instruction = @as(Rbc.Instruction, @bitCast(acc)) });
         }
     }
 

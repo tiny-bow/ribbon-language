@@ -180,8 +180,6 @@ pub const Export = union(enum) {
     }
 };
 
-
-
 pub const Global = struct {
     generator: *RbcGenerator,
     module: *Module,
@@ -239,7 +237,6 @@ pub const Upvalue = struct {
         @panic("TODO: Implement Upvalue.generate");
     }
 };
-
 
 pub const Module = struct {
     generator: *RbcGenerator,
@@ -307,7 +304,6 @@ pub const Module = struct {
     }
 };
 
-
 const BlockMap = std.ArrayHashMapUnmanaged(Rir.BlockId, *Block, utils.SimpleHashContext, false);
 const UpvalueMap = std.ArrayHashMapUnmanaged(Rir.UpvalueId, *Upvalue, utils.SimpleHashContext, false);
 
@@ -328,7 +324,6 @@ pub const Function = struct {
 
         const self = try generator.allocator.create(Function);
 
-
         self.* = Function{
             .generator = generator,
             .module = module,
@@ -345,15 +340,15 @@ pub const Function = struct {
         _ = try self.compileBlock(blockIr, blockBuilder);
     }
 
-    pub fn getBlock(self: *Function, blockIr: *Rir.Block) error{InvalidBlock}! *Block {
+    pub fn getBlock(self: *Function, blockIr: *Rir.Block) error{InvalidBlock}!*Block {
         return self.block_map.get(blockIr.id) orelse error.InvalidBlock;
     }
 
-    pub fn getUpvalue(self: *Function, upvalueIr: *Rir.Upvalue) error{InvalidUpvalue}! *Upvalue {
+    pub fn getUpvalue(self: *Function, upvalueIr: *Rir.Upvalue) error{InvalidUpvalue}!*Upvalue {
         return self.upvalue_map.get(upvalueIr.id) orelse error.InvalidUpvalue;
     }
 
-    pub fn setupBlock(self: *Function, blockIr: *Rir.Block, blockBuilder: ?*RbcBuilder.Block) error{TooManyBlocks, OutOfMemory}! *Block {
+    pub fn setupBlock(self: *Function, blockIr: *Rir.Block, blockBuilder: ?*RbcBuilder.Block) error{ TooManyBlocks, OutOfMemory }!*Block {
         const blockGenerator = try Block.init(null, self, blockIr, blockBuilder);
 
         try self.block_map.put(self.generator.allocator, blockIr.id, blockGenerator);
@@ -361,7 +356,7 @@ pub const Function = struct {
         return blockGenerator;
     }
 
-    pub fn compileBlock(self: *Function, blockIr: *Rir.Block, blockBuilder: ?*RbcBuilder.Block) Error! *Block {
+    pub fn compileBlock(self: *Function, blockIr: *Rir.Block, blockBuilder: ?*RbcBuilder.Block) Error!*Block {
         const blockGenerator = try self.setupBlock(blockIr, blockBuilder);
 
         try blockGenerator.generate();
@@ -401,8 +396,7 @@ pub const Block = struct {
         const generator = function.generator;
         const self = try generator.allocator.create(Block);
 
-        const blockBuilder = entryBlockBuilder
-            orelse try function.builder.createBlock();
+        const blockBuilder = entryBlockBuilder orelse try function.builder.createBlock();
 
         self.* = Block{
             .function = function,
@@ -448,7 +442,7 @@ pub const Block = struct {
                 .halt => {
                     try self.active_builder.halt();
 
-                    if (offset < instrs.len) log.warn("dead code at {}/{}/{}/{}", .{self.function.module.ir.id, self.function.ir.id, self.ir.id, offset});
+                    if (offset < instrs.len) log.warn("dead code at {}/{}/{}/{}", .{ self.function.module.ir.id, self.function.ir.id, self.ir.id, offset });
 
                     break;
                 },
@@ -456,11 +450,10 @@ pub const Block = struct {
                 .trap => {
                     try self.active_builder.trap();
 
-                    if (offset < instrs.len) log.warn("dead code at {}/{}/{}/{}", .{self.function.module.ir.id, self.function.ir.id, self.ir.id, offset});
+                    if (offset < instrs.len) log.warn("dead code at {}/{}/{}/{}", .{ self.function.module.ir.id, self.function.ir.id, self.ir.id, offset });
 
                     break;
                 },
-
 
                 .block => {
                     const blockTypeId = instr.data.block;
@@ -517,7 +510,7 @@ pub const Block = struct {
                     const elseBlockIr = try (try self.pop(.meta)).forceBlock();
                     const elseBlockGen = try self.function.setupBlock(elseBlockIr, null);
 
-                    const phiNode = try self.phi(blockTypeIr, &.{thenBlockGen, elseBlockGen});
+                    const phiNode = try self.phi(blockTypeIr, &.{ thenBlockGen, elseBlockGen });
 
                     try thenBlockGen.generate();
                     try elseBlockGen.generate();
@@ -544,7 +537,6 @@ pub const Block = struct {
 
                     try phiNode.entry.br_if(blockGen.entry_builder.index, phiNode.exit.index, condReg.getIndex());
                 },
-
 
                 .br => {
                     const check = instr.data.br;
@@ -613,7 +605,6 @@ pub const Block = struct {
                 },
 
                 .re => @panic("re nyi"),
-
 
                 .call => {
                     const arity = instr.data.call;
@@ -686,7 +677,9 @@ pub const Block = struct {
 
                         switch (functionOperand) {
                             .meta => return error.InvalidOperand,
-                            .l_value => |l| switch (l) { else => @panic("call lvalue nyi"), },
+                            .l_value => |l| switch (l) {
+                                else => @panic("call lvalue nyi"),
+                            },
                             .r_value => |r| switch (r) {
                                 .immediate => return error.InvalidOperand,
                                 .foreign => |foreignIr| {
@@ -845,7 +838,6 @@ pub const Block = struct {
                     try self.push(upvalueIr);
                 },
 
-
                 .im_i => {
                     const im = instr.data.im_i;
                     const typeIr = try self.generator.ir.getType(im.type_id);
@@ -866,14 +858,11 @@ pub const Block = struct {
         try self.stack.append(self.generator.allocator, Rir.Operand.from(operand));
     }
 
-    pub fn maybePop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand))
-        error{InvalidOperand}!
-            ? if (kind) |k| switch (k) {
-                .meta => Rir.Meta,
-                .l_value => Rir.LValue,
-                .r_value => Rir.RValue,
-            } else Rir.Operand
-    {
+    pub fn maybePop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand)) error{InvalidOperand}!?if (kind) |k| switch (k) {
+        .meta => Rir.Meta,
+        .l_value => Rir.LValue,
+        .r_value => Rir.RValue,
+    } else Rir.Operand {
         if (self.stack.popOrNull()) |operand| {
             return if (comptime kind) |k| switch (operand) {
                 .meta => |m| if (k == .meta) m else error.InvalidOperand,
@@ -885,14 +874,11 @@ pub const Block = struct {
         return null;
     }
 
-    pub fn pop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand))
-        error{InvalidOperand, StackUnderflow}!
-            if (kind) |k| switch (k){
-                .meta => Rir.Meta,
-                .l_value => Rir.LValue,
-                .r_value => Rir.RValue,
-            } else Rir.Operand
-    {
+    pub fn pop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand)) error{ InvalidOperand, StackUnderflow }!if (kind) |k| switch (k) {
+        .meta => Rir.Meta,
+        .l_value => Rir.LValue,
+        .r_value => Rir.RValue,
+    } else Rir.Operand {
         if (self.stack.popOrNull()) |operand| {
             return if (comptime kind) |k| switch (operand) {
                 .meta => |m| if (k == .meta) m else error.InvalidOperand,
@@ -905,10 +891,10 @@ pub const Block = struct {
     }
 
     /// slice returned is valid until next push
-    pub fn popN(self: *Block, n: usize) error{StackUnderflow}! []const Rir.Operand {
+    pub fn popN(self: *Block, n: usize) error{StackUnderflow}![]const Rir.Operand {
         if (self.stack.items.len < n) return error.StackUnderflow;
 
-        const out = self.stack.items[self.stack.items.len - n..];
+        const out = self.stack.items[self.stack.items.len - n ..];
 
         self.stack.shrinkRetainingCapacity(self.stack.items.len - n);
 
@@ -925,7 +911,7 @@ pub const Block = struct {
         return null;
     }
 
-    pub fn allocRegister(self: *Block, offset: Rir.Offset, typeIr: *Rir.Type) error{ InvalidType, TooManyRegisters, OutOfMemory }! *Rir.Register {
+    pub fn allocRegister(self: *Block, offset: Rir.Offset, typeIr: *Rir.Type) error{ InvalidType, TooManyRegisters, OutOfMemory }!*Rir.Register {
         if (self.takeFreeRegister(offset)) |reg| {
             reg.type = typeIr;
             return reg;
@@ -1020,23 +1006,23 @@ pub const Block = struct {
     }
 
     pub fn compileImmediate(self: *Block, im: Rir.Immediate) !void {
-        utils.todo(noreturn, .{self, im});
+        utils.todo(noreturn, .{ self, im });
     }
 
     pub fn read(self: *Block, source: Rir.Operand) !Rir.Operand {
-        utils.todo(noreturn, .{self, source});
+        utils.todo(noreturn, .{ self, source });
     }
 
     pub fn write(self: *Block, destination: Rir.Operand, value: Rir.Operand) !void {
-        utils.todo(noreturn, .{self, destination, value});
+        utils.todo(noreturn, .{ self, destination, value });
     }
 
     pub fn coerceRegister(self: *Block, operand: Rir.Operand) !*Rir.Register {
-        utils.todo(noreturn, .{self, operand});
+        utils.todo(noreturn, .{ self, operand });
     }
 
     pub fn typecheckCall(self: *Block, functionTypeIr: *Rir.Type, operand: []const Rir.Operand) ![]const Rbc.RegisterIndex {
-        utils.todo(noreturn, .{self, functionTypeIr, operand});
+        utils.todo(noreturn, .{ self, functionTypeIr, operand });
     }
 
     pub fn coerceAddress(self: *Block, offset: Rir.Offset, operand: Rir.Operand) !void {
@@ -1101,7 +1087,7 @@ pub const Block = struct {
         }
     }
 
-    pub fn phi(self: *Block, blockTypeIr: *Rir.Type, blockGens: []const *Block) ! PhiNode {
-        utils.todo(noreturn, .{self, blockTypeIr, blockGens});
+    pub fn phi(self: *Block, blockTypeIr: *Rir.Type, blockGens: []const *Block) !PhiNode {
+        utils.todo(noreturn, .{ self, blockTypeIr, blockGens });
     }
 };

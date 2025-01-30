@@ -3242,8 +3242,7 @@ fn br(fiber: *Fiber, thenOffset: Rbc.JumpOffset, elseOffset: Rbc.JumpOffset, x: 
         const cond = fiber.readLocal(u8, x);
 
         callFrame.ip =
-            if (cond != 0) utils.offsetPointer(callFrame.ip, thenOffset)
-            else utils.offsetPointer(callFrame.ip, elseOffset);
+            if (cond != 0) utils.offsetPointer(callFrame.ip, thenOffset) else utils.offsetPointer(callFrame.ip, elseOffset);
     } else {
         callFrame.ip = utils.offsetPointer(callFrame.ip, thenOffset);
     }

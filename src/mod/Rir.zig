@@ -64,8 +64,6 @@ pub fn deinit(self: *Rir) void {
     self.allocator.destroy(self);
 }
 
-
-
 pub fn onFormat(self: *const Rir, formatter: Formatter) Formatter.Error!void {
     if (self.type_map.count() > 0) {
         const oldTypeMode = formatter.swapFlag(.show_nominative_type_bodies, true);
@@ -95,7 +93,7 @@ pub fn onFormat(self: *const Rir, formatter: Formatter) Formatter.Error!void {
 }
 
 /// Intern a string, yielding a Name
-pub fn internName(self: *Rir, name: []const u8) error{ OutOfMemory }!NameId {
+pub fn internName(self: *Rir, name: []const u8) error{OutOfMemory}!NameId {
     if (self.interner.getIndexAdapted(name, InternerContext{})) |interned| {
         return @enumFromInt(interned);
     }
@@ -131,7 +129,7 @@ pub fn createType(self: *Rir, name: ?NameId, info: TypeInfo) error{ TooManyTypes
 
     const hash = utils.fnv1a_32(info);
 
-    const getOrPut = try self.type_map.getOrPutAdapted(self.allocator, TypeLookupContext.Lookup{&info, hash}, TypeLookupContext{});
+    const getOrPut = try self.type_map.getOrPutAdapted(self.allocator, TypeLookupContext.Lookup{ &info, hash }, TypeLookupContext{});
 
     if (!getOrPut.found_existing) {
         const typeIr = try Type.init(self, @enumFromInt(index), name, hash, info);
@@ -296,7 +294,6 @@ pub const Error = std.mem.Allocator.Error || error{
     ExpectedFunctionType,
 };
 
-
 pub const RegisterOffset = Rbc.RegisterLocalOffset;
 /// 2 ^ 2 = max of 4 registers per multi-register entity
 pub const MultiRegisterIndex = std.meta.Int(.unsigned, 2);
@@ -315,7 +312,7 @@ pub const TypeId = enum(u16) {
     _,
 
     pub fn format(self: TypeId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("TypeId-{x}", .{ @intFromEnum(self) });
+        return writer.print("TypeId-{x}", .{@intFromEnum(self)});
     }
 };
 pub const ModuleId = enum(u16) {
@@ -324,7 +321,7 @@ pub const ModuleId = enum(u16) {
     _,
 
     pub fn format(self: ModuleId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("ModuleId-{x}", .{ @intFromEnum(self) });
+        return writer.print("ModuleId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -334,7 +331,7 @@ pub const RegisterId = enum(Rbc.RegisterIndex) {
     _,
 
     pub fn format(self: RegisterId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("RegisterId-{x}", .{ @intFromEnum(self) });
+        return writer.print("RegisterId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -344,7 +341,7 @@ pub const HandlerSetId = enum(Rbc.HandlerSetIndex) {
     _,
 
     pub fn format(self: HandlerSetId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("HandlerSetId-{x}", .{ @intFromEnum(self) });
+        return writer.print("HandlerSetId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -355,7 +352,7 @@ pub const BlockId = enum(u16) {
     _,
 
     pub fn format(self: BlockId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("BlockId-{x}", .{ @intFromEnum(self) });
+        return writer.print("BlockId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -365,7 +362,7 @@ pub const FunctionId = enum(Rbc.FunctionIndex) {
     _,
 
     pub fn format(self: FunctionId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("FunctionId-{x}", .{ @intFromEnum(self) });
+        return writer.print("FunctionId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -375,7 +372,7 @@ pub const ForeignId = enum(Rbc.ForeignIndex) {
     _,
 
     pub fn format(self: ForeignId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("ForeignId-{x}", .{ @intFromEnum(self) });
+        return writer.print("ForeignId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -385,7 +382,7 @@ pub const GlobalId = enum(Rbc.GlobalIndex) {
     _,
 
     pub fn format(self: GlobalId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("GlobalId-{x}", .{ @intFromEnum(self) });
+        return writer.print("GlobalId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -395,7 +392,7 @@ pub const UpvalueId = enum(Rbc.UpvalueIndex) {
     _,
 
     pub fn format(self: UpvalueId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("UpvalueId-{x}", .{ @intFromEnum(self) });
+        return writer.print("UpvalueId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -405,7 +402,7 @@ pub const EvidenceId = enum(Rbc.EvidenceIndex) {
     _,
 
     pub fn format(self: EvidenceId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("EvidenceId-{x}", .{ @intFromEnum(self) });
+        return writer.print("EvidenceId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -415,7 +412,7 @@ pub const LocalId = enum(u16) {
     _,
 
     pub fn format(self: LocalId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("LocalId-{x}", .{ @intFromEnum(self) });
+        return writer.print("LocalId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -425,7 +422,7 @@ pub const NameId = enum(u16) {
     _,
 
     pub fn format(self: NameId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("NameId-{x}", .{ @intFromEnum(self) });
+        return writer.print("NameId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -435,7 +432,7 @@ pub const FieldId = enum(u16) {
     _,
 
     pub fn format(self: FieldId, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("FieldId-{x}", .{ @intFromEnum(self) });
+        return writer.print("FieldId-{x}", .{@intFromEnum(self)});
     }
 };
 
@@ -883,14 +880,6 @@ const FormatterState = struct {
     }
 };
 
-
-
-
-
-
-
-
-
 const GlobalList = std.ArrayListUnmanaged(*Global);
 const FunctionList = std.ArrayListUnmanaged(*Function);
 const HandlerSetList = std.ArrayListUnmanaged(*HandlerSet);
@@ -1035,13 +1024,6 @@ pub const Module = struct {
     }
 };
 
-
-
-
-
-
-
-
 /// Type representation for all values in Rir;
 ///
 /// Essentially, this is a wrapper for `TypeInfo` that
@@ -1058,7 +1040,7 @@ pub const Type = struct {
 
     info: TypeInfo,
 
-    pub fn init(ir: *Rir, id: TypeId, name: ?NameId, hash: u32, info: TypeInfo) error{ OutOfMemory }! *Type {
+    pub fn init(ir: *Rir, id: TypeId, name: ?NameId, hash: u32, info: TypeInfo) error{OutOfMemory}!*Type {
         const self = try ir.allocator.create(Type);
 
         self.* = Type{
@@ -2159,9 +2141,6 @@ pub const FunctionTypeInfo = struct {
     }
 };
 
-
-
-
 const HandlerList = std.ArrayHashMapUnmanaged(EvidenceId, *Function, utils.SimpleHashContext, false);
 
 pub const HandlerSet = struct {
@@ -2223,16 +2202,6 @@ pub const HandlerSet = struct {
     }
 };
 
-
-
-
-
-
-
-
-
-
-
 pub const Foreign = struct {
     pub const Id = ForeignId;
 
@@ -2241,7 +2210,7 @@ pub const Foreign = struct {
     name: NameId,
     type: *Type,
 
-    pub fn init(root: *Rir, id: ForeignId, name: NameId, typeIr: *Type) error{InvalidCallConv, ExpectedFunctionType, OutOfMemory}! *Foreign {
+    pub fn init(root: *Rir, id: ForeignId, name: NameId, typeIr: *Type) error{ InvalidCallConv, ExpectedFunctionType, OutOfMemory }!*Foreign {
         const ptr = try root.allocator.create(Foreign);
         errdefer root.allocator.destroy(ptr);
 
@@ -2265,17 +2234,6 @@ pub const Foreign = struct {
         self.root.allocator.destroy(self);
     }
 };
-
-
-
-
-
-
-
-
-
-
-
 
 const BlockList = std.ArrayListUnmanaged(*Block);
 const UpvalueList = std.ArrayListUnmanaged(LocalId);
@@ -2464,13 +2422,6 @@ pub const Function = struct {
         return self.blocks.items[@intFromEnum(id)];
     }
 };
-
-
-
-
-
-
-
 
 pub const Check = enum(u1) { none, non_zero };
 pub const BitSize = enum(u2) { b8, b16, b32, b64 };
@@ -3207,12 +3158,6 @@ pub const Operand = union(enum) {
     }
 };
 
-
-
-
-
-
-
 /// Describes where a `Local` variable is stored
 pub const LocalStorage = union(enum) {
     /// The Local is not stored anywhere
@@ -3433,11 +3378,6 @@ pub const Global = struct {
         self.initial_value = try self.rir.allocator.dupe(u8, @as([*]const u8, @ptrCast(&value))[0..@sizeOf(T)]);
     }
 };
-
-
-
-
-
 
 const LocalMap = std.ArrayHashMapUnmanaged(LocalId, *Local, utils.SimpleHashContext, false);
 
@@ -3798,8 +3738,7 @@ pub const Block = struct {
 
     pub fn im(self: *Block, x: anytype) !void {
         const size = @bitSizeOf(@TypeOf(x));
-        return if (comptime size > 32) @call(.always_inline, im_w, .{ self, x })
-             else @call(.always_inline, im_i, .{ self, x });
+        return if (comptime size > 32) @call(.always_inline, im_w, .{ self, x }) else @call(.always_inline, im_i, .{ self, x });
     }
 
     pub fn im_i(self: *Block, x: anytype) !void {

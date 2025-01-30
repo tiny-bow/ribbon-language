@@ -347,7 +347,6 @@ pub const Pos = struct {
     }
 };
 
-
 pub const ARENA_RETAIN_AMOUNT = 1024 * 1024 * 16;
 const InternerMap = std.ArrayHashMapUnmanaged([]const u8, void, utils.SimpleHashContext, true);
 
@@ -464,9 +463,6 @@ pub const Storage = struct {
     }
 };
 
-
-
-
 pub const TypeId = struct {
     typename: [*:0]const u8,
 
@@ -520,8 +516,6 @@ pub const Diagnostic = struct {
     };
 };
 
-
-
 pub const Format = enum {
     debug,
     message,
@@ -567,8 +561,6 @@ pub const Format = enum {
         };
     }
 };
-
-
 
 pub const Parser = struct {
     input: Obj(String),
@@ -1575,8 +1567,6 @@ pub fn isSameLine(start: Pos, pos: Pos) bool {
     return value;
 }
 
-
-
 pub const WithId = enum(usize) { _ };
 
 pub const Cancellation = struct {
@@ -1748,7 +1738,6 @@ pub const Interpreter = struct {
         }
     }
 };
-
 
 pub const bindgen = struct {
     pub fn isObj(comptime T: type) bool { // TODO: this check really needs to be more robust
@@ -2629,7 +2618,7 @@ pub const builtin = struct {
             }
         },
 
-        .@"type" = struct {
+        .type = struct {
             /// Get the type of an object
             pub fn of(obj: Object) OOM!Obj(Symbol) {
                 const id = obj.getTypeId();
@@ -4309,8 +4298,6 @@ pub fn isExactSymbol(name: []const u8, obj: Object) bool {
     }
 }
 
-
-
 pub const Array = TypedArray(ObjData);
 
 pub fn TypedArray(comptime T: type) type {
@@ -5899,8 +5886,7 @@ pub const Procedure = union(ProcedureKind) {
 
                             return interpreter.runProgram(false, caseData.body.data.items());
                         } else if (diag) |d| {
-                            writer.print("failed to match; {} vs {any}:\n\t{}", .{ caseData.scrutinizer, eArgs, d.formatter(error.PatternFailed) })
-                                catch |err| return errorCast(err);
+                            writer.print("failed to match; {} vs {any}:\n\t{}", .{ caseData.scrutinizer, eArgs, d.formatter(error.PatternFailed) }) catch |err| return errorCast(err);
                         } else {
                             log.interpreter.err("requested pattern diagnostic is null", .{});
                             writer.print("failed to match; {} vs {any}", .{ caseData.scrutinizer, eArgs }) catch |err| return errorCast(err);
@@ -6155,7 +6141,6 @@ pub fn TypedSet(comptime K: type) type {
         }
     };
 }
-
 
 pub const NativeString = std.ArrayListUnmanaged(u8);
 

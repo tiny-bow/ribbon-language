@@ -4,7 +4,6 @@ const std = @import("std");
 
 pub const log = std.log.scoped(.utils);
 
-
 test {
     std.testing.refAllDeclsRecursive(@This());
 }
@@ -638,8 +637,6 @@ test {
     }
 }
 
-
-
 pub const ansi = struct {
     pub const Scl = struct {
         pub const Bell: u8 = 0x07;
@@ -893,7 +890,6 @@ pub const ansi = struct {
     } };
 };
 
-
 pub const external = struct {
     pub fn Option(comptime T: type) type {
         return extern struct {
@@ -1139,7 +1135,6 @@ pub const external = struct {
         }
     };
 };
-
 
 pub const text = struct {
     const GenCatData = @import("zg/GenCatData");
@@ -3996,10 +3991,6 @@ pub const text = struct {
         };
     };
 };
-
-
-
-
 
 pub const types = struct {
     pub fn CopyConst(comptime Dest: type, comptime Src: type) type {
