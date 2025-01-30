@@ -2429,6 +2429,7 @@ pub const BitSize = enum(u2) { b8, b16, b32, b64 };
 pub const Instruction = packed struct {
     code: OpCode,
     data: OpData,
+    _padding: std.meta.Int(.unsigned, 64 - (@bitSizeOf(OpCode) + @bitSizeOf(OpData))) = 0,
 
     pub fn onFormat(self: Instruction, formatter: Formatter) !void {
         const flags = formatter.getFlags();
@@ -2456,17 +2457,20 @@ pub const OpCode = enum(u8) {
     halt,
     trap,
 
+    block,
+    with,
+    @"if",
+    when,
+    br,
+    re,
+
     call,
     ret,
     cancel,
 
-    alloca,
     addr,
     load,
     store,
-
-    read,
-    write,
 
     add,
     sub,
@@ -2489,20 +2493,14 @@ pub const OpCode = enum(u8) {
     le,
     ge,
 
-    ext,
-    trunc,
     cast,
 
     clear,
     swap,
     copy,
 
-    block,
-    with,
-    @"if",
-    when,
-    br,
-    re,
+    read,
+    write,
 
     new_local,
 
@@ -2607,17 +2605,21 @@ pub const OpData = packed union {
     halt: void,
     trap: void,
 
+    block: TypeId,
+    with: TypeId,
+    @"if": TypeId,
+    when: void,
+
+    br: Check,
+    re: Check,
+
     call: Arity,
     ret: void,
     cancel: void,
 
-    alloca: TypeId,
     addr: void,
     load: void,
     store: void,
-
-    read: void,
-    write: void,
 
     add: void,
     sub: void,
@@ -2640,21 +2642,14 @@ pub const OpData = packed union {
     le: void,
     ge: void,
 
-    ext: BitSize,
-    trunc: BitSize,
     cast: TypeId,
 
     clear: Index,
     swap: Index,
     copy: Index,
 
-    block: TypeId,
-    with: TypeId,
-    @"if": TypeId,
-    when: void,
-
-    br: Check,
-    re: Check,
+    read: void,
+    write: void,
 
     new_local: OpLocal,
 
@@ -2674,17 +2669,20 @@ pub const OpData = packed union {
             .halt => {},
             .trap => {},
 
+            .block => try formatter.fmt(self.block),
+            .with => try formatter.fmt(self.with),
+            .@"if" => try formatter.fmt(self.@"if"),
+            .when => {},
+            .br => try formatter.fmt(self.br),
+            .re => try formatter.fmt(self.re),
+
             .call => try formatter.fmt(self.call),
             .ret => {},
             .cancel => {},
 
-            .alloca => try formatter.fmt(self.alloca),
             .addr => {},
             .load => {},
             .store => {},
-
-            .read => {},
-            .write => {},
 
             .add => {},
             .sub => {},
@@ -2707,21 +2705,14 @@ pub const OpData = packed union {
             .le => {},
             .ge => {},
 
-            .ext => try formatter.fmt(self.ext),
-            .trunc => try formatter.fmt(self.trunc),
             .cast => try formatter.fmt(self.cast),
 
             .clear => try formatter.fmt(self.clear),
             .swap => try formatter.fmt(self.swap),
             .copy => try formatter.fmt(self.copy),
 
-            .block => try formatter.fmt(self.block),
-            .with => try formatter.fmt(self.with),
-            .@"if" => try formatter.fmt(self.@"if"),
-            .when => {},
-
-            .br => try formatter.fmt(self.br),
-            .re => try formatter.fmt(self.re),
+            .read => {},
+            .write => {},
 
             .new_local => try formatter.fmt(self.new_local),
 
@@ -3580,10 +3571,6 @@ pub const Block = struct {
         try exitOp(self, .cancel, {});
     }
 
-    pub fn alloca(self: *Block, x: *Type) !void {
-        try op(self, .alloca, x.id);
-    }
-
     pub fn addr(self: *Block) !void {
         try op(self, .addr, {});
     }
@@ -3674,14 +3661,6 @@ pub const Block = struct {
 
     pub fn ge(self: *Block) !void {
         try op(self, .ge, {});
-    }
-
-    pub fn ext(self: *Block, x: BitSize) !void {
-        try op(self, .ext, x);
-    }
-
-    pub fn trunc(self: *Block, x: BitSize) !void {
-        try op(self, .trunc, x);
     }
 
     pub fn cast(self: *Block, x: *Type) !void {

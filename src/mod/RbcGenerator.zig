@@ -116,7 +116,6 @@ pub fn freshName(self: *RbcGenerator, args: anytype) Error!Rir.NameId {
 
 pub const Error = Rir.Error || RbcBuilder.Error || error{
     TypeMismatch,
-    StackOverflow,
     StackUnderflow,
     StackNotCleared,
     StackBranchMismatch,
@@ -125,6 +124,7 @@ pub const Error = Rir.Error || RbcBuilder.Error || error{
     ExpectedRegister,
     AddressOfRegister,
     InvalidBranch,
+    UnexpectedEndOfInput,
 };
 
 pub const MAX_FRESH_NAME_LEN = 128;
@@ -604,7 +604,22 @@ pub const Block = struct {
                     }
                 },
 
-                .re => @panic("re nyi"),
+                .re => {
+                    const blockIr = try (try self.pop(.meta)).forceBlock();
+                    const blockGen = try self.function.getBlock(blockIr);
+
+                    if (self.stackDepth() > 0) {
+                        return error.StackNotCleared;
+                    }
+
+                    const phiNode = blockGen.phi_node orelse return error.InvalidBranch;
+
+                    if (phiNode.register != null) {
+                        return error.StackBranchMismatch;
+                    }
+
+                    try self.active_builder.br(phiNode.entry.index);
+                },
 
                 .call => {
                     const arity = instr.data.call;
@@ -708,82 +723,167 @@ pub const Block = struct {
                         try self.push(out);
                     }
                 },
-                .ret => @panic("ret nyi"),
-                .cancel => @panic("cancel nyi"),
+                .ret => {
+                    const resultMaybeOperand = try self.maybePop(null);
 
-                .alloca => {
-                    const typeIr = try (try self.pop(.meta)).forceType();
-                    const typeLayout = try typeIr.getLayout();
+                    if (self.stackDepth() > 0) {
+                        return error.StackNotCleared;
+                    }
 
-                    const register = try self.allocRegister(offset, typeIr);
+                    if (resultMaybeOperand) |resultOperand| {
+                        switch (try self.coerceRegisterOrImmediate(resultOperand)) {
+                            .register => |reg| {
+                                const regLayout = try reg.type.getLayout();
 
-                    try self.active_builder.alloca(@intCast(typeLayout.dimensions.size), register.getIndex());
+                                switch (regLayout.local_storage) {
+                                    .none,
+                                    .@"comptime",
+                                    => return error.InvalidOperand,
 
-                    try self.push(register);
+                                    .zero_size => try self.active_builder.ret(),
+
+                                    .n_registers,
+                                    .stack,
+                                    => @panic("stack return nyi"),
+
+                                    .register => try self.active_builder.ret_v(reg.getIndex()),
+                                }
+                            },
+                            .immediate => |im| {
+                                const imLayout = try im.type.getLayout();
+
+                                switch (imLayout.local_storage) {
+                                    .none,
+                                    .@"comptime",
+                                    => return error.InvalidOperand,
+
+                                    .zero_size => try self.active_builder.ret(),
+
+                                    .n_registers,
+                                    .stack,
+                                    => @panic("stack return nyi"),
+
+                                    .register => if (imLayout.dimensions.size <= 32) try self.active_builder.ret_im_v(im.data) else try self.active_builder.ret_im_w_v(im.data),
+                                }
+                            },
+                        }
+                    }
+                },
+                .cancel => {
+                    const resultMaybeOperand = try self.maybePop(null);
+
+                    if (self.stackDepth() > 0) {
+                        return error.StackNotCleared;
+                    }
+
+                    if (resultMaybeOperand) |resultOperand| {
+                        switch (try self.coerceRegisterOrImmediate(resultOperand)) {
+                            .register => |reg| {
+                                const regLayout = try reg.type.getLayout();
+
+                                switch (regLayout.local_storage) {
+                                    .none,
+                                    .@"comptime",
+                                    => return error.InvalidOperand,
+
+                                    .zero_size => try self.active_builder.cancel(),
+
+                                    .n_registers,
+                                    .stack,
+                                    => @panic("stack cancel nyi"),
+
+                                    .register => try self.active_builder.cancel_v(reg.getIndex()),
+                                }
+                            },
+                            .immediate => |im| {
+                                const imLayout = try im.type.getLayout();
+
+                                switch (imLayout.local_storage) {
+                                    .none,
+                                    .@"comptime",
+                                    => return error.InvalidOperand,
+
+                                    .zero_size => try self.active_builder.cancel(),
+
+                                    .n_registers,
+                                    .stack,
+                                    => @panic("stack cancel nyi"),
+
+                                    .register => if (imLayout.dimensions.size <= 32) try self.active_builder.cancel_im_v(im.data) else try self.active_builder.cancel_im_w_v(im.data),
+                                }
+                            },
+                        }
+                    }
                 },
 
                 .addr => {
-                    const operand: Rir.Operand = try self.pop(null);
+                    const location = try self.pop(null);
 
-                    try self.coerceAddress(offset, operand);
+                    const output = try self.coerceAddress(offset, location);
+
+                    try self.push(output);
                 },
 
-                .read => @panic("read nyi"),
-                .write => @panic("write nyi"),
+                .load => {
+                    const source = try self.pop(null);
 
-                .load => @panic("load nyi"),
-                .store => @panic("store nyi"),
+                    const output = try self.load(source);
 
-                .add => @panic("add nyi"),
-                .sub => @panic("sub nyi"),
-                .mul => @panic("mul nyi"),
-                .div => @panic("div nyi"),
-                .rem => @panic("rem nyi"),
-                .neg => @panic("neg nyi"),
-
-                .band => @panic("band nyi"),
-                .bor => @panic("bor nyi"),
-                .bxor => @panic("bxor nyi"),
-                .bnot => @panic("bnot nyi"),
-                .bshiftl => @panic("bshiftl nyi"),
-                .bshiftr => @panic("bshiftr nyi"),
-
-                .eq => @panic("eq nyi"),
-                .ne => @panic("ne nyi"),
-                .lt => @panic("lt nyi"),
-                .gt => @panic("gt nyi"),
-                .le => @panic("le nyi"),
-                .ge => @panic("ge nyi"),
-
-                .ext => @panic("ext nyi"),
-                .trunc => @panic("trunc nyi"),
-                .cast => @panic("cast nyi"),
-
-                .clear => {
-                    const count = instr.data.clear;
-
-                    if (count > self.stackDepth()) return error.StackUnderflow;
-
-                    for (count) |_| _ = try self.pop(null);
+                    try self.push(output);
                 },
-                .swap => {
-                    const index = instr.data.swap;
 
-                    if (index >= self.stackDepth()) return error.StackUnderflow;
+                .store => {
+                    const destination = try self.pop(null);
+                    const source = try self.pop(null);
 
-                    const a = &self.stack.items[self.stackDepth() - 1 - index];
-                    const b = &self.stack.items[self.stackDepth() - 1];
-
-                    std.mem.swap(Rir.Operand, a, b);
+                    try self.store(destination, source);
                 },
-                .copy => {
-                    const index = instr.data.copy;
 
-                    if (index >= self.stackDepth()) return error.StackUnderflow;
+                .add => try self.binary(.add),
+                .sub => try self.binary(.sub),
+                .mul => try self.binary(.mul),
+                .div => try self.binary(.div),
+                .rem => try self.binary(.rem),
+                .neg => try self.unary(.neg),
 
-                    const operand = self.stack.items[self.stackDepth() - 1 - index];
+                .band => try self.binary(.band),
+                .bor => try self.binary(.bor),
+                .bxor => try self.binary(.bxor),
+                .bnot => try self.unary(.bnot),
+                .bshiftl => try self.binary(.bshiftl),
+                .bshiftr => try self.binary(.bshiftr),
 
-                    try self.push(operand);
+                .eq => try self.binary(.eq),
+                .ne => try self.binary(.ne),
+                .lt => try self.binary(.lt),
+                .gt => try self.binary(.gt),
+                .le => try self.binary(.le),
+                .ge => try self.binary(.ge),
+
+                .cast => {
+                    const typeId = instr.data.cast;
+                    const typeIr = try self.generator.ir.getType(typeId);
+
+                    try self.cast(typeIr);
+                },
+
+                .clear => try self.clear(instr.data.clear),
+                .swap => try self.swap(instr.data.swap),
+                .copy => try self.copy(instr.data.copy),
+
+                .read => {
+                    const source = try self.pop(null);
+
+                    const output = try self.read(source);
+
+                    try self.push(output);
+                },
+
+                .write => {
+                    const destination = try self.pop(null);
+                    const source = try self.pop(null);
+
+                    try self.write(destination, source);
                 },
 
                 .new_local => {
@@ -845,7 +945,20 @@ pub const Block = struct {
                     try self.push(Rir.Immediate{ .type = typeIr, .data = im.data });
                 },
 
-                .im_w => @panic("im_w nyi"),
+                .im_w => {
+                    const typeId = instr.data.im_w;
+                    const typeIr = try self.generator.ir.getType(typeId);
+
+                    if (nextInstr) |next| {
+                        offset += 1;
+
+                        const im: u64 = @bitCast(next);
+
+                        try self.push(Rir.Immediate{ .type = typeIr, .data = im });
+                    } else {
+                        return error.UnexpectedEndOfInput;
+                    }
+                },
             }
         }
     }
@@ -854,8 +967,31 @@ pub const Block = struct {
         return self.stack.items.len;
     }
 
-    pub fn push(self: *Block, operand: anytype) !void {
+    pub fn push(self: *Block, operand: anytype) error{OutOfMemory}!void {
         try self.stack.append(self.generator.allocator, Rir.Operand.from(operand));
+    }
+
+    pub fn clear(self: *Block, count: usize) error{StackUnderflow}!void {
+        if (count > self.stackDepth()) return error.StackUnderflow;
+
+        for (count) |_| _ = try self.pop(null);
+    }
+
+    pub fn swap(self: *Block, index: usize) error{StackUnderflow}!void {
+        if (index >= self.stackDepth()) return error.StackUnderflow;
+
+        const a = &self.stack.items[self.stackDepth() - 1 - index];
+        const b = &self.stack.items[self.stackDepth() - 1];
+
+        std.mem.swap(Rir.Operand, a, b);
+    }
+
+    pub fn copy(self: *Block, index: usize) error{ StackUnderflow, OutOfMemory }!void {
+        if (index >= self.stackDepth()) return error.StackUnderflow;
+
+        const operand = self.stack.items[self.stackDepth() - 1 - index];
+
+        try self.push(operand);
     }
 
     pub fn maybePop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand)) error{InvalidOperand}!?if (kind) |k| switch (k) {
@@ -874,11 +1010,11 @@ pub const Block = struct {
         return null;
     }
 
-    pub fn pop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand)) error{ InvalidOperand, StackUnderflow }!if (kind) |k| switch (k) {
+    pub fn pop(self: *Block, comptime kind: ?std.meta.Tag(Rir.Operand)) if (kind) |k| error{ InvalidOperand, StackUnderflow }!switch (k) {
         .meta => Rir.Meta,
         .l_value => Rir.LValue,
         .r_value => Rir.RValue,
-    } else Rir.Operand {
+    } else error{StackUnderflow}!Rir.Operand {
         if (self.stack.popOrNull()) |operand| {
             return if (comptime kind) |k| switch (operand) {
                 .meta => |m| if (k == .meta) m else error.InvalidOperand,
@@ -1009,6 +1145,14 @@ pub const Block = struct {
         utils.todo(noreturn, .{ self, im });
     }
 
+    pub fn load(self: *Block, source: Rir.Operand) !Rir.Operand {
+        utils.todo(noreturn, .{ self, source });
+    }
+
+    pub fn store(self: *Block, source: Rir.Operand, value: Rir.Operand) !void {
+        utils.todo(noreturn, .{ self, source, value });
+    }
+
     pub fn read(self: *Block, source: Rir.Operand) !Rir.Operand {
         utils.todo(noreturn, .{ self, source });
     }
@@ -1021,11 +1165,15 @@ pub const Block = struct {
         utils.todo(noreturn, .{ self, operand });
     }
 
+    pub fn coerceRegisterOrImmediate(self: *Block, operand: Rir.Operand) !union(enum) { register: *Rir.Register, immediate: Rir.Immediate } {
+        utils.todo(noreturn, .{ self, operand });
+    }
+
     pub fn typecheckCall(self: *Block, functionTypeIr: *Rir.Type, operand: []const Rir.Operand) ![]const Rbc.RegisterIndex {
         utils.todo(noreturn, .{ self, functionTypeIr, operand });
     }
 
-    pub fn coerceAddress(self: *Block, offset: Rir.Offset, operand: Rir.Operand) !void {
+    pub fn coerceAddress(self: *Block, offset: Rir.Offset, operand: Rir.Operand) !Rir.Operand {
         const operandType = try operand.getType();
         const pointerType = try operandType.createPointer();
 
@@ -1036,10 +1184,10 @@ pub const Block = struct {
                 .local => |localIr| {
                     switch (localIr.storage) {
                         .none => return error.InvalidOperand,
-                        .zero_size => try self.push(Rir.Immediate.zero(pointerType)),
+                        .zero_size => return .from(Rir.Immediate.zero(pointerType)),
                         .register => return error.AddressOfRegister,
                         .n_registers => return error.AddressOfRegister,
-                        .stack => try self.push(localIr.register orelse return error.LocalNotAssignedRegister),
+                        .stack => return .from(localIr.register orelse return error.LocalNotAssignedRegister),
                         .@"comptime" => return error.InvalidOperand, // TODO: create global?
                     }
                 },
@@ -1050,7 +1198,7 @@ pub const Block = struct {
                     const outReg = try self.allocRegister(offset, pointerType);
                     try self.active_builder.addr_global(globalGen.index, outReg.getIndex());
 
-                    try self.push(outReg);
+                    return .from(outReg);
                 },
 
                 .upvalue => |upvalueIr| {
@@ -1059,7 +1207,7 @@ pub const Block = struct {
                     const outReg = try self.allocRegister(offset, pointerType);
                     try self.active_builder.addr_upvalue(upvalueGen.index, outReg.getIndex());
 
-                    try self.push(outReg);
+                    return .from(outReg);
                 },
 
                 else => return error.InvalidOperand,
@@ -1073,7 +1221,7 @@ pub const Block = struct {
                     const outReg = try self.allocRegister(offset, pointerType);
                     try self.active_builder.addr_foreign(foreignIndex, outReg.getIndex());
 
-                    try self.push(outReg);
+                    return .from(outReg);
                 },
                 .function => |functionIr| {
                     const functionGen = try self.generator.getFunction(functionIr);
@@ -1081,7 +1229,7 @@ pub const Block = struct {
                     const outReg = try self.allocRegister(offset, pointerType);
                     try self.active_builder.addr_function(functionGen.builder.index, outReg.getIndex());
 
-                    try self.push(outReg);
+                    return .from(outReg);
                 },
             },
         }
@@ -1089,5 +1237,36 @@ pub const Block = struct {
 
     pub fn phi(self: *Block, blockTypeIr: *Rir.Type, blockGens: []const *Block) !PhiNode {
         utils.todo(noreturn, .{ self, blockTypeIr, blockGens });
+    }
+
+    pub fn unary(self: *Block, op: Rir.OpCode) !void {
+        const a = try self.pop(null);
+
+        const output = switch (op) {
+            else => utils.todo(noreturn, .{ a, op }),
+        };
+
+        try self.push(output);
+    }
+
+    pub fn binary(self: *Block, op: Rir.OpCode) !void {
+        const a = try self.pop(null);
+        const b = try self.pop(null);
+
+        const output = switch (op) {
+            else => utils.todo(noreturn, .{ a, b, op }),
+        };
+
+        try self.push(output);
+    }
+
+    pub fn cast(self: *Block, typeIr: *Rir.Type) !void {
+        const a = try self.pop(null);
+
+        const output = switch (typeIr.info) {
+            else => utils.todo(noreturn, .{a}),
+        };
+
+        try self.push(output);
     }
 };

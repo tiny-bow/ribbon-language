@@ -434,7 +434,7 @@ pub const Block = struct {
     }
 
     pub fn ret_im_w_v(self: *Block, w: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.ret_im_w_v, {});
+        try self.op(.ret_im_w_v, &{});
         self.exited = true;
         try self.wideImmediate(w);
     }
@@ -455,7 +455,7 @@ pub const Block = struct {
     }
 
     pub fn cancel_im_w_v(self: *Block, w: anytype) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.cancel_im_w_v, {});
+        try self.op(.cancel_im_w_v, &{});
         self.exited = true;
         try self.wideImmediate(w);
     }
