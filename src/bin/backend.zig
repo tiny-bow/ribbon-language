@@ -48,13 +48,13 @@ pub fn main() !void {
     log.info("created S32 {}", .{S32});
 
     { // struct
-        const Foo = try ir.createType(try ir.internName("Foo"), Rir.TypeInfo{ .Struct = Rir.type_info.Struct{
+        const Foo = try ir.createType(try ir.internName("Foo"), Rir.TypeInfo{ .Struct = Rir.StructTypeInfo{
             .fields = &.{
-                Rir.type_info.StructField{
+                Rir.StructField{
                     .name = try ir.internName("x"),
                     .type = S32,
                 },
-                Rir.type_info.StructField{
+                Rir.StructField{
                     .name = try ir.internName("y"),
                     .type = S32,
                 },
