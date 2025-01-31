@@ -75,6 +75,29 @@ pub const Bytecode = struct {
     pub fn deinit(self: Bytecode, allocator: std.mem.Allocator) void {
         allocator.free(self.instructions);
     }
+
+    pub fn disassemble(self: Bytecode, writer: anytype) !void {
+        instrs: for (self.instructions) |x| {
+            inline for (comptime std.meta.fieldNames(Code)) |name| {
+                if (@field(Code, name) == x.code) {
+                    const data = @field(self.data, name);
+                    const T = @TypeOf(data);
+
+                    if (comptime T != void) {
+                        try writer.writeAll(@tagName(name));
+
+                        inline for (comptime std.meta.fieldNames(T)) |fieldName| {
+                            try writer.writeAll(" ");
+                            try writer.writeAll(fieldName ++ " = ");
+                            try writer.print("{any}", .{@field(data, fieldName)});
+                        }
+                    }
+
+                    comptime continue :instrs;
+                }
+            }
+        }
+    }
 };
 
 pub const Function = struct {

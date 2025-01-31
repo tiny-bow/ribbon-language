@@ -198,7 +198,7 @@ pub fn sCast(b: anytype) u16 {
             .unsigned => @as(u16, b),
             .signed => @as(u16, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
         } else @bitCast(@as(std.meta.Int(info.signedness, 16), @intCast(b))),
-        .@"enum" => bCast(@intFromEnum(b)),
+        .@"enum" => sCast(@intFromEnum(b)),
         else => @as(u16, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(b))), @bitCast(b))),
     };
 }
@@ -210,7 +210,7 @@ pub fn iCast(b: anytype) u32 {
             .unsigned => @as(u32, b),
             .signed => @as(u32, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
         } else @bitCast(@as(std.meta.Int(info.signedness, 32), @intCast(b))),
-        .@"enum" => bCast(@intFromEnum(b)),
+        .@"enum" => iCast(@intFromEnum(b)),
         else => @as(u32, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(b))), @bitCast(b))),
     };
 }
@@ -222,7 +222,7 @@ pub fn wCast(b: anytype) u64 {
             .unsigned => @as(u64, b),
             .signed => @as(u64, @as(std.meta.Int(.unsigned, info.bits), @bitCast(b))),
         } else @bitCast(@as(std.meta.Int(info.signedness, 64), @intCast(b))),
-        .@"enum" => bCast(@intFromEnum(b)),
+        .@"enum" => wCast(@intFromEnum(b)),
         else => @as(u64, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(b))), @bitCast(b))),
     };
 }
@@ -788,7 +788,7 @@ pub const Block = struct {
     }
 
     pub fn i_sub_64_im_b(self: *Block, x: Rbc.RegisterIndex, w: anytype, y: Rbc.RegisterIndex) error{ InstructionsAfterExit, OutOfMemory }!void {
-        try self.op(.i_sub_64_im, &.{ .R0 = x, .R1 = y });
+        try self.op(.i_sub_64_im_b, &.{ .R0 = x, .R1 = y });
         try self.wideImmediate(w);
     }
 

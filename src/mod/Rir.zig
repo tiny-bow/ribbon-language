@@ -1461,15 +1461,19 @@ pub const TypeTag = std.meta.Tag(TypeInfo);
 /// To use `TypeInfo` within an Rir instance, it must be wrapped in a de-duplicated `Type` via `createType`
 pub const TypeInfo = union(enum) {
     Nil: void,
+
     Bool: void,
+
     U8: void,
     U16: void,
     U32: void,
     U64: void,
+
     S8: void,
     S16: void,
     S32: void,
     S64: void,
+
     F32: void,
     F64: void,
 
@@ -2884,6 +2888,511 @@ pub const Immediate = struct {
             } else @bitCast(@as(std.meta.Int(info.signedness, 64), @intCast(val))),
             .@"enum" => |info| convert(@as(info.tag_type, @intFromEnum(val))),
             else => @as(u64, @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(val))), @bitCast(val))),
+        };
+    }
+
+    pub fn asU8(self: *const Immediate) error{TypeMismatch}!u8 {
+        if (self.type.info != .U8) return error.TypeMismatch;
+        return self.asU8Unchecked();
+    }
+
+    pub fn asU8Unchecked(self: *const Immediate) u8 {
+        return @truncate(self.data);
+    }
+
+    pub fn asU16(self: *const Immediate) error{TypeMismatch}!u16 {
+        if (self.type.info != .U16) return error.TypeMismatch;
+        return self.asU16Unchecked();
+    }
+
+    pub fn asU16Unchecked(self: *const Immediate) u16 {
+        return @truncate(self.data);
+    }
+
+    pub fn asU32(self: *const Immediate) error{TypeMismatch}!u32 {
+        if (self.type.info != .U32) return error.TypeMismatch;
+        return self.asU32Unchecked();
+    }
+
+    pub fn asU32Unchecked(self: *const Immediate) u32 {
+        return @truncate(self.data);
+    }
+
+    pub fn asU64(self: *const Immediate) error{TypeMismatch}!u64 {
+        if (self.type.info != .U64) return error.TypeMismatch;
+        return self.asU64Unchecked();
+    }
+
+    pub fn asU64Unchecked(self: *const Immediate) u64 {
+        return @truncate(self.data);
+    }
+
+    pub fn asS8(self: *const Immediate) error{TypeMismatch}!i8 {
+        if (self.type.info != .S8) return error.TypeMismatch;
+        return self.asS8Unchecked();
+    }
+
+    pub fn asS8Unchecked(self: *const Immediate) i8 {
+        return @intCast(self.asU8Unchecked());
+    }
+
+    pub fn asS16(self: *const Immediate) error{TypeMismatch}!i16 {
+        if (self.type.info != .S16) return error.TypeMismatch;
+        return self.asS16Unchecked();
+    }
+
+    pub fn asS16Unchecked(self: *const Immediate) i16 {
+        return @intCast(self.asU16Unchecked());
+    }
+
+    pub fn asS32(self: *const Immediate) error{TypeMismatch}!i32 {
+        if (self.type.info != .S32) return error.TypeMismatch;
+        return self.asS32Unchecked();
+    }
+
+    pub fn asS32Unchecked(self: *const Immediate) i32 {
+        return @intCast(self.asU32Unchecked());
+    }
+
+    pub fn asS64(self: *const Immediate) error{TypeMismatch}!i64 {
+        if (self.type.info != .S64) return error.TypeMismatch;
+        return self.asS64Unchecked();
+    }
+
+    pub fn asS64Unchecked(self: *const Immediate) i64 {
+        return @intCast(self.asU64Unchecked());
+    }
+
+    pub fn asF32(self: *const Immediate) error{TypeMismatch}!f32 {
+        if (self.type.info != .F32) return error.TypeMismatch;
+        return self.asF32Unchecked();
+    }
+
+    pub fn asF32Unchecked(self: *const Immediate) f32 {
+        return @bitCast(self.asU32Unchecked());
+    }
+
+    pub fn asF64(self: *const Immediate) error{TypeMismatch}!f64 {
+        if (self.type.info != .F64) return error.TypeMismatch;
+        return self.asF64Unchecked();
+    }
+
+    pub fn asF64Unchecked(self: *const Immediate) f64 {
+        return @bitCast(self.asU64Unchecked());
+    }
+
+    pub fn add(self: *const Immediate, other: *const Immediate) error{ InvalidOperand, TypeMismatch }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .U8 => @as(*const u8, @ptrCast(&self.data)).* + @as(*const u8, @ptrCast(&other.data)).*,
+                .U16 => @as(*const u16, @ptrCast(&self.data)).* + @as(*const u16, @ptrCast(&other.data)).*,
+                .U32 => @as(*const u32, @ptrCast(&self.data)).* + @as(*const u32, @ptrCast(&other.data)).*,
+                .U64 => @as(*const u64, @ptrCast(&self.data)).* + @as(*const u64, @ptrCast(&other.data)).*,
+
+                .S8 => @as(u8, @bitCast(@as(*const i8, @ptrCast(&self.data)).* + @as(*const i8, @ptrCast(&other.data)).*)),
+                .S16 => @as(u16, @bitCast(@as(*const i16, @ptrCast(&self.data)).* + @as(*const i16, @ptrCast(&other.data)).*)),
+                .S32 => @as(u32, @bitCast(@as(*const i32, @ptrCast(&self.data)).* + @as(*const i32, @ptrCast(&other.data)).*)),
+                .S64 => @as(u64, @bitCast(@as(*const i64, @ptrCast(&self.data)).* + @as(*const i64, @ptrCast(&other.data)).*)),
+
+                .F32 => @as(u32, @bitCast(@as(*const f32, @ptrCast(&self.data)).* + @as(*const f32, @ptrCast(&other.data)).*)),
+                .F64 => @as(u64, @bitCast(@as(*const f64, @ptrCast(&self.data)).* + @as(*const f64, @ptrCast(&other.data)).*)),
+
+                else => return error.InvalidOperand,
+            },
+        };
+    }
+
+    pub fn sub(self: *const Immediate, other: *const Immediate) error{ InvalidOperand, TypeMismatch }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .U8 => @as(*const u8, @ptrCast(&self.data)).* - @as(*const u8, @ptrCast(&other.data)).*,
+                .U16 => @as(*const u16, @ptrCast(&self.data)).* - @as(*const u16, @ptrCast(&other.data)).*,
+                .U32 => @as(*const u32, @ptrCast(&self.data)).* - @as(*const u32, @ptrCast(&other.data)).*,
+                .U64 => @as(*const u64, @ptrCast(&self.data)).* - @as(*const u64, @ptrCast(&other.data)).*,
+
+                .S8 => @as(u8, @bitCast(@as(*const i8, @ptrCast(&self.data)).* - @as(*const i8, @ptrCast(&other.data)).*)),
+                .S16 => @as(u16, @bitCast(@as(*const i16, @ptrCast(&self.data)).* - @as(*const i16, @ptrCast(&other.data)).*)),
+                .S32 => @as(u32, @bitCast(@as(*const i32, @ptrCast(&self.data)).* - @as(*const i32, @ptrCast(&other.data)).*)),
+                .S64 => @as(u64, @bitCast(@as(*const i64, @ptrCast(&self.data)).* - @as(*const i64, @ptrCast(&other.data)).*)),
+
+                .F32 => @as(u32, @bitCast(@as(*const f32, @ptrCast(&self.data)).* - @as(*const f32, @ptrCast(&other.data)).*)),
+                .F64 => @as(u64, @bitCast(@as(*const f64, @ptrCast(&self.data)).* - @as(*const f64, @ptrCast(&other.data)).*)),
+
+                else => return error.InvalidOperand,
+            },
+        };
+    }
+
+    pub fn mul(self: *const Immediate, other: *const Immediate) error{ InvalidOperand, TypeMismatch }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .U8 => @as(*const u8, @ptrCast(&self.data)).* * @as(*const u8, @ptrCast(&other.data)).*,
+                .U16 => @as(*const u16, @ptrCast(&self.data)).* * @as(*const u16, @ptrCast(&other.data)).*,
+                .U32 => @as(*const u32, @ptrCast(&self.data)).* * @as(*const u32, @ptrCast(&other.data)).*,
+                .U64 => @as(*const u64, @ptrCast(&self.data)).* * @as(*const u64, @ptrCast(&other.data)).*,
+
+                .S8 => @as(u8, @bitCast(@as(*const i8, @ptrCast(&self.data)).* * @as(*const i8, @ptrCast(&other.data)).*)),
+                .S16 => @as(u16, @bitCast(@as(*const i16, @ptrCast(&self.data)).* * @as(*const i16, @ptrCast(&other.data)).*)),
+                .S32 => @as(u32, @bitCast(@as(*const i32, @ptrCast(&self.data)).* * @as(*const i32, @ptrCast(&other.data)).*)),
+                .S64 => @as(u64, @bitCast(@as(*const i64, @ptrCast(&self.data)).* * @as(*const i64, @ptrCast(&other.data)).*)),
+
+                .F32 => @as(u32, @bitCast(@as(*const f32, @ptrCast(&self.data)).* * @as(*const f32, @ptrCast(&other.data)).*)),
+                .F64 => @as(u64, @bitCast(@as(*const f64, @ptrCast(&self.data)).* * @as(*const f64, @ptrCast(&other.data)).*)),
+
+                else => return error.InvalidOperand,
+            },
+        };
+    }
+
+    pub fn div(self: *const Immediate, other: *const Immediate) error{ InvalidOperand, TypeMismatch }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .U8 => @divFloor(@as(*const u8, @ptrCast(&self.data)).*, @as(*const u8, @ptrCast(&other.data)).*),
+                .U16 => @divFloor(@as(*const u16, @ptrCast(&self.data)).*, @as(*const u16, @ptrCast(&other.data)).*),
+                .U32 => @divFloor(@as(*const u32, @ptrCast(&self.data)).*, @as(*const u32, @ptrCast(&other.data)).*),
+                .U64 => @divFloor(@as(*const u64, @ptrCast(&self.data)).*, @as(*const u64, @ptrCast(&other.data)).*),
+
+                .S8 => @as(u8, @bitCast(@divFloor(@as(*const i8, @ptrCast(&self.data)).*, @as(*const i8, @ptrCast(&other.data)).*))),
+                .S16 => @as(u16, @bitCast(@divFloor(@as(*const i16, @ptrCast(&self.data)).*, @as(*const i16, @ptrCast(&other.data)).*))),
+                .S32 => @as(u32, @bitCast(@divFloor(@as(*const i32, @ptrCast(&self.data)).*, @as(*const i32, @ptrCast(&other.data)).*))),
+                .S64 => @as(u64, @bitCast(@divFloor(@as(*const i64, @ptrCast(&self.data)).*, @as(*const i64, @ptrCast(&other.data)).*))),
+
+                .F32 => @as(u32, @bitCast(@as(*const f32, @ptrCast(&self.data)).* / @as(*const f32, @ptrCast(&other.data)).*)),
+                .F64 => @as(u64, @bitCast(@as(*const f64, @ptrCast(&self.data)).* / @as(*const f64, @ptrCast(&other.data)).*)),
+
+                else => return error.InvalidOperand,
+            },
+        };
+    }
+
+    pub fn rem(self: *const Immediate, other: *const Immediate) error{ InvalidOperand, TypeMismatch }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .U8 => @rem(@as(*const u8, @ptrCast(&self.data)).*, @as(*const u8, @ptrCast(&other.data)).*),
+                .U16 => @rem(@as(*const u16, @ptrCast(&self.data)).*, @as(*const u16, @ptrCast(&other.data)).*),
+                .U32 => @rem(@as(*const u32, @ptrCast(&self.data)).*, @as(*const u32, @ptrCast(&other.data)).*),
+                .U64 => @rem(@as(*const u64, @ptrCast(&self.data)).*, @as(*const u64, @ptrCast(&other.data)).*),
+
+                .S8 => @as(u8, @bitCast(@rem(@as(*const i8, @ptrCast(&self.data)).*, @as(*const i8, @ptrCast(&other.data)).*))),
+                .S16 => @as(u16, @bitCast(@rem(@as(*const i16, @ptrCast(&self.data)).*, @as(*const i16, @ptrCast(&other.data)).*))),
+                .S32 => @as(u32, @bitCast(@rem(@as(*const i32, @ptrCast(&self.data)).*, @as(*const i32, @ptrCast(&other.data)).*))),
+                .S64 => @as(u64, @bitCast(@rem(@as(*const i64, @ptrCast(&self.data)).*, @as(*const i64, @ptrCast(&other.data)).*))),
+
+                .F32 => @as(u32, @bitCast(@rem(@as(*const f32, @ptrCast(&self.data)).*, @as(*const f32, @ptrCast(&other.data)).*))),
+                .F64 => @as(u64, @bitCast(@rem(@as(*const f64, @ptrCast(&self.data)).*, @as(*const f64, @ptrCast(&other.data)).*))),
+
+                else => return error.InvalidOperand,
+            },
+        };
+    }
+
+    pub fn band(self: *const Immediate, other: *const Immediate) error{ InvalidOperand, TypeMismatch }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .U8 => @as(*const u8, @ptrCast(&self.data)).* & @as(*const u8, @ptrCast(&other.data)).*,
+                .U16 => @as(*const u16, @ptrCast(&self.data)).* & @as(*const u16, @ptrCast(&other.data)).*,
+                .U32 => @as(*const u32, @ptrCast(&self.data)).* & @as(*const u32, @ptrCast(&other.data)).*,
+                .U64 => @as(*const u64, @ptrCast(&self.data)).* & @as(*const u64, @ptrCast(&other.data)).*,
+
+                .S8 => @as(u8, @bitCast(@as(*const i8, @ptrCast(&self.data)).* & @as(*const i8, @ptrCast(&other.data)).*)),
+                .S16 => @as(u16, @bitCast(@as(*const i16, @ptrCast(&self.data)).* & @as(*const i16, @ptrCast(&other.data)).*)),
+                .S32 => @as(u32, @bitCast(@as(*const i32, @ptrCast(&self.data)).* & @as(*const i32, @ptrCast(&other.data)).*)),
+                .S64 => @as(u64, @bitCast(@as(*const i64, @ptrCast(&self.data)).* & @as(*const i64, @ptrCast(&other.data)).*)),
+
+                else => return error.InvalidOperand,
+            },
+        };
+    }
+
+    pub fn bor(self: *const Immediate, other: *const Immediate) error{ InvalidOperand, TypeMismatch }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .U8 => @as(*const u8, @ptrCast(&self.data)).* | @as(*const u8, @ptrCast(&other.data)).*,
+                .U16 => @as(*const u16, @ptrCast(&self.data)).* | @as(*const u16, @ptrCast(&other.data)).*,
+                .U32 => @as(*const u32, @ptrCast(&self.data)).* | @as(*const u32, @ptrCast(&other.data)).*,
+                .U64 => @as(*const u64, @ptrCast(&self.data)).* | @as(*const u64, @ptrCast(&other.data)).*,
+
+                .S8 => @as(u8, @bitCast(@as(*const i8, @ptrCast(&self.data)).* | @as(*const i8, @ptrCast(&other.data)).*)),
+                .S16 => @as(u16, @bitCast(@as(*const i16, @ptrCast(&self.data)).* | @as(*const i16, @ptrCast(&other.data)).*)),
+                .S32 => @as(u32, @bitCast(@as(*const i32, @ptrCast(&self.data)).* | @as(*const i32, @ptrCast(&other.data)).*)),
+                .S64 => @as(u64, @bitCast(@as(*const i64, @ptrCast(&self.data)).* | @as(*const i64, @ptrCast(&other.data)).*)),
+
+                else => return error.InvalidOperand,
+            },
+        };
+    }
+
+    pub fn bxor(self: *const Immediate, other: *const Immediate) error{ InvalidOperand, TypeMismatch }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .U8 => @as(*const u8, @ptrCast(&self.data)).* ^ @as(*const u8, @ptrCast(&other.data)).*,
+                .U16 => @as(*const u16, @ptrCast(&self.data)).* ^ @as(*const u16, @ptrCast(&other.data)).*,
+                .U32 => @as(*const u32, @ptrCast(&self.data)).* ^ @as(*const u32, @ptrCast(&other.data)).*,
+                .U64 => @as(*const u64, @ptrCast(&self.data)).* ^ @as(*const u64, @ptrCast(&other.data)).*,
+
+                .S8 => @as(u8, @bitCast(@as(*const i8, @ptrCast(&self.data)).* ^ @as(*const i8, @ptrCast(&other.data)).*)),
+                .S16 => @as(u16, @bitCast(@as(*const i16, @ptrCast(&self.data)).* ^ @as(*const i16, @ptrCast(&other.data)).*)),
+                .S32 => @as(u32, @bitCast(@as(*const i32, @ptrCast(&self.data)).* ^ @as(*const i32, @ptrCast(&other.data)).*)),
+                .S64 => @as(u64, @bitCast(@as(*const i64, @ptrCast(&self.data)).* ^ @as(*const i64, @ptrCast(&other.data)).*)),
+
+                else => return error.InvalidOperand,
+            },
+        };
+    }
+
+    pub fn bshiftl(self: *const Immediate, other: *const Immediate) error{ InvalidOperand, TypeMismatch }!Immediate {
+        // TODO: should probably have the shift-by operand be unsigned, and if we do variable-width integers, the exact width
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .U8 => @as(*const u8, @ptrCast(&self.data)).* << @as(u3, @intCast(@as(*const u8, @ptrCast(&other.data)).*)),
+                .U16 => @as(*const u16, @ptrCast(&self.data)).* << @as(u4, @intCast(@as(*const u16, @ptrCast(&other.data)).*)),
+                .U32 => @as(*const u32, @ptrCast(&self.data)).* << @as(u5, @intCast(@as(*const u32, @ptrCast(&other.data)).*)),
+                .U64 => @as(*const u64, @ptrCast(&self.data)).* << @as(u6, @intCast(@as(*const u64, @ptrCast(&other.data)).*)),
+
+                .S8 => @as(u8, @bitCast(@as(*const i8, @ptrCast(&self.data)).* << @as(u3, @intCast(@as(*const i8, @ptrCast(&other.data)).*)))),
+                .S16 => @as(u16, @bitCast(@as(*const i16, @ptrCast(&self.data)).* << @as(u4, @intCast(@as(*const i16, @ptrCast(&other.data)).*)))),
+                .S32 => @as(u32, @bitCast(@as(*const i32, @ptrCast(&self.data)).* << @as(u5, @intCast(@as(*const i32, @ptrCast(&other.data)).*)))),
+                .S64 => @as(u64, @bitCast(@as(*const i64, @ptrCast(&self.data)).* << @as(u6, @intCast(@as(*const i64, @ptrCast(&other.data)).*)))),
+
+                else => return error.InvalidOperand,
+            },
+        };
+    }
+
+    pub fn bshiftr(self: *const Immediate, other: *const Immediate) error{ InvalidOperand, TypeMismatch }!Immediate {
+        // TODO: should probably have the shift-by operand be unsigned, and if we do variable-width integers, the exact width
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .U8 => @as(*const u8, @ptrCast(&self.data)).* >> @as(u3, @intCast(@as(*const u8, @ptrCast(&other.data)).*)),
+                .U16 => @as(*const u16, @ptrCast(&self.data)).* >> @as(u4, @intCast(@as(*const u16, @ptrCast(&other.data)).*)),
+                .U32 => @as(*const u32, @ptrCast(&self.data)).* >> @as(u5, @intCast(@as(*const u32, @ptrCast(&other.data)).*)),
+                .U64 => @as(*const u64, @ptrCast(&self.data)).* >> @as(u6, @intCast(@as(*const u64, @ptrCast(&other.data)).*)),
+
+                .S8 => @as(u8, @bitCast(@as(*const i8, @ptrCast(&self.data)).* >> @as(u3, @intCast(@as(*const i8, @ptrCast(&other.data)).*)))),
+                .S16 => @as(u16, @bitCast(@as(*const i16, @ptrCast(&self.data)).* >> @as(u4, @intCast(@as(*const i16, @ptrCast(&other.data)).*)))),
+                .S32 => @as(u32, @bitCast(@as(*const i32, @ptrCast(&self.data)).* >> @as(u5, @intCast(@as(*const i32, @ptrCast(&other.data)).*)))),
+                .S64 => @as(u64, @bitCast(@as(*const i64, @ptrCast(&self.data)).* >> @as(u6, @intCast(@as(*const i64, @ptrCast(&other.data)).*)))),
+
+                else => return error.InvalidOperand,
+            },
+        };
+    }
+
+    pub fn eq(self: *const Immediate, other: *const Immediate) error{ TypeMismatch, TooManyTypes, OutOfMemory }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = try self.type.rir.createType(null, .Bool),
+            .data = switch (self.type.info) {
+                .Nil => @intFromBool(true),
+
+                .Bool => @intFromBool(@as(*const bool, @ptrCast(&self.data)).* == @as(*const bool, @ptrCast(&other.data)).*),
+
+                .U8 => @intFromBool(@as(*const u8, @ptrCast(&self.data)).* == @as(*const u8, @ptrCast(&other.data)).*),
+                .U16 => @intFromBool(@as(*const u16, @ptrCast(&self.data)).* == @as(*const u16, @ptrCast(&other.data)).*),
+                .U32 => @intFromBool(@as(*const u32, @ptrCast(&self.data)).* == @as(*const u32, @ptrCast(&other.data)).*),
+                .U64 => @intFromBool(@as(*const u64, @ptrCast(&self.data)).* == @as(*const u64, @ptrCast(&other.data)).*),
+
+                .S8 => @intFromBool(@as(*const i8, @ptrCast(&self.data)).* == @as(*const i8, @ptrCast(&other.data)).*),
+                .S16 => @intFromBool(@as(*const i16, @ptrCast(&self.data)).* == @as(*const i16, @ptrCast(&other.data)).*),
+                .S32 => @intFromBool(@as(*const i32, @ptrCast(&self.data)).* == @as(*const i32, @ptrCast(&other.data)).*),
+                .S64 => @intFromBool(@as(*const i64, @ptrCast(&self.data)).* == @as(*const i64, @ptrCast(&other.data)).*),
+
+                .F32 => @intFromBool(@as(*const f32, @ptrCast(&self.data)).* == @as(*const f32, @ptrCast(&other.data)).*),
+                .F64 => @intFromBool(@as(*const f64, @ptrCast(&self.data)).* == @as(*const f64, @ptrCast(&other.data)).*),
+
+                else => @intFromBool(self.data == other.data),
+            },
+        };
+    }
+
+    pub fn ne(self: *const Immediate, other: *const Immediate) error{ TypeMismatch, TooManyTypes, OutOfMemory }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = try self.type.rir.createType(null, .Bool),
+            .data = switch (self.type.info) {
+                .Nil => @intFromBool(false),
+
+                .Bool => @intFromBool(@as(*const bool, @ptrCast(&self.data)).* != @as(*const bool, @ptrCast(&other.data)).*),
+
+                .U8 => @intFromBool(@as(*const u8, @ptrCast(&self.data)).* != @as(*const u8, @ptrCast(&other.data)).*),
+                .U16 => @intFromBool(@as(*const u16, @ptrCast(&self.data)).* != @as(*const u16, @ptrCast(&other.data)).*),
+                .U32 => @intFromBool(@as(*const u32, @ptrCast(&self.data)).* != @as(*const u32, @ptrCast(&other.data)).*),
+                .U64 => @intFromBool(@as(*const u64, @ptrCast(&self.data)).* != @as(*const u64, @ptrCast(&other.data)).*),
+
+                .S8 => @intFromBool(@as(*const i8, @ptrCast(&self.data)).* != @as(*const i8, @ptrCast(&other.data)).*),
+                .S16 => @intFromBool(@as(*const i16, @ptrCast(&self.data)).* != @as(*const i16, @ptrCast(&other.data)).*),
+                .S32 => @intFromBool(@as(*const i32, @ptrCast(&self.data)).* != @as(*const i32, @ptrCast(&other.data)).*),
+                .S64 => @intFromBool(@as(*const i64, @ptrCast(&self.data)).* != @as(*const i64, @ptrCast(&other.data)).*),
+
+                .F32 => @intFromBool(@as(*const f32, @ptrCast(&self.data)).* != @as(*const f32, @ptrCast(&other.data)).*),
+                .F64 => @intFromBool(@as(*const f64, @ptrCast(&self.data)).* != @as(*const f64, @ptrCast(&other.data)).*),
+
+                else => @intFromBool(self.data != other.data),
+            },
+        };
+    }
+
+    pub fn lt(self: *const Immediate, other: *const Immediate) error{ TypeMismatch, TooManyTypes, OutOfMemory }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = try self.type.rir.createType(null, .Bool),
+            .data = switch (self.type.info) {
+                .U8 => @intFromBool(@as(*const u8, @ptrCast(&self.data)).* < @as(*const u8, @ptrCast(&other.data)).*),
+                .U16 => @intFromBool(@as(*const u16, @ptrCast(&self.data)).* < @as(*const u16, @ptrCast(&other.data)).*),
+                .U32 => @intFromBool(@as(*const u32, @ptrCast(&self.data)).* < @as(*const u32, @ptrCast(&other.data)).*),
+                .U64 => @intFromBool(@as(*const u64, @ptrCast(&self.data)).* < @as(*const u64, @ptrCast(&other.data)).*),
+
+                .S8 => @intFromBool(@as(*const i8, @ptrCast(&self.data)).* < @as(*const i8, @ptrCast(&other.data)).*),
+                .S16 => @intFromBool(@as(*const i16, @ptrCast(&self.data)).* < @as(*const i16, @ptrCast(&other.data)).*),
+                .S32 => @intFromBool(@as(*const i32, @ptrCast(&self.data)).* < @as(*const i32, @ptrCast(&other.data)).*),
+                .S64 => @intFromBool(@as(*const i64, @ptrCast(&self.data)).* < @as(*const i64, @ptrCast(&other.data)).*),
+
+                .F32 => @intFromBool(@as(*const f32, @ptrCast(&self.data)).* < @as(*const f32, @ptrCast(&other.data)).*),
+                .F64 => @intFromBool(@as(*const f64, @ptrCast(&self.data)).* < @as(*const f64, @ptrCast(&other.data)).*),
+
+                else => @intFromBool(self.data < other.data),
+            },
+        };
+    }
+
+    pub fn gt(self: *const Immediate, other: *const Immediate) error{ TypeMismatch, TooManyTypes, OutOfMemory }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = try self.type.rir.createType(null, .Bool),
+            .data = switch (self.type.info) {
+                .U8 => @intFromBool(@as(*const u8, @ptrCast(&self.data)).* > @as(*const u8, @ptrCast(&other.data)).*),
+                .U16 => @intFromBool(@as(*const u16, @ptrCast(&self.data)).* > @as(*const u16, @ptrCast(&other.data)).*),
+                .U32 => @intFromBool(@as(*const u32, @ptrCast(&self.data)).* > @as(*const u32, @ptrCast(&other.data)).*),
+                .U64 => @intFromBool(@as(*const u64, @ptrCast(&self.data)).* > @as(*const u64, @ptrCast(&other.data)).*),
+
+                .S8 => @intFromBool(@as(*const i8, @ptrCast(&self.data)).* > @as(*const i8, @ptrCast(&other.data)).*),
+                .S16 => @intFromBool(@as(*const i16, @ptrCast(&self.data)).* > @as(*const i16, @ptrCast(&other.data)).*),
+                .S32 => @intFromBool(@as(*const i32, @ptrCast(&self.data)).* > @as(*const i32, @ptrCast(&other.data)).*),
+                .S64 => @intFromBool(@as(*const i64, @ptrCast(&self.data)).* > @as(*const i64, @ptrCast(&other.data)).*),
+
+                .F32 => @intFromBool(@as(*const f32, @ptrCast(&self.data)).* > @as(*const f32, @ptrCast(&other.data)).*),
+                .F64 => @intFromBool(@as(*const f64, @ptrCast(&self.data)).* > @as(*const f64, @ptrCast(&other.data)).*),
+
+                else => @intFromBool(self.data > other.data),
+            },
+        };
+    }
+
+    pub fn ge(self: *const Immediate, other: *const Immediate) error{ TypeMismatch, TooManyTypes, OutOfMemory }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = try self.type.rir.createType(null, .Bool),
+            .data = switch (self.type.info) {
+                .U8 => @intFromBool(@as(*const u8, @ptrCast(&self.data)).* >= @as(*const u8, @ptrCast(&other.data)).*),
+                .U16 => @intFromBool(@as(*const u16, @ptrCast(&self.data)).* >= @as(*const u16, @ptrCast(&other.data)).*),
+                .U32 => @intFromBool(@as(*const u32, @ptrCast(&self.data)).* >= @as(*const u32, @ptrCast(&other.data)).*),
+                .U64 => @intFromBool(@as(*const u64, @ptrCast(&self.data)).* >= @as(*const u64, @ptrCast(&other.data)).*),
+
+                .S8 => @intFromBool(@as(*const i8, @ptrCast(&self.data)).* >= @as(*const i8, @ptrCast(&other.data)).*),
+                .S16 => @intFromBool(@as(*const i16, @ptrCast(&self.data)).* >= @as(*const i16, @ptrCast(&other.data)).*),
+                .S32 => @intFromBool(@as(*const i32, @ptrCast(&self.data)).* >= @as(*const i32, @ptrCast(&other.data)).*),
+                .S64 => @intFromBool(@as(*const i64, @ptrCast(&self.data)).* >= @as(*const i64, @ptrCast(&other.data)).*),
+
+                .F32 => @intFromBool(@as(*const f32, @ptrCast(&self.data)).* >= @as(*const f32, @ptrCast(&other.data)).*),
+                .F64 => @intFromBool(@as(*const f64, @ptrCast(&self.data)).* >= @as(*const f64, @ptrCast(&other.data)).*),
+
+                else => @intFromBool(self.data >= other.data),
+            },
+        };
+    }
+
+    pub fn le(self: *const Immediate, other: *const Immediate) error{ TypeMismatch, TooManyTypes, OutOfMemory }!Immediate {
+        if (utils.notEqual(self.type, other.type)) return error.TypeMismatch;
+
+        return Immediate{
+            .type = try self.type.rir.createType(null, .Bool),
+            .data = switch (self.type.info) {
+                .U8 => @intFromBool(@as(*const u8, @ptrCast(&self.data)).* <= @as(*const u8, @ptrCast(&other.data)).*),
+                .U16 => @intFromBool(@as(*const u16, @ptrCast(&self.data)).* <= @as(*const u16, @ptrCast(&other.data)).*),
+                .U32 => @intFromBool(@as(*const u32, @ptrCast(&self.data)).* <= @as(*const u32, @ptrCast(&other.data)).*),
+                .U64 => @intFromBool(@as(*const u64, @ptrCast(&self.data)).* <= @as(*const u64, @ptrCast(&other.data)).*),
+
+                .S8 => @intFromBool(@as(*const i8, @ptrCast(&self.data)).* <= @as(*const i8, @ptrCast(&other.data)).*),
+                .S16 => @intFromBool(@as(*const i16, @ptrCast(&self.data)).* <= @as(*const i16, @ptrCast(&other.data)).*),
+                .S32 => @intFromBool(@as(*const i32, @ptrCast(&self.data)).* <= @as(*const i32, @ptrCast(&other.data)).*),
+                .S64 => @intFromBool(@as(*const i64, @ptrCast(&self.data)).* <= @as(*const i64, @ptrCast(&other.data)).*),
+
+                .F32 => @intFromBool(@as(*const f32, @ptrCast(&self.data)).* <= @as(*const f32, @ptrCast(&other.data)).*),
+                .F64 => @intFromBool(@as(*const f64, @ptrCast(&self.data)).* <= @as(*const f64, @ptrCast(&other.data)).*),
+
+                else => @intFromBool(self.data <= other.data),
+            },
+        };
+    }
+
+    pub fn neg(self: *const Immediate) error{InvalidOperand}! Immediate {
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .S8 => @as(u8, @bitCast(-@as(*const i8, @ptrCast(&self.data)).*)),
+                .S16 => @as(u16, @bitCast(-@as(*const i16, @ptrCast(&self.data)).*)),
+                .S32 => @as(u32, @bitCast(-@as(*const i32, @ptrCast(&self.data)).*)),
+                .S64 => @as(u64, @bitCast(-@as(*const i64, @ptrCast(&self.data)).*)),
+
+                .F32 => @as(u32, @bitCast(-@as(*const f32, @ptrCast(&self.data)).*)),
+                .F64 => @as(u64, @bitCast(-@as(*const f64, @ptrCast(&self.data)).*)),
+
+                else => return error.InvalidOperand,
+            },
+        };
+    }
+
+    pub fn bnot(self: *const Immediate) error{InvalidOperand}!Immediate {
+        return Immediate{
+            .type = self.type,
+            .data = switch (self.type.info) {
+                .U8 => ~@as(*const u8, @ptrCast(&self.data)).*,
+                .U16 => ~@as(*const u16, @ptrCast(&self.data)).*,
+                .U32 => ~@as(*const u32, @ptrCast(&self.data)).*,
+                .U64 => ~@as(*const u64, @ptrCast(&self.data)).*,
+
+                .S8 => @as(u8, @bitCast(~@as(*const i8, @ptrCast(&self.data)).*)),
+                .S16 => @as(u16, @bitCast(~@as(*const i16, @ptrCast(&self.data)).*)),
+                .S32 => @as(u32, @bitCast(~@as(*const i32, @ptrCast(&self.data)).*)),
+                .S64 => @as(u64, @bitCast(~@as(*const i64, @ptrCast(&self.data)).*)),
+
+                else => return error.InvalidOperand,
+            },
         };
     }
 };

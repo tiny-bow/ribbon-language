@@ -124,6 +124,7 @@ pub const Error = Rir.Error || RbcBuilder.Error || error{
     ExpectedRegister,
     AddressOfRegister,
     InvalidBranch,
+    InvalidOpCode,
     UnexpectedEndOfInput,
 };
 
@@ -373,6 +374,24 @@ pub const PhiNode = struct {
     register: ?*Rir.Register,
     entry: *RbcBuilder.Block,
     exit: *RbcBuilder.Block,
+};
+
+pub const RegisterOrImmediate = union(enum) {
+    register: *Rir.Register,
+    immediate: Rir.Immediate,
+
+    pub fn getType(self: *const RegisterOrImmediate) *Rir.Type {
+        return switch (self.*) {
+            .register => self.register.type,
+            .immediate => self.immediate.type,
+        };
+    }
+};
+
+pub const OperationValidity = enum {
+    unsigned,
+    signed,
+    floating,
 };
 
 pub const Block = struct {
@@ -723,6 +742,7 @@ pub const Block = struct {
                         try self.push(out);
                     }
                 },
+
                 .ret => {
                     const resultMaybeOperand = try self.maybePop(null);
 
@@ -769,6 +789,7 @@ pub const Block = struct {
                         }
                     }
                 },
+
                 .cancel => {
                     const resultMaybeOperand = try self.maybePop(null);
 
@@ -839,26 +860,26 @@ pub const Block = struct {
                     try self.store(destination, source);
                 },
 
-                .add => try self.binary(.add),
-                .sub => try self.binary(.sub),
-                .mul => try self.binary(.mul),
-                .div => try self.binary(.div),
-                .rem => try self.binary(.rem),
-                .neg => try self.unary(.neg),
+                .add => try self.binary(.add, offset),
+                .sub => try self.binary(.sub, offset),
+                .mul => try self.binary(.mul, offset),
+                .div => try self.binary(.div, offset),
+                .rem => try self.binary(.rem, offset),
+                .neg => try self.unary(.neg, offset),
 
-                .band => try self.binary(.band),
-                .bor => try self.binary(.bor),
-                .bxor => try self.binary(.bxor),
-                .bnot => try self.unary(.bnot),
-                .bshiftl => try self.binary(.bshiftl),
-                .bshiftr => try self.binary(.bshiftr),
+                .band => try self.binary(.band, offset),
+                .bor => try self.binary(.bor, offset),
+                .bxor => try self.binary(.bxor, offset),
+                .bnot => try self.unary(.bnot, offset),
+                .bshiftl => try self.binary(.bshiftl, offset),
+                .bshiftr => try self.binary(.bshiftr, offset),
 
-                .eq => try self.binary(.eq),
-                .ne => try self.binary(.ne),
-                .lt => try self.binary(.lt),
-                .gt => try self.binary(.gt),
-                .le => try self.binary(.le),
-                .ge => try self.binary(.ge),
+                .eq => try self.binary(.eq, offset),
+                .ne => try self.binary(.ne, offset),
+                .lt => try self.binary(.lt, offset),
+                .gt => try self.binary(.gt, offset),
+                .le => try self.binary(.le, offset),
+                .ge => try self.binary(.ge, offset),
 
                 .cast => {
                     const typeId = instr.data.cast;
@@ -1165,7 +1186,7 @@ pub const Block = struct {
         utils.todo(noreturn, .{ self, operand });
     }
 
-    pub fn coerceRegisterOrImmediate(self: *Block, operand: Rir.Operand) !union(enum) { register: *Rir.Register, immediate: Rir.Immediate } {
+    pub fn coerceRegisterOrImmediate(self: *Block, operand: Rir.Operand) !RegisterOrImmediate {
         utils.todo(noreturn, .{ self, operand });
     }
 
@@ -1239,22 +1260,46 @@ pub const Block = struct {
         utils.todo(noreturn, .{ self, blockTypeIr, blockGens });
     }
 
-    pub fn unary(self: *Block, op: Rir.OpCode) !void {
-        const a = try self.pop(null);
+    pub fn unary(self: *Block, op: Rir.OpCode, offset: Rir.Offset) !void {
+        const a: RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null));
 
         const output = switch (op) {
-            else => utils.todo(noreturn, .{ a, op }),
+            .neg => try unary1(self, offset, a.getType(), a, .neg, .signed, &.{ .floating, .signed }),
+            .bnot => try unary1(self, offset, a.getType(), a, .bnot, .no_sign, &.{ .unsigned, .signed }),
+            inline else => utils.todo(noreturn, .{ a, op, offset }),
         };
 
         try self.push(output);
     }
 
-    pub fn binary(self: *Block, op: Rir.OpCode) !void {
-        const a = try self.pop(null);
-        const b = try self.pop(null);
+    pub fn binary(self: *Block, op: Rir.OpCode, offset: Rir.Offset) !void {
+        const a: RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null));
+        const b: RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null));
 
-        const output = switch (op) {
-            else => utils.todo(noreturn, .{ a, b, op }),
+        const typeIr = a.getType();
+
+        if (!utils.equal(typeIr, b.getType())) {
+            return error.TypeMismatch;
+        }
+
+        const output: Rir.Operand = switch (op) {
+            .add => try binary1(self, offset, typeIr, a, b, .add, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
+            .sub => try binary1(self, offset, typeIr, a, b, .sub, .sign_agnostic, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .mul => try binary1(self, offset, typeIr, a, b, .mul, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
+            .div => try binary1(self, offset, typeIr, a, b, .div, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .rem => try binary1(self, offset, typeIr, a, b, .rem, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .band => try binary1(self, offset, typeIr, a, b, .band, .no_sign, .commutative, &.{ .unsigned, .signed }),
+            .bor => try binary1(self, offset, typeIr, a, b, .bor, .no_sign, .commutative, &.{ .unsigned, .signed }),
+            .bxor => try binary1(self, offset, typeIr, a, b, .bxor, .no_sign, .commutative, &.{ .unsigned, .signed }),
+            .bshiftl => try binary1(self, offset, typeIr, a, b, .bshiftl, .no_sign, .non_commutative, &.{ .unsigned, .signed }),
+            .bshiftr => try binary1(self, offset, typeIr, a, b, .bshiftr, .signed, .non_commutative, &.{ .unsigned, .signed }),
+            .eq => try binary1(self, offset, typeIr, a, b, .eq, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
+            .ne => try binary1(self, offset, typeIr, a, b, .ne, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
+            .lt => try binary1(self, offset, typeIr, a, b, .lt, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .gt => try binary1(self, offset, typeIr, a, b, .gt, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .le => try binary1(self, offset, typeIr, a, b, .le, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .ge => try binary1(self, offset, typeIr, a, b, .ge, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            inline else => return error.InvalidOpCode,
         };
 
         try self.push(output);
@@ -1270,3 +1315,263 @@ pub const Block = struct {
         try self.push(output);
     }
 };
+
+inline fn unary2(
+    self: *Block,
+    offset: Rir.Offset,
+    typeIr: *Rir.Type,
+    a: RegisterOrImmediate,
+    comptime im: anytype,
+    comptime dyn: anytype,
+) !Rir.Operand {
+    if (comptime @typeInfo(@TypeOf(im)) != .@"fn") {
+        @compileError(std.fmt.comptimePrint("im parameter must be a function, got {any}: {s}", .{dyn, @typeName(@TypeOf(im))}));
+    }
+
+    if (comptime @typeInfo(@TypeOf(dyn)) != .@"fn") {
+        @compileError(std.fmt.comptimePrint("dyn parameter must be a function, got {any}: {s}", .{dyn, @typeName(@TypeOf(dyn))}));
+    }
+
+    switch (a) {
+        .register => |reg| {
+            const out = try self.allocRegister(offset, typeIr);
+            try dyn(self.active_builder, reg.getIndex(), out.getIndex());
+            return .from(out);
+        },
+        .immediate => |*data| {
+            return .from(try im(data));
+        },
+    }
+}
+
+fn binary2(
+    self: *Block,
+    offset: Rir.Offset,
+    typeIr: *Rir.Type,
+    a: RegisterOrImmediate,
+    b: RegisterOrImmediate,
+    comptime downcast: anytype,
+    comptime both_im: anytype,
+    comptime neither_im: anytype,
+    comptime lhs_im: anytype,
+    comptime rhs_im: anytype,
+) !Rir.Operand {
+    if (a == .immediate and b == .register) {
+        const out = try self.allocRegister(offset, typeIr);
+        try lhs_im(self.active_builder, downcast(&a.immediate), b.register.getIndex(), out.getIndex());
+        return .from(out);
+    } else if (a == .register and b == .immediate) {
+        const out = try self.allocRegister(offset, typeIr);
+        if (comptime @typeInfo(@TypeOf(rhs_im)) == .null) {
+            try lhs_im(self.active_builder, downcast(&b.immediate), a.register.getIndex(), out.getIndex());
+        } else {
+            try rhs_im(self.active_builder, a.register.getIndex(), downcast(&b.immediate), out.getIndex());
+        }
+        return .from(out);
+    } else if (a == .register and b == .register) {
+        const out = try self.allocRegister(offset, typeIr);
+        try neither_im(self.active_builder, a.register.getIndex(), b.register.getIndex(), out.getIndex());
+        return .from(out);
+    } else {
+        return .from(try both_im(&a.immediate, &b.immediate));
+    }
+}
+
+fn unary1(
+    self: *Block,
+    offset: Rir.Offset,
+    typeIr: *Rir.Type,
+    a: RegisterOrImmediate,
+    comptime opCode: Rir.OpCode,
+    comptime intSignStyle: enum { signed, sign_agnostic, no_sign },
+    comptime validity: []const OperationValidity,
+) !Rir.Operand {
+    const opName = comptime @tagName(opCode);
+    const validForUnsigned = comptime std.mem.indexOfScalar(OperationValidity, validity, .unsigned) != null;
+    const validForSigned = comptime std.mem.indexOfScalar(OperationValidity, validity, .signed) != null;
+    const validForFloat = comptime std.mem.indexOfScalar(OperationValidity, validity, .floating) != null;
+    const unsigned_prefix = comptime switch (intSignStyle) {
+        .signed => "u_",
+        .sign_agnostic => "i_",
+        .no_sign => "",
+    };
+    const signed_prefix = comptime switch (intSignStyle) {
+        .signed => "s_",
+        .sign_agnostic => "i_",
+        .no_sign => "",
+    };
+
+    comptime std.debug.assert(@hasDecl(Rir.Immediate, opName));
+    comptime std.debug.assert(@typeInfo(@TypeOf(@field(Rir.Immediate, opName))) == .@"fn");
+
+    const im = @field(Rir.Immediate, opName);
+
+    switch (typeIr.info) {
+        .U8 => if (comptime validForUnsigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_8")) else return error.InvalidOperand,
+        .U16 => if (comptime validForUnsigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_16")) else return error.InvalidOperand,
+        .U32 => if (comptime validForUnsigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_32")) else return error.InvalidOperand,
+        .U64 => if (comptime validForUnsigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_64")) else return error.InvalidOperand,
+        .S8 => if (comptime validForSigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_8")) else return error.InvalidOperand,
+        .S16 => if (comptime validForSigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_16")) else return error.InvalidOperand,
+        .S32 => if (comptime validForSigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_32")) else return error.InvalidOperand,
+        .S64 => if (comptime validForSigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_64")) else return error.InvalidOperand,
+        .F32 => if (comptime validForFloat) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, "f_" ++ opName ++ "_32")) else return error.InvalidOperand,
+        .F64 => if (comptime validForFloat) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, "f_" ++ opName ++ "_64")) else return error.InvalidOperand,
+        inline else => return error.InvalidOperand,
+    }
+}
+
+fn binary1(
+    self: *Block,
+    offset: Rir.Offset,
+    typeIr: *Rir.Type,
+    a: RegisterOrImmediate,
+    b: RegisterOrImmediate,
+    comptime opCode: Rir.OpCode,
+    comptime intSignStyle: enum { sign_agnostic, signed, no_sign },
+    comptime commutativity: enum { commutative, non_commutative },
+    comptime validity: []const OperationValidity,
+) !Rir.Operand {
+    const opName = comptime @tagName(opCode);
+    const validForUnsigned = comptime std.mem.indexOfScalar(OperationValidity, validity, .unsigned) != null;
+    const validForSigned = comptime std.mem.indexOfScalar(OperationValidity, validity, .signed) != null;
+    const validForFloat = comptime std.mem.indexOfScalar(OperationValidity, validity, .floating) != null;
+
+    const unsigned_prefix = comptime switch (intSignStyle) {
+        .sign_agnostic => "i_",
+        .signed => "u_",
+        .no_sign => "",
+    };
+    const signed_prefix = comptime switch (intSignStyle) {
+        .sign_agnostic => "i_",
+        .signed => "s_",
+        .no_sign => "",
+    };
+
+    const suffixA = comptime if (commutativity != .commutative) "_im_a" else "_im";
+    const suffixB = comptime if (commutativity != .commutative) "_im_b" else "_im";
+
+    switch (typeIr.info) {
+        .U8 => if (comptime validForUnsigned) return try binary2(
+            self,
+            offset,
+            typeIr,
+            a,
+            b,
+            Rir.Immediate.asU8Unchecked,
+            @field(Rir.Immediate, opName),
+            @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_8"),
+            @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_8" ++ suffixA),
+            if (commutativity != .commutative) @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_8" ++ suffixB) else null,
+        ) else return error.InvalidOperand,
+        .U16 => if (comptime validForUnsigned) return try binary2(
+            self,
+            offset,
+            typeIr,
+            a,
+            b,
+            Rir.Immediate.asU16Unchecked,
+            @field(Rir.Immediate, opName),
+            @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_16"),
+            @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_16" ++ suffixA),
+            if (commutativity != .commutative) @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_16" ++ suffixB) else null,
+        ) else return error.InvalidOperand,
+        .U32 => if (comptime validForUnsigned) return try binary2(
+            self,
+            offset,
+            typeIr,
+            a,
+            b,
+            Rir.Immediate.asU32Unchecked,
+            @field(Rir.Immediate, opName),
+            @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_32"),
+            @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_32" ++ suffixA),
+            if (commutativity != .commutative) @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_32" ++ suffixB) else null,
+        ) else return error.InvalidOperand,
+        .U64 => if (comptime validForUnsigned) return try binary2(
+            self,
+            offset,
+            typeIr,
+            a,
+            b,
+            Rir.Immediate.asU64Unchecked,
+            @field(Rir.Immediate, opName),
+            @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_64"),
+            @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_64" ++ suffixA),
+            if (commutativity != .commutative) @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_64" ++ suffixB) else null,
+        ) else return error.InvalidOperand,
+        .S8 => if (comptime validForSigned) return try binary2(
+            self,
+            offset,
+            typeIr,
+            a,
+            b,
+            Rir.Immediate.asS8Unchecked,
+            @field(Rir.Immediate, opName),
+            @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_8"),
+            @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_8" ++ suffixA),
+            if (commutativity != .commutative) @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_8" ++ suffixB) else null,
+        ) else return error.InvalidOperand,
+        .S16 => if (comptime validForSigned) return try binary2(
+            self,
+            offset,
+            typeIr,
+            a,
+            b,
+            Rir.Immediate.asS16Unchecked,
+            @field(Rir.Immediate, opName),
+            @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_16"),
+            @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_16" ++ suffixA),
+            if (commutativity != .commutative) @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_16" ++ suffixB) else null,
+        ) else return error.InvalidOperand,
+        .S32 => if (comptime validForSigned) return try binary2(
+            self,
+            offset,
+            typeIr,
+            a,
+            b,
+            Rir.Immediate.asS32Unchecked,
+            @field(Rir.Immediate, opName),
+            @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_32"),
+            @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_32" ++ suffixA),
+            if (commutativity != .commutative) @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_32" ++ suffixB) else null,
+        ) else return error.InvalidOperand,
+        .S64 => if (comptime validForSigned) return try binary2(
+            self,
+            offset,
+            typeIr,
+            a,
+            b,
+            Rir.Immediate.asS64Unchecked,
+            @field(Rir.Immediate, opName),
+            @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_64"),
+            @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_64" ++ suffixA),
+            if (commutativity != .commutative) @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_64" ++ suffixB) else null,
+        ) else return error.InvalidOperand,
+        .F32 => if (comptime validForFloat) return try binary2(
+            self,
+            offset,
+            typeIr,
+            a,
+            b,
+            Rir.Immediate.asF32Unchecked,
+            @field(Rir.Immediate, opName),
+            @field(RbcBuilder.Block, "f_" ++ opName ++ "_32"),
+            @field(RbcBuilder.Block, "f_" ++ opName ++ "_32" ++ suffixA),
+            if (commutativity != .commutative) @field(RbcBuilder.Block, "f_" ++ opName ++ "_32" ++ suffixB) else null,
+        ) else return error.InvalidOperand,
+        .F64 => if (comptime validForFloat) return try binary2(
+            self,
+            offset,
+            typeIr,
+            a,
+            b,
+            Rir.Immediate.asF64Unchecked,
+            @field(Rir.Immediate, opName),
+            @field(RbcBuilder.Block, "f_" ++ opName ++ "_64"),
+            @field(RbcBuilder.Block, "f_" ++ opName ++ "_64" ++ suffixA),
+            if (commutativity != .commutative) @field(RbcBuilder.Block, "f_" ++ opName ++ "_64" ++ suffixB) else null,
+        ) else return error.InvalidOperand,
+        inline else => return error.InvalidOperand,
+    }
+}
