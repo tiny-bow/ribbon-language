@@ -376,18 +376,6 @@ pub const PhiNode = struct {
     exit: *RbcBuilder.Block,
 };
 
-pub const RegisterOrImmediate = union(enum) {
-    register: *Rir.Register,
-    immediate: Rir.Immediate,
-
-    pub fn getType(self: *const RegisterOrImmediate) *Rir.Type {
-        return switch (self.*) {
-            .register => self.register.type,
-            .immediate => self.immediate.type,
-        };
-    }
-};
-
 pub const OperationValidity = enum {
     unsigned,
     signed,
@@ -521,7 +509,8 @@ pub const Block = struct {
                     const blockTypeIr = try self.generator.ir.getType(blockTypeId);
 
                     const condOperand = try self.pop(null);
-                    const condReg = try self.coerceRegister(condOperand);
+                    const boolTypeIr = try self.generator.ir.createType(null, .Bool);
+                    const condReg = try self.coerceRegister(condOperand, boolTypeIr);
 
                     const thenBlockIr = try (try self.pop(.meta)).forceBlock();
                     const thenBlockGen = try self.function.setupBlock(thenBlockIr, null);
@@ -545,7 +534,8 @@ pub const Block = struct {
                     const Nil = try self.generator.ir.createType(null, .Nil);
 
                     const condOperand = try self.pop(null);
-                    const condReg = try self.coerceRegister(condOperand);
+                    const boolTypeIr = try self.generator.ir.createType(null, .Bool);
+                    const condReg = try self.coerceRegister(condOperand, boolTypeIr);
 
                     const blockIr = try (try self.pop(.meta)).forceBlock();
                     const blockGen = try self.function.setupBlock(blockIr, null);
@@ -582,7 +572,8 @@ pub const Block = struct {
                         },
                         .non_zero => {
                             const condOperand = try self.pop(null);
-                            const condReg = try self.coerceRegister(condOperand);
+                            const boolTypeIr = try self.generator.ir.createType(null, .Bool);
+                            const condReg = try self.coerceRegister(condOperand, boolTypeIr);
 
                             const blockIr = try (try self.pop(.meta)).forceBlock();
                             const blockGen = try self.function.getBlock(blockIr);
@@ -624,20 +615,52 @@ pub const Block = struct {
                 },
 
                 .re => {
-                    const blockIr = try (try self.pop(.meta)).forceBlock();
-                    const blockGen = try self.function.getBlock(blockIr);
+                    const check = instr.data.br;
 
-                    if (self.stackDepth() > 0) {
-                        return error.StackNotCleared;
+                    switch (check) {
+                        .none => {
+                            const blockIr = try (try self.pop(.meta)).forceBlock();
+                            const blockGen = try self.function.getBlock(blockIr);
+
+                            const phiNode = blockGen.phi_node orelse return error.InvalidBranch;
+
+                            if (phiNode.register) |outReg| {
+                                const resultOperand = try self.pop(null);
+                                const resultType = try resultOperand.getType();
+
+                                if (utils.notEqual(resultType, outReg.type)) {
+                                    return error.TypeMismatch;
+                                }
+
+                                try self.write(.from(outReg), resultOperand);
+                            }
+
+                            try self.active_builder.br(phiNode.entry.index);
+                        },
+                        .non_zero => {
+                            const condOperand = try self.pop(null);
+                            const boolTypeIr = try self.generator.ir.createType(null, .Bool);
+                            const condReg = try self.coerceRegister(condOperand, boolTypeIr);
+
+                            const blockIr = try (try self.pop(.meta)).forceBlock();
+                            const blockGen = try self.function.getBlock(blockIr);
+
+                            if (self.stackDepth() > 0) {
+                                return error.StackNotCleared;
+                            }
+
+                            const restBuilder = try self.function.builder.createBlock();
+                            try self.builders.append(self.generator.allocator, restBuilder);
+
+                            const phiNode = blockGen.phi_node orelse return error.InvalidBranch;
+
+                            if (phiNode.register != null) {
+                                return error.StackBranchMismatch;
+                            }
+
+                            try self.active_builder.br_if(phiNode.entry.index, restBuilder.index, condReg.getIndex());
+                        },
                     }
-
-                    const phiNode = blockGen.phi_node orelse return error.InvalidBranch;
-
-                    if (phiNode.register != null) {
-                        return error.StackBranchMismatch;
-                    }
-
-                    try self.active_builder.br(phiNode.entry.index);
                 },
 
                 .call => {
@@ -667,17 +690,17 @@ pub const Block = struct {
                                         },
                                         .multi_register => return error.InvalidOperand,
                                         .local => |localIr| {
-                                            const functionRegister = try self.coerceRegister(.from(localIr));
+                                            const functionRegister = try self.coerceRegister(.from(localIr), null); // TODO: could pass .Function here?
 
                                             try self.active_builder.tail_call(functionRegister.getIndex(), argRegisters);
                                         },
                                         .global => |globalIr| {
-                                            const globalRegister = try self.coerceRegister(.from(globalIr));
+                                            const globalRegister = try self.coerceRegister(.from(globalIr), null);
 
                                             try self.active_builder.tail_call(globalRegister.getIndex(), argRegisters);
                                         },
                                         .upvalue => |upvalueIr| {
-                                            const upvalueRegister = try self.coerceRegister(.from(upvalueIr));
+                                            const upvalueRegister = try self.coerceRegister(.from(upvalueIr), null);
 
                                             try self.active_builder.tail_call(upvalueRegister.getIndex(), argRegisters);
                                         },
@@ -751,7 +774,8 @@ pub const Block = struct {
                     }
 
                     if (resultMaybeOperand) |resultOperand| {
-                        switch (try self.coerceRegisterOrImmediate(resultOperand)) {
+                        const functionTypeInfo = try self.function.ir.getTypeInfo();
+                        switch (try self.coerceRegisterOrImmediate(resultOperand, functionTypeInfo.return_type)) {
                             .register => |reg| {
                                 const regLayout = try reg.type.getLayout();
 
@@ -798,7 +822,9 @@ pub const Block = struct {
                     }
 
                     if (resultMaybeOperand) |resultOperand| {
-                        switch (try self.coerceRegisterOrImmediate(resultOperand)) {
+                        const cancellationTypeIr = try self.function.ir.getCancellationType();
+
+                        switch (try self.coerceRegisterOrImmediate(resultOperand, cancellationTypeIr)) {
                             .register => |reg| {
                                 const regLayout = try reg.type.getLayout();
 
@@ -885,7 +911,7 @@ pub const Block = struct {
                     const typeId = instr.data.cast;
                     const typeIr = try self.generator.ir.getType(typeId);
 
-                    try self.cast(typeIr);
+                    try self.cast(offset, typeIr);
                 },
 
                 .clear => try self.clear(instr.data.clear),
@@ -1182,12 +1208,12 @@ pub const Block = struct {
         utils.todo(noreturn, .{ self, destination, value });
     }
 
-    pub fn coerceRegister(self: *Block, operand: Rir.Operand) !*Rir.Register {
-        utils.todo(noreturn, .{ self, operand });
+    pub fn coerceRegister(self: *Block, operand: Rir.Operand, typeIr: ?*Rir.Type) !*Rir.Register {
+        utils.todo(noreturn, .{ self, operand, typeIr });
     }
 
-    pub fn coerceRegisterOrImmediate(self: *Block, operand: Rir.Operand) !RegisterOrImmediate {
-        utils.todo(noreturn, .{ self, operand });
+    pub fn coerceRegisterOrImmediate(self: *Block, operand: Rir.Operand, typeIr: ?*Rir.Type) !Rir.RegisterOrImmediate {
+        utils.todo(noreturn, .{ self, operand, typeIr });
     }
 
     pub fn typecheckCall(self: *Block, functionTypeIr: *Rir.Type, operand: []const Rir.Operand) ![]const Rbc.RegisterIndex {
@@ -1261,7 +1287,7 @@ pub const Block = struct {
     }
 
     pub fn unary(self: *Block, op: Rir.OpCode, offset: Rir.Offset) !void {
-        const a: RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null));
+        const a: Rir.RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null), null);
 
         const output = switch (op) {
             .neg => try unary1(self, offset, a.getType(), a, .neg, .signed, &.{ .floating, .signed }),
@@ -1273,8 +1299,8 @@ pub const Block = struct {
     }
 
     pub fn binary(self: *Block, op: Rir.OpCode, offset: Rir.Offset) !void {
-        const a: RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null));
-        const b: RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null));
+        const a: Rir.RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null), null);
+        const b: Rir.RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null), a.getType());
 
         const typeIr = a.getType();
 
@@ -1305,11 +1331,52 @@ pub const Block = struct {
         try self.push(output);
     }
 
-    pub fn cast(self: *Block, typeIr: *Rir.Type) !void {
-        const a = try self.pop(null);
+    fn cast2(self: *Block, comptime opCode: Rbc.Code, offset: Rir.Offset, outputTypeIr: *Rir.Type, a: Rir.Operand) !Rir.Operand {
+        return switch (try self.coerceRegisterOrImmediate(a, outputTypeIr)) {
+            .register => |aRegister| reg: {
+                if (a == .l_value and utils.equal(a.l_value.register, aRegister)) {
+                    break :reg .from(aRegister);
+                }
+                const bRegister = try self.allocRegister(offset, outputTypeIr);
+                try @field(RbcBuilder.Block, @tagName(opCode))(self.active_builder, aRegister.getIndex(), bRegister.getIndex());
+                break :reg .from(bRegister);
+            },
+            .immediate => |im| .from(im),
+        };
+    }
 
-        const output = switch (typeIr.info) {
-            else => utils.todo(noreturn, .{a}),
+    pub fn cast(self: *Block, offset: Rir.Offset, outputTypeIr: *Rir.Type) !void {
+        const a = try self.pop(null);
+        const inputTypeIr = try a.getType();
+
+        const output: Rir.Operand = switch (inputTypeIr.info) {
+            .U8 => switch (outputTypeIr.info) {
+                .U8 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
+                .U16 => try cast2(self, .u_ext_8_16, offset, outputTypeIr, a),
+                .U32 => try cast2(self, .u_ext_8_32, offset, outputTypeIr, a),
+                .U64 => try cast2(self, .u_ext_8_64, offset, outputTypeIr, a),
+                .S8 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
+                .S16 => try cast2(self, .s_ext_8_16, offset, outputTypeIr, a),
+                .S32 => try cast2(self, .s_ext_8_32, offset, outputTypeIr, a),
+                .S64 => try cast2(self, .s_ext_8_64, offset, outputTypeIr, a),
+                .F32 => try cast2(self, .u8_to_f32, offset, outputTypeIr, a),
+                .F64 => try cast2(self, .u8_to_f64, offset, outputTypeIr, a),
+                else => return error.InvalidOperand,
+            },
+            .U16 => switch (outputTypeIr.info) {
+                .U8 => try cast2(self, .i_trunc_16_8, offset, outputTypeIr, a),
+                .U16 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
+                .U32 => try cast2(self, .u_ext_16_32, offset, outputTypeIr, a),
+                .U64 => try cast2(self, .u_ext_16_64, offset, outputTypeIr, a),
+                .S8 => try cast2(self, .i_trunc_16_8, offset, outputTypeIr, a),
+                .S16 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
+                .S32 => try cast2(self, .s_ext_16_32, offset, outputTypeIr, a),
+                .S64 => try cast2(self, .s_ext_16_64, offset, outputTypeIr, a),
+                .F32 => try cast2(self, .u16_to_f32, offset, outputTypeIr, a),
+                .F64 => try cast2(self, .u16_to_f64, offset, outputTypeIr, a),
+                else => return error.InvalidOperand,
+            },
+            else => return error.InvalidOperand,
         };
 
         try self.push(output);
@@ -1320,7 +1387,7 @@ inline fn unary2(
     self: *Block,
     offset: Rir.Offset,
     typeIr: *Rir.Type,
-    a: RegisterOrImmediate,
+    a: Rir.RegisterOrImmediate,
     comptime im: anytype,
     comptime dyn: anytype,
 ) !Rir.Operand {
@@ -1348,8 +1415,8 @@ fn binary2(
     self: *Block,
     offset: Rir.Offset,
     typeIr: *Rir.Type,
-    a: RegisterOrImmediate,
-    b: RegisterOrImmediate,
+    a: Rir.RegisterOrImmediate,
+    b: Rir.RegisterOrImmediate,
     comptime downcast: anytype,
     comptime both_im: anytype,
     comptime neither_im: anytype,
@@ -1381,7 +1448,7 @@ fn unary1(
     self: *Block,
     offset: Rir.Offset,
     typeIr: *Rir.Type,
-    a: RegisterOrImmediate,
+    a: Rir.RegisterOrImmediate,
     comptime opCode: Rir.OpCode,
     comptime intSignStyle: enum { signed, sign_agnostic, no_sign },
     comptime validity: []const OperationValidity,
@@ -1425,8 +1492,8 @@ fn binary1(
     self: *Block,
     offset: Rir.Offset,
     typeIr: *Rir.Type,
-    a: RegisterOrImmediate,
-    b: RegisterOrImmediate,
+    a: Rir.RegisterOrImmediate,
+    b: Rir.RegisterOrImmediate,
     comptime opCode: Rir.OpCode,
     comptime intSignStyle: enum { sign_agnostic, signed, no_sign },
     comptime commutativity: enum { commutative, non_commutative },

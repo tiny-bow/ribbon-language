@@ -292,6 +292,7 @@ pub const Error = std.mem.Allocator.Error || error{
     ExpectedProductType,
     ExpectedSumType,
     ExpectedFunctionType,
+    ExpectedEffectHandlerType,
 };
 
 pub const RegisterOffset = Rbc.RegisterLocalOffset;
@@ -1948,7 +1949,7 @@ pub const TypeInfo = union(enum) {
                 },
                 .@"fn" => |info| {
                     const returnType = try rir.createTypeFromNative(info.return_type.?, null, null);
-                    const terminationType = try rir.createTypeFromNative(void, null, null);
+                    const cancellationType = try rir.createTypeFromNative(void, null, null);
 
                     const effects = try rir.allocator.alloc(*Type, 0);
                     errdefer rir.allocator.free(effects);
@@ -1968,7 +1969,7 @@ pub const TypeInfo = union(enum) {
                     return TypeInfo{ .Function = .{
                         .call_conv = .foreign,
                         .return_type = returnType,
-                        .termination_type = terminationType,
+                        .cancellation_type = cancellationType,
                         .effects = effects,
                         .parameters = parameters,
                     } };
@@ -2103,7 +2104,7 @@ pub const CallConv = enum {
 pub const FunctionTypeInfo = struct {
     call_conv: CallConv,
     return_type: *Type,
-    termination_type: *Type,
+    cancellation_type: ?*Type,
     effects: []const *Type,
     parameters: []const Parameter,
 
@@ -2122,7 +2123,7 @@ pub const FunctionTypeInfo = struct {
         return FunctionTypeInfo{
             .call_conv = self.call_conv,
             .return_type = self.return_type,
-            .termination_type = self.termination_type,
+            .cancellation_type = self.cancellation_type,
             .effects = effects,
             .parameters = parameters,
         };
@@ -2209,14 +2210,15 @@ pub const HandlerSet = struct {
 pub const Foreign = struct {
     pub const Id = ForeignId;
 
-    root: *Rir,
+    rir: *Rir,
+
     id: ForeignId,
     name: NameId,
     type: *Type,
 
-    pub fn init(root: *Rir, id: ForeignId, name: NameId, typeIr: *Type) error{ InvalidCallConv, ExpectedFunctionType, OutOfMemory }!*Foreign {
-        const ptr = try root.allocator.create(Foreign);
-        errdefer root.allocator.destroy(ptr);
+    pub fn init(rir: *Rir, id: ForeignId, name: NameId, typeIr: *Type) error{ InvalidCallConv, ExpectedFunctionType, OutOfMemory }!*Foreign {
+        const ptr = try rir.allocator.create(Foreign);
+        errdefer rir.allocator.destroy(ptr);
 
         const functionTypeInfo = try typeIr.info.forceFunction();
 
@@ -2225,7 +2227,7 @@ pub const Foreign = struct {
         }
 
         ptr.* = Foreign{
-            .root = root,
+            .rir = rir,
             .id = id,
             .name = name,
             .type = typeIr,
@@ -2235,7 +2237,11 @@ pub const Foreign = struct {
     }
 
     pub fn deinit(self: *Foreign) void {
-        self.root.allocator.destroy(self);
+        self.rir.allocator.destroy(self);
+    }
+
+    pub fn cast(self: *Foreign, newTypeIr: *Type) error{InvalidOperand, TooManyTypes, OutOfMemory}!Operand {
+        utils.todo(noreturn, .{self, newTypeIr});
     }
 };
 
@@ -2350,6 +2356,10 @@ pub const Function = struct {
         return (try self.getTypeInfo()).parameters;
     }
 
+    pub fn getCancellationType(self: *const Function) error{ExpectedFunctionType, ExpectedEffectHandlerType}!*Type {
+        return (try self.getTypeInfo()).cancellation_type orelse error.ExpectedEffectHandlerType;
+    }
+
     pub fn getReturnType(self: *const Function) error{ExpectedFunctionType}!*Type {
         return (try self.getTypeInfo()).return_type;
     }
@@ -2424,6 +2434,10 @@ pub const Function = struct {
         }
 
         return self.blocks.items[@intFromEnum(id)];
+    }
+
+    pub fn cast(self: *const Function, newTypeIr: *Type) error{InvalidOperand, TooManyTypes, OutOfMemory}!Operand {
+        utils.todo(noreturn, .{self, newTypeIr});
     }
 };
 
@@ -2769,6 +2783,10 @@ pub const MultiRegister = struct {
     type: *Type,
     indices: [MAX_MULTI_REGISTER]Rbc.RegisterIndex,
 
+    pub fn cast(self: *const MultiRegister, newTypeIr: *Type) !Operand {
+        utils.todo(noreturn, .{self, newTypeIr});
+    }
+
     pub fn getType(self: *const MultiRegister) *Type {
         return self.type;
     }
@@ -2802,6 +2820,10 @@ pub const Register = struct {
     id: RegisterId,
     type: *Type,
 
+    pub fn cast(self: *const Register, newTypeIr: *Type) !Operand {
+        utils.todo(noreturn, .{self, newTypeIr});
+    }
+
     pub fn getType(self: *const Register) *Type {
         return self.type;
     }
@@ -2826,6 +2848,18 @@ pub const Register = struct {
     }
 };
 
+pub const RegisterOrImmediate = union(enum) {
+    register: *Rir.Register,
+    immediate: Rir.Immediate,
+
+    pub fn getType(self: *const RegisterOrImmediate) *Rir.Type {
+        return switch (self.*) {
+            .register => self.register.type,
+            .immediate => self.immediate.type,
+        };
+    }
+};
+
 pub const SimpleImmediateSize = enum(u16) {
     @"inline" = 32,
     wide = 64,
@@ -2839,6 +2873,170 @@ pub const SimpleImmediateSize = enum(u16) {
 pub const Immediate = struct {
     data: u64,
     type: *Type,
+
+    pub fn cast(self: *const Immediate, newTypeIr: *Type) !Operand {
+        return .from(Immediate {
+            .data = data: switch (self.type.info) {
+                .U8 => {
+                    const value = @as(*const u8, @ptrCast(&self.data)).*;
+
+                    break :data switch (newTypeIr.info) {
+                        inline .U8, .U16, .U32, .U64 => value,
+                        .S8 => if (value <= std.math.maxInt(i8)) value else return error.InvalidOperand,
+                        inline .S16, .S32, .S64 => value,
+                        .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
+                        .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
+                        inline else => return error.InvalidOperand,
+                    };
+                },
+                .U16 => {
+                    const value = @as(*const u16, @ptrCast(&self.data)).*;
+
+                    break :data switch (newTypeIr.info) {
+                        inline .U16, .U32, .U64 => value,
+                        .U8 => if (value <= std.math.maxInt(u8)) value else return error.InvalidOperand,
+                        .S8 => if (value <= std.math.maxInt(i8)) value else return error.InvalidOperand,
+                        .S16 => if (value <= std.math.maxInt(i16)) value else return error.InvalidOperand,
+                        inline .S32, .S64 => value,
+                        .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
+                        .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
+                        inline else => return error.InvalidOperand,
+                    };
+                },
+                .U32 => {
+                    const value = @as(*const u32, @ptrCast(&self.data)).*;
+
+                    break :data switch (newTypeIr.info) {
+                        inline .U32, .U64 => value,
+                        .U8 => if (value <= std.math.maxInt(u8)) value else return error.InvalidOperand,
+                        .U16 => if (value <= std.math.maxInt(u16)) value else return error.InvalidOperand,
+                        .S8 => if (value <= std.math.maxInt(i8)) value else return error.InvalidOperand,
+                        .S16 => if (value <= std.math.maxInt(i16)) value else return error.InvalidOperand,
+                        .S32 => if (value <= std.math.maxInt(i32)) value else return error.InvalidOperand,
+                        .S64 => value,
+                        .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
+                        .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
+                        inline else => return error.InvalidOperand,
+                    };
+                },
+                .U64 => {
+                    const value = @as(*const u64, @ptrCast(&self.data)).*;
+
+                    break :data switch (newTypeIr.info) {
+                        .U64 => value,
+                        .U8 => if (value <= std.math.maxInt(u8)) value else return error.InvalidOperand,
+                        .U16 => if (value <= std.math.maxInt(u16)) value else return error.InvalidOperand,
+                        .U32 => if (value <= std.math.maxInt(u32)) value else return error.InvalidOperand,
+                        .S8 => if (value <= std.math.maxInt(i8)) value else return error.InvalidOperand,
+                        .S16 => if (value <= std.math.maxInt(i16)) value else return error.InvalidOperand,
+                        .S32 => if (value <= std.math.maxInt(i32)) value else return error.InvalidOperand,
+                        .S64 => if (value <= std.math.maxInt(i64)) value else return error.InvalidOperand,
+                        .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
+                        .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
+                        inline else => return error.InvalidOperand,
+                    };
+                },
+                .S8 => {
+                    const value = @as(*const i8, @ptrCast(&self.data)).*;
+
+                    break :data switch (newTypeIr.info) {
+                        .U8 => if (value >= 0) @as(u8, @bitCast(value)) else return error.InvalidOperand,
+                        .U16 => if (value >= 0) @as(u8, @bitCast(value)) else return error.InvalidOperand,
+                        .U32 => if (value >= 0) @as(u8, @bitCast(value)) else return error.InvalidOperand,
+                        .U64 => if (value >= 0) @as(u8, @bitCast(value)) else return error.InvalidOperand,
+                        inline .S8, .S16, .S32, .S64 => @as(u8, @bitCast(value)),
+                        .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
+                        .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
+                        inline else => return error.InvalidOperand,
+                    };
+                },
+                .S16 => {
+                    const value = @as(*const i16, @ptrCast(&self.data)).*;
+
+                    break :data switch (newTypeIr.info) {
+                        .U8 => if (value >= 0 and value <= std.math.maxInt(u8)) @as(u16, @bitCast(value)) else return error.InvalidOperand,
+                        .U16 => if (value >= 0) @as(u16, @bitCast(value)) else return error.InvalidOperand,
+                        .U32 => if (value >= 0) @as(u16, @bitCast(value)) else return error.InvalidOperand,
+                        .U64 => if (value >= 0) @as(u16, @bitCast(value)) else return error.InvalidOperand,
+                        .S8 => if (value >= std.math.minInt(i8) and value <= std.math.maxInt(i8)) @as(u8, @bitCast(@as(i8, @intCast(value)))) else return error.InvalidOperand,
+                        inline .S16, .S32, .S64 => @as(u16, @bitCast(value)),
+                        .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
+                        .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
+                        inline else => return error.InvalidOperand,
+                    };
+                },
+                .S32 => {
+                    const value = @as(*const i32, @ptrCast(&self.data)).*;
+
+                    break :data switch (newTypeIr.info) {
+                        .U8 => if (value >= 0 and value <= std.math.maxInt(u8)) @as(u32, @bitCast(value)) else return error.InvalidOperand,
+                        .U16 => if (value >= 0 and value <= std.math.maxInt(u16)) @as(u32, @bitCast(value)) else return error.InvalidOperand,
+                        .U32 => if (value >= 0) @as(u32, @bitCast(value)) else return error.InvalidOperand,
+                        .U64 => if (value >= 0) @as(u32, @bitCast(value)) else return error.InvalidOperand,
+                        .S8 => if (value >= std.math.minInt(i8) and value <= std.math.maxInt(i8)) @as(u8, @bitCast(@as(i8, @intCast(value)))) else return error.InvalidOperand,
+                        .S16 => if (value >= std.math.minInt(i16) and value <= std.math.maxInt(i16)) @as(u16, @bitCast(@as(i16, @intCast(value)))) else return error.InvalidOperand,
+                        inline .S32, .S64 => @as(u32, @bitCast(value)),
+                        .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
+                        .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
+                        inline else => return error.InvalidOperand,
+                    };
+                },
+                .S64 => {
+                    const value = @as(*const i64, @ptrCast(&self.data)).*;
+
+                    break :data switch (newTypeIr.info) {
+                        .U8 => if (value >= 0 and value <= std.math.maxInt(u8)) @as(u64, @bitCast(value)) else return error.InvalidOperand,
+                        .U16 => if (value >= 0 and value <= std.math.maxInt(u16)) @as(u64, @bitCast(value)) else return error.InvalidOperand,
+                        .U32 => if (value >= 0 and value <= std.math.maxInt(u32)) @as(u64, @bitCast(value)) else return error.InvalidOperand,
+                        .U64 => if (value >= 0) @as(u64, @bitCast(value)) else return error.InvalidOperand,
+                        .S8 => if (value >= std.math.minInt(i8) and value <= std.math.maxInt(i8)) @as(u8, @bitCast(@as(i8, @intCast(value)))) else return error.InvalidOperand,
+                        .S16 => if (value >= std.math.minInt(i16) and value <= std.math.maxInt(i16)) @as(u16, @bitCast(@as(i16, @intCast(value)))) else return error.InvalidOperand,
+                        .S32 => if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) @as(u32, @bitCast(@as(i32, @intCast(value)))) else return error.InvalidOperand,
+                        inline .S64 => @as(u64, @bitCast(value)),
+                        .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
+                        .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
+                        inline else => return error.InvalidOperand,
+                    };
+                },
+                .F32 => {
+                    const value = @as(*const f32, @ptrCast(&self.data)).*;
+
+                    break :data switch (newTypeIr.info) {
+                        .U8 => if (value >= 0 and value <= std.math.maxInt(u8)) @as(u8, @intFromFloat(value)) else return error.InvalidOperand,
+                        .U16 => if (value >= 0 and value <= std.math.maxInt(u16)) @as(u16, @intFromFloat(value)) else return error.InvalidOperand,
+                        .U32 => if (value >= 0 and value <= std.math.maxInt(u32)) @as(u32, @intFromFloat(value)) else return error.InvalidOperand,
+                        .U64 => if (value >= 0 and value <= std.math.maxInt(u64)) @as(u64, @intFromFloat(value)) else return error.InvalidOperand,
+                        .S8 => if (value >= std.math.minInt(i8) and value <= std.math.maxInt(i8)) @as(u8, @bitCast(@as(i8, @intFromFloat(value)))) else return error.InvalidOperand,
+                        .S16 => if (value >= std.math.minInt(i16) and value <= std.math.maxInt(i16)) @as(u16, @bitCast(@as(i16, @intFromFloat(value)))) else return error.InvalidOperand,
+                        .S32 => if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) @as(u32, @bitCast(@as(i32, @intFromFloat(value)))) else return error.InvalidOperand,
+                        .S64 => if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64)) @as(u64, @bitCast(@as(i64, @intFromFloat(value)))) else return error.InvalidOperand,
+                        inline .F32 => @as(u32, @bitCast(value)),
+                        .F64 => @as(u64, @bitCast(@as(f64, value))),
+                        inline else => return error.InvalidOperand,
+                    };
+                },
+                .F64 => {
+                    const value = @as(*const f64, @ptrCast(&self.data)).*;
+
+                    break :data switch (newTypeIr.info) {
+                        .U8 => if (value >= 0 and value <= std.math.maxInt(u8)) @as(u8, @intFromFloat(value)) else return error.InvalidOperand,
+                        .U16 => if (value >= 0 and value <= std.math.maxInt(u16)) @as(u16, @intFromFloat(value)) else return error.InvalidOperand,
+                        .U32 => if (value >= 0 and value <= std.math.maxInt(u32)) @as(u32, @intFromFloat(value)) else return error.InvalidOperand,
+                        .U64 => if (value >= 0 and value <= std.math.maxInt(u64)) @as(u64, @intFromFloat(value)) else return error.InvalidOperand,
+                        .S8 => if (value >= std.math.minInt(i8) and value <= std.math.maxInt(i8)) @as(u8, @bitCast(@as(i8, @intFromFloat(value)))) else return error.InvalidOperand,
+                        .S16 => if (value >= std.math.minInt(i16) and value <= std.math.maxInt(i16)) @as(u16, @bitCast(@as(i16, @intFromFloat(value)))) else return error.InvalidOperand,
+                        .S32 => if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) @as(u32, @bitCast(@as(i32, @intFromFloat(value)))) else return error.InvalidOperand,
+                        .S64 => if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64)) @as(u64, @bitCast(@as(i64, @intFromFloat(value)))) else return error.InvalidOperand,
+                        .F32 => @as(u32, @bitCast(@as(f32, @floatCast(value)))),
+                        inline .F64 => @as(u64, @bitCast(value)),
+                        inline else => return error.InvalidOperand,
+                    };
+                },
+                inline else => return error.InvalidOperand,
+            },
+            .type = newTypeIr,
+        });
+    }
 
     pub fn zero(typeIr: *Type) Immediate {
         return Immediate{
@@ -2859,7 +3057,7 @@ pub const Immediate = struct {
     }
 
     pub fn getMemory(self: anytype) utils.types.CopyConst([]u8, @TypeOf(self)) {
-        return @as(utils.types.CopyConst([*]align(@alignOf(OpImmediate)) u8, @TypeOf(self)), @ptrCast(&self.data))[0..@sizeOf(u64)];
+        return @as(utils.types.CopyConst([*]align(@alignOf(Immediate)) u8, @TypeOf(self)), @ptrCast(&self.data))[0..@sizeOf(u64)];
     }
 
     pub fn onFormat(self: *const Immediate, formatter: Formatter) !void {
@@ -3408,6 +3606,12 @@ pub const LValue = union(enum) {
     upvalue: *Upvalue,
     global: *Global,
 
+    pub fn cast(self: LValue, newTypeIr: *Rir.Type) error{InvalidOperand, TooManyTypes, OutOfMemory}! Operand {
+        return switch (self) {
+            inline else => |x| try x.cast(newTypeIr),
+        };
+    }
+
     pub fn getType(self: LValue) *Type {
         return switch (self) {
             inline else => |x| x.type,
@@ -3488,6 +3692,12 @@ pub const RValue = union(enum) {
     foreign: *Foreign,
     function: *Function,
 
+    pub fn cast(self: RValue, newTypeIr: *Rir.Type) error{InvalidOperand, TooManyTypes, OutOfMemory}! Operand {
+        return switch (self) {
+            inline else => |x| try x.cast(newTypeIr),
+        };
+    }
+
     pub fn getType(self: RValue) *Type {
         return switch (self) {
             inline else => |x| x.type,
@@ -3536,6 +3746,11 @@ pub const Meta = union(enum) {
     block: *Block,
     handler_set: *HandlerSet,
 
+    pub fn cast(self: Meta, newTypeIr: *Rir.Type) error{InvalidOperand, OutOfMemory, TooManyTypes}! Operand {
+        const ownTypeIr = try self.getType();
+        return if (utils.equal(newTypeIr, ownTypeIr)) .from(self) else error.InvalidOperand;
+    }
+
     pub fn getType(self: Meta) error{ OutOfMemory, TooManyTypes }!*Type {
         return switch (self) {
             .type => |x| try x.rir.createType(null, .Type),
@@ -3581,7 +3796,15 @@ pub const Operand = union(enum) {
     l_value: LValue,
     r_value: RValue,
 
-    pub fn getType(self: Operand) error{ OutOfMemory, TooManyTypes }!*Type {
+    pub fn cast(self: Operand, newTypeIr: *Rir.Type) error{InvalidOperand, TooManyTypes, OutOfMemory}! Operand {
+        return switch (self) {
+            .meta => |x| try x.cast(newTypeIr),
+            .l_value => |x| try x.cast(newTypeIr),
+            .r_value => |x| try x.cast(newTypeIr),
+        };
+    }
+
+    pub fn getType(self: Operand) error{ TooManyTypes, OutOfMemory }!*Type {
         return switch (self) {
             .meta => |x| try x.getType(),
             .l_value => |x| x.getType(),
@@ -3602,15 +3825,26 @@ pub const Operand = union(enum) {
         return switch (T) {
             Operand => val,
 
+            Meta => .{ .meta = val },
+
             *Type => .{ .meta = .{ .type = val } },
             *Block => .{ .meta = .{ .block = val } },
             *HandlerSet => .{ .meta = .{ .handler_set = val } },
+
+            LValue => .{ .l_value = val },
+
+            RegisterOrImmediate => switch (val) {
+                .register => |x| from(x),
+                .immediate => |x| from(x),
+            },
 
             *Register => .{ .l_value = .{ .register = val } },
             *MultiRegister => .{ .l_value = .{ .multi_register = val } },
             *Local => .{ .l_value = .{ .local = val } },
             *Upvalue => .{ .l_value = .{ .upvalue = val } },
             *Global => .{ .l_value = .{ .global = val } },
+
+            RValue => .{ .r_value = val },
 
             Immediate => .{ .r_value = .{ .immediate = val } },
             *Foreign => .{ .r_value = .{ .foreign = val } },
@@ -3760,6 +3994,10 @@ pub const Local = struct {
     pub fn isComptimeKnown(self: Local) bool {
         return self.storage == .@"comptime";
     }
+
+    pub fn cast(self: *const Local, newTypeIr: *Type) !Operand {
+        utils.todo(noreturn, .{self, newTypeIr});
+    }
 };
 
 pub const Upvalue = struct {
@@ -3789,6 +4027,10 @@ pub const Upvalue = struct {
 
     pub fn deinit(self: *Upvalue) void {
         self.rir.allocator.destroy(self);
+    }
+
+    pub fn cast(self: *const Upvalue, newTypeIr: *Rir.Type) !Operand {
+        utils.todo(noreturn, .{self, newTypeIr});
     }
 };
 
@@ -3876,6 +4118,10 @@ pub const Global = struct {
         }
 
         self.initial_value = try self.rir.allocator.dupe(u8, @as([*]const u8, @ptrCast(&value))[0..@sizeOf(T)]);
+    }
+
+    pub fn cast(self: *const Global, newTypeIr: *Type) !Operand {
+        utils.todo(noreturn, .{self, newTypeIr});
     }
 };
 
