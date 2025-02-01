@@ -488,7 +488,7 @@ pub const Layout = struct {
 
                 break :structure offsets;
             },
-            inline else => &[0]Offset{},
+            else => &[0]Offset{},
         };
 
         return Layout{
@@ -1098,7 +1098,7 @@ pub const Type = struct {
 
             .Function => utils.compare(self.info.Function, other.info.Function),
 
-            inline else => unreachable,
+            else => unreachable,
         };
     }
 
@@ -1211,7 +1211,7 @@ pub const Type = struct {
             .F32 => return utils.compare(@as(*const f32, @alignCast(@ptrCast(a.ptr))).*, @as(*const f32, @alignCast(@ptrCast(b.ptr))).*),
             .F64 => return utils.compare(@as(*const f64, @alignCast(@ptrCast(a.ptr))).*, @as(*const f64, @alignCast(@ptrCast(b.ptr))).*),
 
-            inline .Block,
+            .Block,
             .HandlerSet,
             .Pointer,
             => return utils.compare(a, b),
@@ -1344,7 +1344,7 @@ pub const Type = struct {
             .F32 => try formatter.fmt(@as(*const f32, @alignCast(@ptrCast(memory.ptr))).*),
             .F64 => try formatter.fmt(@as(*const f64, @alignCast(@ptrCast(memory.ptr))).*),
 
-            inline .Block,
+            .Block,
             .HandlerSet,
             .Pointer,
             .Sum,
@@ -1504,7 +1504,7 @@ pub const TypeInfo = union(enum) {
 
             .Function => |x| x.deinit(allocator),
 
-            inline else => std.debug.assert(!self.isAllocated()),
+            else => std.debug.assert(!self.isAllocated()),
         }
     }
 
@@ -1518,7 +1518,7 @@ pub const TypeInfo = union(enum) {
 
             .Function => |x| .{ .Function = try x.clone(allocator) },
 
-            inline else => pod: {
+            else => pod: {
                 std.debug.assert(!self.isAllocated());
                 break :pod self.*;
             },
@@ -1531,14 +1531,14 @@ pub const TypeInfo = union(enum) {
 
     pub fn isAllocated(self: *const TypeInfo) bool {
         return switch (self.*) {
-            inline .Struct,
+            .Struct,
             .Union,
             .Product,
             .Sum,
             .Function,
             => true,
 
-            inline else => false,
+            else => false,
         };
     }
 
@@ -1546,7 +1546,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceNil(self: *const TypeInfo) error{ExpectedNilType}!void {
         switch (self.*) {
             .Nil => return,
-            inline else => return error.ExpectedNilType,
+            else => return error.ExpectedNilType,
         }
     }
 
@@ -1554,7 +1554,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceBool(self: *const TypeInfo) error{ExpectedBoolType}!void {
         switch (self.*) {
             .Bool => return,
-            inline else => return error.ExpectedBoolType,
+            else => return error.ExpectedBoolType,
         }
     }
 
@@ -1562,7 +1562,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceU8(self: *const TypeInfo) error{ExpectedU8Type}!void {
         switch (self.*) {
             .U8 => return,
-            inline else => return error.ExpectedU8Type,
+            else => return error.ExpectedU8Type,
         }
     }
 
@@ -1570,7 +1570,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceU16(self: *const TypeInfo) error{ExpectedU16Type}!void {
         switch (self.*) {
             .U16 => return,
-            inline else => return error.ExpectedU16Type,
+            else => return error.ExpectedU16Type,
         }
     }
 
@@ -1578,7 +1578,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceU32(self: *const TypeInfo) error{ExpectedU32Type}!void {
         switch (self.*) {
             .U32 => return,
-            inline else => return error.ExpectedU32Type,
+            else => return error.ExpectedU32Type,
         }
     }
 
@@ -1586,7 +1586,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceU64(self: *const TypeInfo) error{ExpectedU64Type}!void {
         switch (self.*) {
             .U64 => return,
-            inline else => return error.ExpectedU64Type,
+            else => return error.ExpectedU64Type,
         }
     }
 
@@ -1594,7 +1594,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceS8(self: *const TypeInfo) error{ExpectedS8Type}!void {
         switch (self.*) {
             .S8 => return,
-            inline else => return error.ExpectedS8Type,
+            else => return error.ExpectedS8Type,
         }
     }
 
@@ -1602,7 +1602,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceS16(self: *const TypeInfo) error{ExpectedS16Type}!void {
         switch (self.*) {
             .S16 => return,
-            inline else => return error.ExpectedS16Type,
+            else => return error.ExpectedS16Type,
         }
     }
 
@@ -1610,7 +1610,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceS32(self: *const TypeInfo) error{ExpectedS32Type}!void {
         switch (self.*) {
             .S32 => return,
-            inline else => return error.ExpectedS32Type,
+            else => return error.ExpectedS32Type,
         }
     }
 
@@ -1618,7 +1618,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceS64(self: *const TypeInfo) error{ExpectedS64Type}!void {
         switch (self.*) {
             .S64 => return,
-            inline else => return error.ExpectedS64Type,
+            else => return error.ExpectedS64Type,
         }
     }
 
@@ -1626,7 +1626,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceF32(self: *const TypeInfo) error{ExpectedF32Type}!void {
         switch (self.*) {
             .F32 => return,
-            inline else => return error.ExpectedF32Type,
+            else => return error.ExpectedF32Type,
         }
     }
 
@@ -1634,7 +1634,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceF64(self: *const TypeInfo) error{ExpectedF64Type}!void {
         switch (self.*) {
             .F64 => return,
-            inline else => return error.ExpectedF64Type,
+            else => return error.ExpectedF64Type,
         }
     }
 
@@ -1642,7 +1642,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceBlock(self: *const TypeInfo) error{ExpectedBlockType}!void {
         switch (self.*) {
             .Block => return,
-            inline else => return error.ExpectedBlockType,
+            else => return error.ExpectedBlockType,
         }
     }
 
@@ -1650,7 +1650,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceHandlerSet(self: *const TypeInfo) error{ExpectedHandlerSetType}!void {
         switch (self.*) {
             .HandlerSet => return,
-            inline else => return error.ExpectedHandlerSetType,
+            else => return error.ExpectedHandlerSetType,
         }
     }
 
@@ -1658,7 +1658,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceType(self: *const TypeInfo) error{ExpectedTypeType}!void {
         switch (self.*) {
             .Type => return,
-            inline else => return error.ExpectedTypeType,
+            else => return error.ExpectedTypeType,
         }
     }
 
@@ -1666,7 +1666,7 @@ pub const TypeInfo = union(enum) {
     pub fn forcePointer(self: *const TypeInfo) error{ExpectedPointerType}!*const PointerTypeInfo {
         switch (self.*) {
             .Pointer => |*ptr| return ptr,
-            inline else => return error.ExpectedPointerType,
+            else => return error.ExpectedPointerType,
         }
     }
 
@@ -1674,7 +1674,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceSlice(self: *const TypeInfo) error{ExpectedSliceType}!*const SliceTypeInfo {
         switch (self.*) {
             .Slice => |*slice| return slice,
-            inline else => return error.ExpectedSliceType,
+            else => return error.ExpectedSliceType,
         }
     }
 
@@ -1682,7 +1682,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceArray(self: *const TypeInfo) error{ExpectedArrayType}!*const ArrayTypeInfo {
         switch (self.*) {
             .Array => |*array| return array,
-            inline else => return error.ExpectedArrayType,
+            else => return error.ExpectedArrayType,
         }
     }
 
@@ -1690,7 +1690,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceStruct(self: *const TypeInfo) error{ExpectedStructType}!*const StructTypeInfo {
         switch (self.*) {
             .Struct => |*str| return str,
-            inline else => return error.ExpectedStructType,
+            else => return error.ExpectedStructType,
         }
     }
 
@@ -1698,7 +1698,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceUnion(self: *const TypeInfo) error{ExpectedUnionType}!*const UnionTypeInfo {
         switch (self.*) {
             .Union => |*@"union"| return @"union",
-            inline else => return error.ExpectedUnionType,
+            else => return error.ExpectedUnionType,
         }
     }
 
@@ -1706,7 +1706,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceProduct(self: *const TypeInfo) error{ExpectedProductType}!TypeSet {
         switch (self.*) {
             .Product => |set| return set,
-            inline else => return error.ExpectedProductType,
+            else => return error.ExpectedProductType,
         }
     }
 
@@ -1714,7 +1714,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceSum(self: *const TypeInfo) error{ExpectedSumType}!TypeSet {
         switch (self.*) {
             .Sum => |set| return set,
-            inline else => return error.ExpectedSumType,
+            else => return error.ExpectedSumType,
         }
     }
 
@@ -1722,7 +1722,7 @@ pub const TypeInfo = union(enum) {
     pub fn forceFunction(self: *const TypeInfo) error{ExpectedFunctionType}!*const FunctionTypeInfo {
         switch (self.*) {
             .Function => |*fun| return fun,
-            inline else => return error.ExpectedFunctionType,
+            else => return error.ExpectedFunctionType,
         }
     }
 
@@ -2240,8 +2240,8 @@ pub const Foreign = struct {
         self.rir.allocator.destroy(self);
     }
 
-    pub fn cast(self: *Foreign, newTypeIr: *Type) error{InvalidOperand, TooManyTypes, OutOfMemory}!Operand {
-        utils.todo(noreturn, .{self, newTypeIr});
+    pub fn cast(self: *Foreign, newTypeIr: *Type) error{ InvalidOperand, TooManyTypes, OutOfMemory }!Operand {
+        utils.todo(noreturn, .{ self, newTypeIr });
     }
 };
 
@@ -2356,7 +2356,7 @@ pub const Function = struct {
         return (try self.getTypeInfo()).parameters;
     }
 
-    pub fn getCancellationType(self: *const Function) error{ExpectedFunctionType, ExpectedEffectHandlerType}!*Type {
+    pub fn getCancellationType(self: *const Function) error{ ExpectedFunctionType, ExpectedEffectHandlerType }!*Type {
         return (try self.getTypeInfo()).cancellation_type orelse error.ExpectedEffectHandlerType;
     }
 
@@ -2436,8 +2436,8 @@ pub const Function = struct {
         return self.blocks.items[@intFromEnum(id)];
     }
 
-    pub fn cast(self: *const Function, newTypeIr: *Type) error{InvalidOperand, TooManyTypes, OutOfMemory}!Operand {
-        utils.todo(noreturn, .{self, newTypeIr});
+    pub fn cast(self: *const Function, newTypeIr: *Type) error{ InvalidOperand, TooManyTypes, OutOfMemory }!Operand {
+        utils.todo(noreturn, .{ self, newTypeIr });
     }
 };
 
@@ -2756,10 +2756,10 @@ pub const OpData = packed union {
 
     pub fn Of(comptime code: OpCode) type {
         @setEvalBranchQuota(2000);
-        inline for (std.meta.fieldNames(OpCode)) |name| {
+        inline for (comptime std.meta.fieldNames(OpCode)) |name| {
             if (@field(OpCode, name) == code) {
-                for (std.meta.fields(OpData)) |field| {
-                    if (std.mem.eql(u8, field.name, name)) {
+                inline for (comptime std.meta.fields(OpData)) |field| {
+                    if (comptime std.mem.eql(u8, field.name, name)) {
                         return field.type;
                     }
                 }
@@ -2784,7 +2784,7 @@ pub const MultiRegister = struct {
     indices: [MAX_MULTI_REGISTER]Rbc.RegisterIndex,
 
     pub fn cast(self: *const MultiRegister, newTypeIr: *Type) !Operand {
-        utils.todo(noreturn, .{self, newTypeIr});
+        utils.todo(noreturn, .{ self, newTypeIr });
     }
 
     pub fn getType(self: *const MultiRegister) *Type {
@@ -2821,7 +2821,7 @@ pub const Register = struct {
     type: *Type,
 
     pub fn cast(self: *const Register, newTypeIr: *Type) !Operand {
-        utils.todo(noreturn, .{self, newTypeIr});
+        utils.todo(noreturn, .{ self, newTypeIr });
     }
 
     pub fn getType(self: *const Register) *Type {
@@ -2875,39 +2875,39 @@ pub const Immediate = struct {
     type: *Type,
 
     pub fn cast(self: *const Immediate, newTypeIr: *Type) !Operand {
-        return .from(Immediate {
+        return .from(Immediate{
             .data = data: switch (self.type.info) {
                 .U8 => {
                     const value = @as(*const u8, @ptrCast(&self.data)).*;
 
                     break :data switch (newTypeIr.info) {
-                        inline .U8, .U16, .U32, .U64 => value,
+                        .U8, .U16, .U32, .U64 => value,
                         .S8 => if (value <= std.math.maxInt(i8)) value else return error.InvalidOperand,
-                        inline .S16, .S32, .S64 => value,
+                        .S16, .S32, .S64 => value,
                         .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
                         .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
-                        inline else => return error.InvalidOperand,
+                        else => return error.InvalidOperand,
                     };
                 },
                 .U16 => {
                     const value = @as(*const u16, @ptrCast(&self.data)).*;
 
                     break :data switch (newTypeIr.info) {
-                        inline .U16, .U32, .U64 => value,
+                        .U16, .U32, .U64 => value,
                         .U8 => if (value <= std.math.maxInt(u8)) value else return error.InvalidOperand,
                         .S8 => if (value <= std.math.maxInt(i8)) value else return error.InvalidOperand,
                         .S16 => if (value <= std.math.maxInt(i16)) value else return error.InvalidOperand,
-                        inline .S32, .S64 => value,
+                        .S32, .S64 => value,
                         .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
                         .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
-                        inline else => return error.InvalidOperand,
+                        else => return error.InvalidOperand,
                     };
                 },
                 .U32 => {
                     const value = @as(*const u32, @ptrCast(&self.data)).*;
 
                     break :data switch (newTypeIr.info) {
-                        inline .U32, .U64 => value,
+                        .U32, .U64 => value,
                         .U8 => if (value <= std.math.maxInt(u8)) value else return error.InvalidOperand,
                         .U16 => if (value <= std.math.maxInt(u16)) value else return error.InvalidOperand,
                         .S8 => if (value <= std.math.maxInt(i8)) value else return error.InvalidOperand,
@@ -2916,7 +2916,7 @@ pub const Immediate = struct {
                         .S64 => value,
                         .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
                         .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
-                        inline else => return error.InvalidOperand,
+                        else => return error.InvalidOperand,
                     };
                 },
                 .U64 => {
@@ -2933,7 +2933,7 @@ pub const Immediate = struct {
                         .S64 => if (value <= std.math.maxInt(i64)) value else return error.InvalidOperand,
                         .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
                         .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
-                        inline else => return error.InvalidOperand,
+                        else => return error.InvalidOperand,
                     };
                 },
                 .S8 => {
@@ -2944,10 +2944,10 @@ pub const Immediate = struct {
                         .U16 => if (value >= 0) @as(u8, @bitCast(value)) else return error.InvalidOperand,
                         .U32 => if (value >= 0) @as(u8, @bitCast(value)) else return error.InvalidOperand,
                         .U64 => if (value >= 0) @as(u8, @bitCast(value)) else return error.InvalidOperand,
-                        inline .S8, .S16, .S32, .S64 => @as(u8, @bitCast(value)),
+                        .S8, .S16, .S32, .S64 => @as(u8, @bitCast(value)),
                         .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
                         .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
-                        inline else => return error.InvalidOperand,
+                        else => return error.InvalidOperand,
                     };
                 },
                 .S16 => {
@@ -2959,10 +2959,10 @@ pub const Immediate = struct {
                         .U32 => if (value >= 0) @as(u16, @bitCast(value)) else return error.InvalidOperand,
                         .U64 => if (value >= 0) @as(u16, @bitCast(value)) else return error.InvalidOperand,
                         .S8 => if (value >= std.math.minInt(i8) and value <= std.math.maxInt(i8)) @as(u8, @bitCast(@as(i8, @intCast(value)))) else return error.InvalidOperand,
-                        inline .S16, .S32, .S64 => @as(u16, @bitCast(value)),
+                        .S16, .S32, .S64 => @as(u16, @bitCast(value)),
                         .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
                         .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
-                        inline else => return error.InvalidOperand,
+                        else => return error.InvalidOperand,
                     };
                 },
                 .S32 => {
@@ -2975,10 +2975,10 @@ pub const Immediate = struct {
                         .U64 => if (value >= 0) @as(u32, @bitCast(value)) else return error.InvalidOperand,
                         .S8 => if (value >= std.math.minInt(i8) and value <= std.math.maxInt(i8)) @as(u8, @bitCast(@as(i8, @intCast(value)))) else return error.InvalidOperand,
                         .S16 => if (value >= std.math.minInt(i16) and value <= std.math.maxInt(i16)) @as(u16, @bitCast(@as(i16, @intCast(value)))) else return error.InvalidOperand,
-                        inline .S32, .S64 => @as(u32, @bitCast(value)),
+                        .S32, .S64 => @as(u32, @bitCast(value)),
                         .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
                         .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
-                        inline else => return error.InvalidOperand,
+                        else => return error.InvalidOperand,
                     };
                 },
                 .S64 => {
@@ -2992,10 +2992,10 @@ pub const Immediate = struct {
                         .S8 => if (value >= std.math.minInt(i8) and value <= std.math.maxInt(i8)) @as(u8, @bitCast(@as(i8, @intCast(value)))) else return error.InvalidOperand,
                         .S16 => if (value >= std.math.minInt(i16) and value <= std.math.maxInt(i16)) @as(u16, @bitCast(@as(i16, @intCast(value)))) else return error.InvalidOperand,
                         .S32 => if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) @as(u32, @bitCast(@as(i32, @intCast(value)))) else return error.InvalidOperand,
-                        inline .S64 => @as(u64, @bitCast(value)),
+                        .S64 => @as(u64, @bitCast(value)),
                         .F32 => @as(u32, @bitCast(@as(f32, @floatFromInt(value)))),
                         .F64 => @as(u64, @bitCast(@as(f64, @floatFromInt(value)))),
-                        inline else => return error.InvalidOperand,
+                        else => return error.InvalidOperand,
                     };
                 },
                 .F32 => {
@@ -3010,9 +3010,9 @@ pub const Immediate = struct {
                         .S16 => if (value >= std.math.minInt(i16) and value <= std.math.maxInt(i16)) @as(u16, @bitCast(@as(i16, @intFromFloat(value)))) else return error.InvalidOperand,
                         .S32 => if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) @as(u32, @bitCast(@as(i32, @intFromFloat(value)))) else return error.InvalidOperand,
                         .S64 => if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64)) @as(u64, @bitCast(@as(i64, @intFromFloat(value)))) else return error.InvalidOperand,
-                        inline .F32 => @as(u32, @bitCast(value)),
+                        .F32 => @as(u32, @bitCast(value)),
                         .F64 => @as(u64, @bitCast(@as(f64, value))),
-                        inline else => return error.InvalidOperand,
+                        else => return error.InvalidOperand,
                     };
                 },
                 .F64 => {
@@ -3028,11 +3028,11 @@ pub const Immediate = struct {
                         .S32 => if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) @as(u32, @bitCast(@as(i32, @intFromFloat(value)))) else return error.InvalidOperand,
                         .S64 => if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64)) @as(u64, @bitCast(@as(i64, @intFromFloat(value)))) else return error.InvalidOperand,
                         .F32 => @as(u32, @bitCast(@as(f32, @floatCast(value)))),
-                        inline .F64 => @as(u64, @bitCast(value)),
-                        inline else => return error.InvalidOperand,
+                        .F64 => @as(u64, @bitCast(value)),
+                        else => return error.InvalidOperand,
                     };
                 },
-                inline else => return error.InvalidOperand,
+                else => return error.InvalidOperand,
             },
             .type = newTypeIr,
         });
@@ -3558,7 +3558,7 @@ pub const Immediate = struct {
         };
     }
 
-    pub fn neg(self: *const Immediate) error{InvalidOperand}! Immediate {
+    pub fn neg(self: *const Immediate) error{InvalidOperand}!Immediate {
         return Immediate{
             .type = self.type,
             .data = switch (self.type.info) {
@@ -3606,7 +3606,7 @@ pub const LValue = union(enum) {
     upvalue: *Upvalue,
     global: *Global,
 
-    pub fn cast(self: LValue, newTypeIr: *Rir.Type) error{InvalidOperand, TooManyTypes, OutOfMemory}! Operand {
+    pub fn cast(self: LValue, newTypeIr: *Rir.Type) error{ InvalidOperand, TooManyTypes, OutOfMemory }!Operand {
         return switch (self) {
             inline else => |x| try x.cast(newTypeIr),
         };
@@ -3622,7 +3622,7 @@ pub const LValue = union(enum) {
     pub fn forceRegister(self: LValue) error{ExpectedRegister}!*Register {
         return switch (self) {
             .register => |x| x,
-            inline else => return error.ExpectedRegister,
+            else => return error.ExpectedRegister,
         };
     }
 
@@ -3630,7 +3630,7 @@ pub const LValue = union(enum) {
     pub fn forceMultiRegister(self: LValue) error{ExpectedMultiRegister}!*MultiRegister {
         return switch (self) {
             .multi_register => |x| x,
-            inline else => return error.ExpectedMultiRegister,
+            else => return error.ExpectedMultiRegister,
         };
     }
 
@@ -3638,7 +3638,7 @@ pub const LValue = union(enum) {
     pub fn forceLocal(self: LValue) error{ExpectedLocal}!*Local {
         return switch (self) {
             .local => |x| x,
-            inline else => return error.ExpectedLocal,
+            else => return error.ExpectedLocal,
         };
     }
 
@@ -3646,7 +3646,7 @@ pub const LValue = union(enum) {
     pub fn forceUpvalue(self: LValue) error{ExpectedUpvalue}!*Upvalue {
         return switch (self) {
             .upvalue => |x| x,
-            inline else => return error.ExpectedUpvalue,
+            else => return error.ExpectedUpvalue,
         };
     }
 
@@ -3663,7 +3663,7 @@ pub const LValue = union(enum) {
         return switch (self) {
             .local => |x| x.isComptimeKnown(),
             .global => |x| x.isComptimeKnown(),
-            inline else => false,
+            else => false,
         };
     }
 
@@ -3678,7 +3678,7 @@ pub const LValue = union(enum) {
     pub fn isWritable(self: LValue) bool {
         return switch (self) {
             .global => |x| x.mutability == .mutable,
-            inline else => true,
+            else => true,
         };
     }
 };
@@ -3692,7 +3692,7 @@ pub const RValue = union(enum) {
     foreign: *Foreign,
     function: *Function,
 
-    pub fn cast(self: RValue, newTypeIr: *Rir.Type) error{InvalidOperand, TooManyTypes, OutOfMemory}! Operand {
+    pub fn cast(self: RValue, newTypeIr: *Rir.Type) error{ InvalidOperand, TooManyTypes, OutOfMemory }!Operand {
         return switch (self) {
             inline else => |x| try x.cast(newTypeIr),
         };
@@ -3716,7 +3716,7 @@ pub const RValue = union(enum) {
     pub fn forceImmediate(self: RValue) error{ExpectedImmediate}!Immediate {
         return switch (self) {
             .immediate => |x| x,
-            inline else => return error.ExpectedImmediate,
+            else => return error.ExpectedImmediate,
         };
     }
 
@@ -3724,7 +3724,7 @@ pub const RValue = union(enum) {
     pub fn forceForeign(self: RValue) error{ExpectedForeign}!*Foreign {
         return switch (self) {
             .foreign => |x| x,
-            inline else => return error.ExpectedForeign,
+            else => return error.ExpectedForeign,
         };
     }
 
@@ -3732,7 +3732,7 @@ pub const RValue = union(enum) {
     pub fn forceFunction(self: RValue) error{ExpectedFunction}!*Function {
         return switch (self) {
             .function => |x| x,
-            inline else => return error.ExpectedFunction,
+            else => return error.ExpectedFunction,
         };
     }
 };
@@ -3746,7 +3746,7 @@ pub const Meta = union(enum) {
     block: *Block,
     handler_set: *HandlerSet,
 
-    pub fn cast(self: Meta, newTypeIr: *Rir.Type) error{InvalidOperand, OutOfMemory, TooManyTypes}! Operand {
+    pub fn cast(self: Meta, newTypeIr: *Rir.Type) error{ InvalidOperand, OutOfMemory, TooManyTypes }!Operand {
         const ownTypeIr = try self.getType();
         return if (utils.equal(newTypeIr, ownTypeIr)) .from(self) else error.InvalidOperand;
     }
@@ -3767,7 +3767,7 @@ pub const Meta = union(enum) {
     pub fn forceType(self: Meta) error{ExpectedType}!*Type {
         return switch (self) {
             .type => |x| x,
-            inline else => return error.ExpectedType,
+            else => return error.ExpectedType,
         };
     }
 
@@ -3775,7 +3775,7 @@ pub const Meta = union(enum) {
     pub fn forceBlock(self: Meta) error{ExpectedBlock}!*Block {
         return switch (self) {
             .block => |x| x,
-            inline else => return error.ExpectedBlock,
+            else => return error.ExpectedBlock,
         };
     }
 
@@ -3783,7 +3783,7 @@ pub const Meta = union(enum) {
     pub fn forceHandlerSet(self: Meta) error{ExpectedHandlerSet}!*HandlerSet {
         return switch (self) {
             .handler_set => |x| x,
-            inline else => return error.ExpectedHandlerSet,
+            else => return error.ExpectedHandlerSet,
         };
     }
 };
@@ -3796,7 +3796,7 @@ pub const Operand = union(enum) {
     l_value: LValue,
     r_value: RValue,
 
-    pub fn cast(self: Operand, newTypeIr: *Rir.Type) error{InvalidOperand, TooManyTypes, OutOfMemory}! Operand {
+    pub fn cast(self: Operand, newTypeIr: *Rir.Type) error{ InvalidOperand, TooManyTypes, OutOfMemory }!Operand {
         return switch (self) {
             .meta => |x| try x.cast(newTypeIr),
             .l_value => |x| try x.cast(newTypeIr),
@@ -3858,7 +3858,7 @@ pub const Operand = union(enum) {
     pub fn forceMeta(self: Operand) error{ExpectedMeta}!Meta {
         switch (self) {
             .meta => |x| return x,
-            inline else => return error.ExpectedMeta,
+            else => return error.ExpectedMeta,
         }
     }
 
@@ -3866,7 +3866,7 @@ pub const Operand = union(enum) {
     pub fn forceLValue(self: Operand) error{ExpectedLValue}!LValue {
         switch (self) {
             .l_value => |x| return x,
-            inline else => return error.ExpectedLValue,
+            else => return error.ExpectedLValue,
         }
     }
 
@@ -3874,7 +3874,7 @@ pub const Operand = union(enum) {
     pub fn forceRValue(self: Operand) error{ExpectedRValue}!RValue {
         switch (self) {
             .r_value => |x| return x,
-            inline else => return error.ExpectedRValue,
+            else => return error.ExpectedRValue,
         }
     }
 
@@ -3887,7 +3887,7 @@ pub const Operand = union(enum) {
     pub fn isConstant(self: Operand) bool {
         return switch (self) {
             .l_value => |l| l.isComptimeKnown(),
-            inline else => true,
+            else => true,
         };
     }
 };
@@ -3996,7 +3996,7 @@ pub const Local = struct {
     }
 
     pub fn cast(self: *const Local, newTypeIr: *Type) !Operand {
-        utils.todo(noreturn, .{self, newTypeIr});
+        utils.todo(noreturn, .{ self, newTypeIr });
     }
 };
 
@@ -4030,7 +4030,7 @@ pub const Upvalue = struct {
     }
 
     pub fn cast(self: *const Upvalue, newTypeIr: *Rir.Type) !Operand {
-        utils.todo(noreturn, .{self, newTypeIr});
+        utils.todo(noreturn, .{ self, newTypeIr });
     }
 };
 
@@ -4121,7 +4121,7 @@ pub const Global = struct {
     }
 
     pub fn cast(self: *const Global, newTypeIr: *Type) !Operand {
-        utils.todo(noreturn, .{self, newTypeIr});
+        utils.todo(noreturn, .{ self, newTypeIr });
     }
 };
 
@@ -4472,7 +4472,7 @@ pub const Block = struct {
 
     pub fn im(self: *Block, x: anytype) !void {
         const size = @bitSizeOf(@TypeOf(x));
-        return if (comptime size > 32) @call(.always_inline, im_w, .{ self, x }) else @call(.always_inline, im_i, .{ self, x });
+        return if (comptime size > 32) im_w(self, x) else im_i(self, x);
     }
 
     pub fn im_i(self: *Block, x: anytype) !void {
@@ -4483,22 +4483,20 @@ pub const Block = struct {
     pub fn im_w(self: *Block, x: anytype) !void {
         const ty = try self.rir.createTypeFromNative(@TypeOf(x), null, null);
         try op(self, .im_w, ty.id);
-        try @call(.always_inline, std.ArrayListUnmanaged(Instruction).append, .{
-            &self.instructions,
+        try self.instructions.append(
             self.rir.allocator,
             @as(Instruction, @bitCast(try Immediate.fromNative(x))),
-        });
+        );
     }
 
     pub fn op(self: *Block, comptime code: OpCode, data: OpData.Of(code)) !void {
-        try @call(.always_inline, std.ArrayListUnmanaged(Instruction).append, .{
-            &self.instructions,
+        try self.instructions.append(
             self.rir.allocator,
             Instruction{
                 .code = code,
                 .data = @unionInit(OpData, @tagName(code), data),
             },
-        });
+        );
     }
 
     pub fn exitOp(self: *Block, comptime code: OpCode, data: OpData.Of(code)) !void {

@@ -95,7 +95,7 @@ pub fn freshName(self: *RbcGenerator, args: anytype) Error!Rir.NameId {
     const formatter = try Rir.Formatter.init(self.ir, w.any());
     defer formatter.deinit();
 
-    inline for (0..args.len) |i| {
+    for (0..args.len) |i| {
         if (i > 0) {
             formatter.writeAll("-") catch |err| {
                 return utils.types.forceErrorSet(Error, err);
@@ -680,7 +680,7 @@ pub const Block = struct {
                                 offset += 1;
 
                                 const argOperands = try self.popN(arity);
-                                const argRegisters = try self.typecheckCall(functionType, argOperands);
+                                const argRegisters = try self.setupCall(functionType, argOperands);
 
                                 switch (functionOperand) {
                                     .meta => return error.InvalidOperand,
@@ -730,7 +730,7 @@ pub const Block = struct {
                         }
 
                         const argOperands = try self.popN(arity);
-                        const argRegisters = try self.typecheckCall(functionType, argOperands);
+                        const argRegisters = try self.setupCall(functionType, argOperands);
 
                         switch (functionOperand) {
                             .meta => return error.InvalidOperand,
@@ -865,7 +865,6 @@ pub const Block = struct {
 
                 .addr => {
                     const location = try self.pop(null);
-
                     const output = try self.coerceAddress(offset, location);
 
                     try self.push(output);
@@ -873,7 +872,6 @@ pub const Block = struct {
 
                 .load => {
                     const source = try self.pop(null);
-
                     const output = try self.load(source);
 
                     try self.push(output);
@@ -1188,10 +1186,6 @@ pub const Block = struct {
         return self.ir.hasReference(offset, registerIndex);
     }
 
-    pub fn compileImmediate(self: *Block, im: Rir.Immediate) !void {
-        utils.todo(noreturn, .{ self, im });
-    }
-
     pub fn load(self: *Block, source: Rir.Operand) !Rir.Operand {
         utils.todo(noreturn, .{ self, source });
     }
@@ -1216,7 +1210,7 @@ pub const Block = struct {
         utils.todo(noreturn, .{ self, operand, typeIr });
     }
 
-    pub fn typecheckCall(self: *Block, functionTypeIr: *Rir.Type, operand: []const Rir.Operand) ![]const Rbc.RegisterIndex {
+    pub fn setupCall(self: *Block, functionTypeIr: *Rir.Type, operand: []const Rir.Operand) ![]const Rbc.RegisterIndex {
         utils.todo(noreturn, .{ self, functionTypeIr, operand });
     }
 
@@ -1292,7 +1286,7 @@ pub const Block = struct {
         const output = switch (op) {
             .neg => try unary1(self, offset, a.getType(), a, .neg, .signed, &.{ .floating, .signed }),
             .bnot => try unary1(self, offset, a.getType(), a, .bnot, .no_sign, &.{ .unsigned, .signed }),
-            inline else => utils.todo(noreturn, .{ a, op, offset }),
+            else => utils.todo(noreturn, .{ a, op, offset }),
         };
 
         try self.push(output);
@@ -1325,24 +1319,10 @@ pub const Block = struct {
             .gt => try binary1(self, offset, typeIr, a, b, .gt, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
             .le => try binary1(self, offset, typeIr, a, b, .le, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
             .ge => try binary1(self, offset, typeIr, a, b, .ge, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
-            inline else => return error.InvalidOpCode,
+            else => return error.InvalidOpCode,
         };
 
         try self.push(output);
-    }
-
-    fn cast2(self: *Block, comptime opCode: Rbc.Code, offset: Rir.Offset, outputTypeIr: *Rir.Type, a: Rir.Operand) !Rir.Operand {
-        return switch (try self.coerceRegisterOrImmediate(a, outputTypeIr)) {
-            .register => |aRegister| reg: {
-                if (a == .l_value and utils.equal(a.l_value.register, aRegister)) {
-                    break :reg .from(aRegister);
-                }
-                const bRegister = try self.allocRegister(offset, outputTypeIr);
-                try @field(RbcBuilder.Block, @tagName(opCode))(self.active_builder, aRegister.getIndex(), bRegister.getIndex());
-                break :reg .from(bRegister);
-            },
-            .immediate => |im| .from(im),
-        };
     }
 
     pub fn cast(self: *Block, offset: Rir.Offset, outputTypeIr: *Rir.Type) !void {
@@ -1352,131 +1332,131 @@ pub const Block = struct {
         const output: Rir.Operand = switch (inputTypeIr.info) {
             .U8 => switch (outputTypeIr.info) {
                 .U8 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U16 => try cast2(self, .u_ext_8_16, offset, outputTypeIr, a),
-                .U32 => try cast2(self, .u_ext_8_32, offset, outputTypeIr, a),
-                .U64 => try cast2(self, .u_ext_8_64, offset, outputTypeIr, a),
+                .U16 => try cast1(self, .u_ext_8_16, offset, outputTypeIr, a),
+                .U32 => try cast1(self, .u_ext_8_32, offset, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_8_64, offset, outputTypeIr, a),
                 .S8 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S16 => try cast2(self, .s_ext_8_16, offset, outputTypeIr, a),
-                .S32 => try cast2(self, .s_ext_8_32, offset, outputTypeIr, a),
-                .S64 => try cast2(self, .s_ext_8_64, offset, outputTypeIr, a),
-                .F32 => try cast2(self, .u8_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast2(self, .u8_to_f64, offset, outputTypeIr, a),
+                .S16 => try cast1(self, .s_ext_8_16, offset, outputTypeIr, a),
+                .S32 => try cast1(self, .s_ext_8_32, offset, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_8_64, offset, outputTypeIr, a),
+                .F32 => try cast1(self, .u8_to_f32, offset, outputTypeIr, a),
+                .F64 => try cast1(self, .u8_to_f64, offset, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .U16 => switch (outputTypeIr.info) {
-                .U8 => try cast2(self, .i_trunc_16_8, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_16_8, offset, outputTypeIr, a),
                 .U16 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U32 => try cast2(self, .u_ext_16_32, offset, outputTypeIr, a),
-                .U64 => try cast2(self, .u_ext_16_64, offset, outputTypeIr, a),
-                .S8 => try cast2(self, .i_trunc_16_8, offset, outputTypeIr, a),
+                .U32 => try cast1(self, .u_ext_16_32, offset, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_16_64, offset, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_16_8, offset, outputTypeIr, a),
                 .S16 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S32 => try cast2(self, .s_ext_16_32, offset, outputTypeIr, a),
-                .S64 => try cast2(self, .s_ext_16_64, offset, outputTypeIr, a),
-                .F32 => try cast2(self, .u16_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast2(self, .u16_to_f64, offset, outputTypeIr, a),
+                .S32 => try cast1(self, .s_ext_16_32, offset, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_16_64, offset, outputTypeIr, a),
+                .F32 => try cast1(self, .u16_to_f32, offset, outputTypeIr, a),
+                .F64 => try cast1(self, .u16_to_f64, offset, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .U32 => switch (outputTypeIr.info) {
-                .U8 => try cast2(self, .i_trunc_32_8, offset, outputTypeIr, a),
-                .U16 => try cast2(self, .i_trunc_32_16, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_32_8, offset, outputTypeIr, a),
+                .U16 => try cast1(self, .i_trunc_32_16, offset, outputTypeIr, a),
                 .U32 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U64 => try cast2(self, .u_ext_32_64, offset, outputTypeIr, a),
-                .S8 => try cast2(self, .i_trunc_32_8, offset, outputTypeIr, a),
-                .S16 => try cast2(self, .i_trunc_32_16, offset, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_32_64, offset, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_32_8, offset, outputTypeIr, a),
+                .S16 => try cast1(self, .i_trunc_32_16, offset, outputTypeIr, a),
                 .S32 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S64 => try cast2(self, .s_ext_32_64, offset, outputTypeIr, a),
-                .F32 => try cast2(self, .u32_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast2(self, .u32_to_f64, offset, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_32_64, offset, outputTypeIr, a),
+                .F32 => try cast1(self, .u32_to_f32, offset, outputTypeIr, a),
+                .F64 => try cast1(self, .u32_to_f64, offset, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .U64 => switch (outputTypeIr.info) {
-                .U8 => try cast2(self, .i_trunc_64_8, offset, outputTypeIr, a),
-                .U16 => try cast2(self, .i_trunc_64_16, offset, outputTypeIr, a),
-                .U32 => try cast2(self, .i_trunc_64_32, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_64_8, offset, outputTypeIr, a),
+                .U16 => try cast1(self, .i_trunc_64_16, offset, outputTypeIr, a),
+                .U32 => try cast1(self, .i_trunc_64_32, offset, outputTypeIr, a),
                 .U64 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S8 => try cast2(self, .i_trunc_64_8, offset, outputTypeIr, a),
-                .S16 => try cast2(self, .i_trunc_64_16, offset, outputTypeIr, a),
-                .S32 => try cast2(self, .i_trunc_64_32, offset, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_64_8, offset, outputTypeIr, a),
+                .S16 => try cast1(self, .i_trunc_64_16, offset, outputTypeIr, a),
+                .S32 => try cast1(self, .i_trunc_64_32, offset, outputTypeIr, a),
                 .S64 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .F32 => try cast2(self, .u64_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast2(self, .u64_to_f64, offset, outputTypeIr, a),
+                .F32 => try cast1(self, .u64_to_f32, offset, outputTypeIr, a),
+                .F64 => try cast1(self, .u64_to_f64, offset, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .S8 => switch (outputTypeIr.info) {
                 .U8 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U16 => try cast2(self, .u_ext_8_16, offset, outputTypeIr, a),
-                .U32 => try cast2(self, .u_ext_8_32, offset, outputTypeIr, a),
-                .U64 => try cast2(self, .u_ext_8_64, offset, outputTypeIr, a),
+                .U16 => try cast1(self, .u_ext_8_16, offset, outputTypeIr, a),
+                .U32 => try cast1(self, .u_ext_8_32, offset, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_8_64, offset, outputTypeIr, a),
                 .S8 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S16 => try cast2(self, .s_ext_8_16, offset, outputTypeIr, a),
-                .S32 => try cast2(self, .s_ext_8_32, offset, outputTypeIr, a),
-                .S64 => try cast2(self, .s_ext_8_64, offset, outputTypeIr, a),
-                .F32 => try cast2(self, .s8_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast2(self, .s8_to_f64, offset, outputTypeIr, a),
+                .S16 => try cast1(self, .s_ext_8_16, offset, outputTypeIr, a),
+                .S32 => try cast1(self, .s_ext_8_32, offset, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_8_64, offset, outputTypeIr, a),
+                .F32 => try cast1(self, .s8_to_f32, offset, outputTypeIr, a),
+                .F64 => try cast1(self, .s8_to_f64, offset, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .S16 => switch (outputTypeIr.info) {
-                .U8 => try cast2(self, .i_trunc_16_8, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_16_8, offset, outputTypeIr, a),
                 .U16 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U32 => try cast2(self, .u_ext_16_32, offset, outputTypeIr, a),
-                .U64 => try cast2(self, .u_ext_16_64, offset, outputTypeIr, a),
-                .S8 => try cast2(self, .i_trunc_16_8, offset, outputTypeIr, a),
+                .U32 => try cast1(self, .u_ext_16_32, offset, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_16_64, offset, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_16_8, offset, outputTypeIr, a),
                 .S16 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S32 => try cast2(self, .s_ext_16_32, offset, outputTypeIr, a),
-                .S64 => try cast2(self, .s_ext_16_64, offset, outputTypeIr, a),
-                .F32 => try cast2(self, .s16_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast2(self, .s16_to_f64, offset, outputTypeIr, a),
+                .S32 => try cast1(self, .s_ext_16_32, offset, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_16_64, offset, outputTypeIr, a),
+                .F32 => try cast1(self, .s16_to_f32, offset, outputTypeIr, a),
+                .F64 => try cast1(self, .s16_to_f64, offset, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .S32 => switch (outputTypeIr.info) {
-                .U8 => try cast2(self, .i_trunc_32_8, offset, outputTypeIr, a),
-                .U16 => try cast2(self, .i_trunc_32_16, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_32_8, offset, outputTypeIr, a),
+                .U16 => try cast1(self, .i_trunc_32_16, offset, outputTypeIr, a),
                 .U32 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U64 => try cast2(self, .u_ext_32_64, offset, outputTypeIr, a),
-                .S8 => try cast2(self, .i_trunc_32_8, offset, outputTypeIr, a),
-                .S16 => try cast2(self, .i_trunc_32_16, offset, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_32_64, offset, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_32_8, offset, outputTypeIr, a),
+                .S16 => try cast1(self, .i_trunc_32_16, offset, outputTypeIr, a),
                 .S32 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S64 => try cast2(self, .s_ext_32_64, offset, outputTypeIr, a),
-                .F32 => try cast2(self, .s32_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast2(self, .s32_to_f64, offset, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_32_64, offset, outputTypeIr, a),
+                .F32 => try cast1(self, .s32_to_f32, offset, outputTypeIr, a),
+                .F64 => try cast1(self, .s32_to_f64, offset, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .S64 => switch (outputTypeIr.info) {
-                .U8 => try cast2(self, .i_trunc_64_8, offset, outputTypeIr, a),
-                .U16 => try cast2(self, .i_trunc_64_16, offset, outputTypeIr, a),
-                .U32 => try cast2(self, .i_trunc_64_32, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_64_8, offset, outputTypeIr, a),
+                .U16 => try cast1(self, .i_trunc_64_16, offset, outputTypeIr, a),
+                .U32 => try cast1(self, .i_trunc_64_32, offset, outputTypeIr, a),
                 .U64 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S8 => try cast2(self, .i_trunc_64_8, offset, outputTypeIr, a),
-                .S16 => try cast2(self, .i_trunc_64_16, offset, outputTypeIr, a),
-                .S32 => try cast2(self, .i_trunc_64_32, offset, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_64_8, offset, outputTypeIr, a),
+                .S16 => try cast1(self, .i_trunc_64_16, offset, outputTypeIr, a),
+                .S32 => try cast1(self, .i_trunc_64_32, offset, outputTypeIr, a),
                 .S64 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .F32 => try cast2(self, .s64_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast2(self, .s64_to_f64, offset, outputTypeIr, a),
+                .F32 => try cast1(self, .s64_to_f32, offset, outputTypeIr, a),
+                .F64 => try cast1(self, .s64_to_f64, offset, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .F32 => switch (outputTypeIr.info) {
-                .U8 => try cast2(self, .f32_to_u8, offset, outputTypeIr, a),
-                .U16 => try cast2(self, .f32_to_u16, offset, outputTypeIr, a),
-                .U32 => try cast2(self, .f32_to_u32, offset, outputTypeIr, a),
-                .U64 => try cast2(self, .f32_to_u64, offset, outputTypeIr, a),
-                .S8 => try cast2(self, .f32_to_s8, offset, outputTypeIr, a),
-                .S16 => try cast2(self, .f32_to_s16, offset, outputTypeIr, a),
-                .S32 => try cast2(self, .f32_to_s32, offset, outputTypeIr, a),
-                .S64 => try cast2(self, .f32_to_s64, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .f32_to_u8, offset, outputTypeIr, a),
+                .U16 => try cast1(self, .f32_to_u16, offset, outputTypeIr, a),
+                .U32 => try cast1(self, .f32_to_u32, offset, outputTypeIr, a),
+                .U64 => try cast1(self, .f32_to_u64, offset, outputTypeIr, a),
+                .S8 => try cast1(self, .f32_to_s8, offset, outputTypeIr, a),
+                .S16 => try cast1(self, .f32_to_s16, offset, outputTypeIr, a),
+                .S32 => try cast1(self, .f32_to_s32, offset, outputTypeIr, a),
+                .S64 => try cast1(self, .f32_to_s64, offset, outputTypeIr, a),
                 .F32 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .F64 => try cast2(self, .f_trunc_64_32, offset, outputTypeIr, a),
+                .F64 => try cast1(self, .f_trunc_64_32, offset, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .F64 => switch (outputTypeIr.info) {
-                .U8 => try cast2(self, .f64_to_u8, offset, outputTypeIr, a),
-                .U16 => try cast2(self, .f64_to_u16, offset, outputTypeIr, a),
-                .U32 => try cast2(self, .f64_to_u32, offset, outputTypeIr, a),
-                .U64 => try cast2(self, .f64_to_u64, offset, outputTypeIr, a),
-                .S8 => try cast2(self, .f64_to_s8, offset, outputTypeIr, a),
-                .S16 => try cast2(self, .f64_to_s16, offset, outputTypeIr, a),
-                .S32 => try cast2(self, .f64_to_s32, offset, outputTypeIr, a),
-                .S64 => try cast2(self, .f64_to_s64, offset, outputTypeIr, a),
-                .F32 => try cast2(self, .f_ext_32_64, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .f64_to_u8, offset, outputTypeIr, a),
+                .U16 => try cast1(self, .f64_to_u16, offset, outputTypeIr, a),
+                .U32 => try cast1(self, .f64_to_u32, offset, outputTypeIr, a),
+                .U64 => try cast1(self, .f64_to_u64, offset, outputTypeIr, a),
+                .S8 => try cast1(self, .f64_to_s8, offset, outputTypeIr, a),
+                .S16 => try cast1(self, .f64_to_s16, offset, outputTypeIr, a),
+                .S32 => try cast1(self, .f64_to_s32, offset, outputTypeIr, a),
+                .S64 => try cast1(self, .f64_to_s64, offset, outputTypeIr, a),
+                .F32 => try cast1(self, .f_ext_32_64, offset, outputTypeIr, a),
                 .F64 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
                 else => return error.InvalidOperand,
             },
@@ -1487,7 +1467,7 @@ pub const Block = struct {
     }
 };
 
-inline fn unary2(
+fn unary2(
     self: *Block,
     offset: Rir.Offset,
     typeIr: *Rir.Type,
@@ -1496,11 +1476,11 @@ inline fn unary2(
     comptime dyn: anytype,
 ) !Rir.Operand {
     if (comptime @typeInfo(@TypeOf(im)) != .@"fn") {
-        @compileError(std.fmt.comptimePrint("im parameter must be a function, got {any}: {s}", .{dyn, @typeName(@TypeOf(im))}));
+        @compileError(std.fmt.comptimePrint("im parameter must be a function, got {any}: {s}", .{ dyn, @typeName(@TypeOf(im)) }));
     }
 
     if (comptime @typeInfo(@TypeOf(dyn)) != .@"fn") {
-        @compileError(std.fmt.comptimePrint("dyn parameter must be a function, got {any}: {s}", .{dyn, @typeName(@TypeOf(dyn))}));
+        @compileError(std.fmt.comptimePrint("dyn parameter must be a function, got {any}: {s}", .{ dyn, @typeName(@TypeOf(dyn)) }));
     }
 
     switch (a) {
@@ -1588,7 +1568,7 @@ fn unary1(
         .S64 => if (comptime validForSigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_64")) else return error.InvalidOperand,
         .F32 => if (comptime validForFloat) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, "f_" ++ opName ++ "_32")) else return error.InvalidOperand,
         .F64 => if (comptime validForFloat) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, "f_" ++ opName ++ "_64")) else return error.InvalidOperand,
-        inline else => return error.InvalidOperand,
+        else => return error.InvalidOperand,
     }
 }
 
@@ -1743,6 +1723,20 @@ fn binary1(
             @field(RbcBuilder.Block, "f_" ++ opName ++ "_64" ++ suffixA),
             if (commutativity != .commutative) @field(RbcBuilder.Block, "f_" ++ opName ++ "_64" ++ suffixB) else null,
         ) else return error.InvalidOperand,
-        inline else => return error.InvalidOperand,
+        else => return error.InvalidOperand,
     }
+}
+
+fn cast1(self: *Block, comptime opCode: Rbc.Code, offset: Rir.Offset, outputTypeIr: *Rir.Type, a: Rir.Operand) !Rir.Operand {
+    return switch (try self.coerceRegisterOrImmediate(a, outputTypeIr)) {
+        .register => |aRegister| reg: {
+            if (a == .l_value and utils.equal(a.l_value.register, aRegister)) {
+                break :reg .from(aRegister);
+            }
+            const bRegister = try self.allocRegister(offset, outputTypeIr);
+            try @field(RbcBuilder.Block, @tagName(opCode))(self.active_builder, aRegister.getIndex(), bRegister.getIndex());
+            break :reg .from(bRegister);
+        },
+        .immediate => |im| .from(im),
+    };
 }

@@ -40,11 +40,11 @@ pub fn asIOError(err: anyerror) ?IOError {
     return null;
 }
 
-pub inline fn todo(comptime T: type, _: anytype) T {
+pub fn todo(comptime T: type, _: anytype) T {
     @panic("not yet implemented");
 }
 
-pub inline fn offsetPointer(ptr: anytype, offset: isize) @TypeOf(ptr) { // TODO: this is stupid..?
+pub fn offsetPointer(ptr: anytype, offset: isize) @TypeOf(ptr) { // TODO: this is stupid..?
     return @ptrFromInt(@as(usize, @bitCast(@as(isize, @bitCast(@intFromPtr(ptr))) + offset)));
 }
 
@@ -177,45 +177,45 @@ pub fn arrayFromVector(vector: anytype) ArrayFromVector(@TypeOf(vector)) {
     return array;
 }
 
-pub inline fn alignTo(baseAddress: anytype, alignment: @TypeOf(baseAddress)) @TypeOf(baseAddress) {
+pub fn alignTo(baseAddress: anytype, alignment: @TypeOf(baseAddress)) @TypeOf(baseAddress) {
     return baseAddress + alignmentDelta(baseAddress, alignment);
 }
 
-pub inline fn alignmentDelta(baseAddress: anytype, alignment: @TypeOf(baseAddress)) @TypeOf(baseAddress) {
+pub fn alignmentDelta(baseAddress: anytype, alignment: @TypeOf(baseAddress)) @TypeOf(baseAddress) {
     return (alignment - (baseAddress % alignment)) % alignment;
 }
 
-pub inline fn bitOrBool(a: bool, b: bool) bool {
+pub fn bitOrBool(a: bool, b: bool) bool {
     return @as(u1, @intFromBool(a)) | @as(u1, @intFromBool(b)) == 1;
 }
 
-pub inline fn bitAndBool(a: bool, b: bool) bool {
+pub fn bitAndBool(a: bool, b: bool) bool {
     return @as(u1, @intFromBool(a)) & @as(u1, @intFromBool(b)) == 1;
 }
 
-pub inline fn sliceCast(comptime T: type, comptime U: type, buffer: []U) []T {
+pub fn sliceCast(comptime T: type, comptime U: type, buffer: []U) []T {
     const uCount = buffer.len * @sizeOf(U);
     const tCount = uCount / @sizeOf(T);
     const ptr = @intFromPtr(buffer.ptr);
     return @as([*]T, @ptrFromInt(ptr))[0..tCount];
 }
 
-pub inline fn sliceCastConst(comptime T: type, comptime U: type, buffer: []const U) []const T {
+pub fn sliceCastConst(comptime T: type, comptime U: type, buffer: []const U) []const T {
     const uCount = buffer.len * @sizeOf(U);
     const tCount = uCount / @sizeOf(T);
     const ptr = @intFromPtr(buffer.ptr);
     return @as([*]const T, @ptrFromInt(ptr))[0..tCount];
 }
 
-pub inline fn makeSlice(comptime T: type, ptr: [*]T, len: usize) []T {
+pub fn makeSlice(comptime T: type, ptr: [*]T, len: usize) []T {
     return ptr[0..len];
 }
 
-pub inline fn makeSliceConst(comptime T: type, ptr: [*]const T, len: usize) []const T {
+pub fn makeSliceConst(comptime T: type, ptr: [*]const T, len: usize) []const T {
     return ptr[0..len];
 }
 
-pub inline fn byteSlice(value: anytype) []const u8 {
+pub fn byteSlice(value: anytype) []const u8 {
     const info = @typeInfo(@TypeOf(value));
     const T = info.pointer.child;
     comptime std.debug.assert(info.pointer.size == .One);
@@ -225,29 +225,29 @@ pub inline fn byteSlice(value: anytype) []const u8 {
     return @as([*]const u8, @ptrCast(value))[0..size];
 }
 
-pub inline fn tryCreateObj(al: std.mem.Allocator, comptime T: type) !*T {
+pub fn tryCreateObj(al: std.mem.Allocator, comptime T: type) !*T {
     const obj = try al.create(T);
     obj.* = try T.init(al);
     return obj;
 }
 
-pub inline fn createObj(al: std.mem.Allocator, comptime T: type) !*T {
+pub fn createObj(al: std.mem.Allocator, comptime T: type) !*T {
     const obj = try al.create(T);
     obj.* = T.init(al);
     return obj;
 }
 
-pub inline fn destroyObj(obj: anytype) void {
+pub fn destroyObj(obj: anytype) void {
     const al = obj.allocator;
     obj.deinit();
     al.destroy(obj);
 }
 
-pub inline fn hashRawWith(comptime T: type, hasher: anytype, value: *const T) void {
+pub fn hashRawWith(comptime T: type, hasher: anytype, value: *const T) void {
     return hasher.update(rawBytes(T, value));
 }
 
-pub inline fn rawBytes(comptime T: type, value: *const T) []const u8 {
+pub fn rawBytes(comptime T: type, value: *const T) []const u8 {
     return @as([*]const u8, @ptrCast(value))[0..@sizeOf(T)];
 }
 
@@ -589,27 +589,27 @@ pub fn compare(a: anytype, b: @TypeOf(a)) CompareResult(@TypeOf(a)) {
     }
 }
 
-pub inline fn less(a: anytype, b: @TypeOf(a)) bool {
+pub fn less(a: anytype, b: @TypeOf(a)) bool {
     return compare(a, b) == .lt;
 }
 
-pub inline fn greater(a: anytype, b: @TypeOf(a)) bool {
+pub fn greater(a: anytype, b: @TypeOf(a)) bool {
     return compare(a, b) == .gt;
 }
 
-pub inline fn greaterOrEqual(a: anytype, b: @TypeOf(a)) bool {
+pub fn greaterOrEqual(a: anytype, b: @TypeOf(a)) bool {
     return compare(a, b) != .lt;
 }
 
-pub inline fn lessOrEqual(a: anytype, b: @TypeOf(a)) bool {
+pub fn lessOrEqual(a: anytype, b: @TypeOf(a)) bool {
     return compare(a, b) != .gt;
 }
 
-pub inline fn equal(a: anytype, b: @TypeOf(a)) bool {
+pub fn equal(a: anytype, b: @TypeOf(a)) bool {
     return compare(a, b) == .eq;
 }
 
-pub inline fn notEqual(a: anytype, b: @TypeOf(a)) bool {
+pub fn notEqual(a: anytype, b: @TypeOf(a)) bool {
     return compare(a, b) != .eq;
 }
 
@@ -911,7 +911,7 @@ pub const external = struct {
                 try writer.print("typedef struct {s} {{ bool isSome; {s} some; }} {s};", .{ name, child_name, name });
             }
 
-            pub inline fn fromNative(value: ?T) Self {
+            pub fn fromNative(value: ?T) Self {
                 if (value) |v| {
                     return Self{ .isSome = true, .value = .{ .Some = v } };
                 } else {
@@ -919,7 +919,7 @@ pub const external = struct {
                 }
             }
 
-            pub inline fn toNative(self: Self) ?T {
+            pub fn toNative(self: Self) ?T {
                 if (self.isSome) {
                     return self.value.Some;
                 } else {
@@ -927,7 +927,7 @@ pub const external = struct {
                 }
             }
 
-            pub inline fn Some(value: T) Self {
+            pub fn Some(value: T) Self {
                 return Self{ .isSome = true, .value = .{ .Some = value } };
             }
 
@@ -945,11 +945,11 @@ pub const external = struct {
 
             const Self = @This();
 
-            pub inline fn fromNative(slice: Native) Self {
+            pub fn fromNative(slice: Native) Self {
                 return .{ .ptr = slice.ptr, .len = slice.len };
             }
 
-            pub inline fn toNative(self: Self) Native {
+            pub fn toNative(self: Self) Native {
                 return self.ptr[0..self.len];
             }
         };
@@ -1050,7 +1050,7 @@ pub const external = struct {
             return true;
         }
 
-        pub inline fn writeInt(self: Self, comptime T: type, value: T, endian: std.builtin.Endian) bool {
+        pub fn writeInt(self: Self, comptime T: type, value: T, endian: std.builtin.Endian) bool {
             self.inner.writeInt(T, value, endian) catch return false;
             return true;
         }
@@ -1251,11 +1251,11 @@ pub const text = struct {
         };
     }
 
-    inline fn strPredicate(str: []const u8, comptime f: fn (c: Char) bool) bool {
+    fn strPredicate(str: []const u8, comptime f: fn (c: Char) bool) bool {
         var i: usize = 0;
         while (i < str.len) {
             const dec = decode1(str[i..]) catch return false;
-            if (!@call(.always_inline, f, .{dec.ch})) return false;
+            if (!f(dec.ch)) return false;
             i += dec.len;
         }
         return true;
@@ -1855,7 +1855,7 @@ pub const text = struct {
 
             const Self = @This();
 
-            inline fn predicateCheck(self: *Self, ch: Char) bool {
+            fn predicateCheck(self: *Self, ch: Char) bool {
                 if (comptime predicateMode) {
                     return self.predicate(ch);
                 } else {
@@ -1863,7 +1863,7 @@ pub const text = struct {
                 }
             }
 
-            inline fn skipUnrecognized(self: *Self) Error!void {
+            fn skipUnrecognized(self: *Self) Error!void {
                 while (self.index < self.buffer.len) {
                     const dec = try decode1(self.buffer[self.index..]);
                     if (self.predicateCheck(dec.ch)) break;

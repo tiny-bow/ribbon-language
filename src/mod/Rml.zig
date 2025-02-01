@@ -1253,7 +1253,7 @@ pub const Parser = struct {
 
         while (try self.peekChar()) |ch| {
             switch (ch) {
-                inline '(',
+                '(',
                 ')',
                 '[',
                 ']',
@@ -1821,7 +1821,7 @@ pub const bindgen = struct {
                             inline for (comptime std.meta.fieldNames(Format)) |fmtName| {
                                 const field = comptime @field(Format, fmtName);
                                 if (field == fmt) {
-                                    return @call(.always_inline, T.format, .{ self, @tagName(field), .{}, writer });
+                                    return T.format(self, @tagName(field), .{}, writer);
                                 }
                             }
                             unreachable;
@@ -1847,7 +1847,7 @@ pub const bindgen = struct {
 
     pub const NativeFunction = *const fn (*Interpreter, Origin, []const Object) Result!Object;
 
-    inline fn onAList(comptime T: type, comptime fieldName: []const u8) bool {
+    fn onAList(comptime T: type, comptime fieldName: []const u8) bool {
         comptime {
             const alist: []const []const u8 =
                 if (@hasDecl(T, "BINDGEN_ALLOW")) T.BINDGEN_ALLOW else return true;
@@ -1860,7 +1860,7 @@ pub const bindgen = struct {
         }
     }
 
-    inline fn onDList(comptime T: type, comptime fieldName: []const u8) bool {
+    fn onDList(comptime T: type, comptime fieldName: []const u8) bool {
         comptime {
             const dlist: []const []const u8 =
                 if (@hasDecl(T, "BINDGEN_DENY")) T.BINDGEN_DENY else return false;
@@ -6174,7 +6174,7 @@ pub const String = struct {
     pub fn onFormat(self: *const String, fmt: Format, w: std.io.AnyWriter) anyerror!void {
         switch (fmt) {
             .message => try w.print("{s}", .{self.text()}),
-            inline else => {
+            else => {
                 try w.writeAll("\"");
                 try utils.text.escapeStrWrite(w, self.text(), .Double);
                 try w.writeAll("\"");
