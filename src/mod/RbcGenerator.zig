@@ -382,6 +382,11 @@ pub const OperationValidity = enum {
     floating,
 };
 
+pub const WriteOp = enum {
+    store,
+    copy,
+};
+
 pub const Block = struct {
     generator: *RbcGenerator,
     function: *Function,
@@ -398,6 +403,7 @@ pub const Block = struct {
 
     phi_node: ?PhiNode = null,
     stack: Stack = .{},
+    offset: ?Rir.Offset = null,
 
     pub fn init(parent: ?*Block, function: *Function, blockIr: *Rir.Block, entryBlockBuilder: ?*RbcBuilder.Block) error{ TooManyBlocks, OutOfMemory }!*Block {
         const generator = function.generator;
@@ -434,14 +440,18 @@ pub const Block = struct {
     }
 
     pub fn generate(self: *Block) Error!void {
+        std.debug.assert(self.offset == null);
+
+        self.offset = 0;
+        const offset: *Rir.Offset = &self.offset.?;
+
         const instrs = self.ir.instructions.items;
 
-        var offset: Rir.Offset = 0;
-        while (offset < instrs.len) {
-            const instr = instrs[offset];
-            offset += 1;
+        while (offset.* < instrs.len) {
+            const instr = instrs[offset.*];
+            offset.* += 1;
 
-            const nextInstr = if (offset < instrs.len) instrs[offset] else null;
+            const nextInstr = if (offset.* < instrs.len) instrs[offset.*] else null;
 
             switch (instr.code) {
                 .nop => try self.active_builder.nop(),
@@ -449,7 +459,7 @@ pub const Block = struct {
                 .halt => {
                     try self.active_builder.halt();
 
-                    if (offset < instrs.len) log.warn("dead code at {}/{}/{}/{}", .{ self.function.module.ir.id, self.function.ir.id, self.ir.id, offset });
+                    if (offset.* < instrs.len) log.warn("dead code at {}/{}/{}/{}", .{ self.function.module.ir.id, self.function.ir.id, self.ir.id, offset });
 
                     break;
                 },
@@ -457,7 +467,7 @@ pub const Block = struct {
                 .trap => {
                     try self.active_builder.trap();
 
-                    if (offset < instrs.len) log.warn("dead code at {}/{}/{}/{}", .{ self.function.module.ir.id, self.function.ir.id, self.ir.id, offset });
+                    if (offset.* < instrs.len) log.warn("dead code at {}/{}/{}/{}", .{ self.function.module.ir.id, self.function.ir.id, self.ir.id, offset });
 
                     break;
                 },
@@ -565,7 +575,7 @@ pub const Block = struct {
                                     return error.TypeMismatch;
                                 }
 
-                                try self.write(.from(outReg), resultOperand);
+                                try self.assign(.from(outReg), resultOperand);
                             }
 
                             try self.active_builder.br(phiNode.exit.index);
@@ -598,7 +608,7 @@ pub const Block = struct {
 
                                 self.active_builder = storeBlockGen;
 
-                                try self.write(.from(outReg), resultOperand);
+                                try self.assign(.from(outReg), resultOperand);
 
                                 try self.active_builder.br(phiNode.exit.index);
                             } else {
@@ -632,7 +642,7 @@ pub const Block = struct {
                                     return error.TypeMismatch;
                                 }
 
-                                try self.write(.from(outReg), resultOperand);
+                                try self.assign(.from(outReg), resultOperand);
                             }
 
                             try self.active_builder.br(phiNode.entry.index);
@@ -668,7 +678,7 @@ pub const Block = struct {
 
                     const Nil = try self.generator.ir.createType(null, .Nil);
 
-                    const functionOperand = try self.pop(null);
+                    const functionOperand: Rir.Operand = try self.pop(null);
                     const functionType = try functionOperand.getType();
                     const functionTypeInfo = try functionType.info.forceFunction();
 
@@ -677,7 +687,7 @@ pub const Block = struct {
                     call: {
                         if (nextInstr) |next| {
                             if (next.code == .ret) {
-                                offset += 1;
+                                offset.* += 1;
 
                                 const argOperands = try self.popN(arity);
                                 const argRegisters = try self.setupCall(functionType, argOperands);
@@ -725,17 +735,21 @@ pub const Block = struct {
                         }
 
                         // NOTE: allocating here will never allocate an input register as the output
+                        // TODO: is this desirable?
                         if (utils.notEqual(functionTypeInfo.return_type, Nil)) {
-                            resultRegister = try self.allocRegister(offset, functionTypeInfo.return_type);
+                            resultRegister = try self.allocRegister(functionTypeInfo.return_type);
                         }
 
                         const argOperands = try self.popN(arity);
                         const argRegisters = try self.setupCall(functionType, argOperands);
 
-                        switch (functionOperand) {
-                            .meta => return error.InvalidOperand,
-                            .l_value => |l| switch (l) {
-                                else => @panic("call lvalue nyi"),
+                        switch (try self.coerceRegisterOrRValue(functionOperand, null)) {
+                            .register => |functionRegister| {
+                                if (resultRegister) |out| {
+                                    try self.active_builder.call_v(functionRegister.getIndex(), out.getIndex(), argRegisters);
+                                } else {
+                                    try self.active_builder.call(functionRegister.getIndex(), argRegisters);
+                                }
                             },
                             .r_value => |r| switch (r) {
                                 .immediate => return error.InvalidOperand,
@@ -775,7 +789,7 @@ pub const Block = struct {
 
                     if (resultMaybeOperand) |resultOperand| {
                         const functionTypeInfo = try self.function.ir.getTypeInfo();
-                        switch (try self.coerceRegisterOrImmediate(resultOperand, functionTypeInfo.return_type)) {
+                        switch (try self.coerceRegisterOrRValue(resultOperand, functionTypeInfo.return_type)) {
                             .register => |reg| {
                                 const regLayout = try reg.type.getLayout();
 
@@ -793,22 +807,34 @@ pub const Block = struct {
                                     .register => try self.active_builder.ret_v(reg.getIndex()),
                                 }
                             },
-                            .immediate => |im| {
-                                const imLayout = try im.type.getLayout();
+                            .r_value => |r| switch (r) {
+                                .immediate => |im| {
+                                    const imLayout = try im.type.getLayout();
 
-                                switch (imLayout.local_storage) {
-                                    .none,
-                                    .@"comptime",
-                                    => return error.InvalidOperand,
+                                    switch (imLayout.local_storage) {
+                                        .none,
+                                        .@"comptime",
+                                        => return error.InvalidOperand,
 
-                                    .zero_size => try self.active_builder.ret(),
+                                        .zero_size => try self.active_builder.ret(),
 
-                                    .n_registers,
-                                    .stack,
-                                    => @panic("stack return nyi"),
+                                        .n_registers,
+                                        .stack,
+                                        => @panic("stack return nyi"),
 
-                                    .register => if (imLayout.dimensions.size <= 32) try self.active_builder.ret_im_v(im.data) else try self.active_builder.ret_im_w_v(im.data),
-                                }
+                                        .register => if (imLayout.dimensions.size <= 32) try self.active_builder.ret_im_v(im.data) else try self.active_builder.ret_im_w_v(im.data),
+                                    }
+                                },
+                                .foreign => |foreignIr| {
+                                    const foreignIndex = try self.generator.getForeign(foreignIr);
+
+                                    try self.active_builder.ret_im_v(foreignIndex);
+                                },
+                                .function => |functionIr| {
+                                    const functionGen = try self.generator.getFunction(functionIr);
+
+                                    try self.active_builder.ret_im_v(functionGen.builder.index);
+                                },
                             },
                         }
                     }
@@ -824,7 +850,7 @@ pub const Block = struct {
                     if (resultMaybeOperand) |resultOperand| {
                         const cancellationTypeIr = try self.function.ir.getCancellationType();
 
-                        switch (try self.coerceRegisterOrImmediate(resultOperand, cancellationTypeIr)) {
+                        switch (try self.coerceRegisterOrRValue(resultOperand, cancellationTypeIr)) {
                             .register => |reg| {
                                 const regLayout = try reg.type.getLayout();
 
@@ -842,22 +868,34 @@ pub const Block = struct {
                                     .register => try self.active_builder.cancel_v(reg.getIndex()),
                                 }
                             },
-                            .immediate => |im| {
-                                const imLayout = try im.type.getLayout();
+                            .r_value => |r| switch (r) {
+                                .immediate => |im| {
+                                    const imLayout = try im.type.getLayout();
 
-                                switch (imLayout.local_storage) {
-                                    .none,
-                                    .@"comptime",
-                                    => return error.InvalidOperand,
+                                    switch (imLayout.local_storage) {
+                                        .none,
+                                        .@"comptime",
+                                        => return error.InvalidOperand,
 
-                                    .zero_size => try self.active_builder.cancel(),
+                                        .zero_size => try self.active_builder.cancel(),
 
-                                    .n_registers,
-                                    .stack,
-                                    => @panic("stack cancel nyi"),
+                                        .n_registers,
+                                        .stack,
+                                        => @panic("stack cancel nyi"),
 
-                                    .register => if (imLayout.dimensions.size <= 32) try self.active_builder.cancel_im_v(im.data) else try self.active_builder.cancel_im_w_v(im.data),
-                                }
+                                        .register => if (imLayout.dimensions.size <= 32) try self.active_builder.cancel_im_v(im.data) else try self.active_builder.cancel_im_w_v(im.data),
+                                    }
+                                },
+                                .foreign => |foreignIr| {
+                                    const foreignIndex = try self.generator.getForeign(foreignIr);
+
+                                    try self.active_builder.cancel_im_v(foreignIndex);
+                                },
+                                .function => |functionIr| {
+                                    const functionGen = try self.generator.getFunction(functionIr);
+
+                                    try self.active_builder.cancel_im_v(functionGen.builder.index);
+                                },
                             },
                         }
                     }
@@ -865,7 +903,7 @@ pub const Block = struct {
 
                 .addr => {
                     const location = try self.pop(null);
-                    const output = try self.coerceAddress(offset, location);
+                    const output = try self.coerceAddress(location);
 
                     try self.push(output);
                 },
@@ -884,51 +922,43 @@ pub const Block = struct {
                     try self.store(destination, source);
                 },
 
-                .add => try self.binary(.add, offset),
-                .sub => try self.binary(.sub, offset),
-                .mul => try self.binary(.mul, offset),
-                .div => try self.binary(.div, offset),
-                .rem => try self.binary(.rem, offset),
-                .neg => try self.unary(.neg, offset),
+                .add => try self.binary(.add),
+                .sub => try self.binary(.sub),
+                .mul => try self.binary(.mul),
+                .div => try self.binary(.div),
+                .rem => try self.binary(.rem),
+                .neg => try self.unary(.neg),
 
-                .band => try self.binary(.band, offset),
-                .bor => try self.binary(.bor, offset),
-                .bxor => try self.binary(.bxor, offset),
-                .bnot => try self.unary(.bnot, offset),
-                .bshiftl => try self.binary(.bshiftl, offset),
-                .bshiftr => try self.binary(.bshiftr, offset),
+                .band => try self.binary(.band),
+                .bor => try self.binary(.bor),
+                .bxor => try self.binary(.bxor),
+                .bnot => try self.unary(.bnot),
+                .bshiftl => try self.binary(.bshiftl),
+                .bshiftr => try self.binary(.bshiftr),
 
-                .eq => try self.binary(.eq, offset),
-                .ne => try self.binary(.ne, offset),
-                .lt => try self.binary(.lt, offset),
-                .gt => try self.binary(.gt, offset),
-                .le => try self.binary(.le, offset),
-                .ge => try self.binary(.ge, offset),
+                .eq => try self.binary(.eq),
+                .ne => try self.binary(.ne),
+                .lt => try self.binary(.lt),
+                .gt => try self.binary(.gt),
+                .le => try self.binary(.le),
+                .ge => try self.binary(.ge),
 
                 .cast => {
                     const typeId = instr.data.cast;
                     const typeIr = try self.generator.ir.getType(typeId);
 
-                    try self.cast(offset, typeIr);
+                    try self.cast(typeIr);
                 },
 
                 .clear => try self.clear(instr.data.clear),
                 .swap => try self.swap(instr.data.swap),
                 .copy => try self.copy(instr.data.copy),
 
-                .read => {
-                    const source = try self.pop(null);
-
-                    const output = try self.read(source);
-
-                    try self.push(output);
-                },
-
-                .write => {
+                .assign => {
                     const destination = try self.pop(null);
                     const source = try self.pop(null);
 
-                    try self.write(destination, source);
+                    try self.assign(destination, source);
                 },
 
                 .new_local => {
@@ -995,7 +1025,7 @@ pub const Block = struct {
                     const typeIr = try self.generator.ir.getType(typeId);
 
                     if (nextInstr) |next| {
-                        offset += 1;
+                        offset.* += 1;
 
                         const im: u64 = @bitCast(next);
 
@@ -1084,16 +1114,16 @@ pub const Block = struct {
         return out;
     }
 
-    pub fn takeFreeRegister(self: *Block, offset: Rir.Offset) ?*Rir.Register {
+    pub fn takeFreeRegister(self: *Block) ?*Rir.Register {
         for (0..Rbc.MAX_REGISTERS) |regIndex| {
-            if (!self.hasReference(offset, @intCast(regIndex))) return self.register_list.items[regIndex];
+            if (!self.hasReference(@intCast(regIndex))) return self.register_list.items[regIndex];
         }
 
         return null;
     }
 
-    pub fn allocRegister(self: *Block, offset: Rir.Offset, typeIr: *Rir.Type) error{ InvalidType, TooManyRegisters, OutOfMemory }!*Rir.Register {
-        if (self.takeFreeRegister(offset)) |reg| {
+    pub fn allocRegister(self: *Block, typeIr: *Rir.Type) error{ InvalidType, TooManyRegisters, OutOfMemory }!*Rir.Register {
+        if (self.takeFreeRegister()) |reg| {
             reg.type = typeIr;
             return reg;
         }
@@ -1110,12 +1140,30 @@ pub const Block = struct {
         return freshReg;
     }
 
-    pub fn createLocal(self: *Block, name: Rir.NameId, typeIr: *Rir.Type) error{ TooManyLocals, OutOfMemory }!*Rir.Local {
+    pub fn createLocal(self: *Block, name: Rir.NameId, typeIr: *Rir.Type) Error!*Rir.Local {
         const out = try self.ir.createLocal(name, typeIr);
-        // const localType = try self.ir.ir.getType(localTypeId);
-        // const localStorage = try localType.getStorage();
+        const localLayout = try typeIr.getLayout();
 
-        // out.storage =
+        out.storage = localLayout.local_storage;
+
+        switch (out.storage) {
+            .none => unreachable,
+            .zero_size => {},
+            .@"comptime" => @panic("comptime local nyi"),
+            .n_registers => @panic("n_registers local nyi"),
+
+            .register => {
+                const reg = try self.allocRegister(typeIr);
+                out.register = reg;
+            },
+
+            .stack => {
+                const regType = try typeIr.createPointer();
+                const reg = try self.allocRegister(regType);
+                try self.active_builder.alloca(@intCast(localLayout.dimensions.size), reg.getIndex()); // FIXME: stack layouts should be able to be larger than 64k
+                out.register = reg;
+            },
+        }
 
         return out;
     }
@@ -1124,7 +1172,7 @@ pub const Block = struct {
         return self.ir.getLocal(id);
     }
 
-    pub fn referenceCount(self: *Block, offset: Rir.Offset, registerIndex: Rbc.RegisterIndex) usize {
+    pub fn referenceCount(self: *Block, registerIndex: Rbc.RegisterIndex) usize {
         var count: usize = 0;
 
         if (self.phi_node) |phiNode| {
@@ -1135,7 +1183,6 @@ pub const Block = struct {
 
         for (self.stack.items) |operand| {
             switch (operand) {
-                .meta => {},
                 .l_value => |l| switch (l) {
                     .register => |reg| {
                         if (reg.getIndex() == registerIndex) count += 1;
@@ -1149,14 +1196,14 @@ pub const Block = struct {
                     .global => {},
                     .upvalue => {},
                 },
-                .r_value => {},
+                else => continue,
             }
         }
 
-        return count + self.ir.referenceCount(offset, registerIndex);
+        return count + self.ir.referenceCount(self.offset orelse 0, registerIndex);
     }
 
-    pub fn hasReference(self: *Block, offset: Rir.Offset, registerIndex: Rbc.RegisterIndex) bool {
+    pub fn hasReference(self: *Block, registerIndex: Rbc.RegisterIndex) bool {
         if (self.phi_node) |phiNode| {
             if (phiNode.register) |reg| {
                 if (reg.getIndex() == registerIndex) return true;
@@ -1183,7 +1230,7 @@ pub const Block = struct {
             }
         }
 
-        return self.ir.hasReference(offset, registerIndex);
+        return self.ir.hasReference(self.offset orelse 0, registerIndex);
     }
 
     pub fn load(self: *Block, source: Rir.Operand) !Rir.Operand {
@@ -1194,27 +1241,234 @@ pub const Block = struct {
         utils.todo(noreturn, .{ self, source, value });
     }
 
-    pub fn read(self: *Block, source: Rir.Operand) !Rir.Operand {
-        utils.todo(noreturn, .{ self, source });
+    pub fn memcpy(self: *Block, location: enum { register, memory }, size: Rir.Size, destination: *Rir.Register, source: *Rir.Register) !void {
+        switch (location) {
+            .register =>
+                if (size <= 0) return
+                else if (size <= 1) try self.active_builder.copy_8(destination.getIndex(), source.getIndex())
+                else if (size <= 2) try self.active_builder.copy_16(destination.getIndex(), source.getIndex())
+                else if (size <= 4) try self.active_builder.copy_32(destination.getIndex(), source.getIndex())
+                else if (size <= 8) try self.active_builder.copy_64(destination.getIndex(), source.getIndex())
+                else return error.InvalidOperand,
+            .memory => @panic("memcpy memory nyi"),
+        }
     }
 
-    pub fn write(self: *Block, destination: Rir.Operand, value: Rir.Operand) !void {
-        utils.todo(noreturn, .{ self, destination, value });
+    pub fn assign(self: *Block, destination: Rir.Operand, newValue: Rir.Operand) !void {
+        const destType = try destination.getType();
+        const rValue = try self.coerceRegisterOrRValue(newValue, destType);
+
+        return switch (destination) {
+            .meta => error.InvalidOperand,
+            .r_value => error.InvalidOperand,
+            .l_value => |lValue| try assign1(self, lValue, rValue),
+        };
     }
 
-    pub fn coerceRegister(self: *Block, operand: Rir.Operand, typeIr: ?*Rir.Type) !*Rir.Register {
-        utils.todo(noreturn, .{ self, operand, typeIr });
+    pub fn writeRValue(self: *Block, comptime operationKind: ?WriteOp, destination: *Rir.Register, rValue: Rir.RValue) Error!void {
+        const Fns = struct {
+            write8: *const fn(*RbcBuilder.Block, u8, Rbc.RegisterIndex) Error!void,
+            write16: *const fn(*RbcBuilder.Block, u16, Rbc.RegisterIndex) Error!void,
+            write32: *const fn(*RbcBuilder.Block, u32, Rbc.RegisterIndex) Error!void,
+            write64: *const fn(*RbcBuilder.Block, u64, Rbc.RegisterIndex) Error!void,
+        };
+
+        const copyFns = comptime Fns {
+            .write8 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u8, register: Rbc.RegisterIndex) Error!void { return block.copy_8_im(value, register); } }.fun,
+            .write16 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u16, register: Rbc.RegisterIndex) Error!void { return block.copy_16_im(value, register); } }.fun,
+            .write32 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u32, register: Rbc.RegisterIndex) Error!void { return block.copy_32_im(value, register); } }.fun,
+            .write64 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u64, register: Rbc.RegisterIndex) Error!void { return block.copy_64_im(value, register); } }.fun,
+        };
+
+        const storeFns = comptime Fns {
+            .write8 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u8, register: Rbc.RegisterIndex) Error!void { return block.store_8_im(value, register); } }.fun,
+            .write16 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u16, register: Rbc.RegisterIndex) Error!void { return block.store_16_im(value, register); } }.fun,
+            .write32 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u32, register: Rbc.RegisterIndex) Error!void { return block.store_32_im(value, register); } }.fun,
+            .write64 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u64, register: Rbc.RegisterIndex) Error!void { return block.store_64_im(value, register); } }.fun,
+        };
+
+        const typeLayout = try destination.type.getLayout();
+
+        const fns = switch (operationKind orelse if (typeLayout.dimensions.size > 8) WriteOp.store else WriteOp.copy) {
+            .store => storeFns,
+            .copy => copyFns,
+        };
+
+        switch (rValue) {
+            .immediate => |im| {
+                // Immediates are always <=64 bits as of now
+                const registerSize = typeLayout.dimensions.registerSize() orelse unreachable;
+
+                switch(registerSize) {
+                    0 => return,
+                    8 => try fns.write8(self.active_builder, im.asU8Unchecked(), destination.getIndex()),
+                    16 => try fns.write16(self.active_builder, im.asU16Unchecked(), destination.getIndex()),
+                    32 => try fns.write32(self.active_builder, im.asU32Unchecked(), destination.getIndex()),
+                    64 => try fns.write64(self.active_builder, im.asU64Unchecked(), destination.getIndex()),
+                    else => unreachable,
+                }
+            },
+            .function => |functionIr| {
+                const functionGen = try self.generator.getFunction(functionIr);
+                try fns.write16(self.active_builder, functionGen.builder.index, destination.getIndex());
+            },
+            .foreign => |foreignIr| {
+                const foreignIndex = try self.generator.getForeign(foreignIr);
+                try fns.write16(self.active_builder, foreignIndex, destination.getIndex());
+            },
+        }
+    }
+
+    pub fn coerceRegister(self: *Block, operand: Rir.Operand, maybeExpectedTypeIr: ?*Rir.Type) !*Rir.Register {
+        const typeIr = maybeExpectedTypeIr orelse try operand.getType();
+
+        switch (operand) {
+            .meta => return error.InvalidOperand,
+            .l_value => |l| switch (l) {
+                .register => |reg|
+                    if (utils.equal(reg.type, typeIr)) {
+                        return reg;
+                    } else if (reg.type.isRegisterCoercibleTo(false, false, typeIr)) {
+                        if (self.hasReference(reg.getIndex())) {
+                            const outReg = try self.allocRegister(typeIr);
+
+                            try self.assign(.from(outReg), .from(reg));
+
+                            return outReg;
+                        } else {
+                            reg.type = typeIr;
+                            return reg;
+                        }
+                    },
+                .multi_register => @panic("multi register coercion to register nyi"),
+                .local => |localIr|
+                    if (localIr.register) |reg| {
+                        if (utils.equal(reg.type, typeIr)) {
+                            return reg;
+                        } else if (reg.type.isRegisterCoercibleTo(false, false, typeIr)) {
+                            const outReg = try self.allocRegister(typeIr);
+
+                            try self.assign(.from(outReg), operand);
+
+                            return outReg;
+                        }
+                    } else {
+                        return error.LocalNotAssignedRegister;
+                    },
+                .upvalue => {
+                    const outReg = try self.allocRegister(typeIr);
+                    try self.assign(.from(outReg), operand);
+
+                    return outReg;
+                },
+                .global => {
+                    const outReg = try self.allocRegister(typeIr);
+                    try self.assign(.from(outReg), operand);
+
+                    return outReg;
+                },
+            },
+            .r_value => |r| switch (r) {
+                .immediate => {
+                    const outReg = try self.allocRegister(typeIr);
+                    try self.assign(.from(outReg), operand);
+
+                    return outReg;
+                },
+                .foreign => {
+                    const outReg = try self.allocRegister(typeIr);
+                    try self.assign(.from(outReg), operand);
+
+                    return outReg;
+                },
+                .function => {
+                    const outReg = try self.allocRegister(typeIr);
+                    try self.assign(.from(outReg), operand);
+
+                    return outReg;
+                },
+            },
+        }
+
+        log.err("cannot coerce operand {} to a register of type {}", .{operand, typeIr});
+        return error.InvalidOperand;
+    }
+
+    pub fn coerceImmediate(_: *Block, operand: Rir.Operand, maybeTypeIr: ?*Rir.Type) Error!Rir.Immediate {
+        switch (operand) {
+            .meta => return error.InvalidOperand,
+            .l_value => return error.InvalidOperand,
+            .r_value => |r| switch (r) {
+                .immediate => |im| {
+                    if (maybeTypeIr) |typeIr| {
+                        if (utils.equal(im.type, typeIr)) {
+                            return im;
+                        } else {
+                            return (im.cast(typeIr) catch return error.TypeMismatch).r_value.immediate;
+                        }
+                    } else {
+                        return im;
+                    }
+                },
+                .foreign => return error.InvalidOperand,
+                .function => return error.InvalidOperand,
+            },
+        }
+    }
+
+    pub fn coerceRValue(self: *Block, operand: Rir.Operand, maybeTypeIr: ?*Rir.Type) Error!Rir.RValue {
+        switch (operand) {
+            .meta => return error.InvalidOperand,
+            .l_value => return error.InvalidOperand,
+            .r_value => |r| switch (r) {
+                .immediate => return .{ .immediate = try self.coerceImmediate(operand, maybeTypeIr) },
+                .foreign => |foreignIr| {
+                    if (maybeTypeIr) |typeIr| {
+                        if (utils.equal(foreignIr.type, typeIr)) {
+                            return r;
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    } else {
+                        return r;
+                    }
+                },
+                .function => |functionIr| {
+                    if (maybeTypeIr) |typeIr| {
+                        if (utils.equal(functionIr.type, typeIr)) {
+                            return r;
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    } else {
+                        return r;
+                    }
+                },
+            },
+        }
+    }
+
+    pub fn coerceRegisterOrRValue(self: *Block, operand: Rir.Operand, typeIr: ?*Rir.Type) Error!Rir.RegisterOrRValue {
+        return switch (operand) {
+            .meta => return error.InvalidOperand,
+            .l_value => .{ .register = try self.coerceRegister(operand, typeIr) },
+            .r_value => .{ .r_value = try self.coerceRValue(operand, typeIr) },
+        };
     }
 
     pub fn coerceRegisterOrImmediate(self: *Block, operand: Rir.Operand, typeIr: ?*Rir.Type) !Rir.RegisterOrImmediate {
-        utils.todo(noreturn, .{ self, operand, typeIr });
+        return switch (operand) {
+            .meta => return error.InvalidOperand,
+            .l_value => .{ .register = try self.coerceRegister(operand, typeIr) },
+            .r_value => .{ .immediate = try self.coerceImmediate(operand, typeIr) },
+        };
     }
 
     pub fn setupCall(self: *Block, functionTypeIr: *Rir.Type, operand: []const Rir.Operand) ![]const Rbc.RegisterIndex {
         utils.todo(noreturn, .{ self, functionTypeIr, operand });
     }
 
-    pub fn coerceAddress(self: *Block, offset: Rir.Offset, operand: Rir.Operand) !Rir.Operand {
+    pub fn coerceAddress(self: *Block, operand: Rir.Operand) !Rir.Operand {
         const operandType = try operand.getType();
         const pointerType = try operandType.createPointer();
 
@@ -1236,7 +1490,7 @@ pub const Block = struct {
                 .global => |globalIr| {
                     const globalGen = try self.generator.getGlobal(globalIr);
 
-                    const outReg = try self.allocRegister(offset, pointerType);
+                    const outReg = try self.allocRegister(pointerType);
                     try self.active_builder.addr_global(globalGen.index, outReg.getIndex());
 
                     return .from(outReg);
@@ -1245,7 +1499,7 @@ pub const Block = struct {
                 .upvalue => |upvalueIr| {
                     const upvalueGen = try self.function.getUpvalue(upvalueIr);
 
-                    const outReg = try self.allocRegister(offset, pointerType);
+                    const outReg = try self.allocRegister(pointerType);
                     try self.active_builder.addr_upvalue(upvalueGen.index, outReg.getIndex());
 
                     return .from(outReg);
@@ -1259,7 +1513,7 @@ pub const Block = struct {
                 .foreign => |foreignIr| {
                     const foreignIndex = try self.generator.getForeign(foreignIr);
 
-                    const outReg = try self.allocRegister(offset, pointerType);
+                    const outReg = try self.allocRegister(pointerType);
                     try self.active_builder.addr_foreign(foreignIndex, outReg.getIndex());
 
                     return .from(outReg);
@@ -1267,7 +1521,7 @@ pub const Block = struct {
                 .function => |functionIr| {
                     const functionGen = try self.generator.getFunction(functionIr);
 
-                    const outReg = try self.allocRegister(offset, pointerType);
+                    const outReg = try self.allocRegister(pointerType);
                     try self.active_builder.addr_function(functionGen.builder.index, outReg.getIndex());
 
                     return .from(outReg);
@@ -1280,19 +1534,19 @@ pub const Block = struct {
         utils.todo(noreturn, .{ self, blockTypeIr, blockGens });
     }
 
-    pub fn unary(self: *Block, op: Rir.OpCode, offset: Rir.Offset) !void {
+    pub fn unary(self: *Block, op: Rir.OpCode) !void {
         const a: Rir.RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null), null);
 
         const output = switch (op) {
-            .neg => try unary1(self, offset, a.getType(), a, .neg, .signed, &.{ .floating, .signed }),
-            .bnot => try unary1(self, offset, a.getType(), a, .bnot, .no_sign, &.{ .unsigned, .signed }),
-            else => utils.todo(noreturn, .{ a, op, offset }),
+            .neg => try unary1(self, a.getType(), a, .neg, .signed, &.{ .floating, .signed }),
+            .bnot => try unary1(self, a.getType(), a, .bnot, .no_sign, &.{ .unsigned, .signed }),
+            else => utils.todo(noreturn, .{ a, op, }),
         };
 
         try self.push(output);
     }
 
-    pub fn binary(self: *Block, op: Rir.OpCode, offset: Rir.Offset) !void {
+    pub fn binary(self: *Block, op: Rir.OpCode) !void {
         const a: Rir.RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null), null);
         const b: Rir.RegisterOrImmediate = try self.coerceRegisterOrImmediate(try self.pop(null), a.getType());
 
@@ -1303,160 +1557,160 @@ pub const Block = struct {
         }
 
         const output: Rir.Operand = switch (op) {
-            .add => try binary1(self, offset, typeIr, a, b, .add, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
-            .sub => try binary1(self, offset, typeIr, a, b, .sub, .sign_agnostic, .non_commutative, &.{ .floating, .unsigned, .signed }),
-            .mul => try binary1(self, offset, typeIr, a, b, .mul, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
-            .div => try binary1(self, offset, typeIr, a, b, .div, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
-            .rem => try binary1(self, offset, typeIr, a, b, .rem, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
-            .band => try binary1(self, offset, typeIr, a, b, .band, .no_sign, .commutative, &.{ .unsigned, .signed }),
-            .bor => try binary1(self, offset, typeIr, a, b, .bor, .no_sign, .commutative, &.{ .unsigned, .signed }),
-            .bxor => try binary1(self, offset, typeIr, a, b, .bxor, .no_sign, .commutative, &.{ .unsigned, .signed }),
-            .bshiftl => try binary1(self, offset, typeIr, a, b, .bshiftl, .no_sign, .non_commutative, &.{ .unsigned, .signed }),
-            .bshiftr => try binary1(self, offset, typeIr, a, b, .bshiftr, .signed, .non_commutative, &.{ .unsigned, .signed }),
-            .eq => try binary1(self, offset, typeIr, a, b, .eq, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
-            .ne => try binary1(self, offset, typeIr, a, b, .ne, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
-            .lt => try binary1(self, offset, typeIr, a, b, .lt, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
-            .gt => try binary1(self, offset, typeIr, a, b, .gt, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
-            .le => try binary1(self, offset, typeIr, a, b, .le, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
-            .ge => try binary1(self, offset, typeIr, a, b, .ge, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .add => try binary1(self, typeIr, a, b, .add, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
+            .sub => try binary1(self, typeIr, a, b, .sub, .sign_agnostic, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .mul => try binary1(self, typeIr, a, b, .mul, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
+            .div => try binary1(self, typeIr, a, b, .div, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .rem => try binary1(self, typeIr, a, b, .rem, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .band => try binary1(self, typeIr, a, b, .band, .no_sign, .commutative, &.{ .unsigned, .signed }),
+            .bor => try binary1(self, typeIr, a, b, .bor, .no_sign, .commutative, &.{ .unsigned, .signed }),
+            .bxor => try binary1(self, typeIr, a, b, .bxor, .no_sign, .commutative, &.{ .unsigned, .signed }),
+            .bshiftl => try binary1(self, typeIr, a, b, .bshiftl, .no_sign, .non_commutative, &.{ .unsigned, .signed }),
+            .bshiftr => try binary1(self, typeIr, a, b, .bshiftr, .signed, .non_commutative, &.{ .unsigned, .signed }),
+            .eq => try binary1(self, typeIr, a, b, .eq, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
+            .ne => try binary1(self, typeIr, a, b, .ne, .sign_agnostic, .commutative, &.{ .floating, .unsigned, .signed }),
+            .lt => try binary1(self, typeIr, a, b, .lt, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .gt => try binary1(self, typeIr, a, b, .gt, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .le => try binary1(self, typeIr, a, b, .le, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
+            .ge => try binary1(self, typeIr, a, b, .ge, .signed, .non_commutative, &.{ .floating, .unsigned, .signed }),
             else => return error.InvalidOpCode,
         };
 
         try self.push(output);
     }
 
-    pub fn cast(self: *Block, offset: Rir.Offset, outputTypeIr: *Rir.Type) !void {
+    pub fn cast(self: *Block, outputTypeIr: *Rir.Type) !void {
         const a = try self.pop(null);
         const inputTypeIr = try a.getType();
 
         const output: Rir.Operand = switch (inputTypeIr.info) {
             .U8 => switch (outputTypeIr.info) {
                 .U8 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U16 => try cast1(self, .u_ext_8_16, offset, outputTypeIr, a),
-                .U32 => try cast1(self, .u_ext_8_32, offset, outputTypeIr, a),
-                .U64 => try cast1(self, .u_ext_8_64, offset, outputTypeIr, a),
+                .U16 => try cast1(self, .u_ext_8_16, outputTypeIr, a),
+                .U32 => try cast1(self, .u_ext_8_32, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_8_64, outputTypeIr, a),
                 .S8 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S16 => try cast1(self, .s_ext_8_16, offset, outputTypeIr, a),
-                .S32 => try cast1(self, .s_ext_8_32, offset, outputTypeIr, a),
-                .S64 => try cast1(self, .s_ext_8_64, offset, outputTypeIr, a),
-                .F32 => try cast1(self, .u8_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast1(self, .u8_to_f64, offset, outputTypeIr, a),
+                .S16 => try cast1(self, .s_ext_8_16, outputTypeIr, a),
+                .S32 => try cast1(self, .s_ext_8_32, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_8_64, outputTypeIr, a),
+                .F32 => try cast1(self, .u8_to_f32, outputTypeIr, a),
+                .F64 => try cast1(self, .u8_to_f64, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .U16 => switch (outputTypeIr.info) {
-                .U8 => try cast1(self, .i_trunc_16_8, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_16_8, outputTypeIr, a),
                 .U16 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U32 => try cast1(self, .u_ext_16_32, offset, outputTypeIr, a),
-                .U64 => try cast1(self, .u_ext_16_64, offset, outputTypeIr, a),
-                .S8 => try cast1(self, .i_trunc_16_8, offset, outputTypeIr, a),
+                .U32 => try cast1(self, .u_ext_16_32, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_16_64, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_16_8, outputTypeIr, a),
                 .S16 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S32 => try cast1(self, .s_ext_16_32, offset, outputTypeIr, a),
-                .S64 => try cast1(self, .s_ext_16_64, offset, outputTypeIr, a),
-                .F32 => try cast1(self, .u16_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast1(self, .u16_to_f64, offset, outputTypeIr, a),
+                .S32 => try cast1(self, .s_ext_16_32, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_16_64, outputTypeIr, a),
+                .F32 => try cast1(self, .u16_to_f32, outputTypeIr, a),
+                .F64 => try cast1(self, .u16_to_f64, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .U32 => switch (outputTypeIr.info) {
-                .U8 => try cast1(self, .i_trunc_32_8, offset, outputTypeIr, a),
-                .U16 => try cast1(self, .i_trunc_32_16, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_32_8, outputTypeIr, a),
+                .U16 => try cast1(self, .i_trunc_32_16, outputTypeIr, a),
                 .U32 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U64 => try cast1(self, .u_ext_32_64, offset, outputTypeIr, a),
-                .S8 => try cast1(self, .i_trunc_32_8, offset, outputTypeIr, a),
-                .S16 => try cast1(self, .i_trunc_32_16, offset, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_32_64, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_32_8, outputTypeIr, a),
+                .S16 => try cast1(self, .i_trunc_32_16, outputTypeIr, a),
                 .S32 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S64 => try cast1(self, .s_ext_32_64, offset, outputTypeIr, a),
-                .F32 => try cast1(self, .u32_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast1(self, .u32_to_f64, offset, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_32_64, outputTypeIr, a),
+                .F32 => try cast1(self, .u32_to_f32, outputTypeIr, a),
+                .F64 => try cast1(self, .u32_to_f64, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .U64 => switch (outputTypeIr.info) {
-                .U8 => try cast1(self, .i_trunc_64_8, offset, outputTypeIr, a),
-                .U16 => try cast1(self, .i_trunc_64_16, offset, outputTypeIr, a),
-                .U32 => try cast1(self, .i_trunc_64_32, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_64_8, outputTypeIr, a),
+                .U16 => try cast1(self, .i_trunc_64_16, outputTypeIr, a),
+                .U32 => try cast1(self, .i_trunc_64_32, outputTypeIr, a),
                 .U64 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S8 => try cast1(self, .i_trunc_64_8, offset, outputTypeIr, a),
-                .S16 => try cast1(self, .i_trunc_64_16, offset, outputTypeIr, a),
-                .S32 => try cast1(self, .i_trunc_64_32, offset, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_64_8, outputTypeIr, a),
+                .S16 => try cast1(self, .i_trunc_64_16, outputTypeIr, a),
+                .S32 => try cast1(self, .i_trunc_64_32, outputTypeIr, a),
                 .S64 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .F32 => try cast1(self, .u64_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast1(self, .u64_to_f64, offset, outputTypeIr, a),
+                .F32 => try cast1(self, .u64_to_f32, outputTypeIr, a),
+                .F64 => try cast1(self, .u64_to_f64, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .S8 => switch (outputTypeIr.info) {
                 .U8 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U16 => try cast1(self, .u_ext_8_16, offset, outputTypeIr, a),
-                .U32 => try cast1(self, .u_ext_8_32, offset, outputTypeIr, a),
-                .U64 => try cast1(self, .u_ext_8_64, offset, outputTypeIr, a),
+                .U16 => try cast1(self, .u_ext_8_16, outputTypeIr, a),
+                .U32 => try cast1(self, .u_ext_8_32, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_8_64, outputTypeIr, a),
                 .S8 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S16 => try cast1(self, .s_ext_8_16, offset, outputTypeIr, a),
-                .S32 => try cast1(self, .s_ext_8_32, offset, outputTypeIr, a),
-                .S64 => try cast1(self, .s_ext_8_64, offset, outputTypeIr, a),
-                .F32 => try cast1(self, .s8_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast1(self, .s8_to_f64, offset, outputTypeIr, a),
+                .S16 => try cast1(self, .s_ext_8_16, outputTypeIr, a),
+                .S32 => try cast1(self, .s_ext_8_32, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_8_64, outputTypeIr, a),
+                .F32 => try cast1(self, .s8_to_f32, outputTypeIr, a),
+                .F64 => try cast1(self, .s8_to_f64, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .S16 => switch (outputTypeIr.info) {
-                .U8 => try cast1(self, .i_trunc_16_8, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_16_8, outputTypeIr, a),
                 .U16 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U32 => try cast1(self, .u_ext_16_32, offset, outputTypeIr, a),
-                .U64 => try cast1(self, .u_ext_16_64, offset, outputTypeIr, a),
-                .S8 => try cast1(self, .i_trunc_16_8, offset, outputTypeIr, a),
+                .U32 => try cast1(self, .u_ext_16_32, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_16_64, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_16_8, outputTypeIr, a),
                 .S16 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S32 => try cast1(self, .s_ext_16_32, offset, outputTypeIr, a),
-                .S64 => try cast1(self, .s_ext_16_64, offset, outputTypeIr, a),
-                .F32 => try cast1(self, .s16_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast1(self, .s16_to_f64, offset, outputTypeIr, a),
+                .S32 => try cast1(self, .s_ext_16_32, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_16_64, outputTypeIr, a),
+                .F32 => try cast1(self, .s16_to_f32, outputTypeIr, a),
+                .F64 => try cast1(self, .s16_to_f64, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .S32 => switch (outputTypeIr.info) {
-                .U8 => try cast1(self, .i_trunc_32_8, offset, outputTypeIr, a),
-                .U16 => try cast1(self, .i_trunc_32_16, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_32_8, outputTypeIr, a),
+                .U16 => try cast1(self, .i_trunc_32_16, outputTypeIr, a),
                 .U32 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .U64 => try cast1(self, .u_ext_32_64, offset, outputTypeIr, a),
-                .S8 => try cast1(self, .i_trunc_32_8, offset, outputTypeIr, a),
-                .S16 => try cast1(self, .i_trunc_32_16, offset, outputTypeIr, a),
+                .U64 => try cast1(self, .u_ext_32_64, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_32_8, outputTypeIr, a),
+                .S16 => try cast1(self, .i_trunc_32_16, outputTypeIr, a),
                 .S32 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S64 => try cast1(self, .s_ext_32_64, offset, outputTypeIr, a),
-                .F32 => try cast1(self, .s32_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast1(self, .s32_to_f64, offset, outputTypeIr, a),
+                .S64 => try cast1(self, .s_ext_32_64, outputTypeIr, a),
+                .F32 => try cast1(self, .s32_to_f32, outputTypeIr, a),
+                .F64 => try cast1(self, .s32_to_f64, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .S64 => switch (outputTypeIr.info) {
-                .U8 => try cast1(self, .i_trunc_64_8, offset, outputTypeIr, a),
-                .U16 => try cast1(self, .i_trunc_64_16, offset, outputTypeIr, a),
-                .U32 => try cast1(self, .i_trunc_64_32, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .i_trunc_64_8, outputTypeIr, a),
+                .U16 => try cast1(self, .i_trunc_64_16, outputTypeIr, a),
+                .U32 => try cast1(self, .i_trunc_64_32, outputTypeIr, a),
                 .U64 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .S8 => try cast1(self, .i_trunc_64_8, offset, outputTypeIr, a),
-                .S16 => try cast1(self, .i_trunc_64_16, offset, outputTypeIr, a),
-                .S32 => try cast1(self, .i_trunc_64_32, offset, outputTypeIr, a),
+                .S8 => try cast1(self, .i_trunc_64_8, outputTypeIr, a),
+                .S16 => try cast1(self, .i_trunc_64_16, outputTypeIr, a),
+                .S32 => try cast1(self, .i_trunc_64_32, outputTypeIr, a),
                 .S64 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .F32 => try cast1(self, .s64_to_f32, offset, outputTypeIr, a),
-                .F64 => try cast1(self, .s64_to_f64, offset, outputTypeIr, a),
+                .F32 => try cast1(self, .s64_to_f32, outputTypeIr, a),
+                .F64 => try cast1(self, .s64_to_f64, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .F32 => switch (outputTypeIr.info) {
-                .U8 => try cast1(self, .f32_to_u8, offset, outputTypeIr, a),
-                .U16 => try cast1(self, .f32_to_u16, offset, outputTypeIr, a),
-                .U32 => try cast1(self, .f32_to_u32, offset, outputTypeIr, a),
-                .U64 => try cast1(self, .f32_to_u64, offset, outputTypeIr, a),
-                .S8 => try cast1(self, .f32_to_s8, offset, outputTypeIr, a),
-                .S16 => try cast1(self, .f32_to_s16, offset, outputTypeIr, a),
-                .S32 => try cast1(self, .f32_to_s32, offset, outputTypeIr, a),
-                .S64 => try cast1(self, .f32_to_s64, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .f32_to_u8, outputTypeIr, a),
+                .U16 => try cast1(self, .f32_to_u16, outputTypeIr, a),
+                .U32 => try cast1(self, .f32_to_u32, outputTypeIr, a),
+                .U64 => try cast1(self, .f32_to_u64, outputTypeIr, a),
+                .S8 => try cast1(self, .f32_to_s8, outputTypeIr, a),
+                .S16 => try cast1(self, .f32_to_s16, outputTypeIr, a),
+                .S32 => try cast1(self, .f32_to_s32, outputTypeIr, a),
+                .S64 => try cast1(self, .f32_to_s64, outputTypeIr, a),
                 .F32 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
-                .F64 => try cast1(self, .f_trunc_64_32, offset, outputTypeIr, a),
+                .F64 => try cast1(self, .f_trunc_64_32, outputTypeIr, a),
                 else => return error.InvalidOperand,
             },
             .F64 => switch (outputTypeIr.info) {
-                .U8 => try cast1(self, .f64_to_u8, offset, outputTypeIr, a),
-                .U16 => try cast1(self, .f64_to_u16, offset, outputTypeIr, a),
-                .U32 => try cast1(self, .f64_to_u32, offset, outputTypeIr, a),
-                .U64 => try cast1(self, .f64_to_u64, offset, outputTypeIr, a),
-                .S8 => try cast1(self, .f64_to_s8, offset, outputTypeIr, a),
-                .S16 => try cast1(self, .f64_to_s16, offset, outputTypeIr, a),
-                .S32 => try cast1(self, .f64_to_s32, offset, outputTypeIr, a),
-                .S64 => try cast1(self, .f64_to_s64, offset, outputTypeIr, a),
-                .F32 => try cast1(self, .f_ext_32_64, offset, outputTypeIr, a),
+                .U8 => try cast1(self, .f64_to_u8, outputTypeIr, a),
+                .U16 => try cast1(self, .f64_to_u16, outputTypeIr, a),
+                .U32 => try cast1(self, .f64_to_u32, outputTypeIr, a),
+                .U64 => try cast1(self, .f64_to_u64, outputTypeIr, a),
+                .S8 => try cast1(self, .f64_to_s8, outputTypeIr, a),
+                .S16 => try cast1(self, .f64_to_s16, outputTypeIr, a),
+                .S32 => try cast1(self, .f64_to_s32, outputTypeIr, a),
+                .S64 => try cast1(self, .f64_to_s64, outputTypeIr, a),
+                .F32 => try cast1(self, .f_ext_32_64, outputTypeIr, a),
                 .F64 => .from(try self.coerceRegisterOrImmediate(a, outputTypeIr)),
                 else => return error.InvalidOperand,
             },
@@ -1469,7 +1723,6 @@ pub const Block = struct {
 
 fn unary2(
     self: *Block,
-    offset: Rir.Offset,
     typeIr: *Rir.Type,
     a: Rir.RegisterOrImmediate,
     comptime im: anytype,
@@ -1485,19 +1738,16 @@ fn unary2(
 
     switch (a) {
         .register => |reg| {
-            const out = try self.allocRegister(offset, typeIr);
+            const out = try self.allocRegister(typeIr);
             try dyn(self.active_builder, reg.getIndex(), out.getIndex());
             return .from(out);
         },
-        .immediate => |*data| {
-            return .from(try im(data));
-        },
+        .immediate => |*x| return .from(try im(x)),
     }
 }
 
 fn binary2(
     self: *Block,
-    offset: Rir.Offset,
     typeIr: *Rir.Type,
     a: Rir.RegisterOrImmediate,
     b: Rir.RegisterOrImmediate,
@@ -1508,11 +1758,11 @@ fn binary2(
     comptime rhs_im: anytype,
 ) !Rir.Operand {
     if (a == .immediate and b == .register) {
-        const out = try self.allocRegister(offset, typeIr);
+        const out = try self.allocRegister(typeIr);
         try lhs_im(self.active_builder, downcast(&a.immediate), b.register.getIndex(), out.getIndex());
         return .from(out);
     } else if (a == .register and b == .immediate) {
-        const out = try self.allocRegister(offset, typeIr);
+        const out = try self.allocRegister(typeIr);
         if (comptime @typeInfo(@TypeOf(rhs_im)) == .null) {
             try lhs_im(self.active_builder, downcast(&b.immediate), a.register.getIndex(), out.getIndex());
         } else {
@@ -1520,7 +1770,7 @@ fn binary2(
         }
         return .from(out);
     } else if (a == .register and b == .register) {
-        const out = try self.allocRegister(offset, typeIr);
+        const out = try self.allocRegister(typeIr);
         try neither_im(self.active_builder, a.register.getIndex(), b.register.getIndex(), out.getIndex());
         return .from(out);
     } else {
@@ -1530,7 +1780,6 @@ fn binary2(
 
 fn unary1(
     self: *Block,
-    offset: Rir.Offset,
     typeIr: *Rir.Type,
     a: Rir.RegisterOrImmediate,
     comptime opCode: Rir.OpCode,
@@ -1558,23 +1807,22 @@ fn unary1(
     const im = @field(Rir.Immediate, opName);
 
     switch (typeIr.info) {
-        .U8 => if (comptime validForUnsigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_8")) else return error.InvalidOperand,
-        .U16 => if (comptime validForUnsigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_16")) else return error.InvalidOperand,
-        .U32 => if (comptime validForUnsigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_32")) else return error.InvalidOperand,
-        .U64 => if (comptime validForUnsigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_64")) else return error.InvalidOperand,
-        .S8 => if (comptime validForSigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_8")) else return error.InvalidOperand,
-        .S16 => if (comptime validForSigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_16")) else return error.InvalidOperand,
-        .S32 => if (comptime validForSigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_32")) else return error.InvalidOperand,
-        .S64 => if (comptime validForSigned) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_64")) else return error.InvalidOperand,
-        .F32 => if (comptime validForFloat) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, "f_" ++ opName ++ "_32")) else return error.InvalidOperand,
-        .F64 => if (comptime validForFloat) return try unary2(self, offset, typeIr, a, im, @field(RbcBuilder.Block, "f_" ++ opName ++ "_64")) else return error.InvalidOperand,
+        .U8 => if (comptime validForUnsigned) return try unary2(self, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_8")) else return error.InvalidOperand,
+        .U16 => if (comptime validForUnsigned) return try unary2(self, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_16")) else return error.InvalidOperand,
+        .U32 => if (comptime validForUnsigned) return try unary2(self, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_32")) else return error.InvalidOperand,
+        .U64 => if (comptime validForUnsigned) return try unary2(self, typeIr, a, im, @field(RbcBuilder.Block, unsigned_prefix ++ opName ++ "_64")) else return error.InvalidOperand,
+        .S8 => if (comptime validForSigned) return try unary2(self, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_8")) else return error.InvalidOperand,
+        .S16 => if (comptime validForSigned) return try unary2(self, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_16")) else return error.InvalidOperand,
+        .S32 => if (comptime validForSigned) return try unary2(self, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_32")) else return error.InvalidOperand,
+        .S64 => if (comptime validForSigned) return try unary2(self, typeIr, a, im, @field(RbcBuilder.Block, signed_prefix ++ opName ++ "_64")) else return error.InvalidOperand,
+        .F32 => if (comptime validForFloat) return try unary2(self, typeIr, a, im, @field(RbcBuilder.Block, "f_" ++ opName ++ "_32")) else return error.InvalidOperand,
+        .F64 => if (comptime validForFloat) return try unary2(self, typeIr, a, im, @field(RbcBuilder.Block, "f_" ++ opName ++ "_64")) else return error.InvalidOperand,
         else => return error.InvalidOperand,
     }
 }
 
 fn binary1(
     self: *Block,
-    offset: Rir.Offset,
     typeIr: *Rir.Type,
     a: Rir.RegisterOrImmediate,
     b: Rir.RegisterOrImmediate,
@@ -1605,7 +1853,6 @@ fn binary1(
     switch (typeIr.info) {
         .U8 => if (comptime validForUnsigned) return try binary2(
             self,
-            offset,
             typeIr,
             a,
             b,
@@ -1617,7 +1864,6 @@ fn binary1(
         ) else return error.InvalidOperand,
         .U16 => if (comptime validForUnsigned) return try binary2(
             self,
-            offset,
             typeIr,
             a,
             b,
@@ -1629,7 +1875,6 @@ fn binary1(
         ) else return error.InvalidOperand,
         .U32 => if (comptime validForUnsigned) return try binary2(
             self,
-            offset,
             typeIr,
             a,
             b,
@@ -1641,7 +1886,6 @@ fn binary1(
         ) else return error.InvalidOperand,
         .U64 => if (comptime validForUnsigned) return try binary2(
             self,
-            offset,
             typeIr,
             a,
             b,
@@ -1653,7 +1897,6 @@ fn binary1(
         ) else return error.InvalidOperand,
         .S8 => if (comptime validForSigned) return try binary2(
             self,
-            offset,
             typeIr,
             a,
             b,
@@ -1665,7 +1908,6 @@ fn binary1(
         ) else return error.InvalidOperand,
         .S16 => if (comptime validForSigned) return try binary2(
             self,
-            offset,
             typeIr,
             a,
             b,
@@ -1677,7 +1919,6 @@ fn binary1(
         ) else return error.InvalidOperand,
         .S32 => if (comptime validForSigned) return try binary2(
             self,
-            offset,
             typeIr,
             a,
             b,
@@ -1689,7 +1930,6 @@ fn binary1(
         ) else return error.InvalidOperand,
         .S64 => if (comptime validForSigned) return try binary2(
             self,
-            offset,
             typeIr,
             a,
             b,
@@ -1701,7 +1941,6 @@ fn binary1(
         ) else return error.InvalidOperand,
         .F32 => if (comptime validForFloat) return try binary2(
             self,
-            offset,
             typeIr,
             a,
             b,
@@ -1713,7 +1952,6 @@ fn binary1(
         ) else return error.InvalidOperand,
         .F64 => if (comptime validForFloat) return try binary2(
             self,
-            offset,
             typeIr,
             a,
             b,
@@ -1727,16 +1965,158 @@ fn binary1(
     }
 }
 
-fn cast1(self: *Block, comptime opCode: Rbc.Code, offset: Rir.Offset, outputTypeIr: *Rir.Type, a: Rir.Operand) !Rir.Operand {
-    return switch (try self.coerceRegisterOrImmediate(a, outputTypeIr)) {
+fn cast1(self: *Block, comptime opCode: Rbc.Code, outputTypeIr: *Rir.Type, a: Rir.Operand) !Rir.Operand {
+    return switch (try self.coerceRegisterOrRValue(a, outputTypeIr)) {
         .register => |aRegister| reg: {
             if (a == .l_value and utils.equal(a.l_value.register, aRegister)) {
                 break :reg .from(aRegister);
             }
-            const bRegister = try self.allocRegister(offset, outputTypeIr);
+            const bRegister = try self.allocRegister(outputTypeIr);
             try @field(RbcBuilder.Block, @tagName(opCode))(self.active_builder, aRegister.getIndex(), bRegister.getIndex());
             break :reg .from(bRegister);
         },
-        .immediate => |im| .from(im),
+        .r_value => |r| .from(r),
     };
+}
+
+fn assign1(self: *Block, lValue: Rir.LValue, rValue: Rir.RegisterOrRValue) !void {
+    const typeLayout = try lValue.getType().getLayout();
+
+    switch (lValue) {
+        .register => |outReg| switch (rValue) {
+            .register => |inReg| {
+                if (outReg.id == inReg.id) return;
+
+                try self.memcpy(.register, typeLayout.dimensions.size, outReg, inReg);
+            },
+            .r_value => |r| try self.writeRValue(null, outReg, r),
+        },
+        .multi_register => @panic("multi register assignment nyi"),
+        .local => |localIr| {
+            const localRegister = localIr.register orelse return error.LocalNotAssignedRegister;
+
+            switch (localIr.storage) {
+                .none => return error.LocalNotAssignedStorage,
+
+                .n_registers => @panic("n_registers local assignment nyi"),
+                .@"comptime" => @panic("comptime local assignment nyi"),
+
+                .zero_size => {},
+
+                .register => switch (rValue) {
+                    .register => |inReg| {
+                        if (localRegister.id == inReg.id) return;
+
+                        try self.memcpy(.register, typeLayout.dimensions.size, localRegister, inReg);
+                    },
+                    .r_value => |r| try self.writeRValue(null, localRegister, r),
+                },
+
+                .stack => switch (rValue) {
+                    .register => |inReg| {
+                        if (localRegister.id == inReg.id) return;
+
+                        try self.memcpy(.memory, typeLayout.dimensions.size, localRegister, inReg);
+                    },
+                    .r_value => |r| try self.writeRValue(.store, localRegister, r),
+                }
+            }
+        },
+        .upvalue => |upvalueIr| {
+            const upvalueGen = try self.function.getUpvalue(upvalueIr);
+
+            switch (rValue) {
+                .register => |inReg| {
+                    if (typeLayout.dimensions.registerSize()) |registerSize| {
+                        switch(registerSize) {
+                            0 => return,
+                            8 => try self.active_builder.write_upvalue_8(upvalueGen.index, inReg.getIndex()),
+                            16 => try self.active_builder.write_upvalue_16(upvalueGen.index, inReg.getIndex()),
+                            32 => try self.active_builder.write_upvalue_32(upvalueGen.index, inReg.getIndex()),
+                            64 => try self.active_builder.write_upvalue_64(upvalueGen.index, inReg.getIndex()),
+                            else => unreachable,
+                        }
+                    } else {
+                        const addrTypeIr = try upvalueGen.ir.type.createPointer();
+                        const addrReg = try self.allocRegister(addrTypeIr);
+
+                        try self.active_builder.addr_upvalue(upvalueGen.index, addrReg.getIndex());
+
+                        try self.memcpy(.memory, typeLayout.dimensions.size, addrReg, inReg);
+                    }
+                },
+                .r_value => |r| switch (r) {
+                    .immediate => |im| {
+                        // Immediates are always <=64 bits as of now
+                        const registerSize = typeLayout.dimensions.registerSize() orelse unreachable;
+
+                        switch (registerSize) {
+                            0 => return,
+                            8 => try self.active_builder.write_upvalue_8_im(im.asU8Unchecked(), upvalueGen.index),
+                            16 => try self.active_builder.write_upvalue_16_im(im.asU16Unchecked(), upvalueGen.index),
+                            32 => try self.active_builder.write_upvalue_32_im(im.asU32Unchecked(), upvalueGen.index),
+                            64 => try self.active_builder.write_upvalue_64_im(im.asU64Unchecked(), upvalueGen.index),
+                            else => unreachable,
+                        }
+                    },
+                    .function => |functionIr| {
+                        const functionGen = try self.generator.getFunction(functionIr);
+                        try self.active_builder.write_upvalue_16_im(functionGen.builder.index, upvalueGen.index);
+                    },
+                    .foreign => |foreignIr| {
+                        const foreignIndex = try self.generator.getForeign(foreignIr);
+                        try self.active_builder.write_upvalue_16_im(foreignIndex, upvalueGen.index);
+                    },
+                },
+            }
+        },
+        .global => |globalIr| {
+            const globalGen = try self.generator.getGlobal(globalIr);
+
+            switch (rValue) {
+                .register => |inReg| {
+                    if (typeLayout.dimensions.registerSize()) |registerSize| {
+                        switch(registerSize) {
+                            0 => return,
+                            8 => try self.active_builder.write_global_8(globalGen.index, inReg.getIndex()),
+                            16 => try self.active_builder.write_global_16(globalGen.index, inReg.getIndex()),
+                            32 => try self.active_builder.write_global_32(globalGen.index, inReg.getIndex()),
+                            64 => try self.active_builder.write_global_64(globalGen.index, inReg.getIndex()),
+                            else => unreachable,
+                        }
+                    } else {
+                        const addrTypeIr = try globalGen.ir.type.createPointer();
+                        const addrReg = try self.allocRegister(addrTypeIr);
+
+                        try self.active_builder.addr_global(globalGen.index, addrReg.getIndex());
+
+                        try self.memcpy(.memory, typeLayout.dimensions.size, addrReg, inReg);
+                    }
+                },
+                .r_value => |r| switch (r) {
+                    .immediate => |im| {
+                        // Immediates are always <=64 bits as of now
+                        const registerSize = typeLayout.dimensions.registerSize() orelse unreachable;
+
+                        switch(registerSize) {
+                            0 => return,
+                            8 => try self.active_builder.write_global_8_im(im.asU8Unchecked(), globalGen.index),
+                            16 => try self.active_builder.write_global_16_im(im.asU16Unchecked(), globalGen.index),
+                            32 => try self.active_builder.write_global_32_im(im.asU32Unchecked(), globalGen.index),
+                            64 => try self.active_builder.write_global_64_im(im.asU64Unchecked(), globalGen.index),
+                            else => unreachable,
+                        }
+                    },
+                    .function => |functionIr| {
+                        const functionGen = try self.generator.getFunction(functionIr);
+                        try self.active_builder.write_global_16_im(functionGen.builder.index, globalGen.index);
+                    },
+                    .foreign => |foreignIr| {
+                        const foreignIndex = try self.generator.getForeign(foreignIr);
+                        try self.active_builder.write_global_16_im(foreignIndex, globalGen.index);
+                    },
+                }
+            }
+        },
+    }
 }

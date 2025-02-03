@@ -447,6 +447,15 @@ pub const Dimensions = packed struct {
             .alignment = @intCast(@alignOf(T)),
         };
     }
+
+    pub fn registerSize(self: Dimensions) ?Size {
+        return if (self.size <= 0) 0
+        else if (self.size <= 1) 8
+        else if (self.size <= 2) 16
+        else if (self.size <= 4) 32
+        else if (self.size <= 8) 64
+        else null;
+    }
 };
 
 pub const Layout = struct {
@@ -1432,6 +1441,64 @@ pub const Type = struct {
 
             .Function => try formatter.print("[{} @ {x}]", .{ formatter.wrap(self), @intFromPtr(memory.ptr) }),
         }
+    }
+
+    pub fn isBitcastableTo(self: *const Type, other: *const Type) bool {
+        if (utils.equal(self.*, other.*)) return true;
+
+        const selfLayout = self.getLayout() catch return false;
+        const otherLayout = other.getLayout() catch return false;
+
+        return utils.equal(selfLayout.dimensions, otherLayout.dimensions);
+    }
+
+    /// Register-coercion means the value can be treated as another type without any modification to the value itself, and without relocating it in memory
+    pub fn isRegisterCoercibleTo(self: *const Type, allowBitcast: bool, allowPointer: bool, maybeOther: ?*const Type) bool {
+        const other = maybeOther orelse return true;
+
+        if (utils.equal(self.*, other.*)) return true;
+
+        switch (self.info) {
+            .U8 => if (other.info == .S8) return true,
+            .S8 => if (other.info == .U8) return true,
+
+            .U16 => if (other.info == .S16) return true,
+            .S16 => if (other.info == .U16) return true,
+
+            .U32 => if (other.info == .S32) return true,
+            .S32 => if (other.info == .U32) return true,
+
+            .U64 => switch (other.info) {
+                .Pointer => return allowPointer,
+                .S64 => return true,
+                else => {},
+            },
+
+            .S64 => switch (other.info) {
+                .Pointer => return allowPointer,
+                .U64 => return true,
+                else => {},
+            },
+
+            .Pointer => switch (other.info) {
+                .U64 => return allowPointer,
+                .S64 => return allowPointer,
+                .Pointer => return allowPointer,
+                else => {},
+            },
+
+            else => {},
+        }
+
+        if (!allowBitcast) return false;
+
+        const selfLayout = self.getLayout() catch return false;
+        const otherLayout = other.getLayout() catch return false;
+
+        if (utils.equal(selfLayout.local_storage, .zero_size) and utils.equal(otherLayout.local_storage, .zero_size)) return true;
+
+        return utils.equal(selfLayout.dimensions, otherLayout.dimensions)
+           and utils.equal(selfLayout.local_storage, otherLayout.local_storage);
     }
 
     pub fn getLayout(self: *const Type) error{ InvalidType, OutOfMemory }!*const Layout {
@@ -2517,8 +2584,7 @@ pub const OpCode = enum(u8) {
     swap,
     copy,
 
-    read,
-    write,
+    assign,
 
     new_local,
 
@@ -2666,8 +2732,7 @@ pub const OpData = packed union {
     swap: Index,
     copy: Index,
 
-    read: void,
-    write: void,
+    assign: void,
 
     new_local: OpLocal,
 
@@ -2729,8 +2794,7 @@ pub const OpData = packed union {
             .swap => try formatter.fmt(self.swap),
             .copy => try formatter.fmt(self.copy),
 
-            .read => {},
-            .write => {},
+            .assign => {},
 
             .new_local => try formatter.fmt(self.new_local),
 
@@ -2855,14 +2919,21 @@ pub const RegisterOrImmediate = union(enum) {
     pub fn getType(self: *const RegisterOrImmediate) *Rir.Type {
         return switch (self.*) {
             .register => self.register.type,
-            .immediate => self.immediate.type,
+            .immediate => self.immediate.getType(),
         };
     }
 };
 
-pub const SimpleImmediateSize = enum(u16) {
-    @"inline" = 32,
-    wide = 64,
+pub const RegisterOrRValue = union(enum) {
+    register: *Rir.Register,
+    r_value: Rir.RValue,
+
+    pub fn getType(self: *const RegisterOrRValue) *Rir.Type {
+        return switch (self.*) {
+            .register => self.register.type,
+            .r_value => self.r_value.getType(),
+        };
+    }
 };
 
 /// Used as operands when compiling instructions
@@ -3833,6 +3904,11 @@ pub const Operand = union(enum) {
 
             LValue => .{ .l_value = val },
 
+            RegisterOrRValue => switch (val) {
+                .register => |x| from(x),
+                .r_value => |x| from(x),
+            },
+
             RegisterOrImmediate => switch (val) {
                 .register => |x| from(x),
                 .immediate => |x| from(x),
@@ -4330,12 +4406,8 @@ pub const Block = struct {
         try op(self, .addr, {});
     }
 
-    pub fn read(self: *Block) !void {
-        try op(self, .read, {});
-    }
-
-    pub fn write(self: *Block) !void {
-        try op(self, .write, {});
+    pub fn assign(self: *Block) !void {
+        try op(self, .assign, {});
     }
 
     pub fn load(self: *Block) !void {
