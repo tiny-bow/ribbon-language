@@ -437,6 +437,20 @@ pub const FieldId = enum(u16) {
     }
 };
 
+pub const RegisterSize = enum(u4) {
+    r0 = 0,
+    r8 = 1,
+    r16 = 2,
+    r32 = 4,
+    r64 = 8,
+
+    pub fn fromByteSize(size: Size) ?RegisterSize {
+        if (size > 8) return null;
+        const left = size & @as(Size, 1) << @intCast(@bitSizeOf(Size) - 1 -| @clz(size));
+        return @enumFromInt(left << @intFromBool(size & ~left > 0));
+    }
+};
+
 pub const Dimensions = packed struct {
     size: Size = 0,
     alignment: Alignment = 1,
@@ -446,15 +460,6 @@ pub const Dimensions = packed struct {
             .size = @sizeOf(T),
             .alignment = @intCast(@alignOf(T)),
         };
-    }
-
-    pub fn registerSize(self: Dimensions) ?Size {
-        return if (self.size <= 0) 0
-        else if (self.size <= 1) 8
-        else if (self.size <= 2) 16
-        else if (self.size <= 4) 32
-        else if (self.size <= 8) 64
-        else null;
     }
 };
 
@@ -1497,8 +1502,7 @@ pub const Type = struct {
 
         if (utils.equal(selfLayout.local_storage, .zero_size) and utils.equal(otherLayout.local_storage, .zero_size)) return true;
 
-        return utils.equal(selfLayout.dimensions, otherLayout.dimensions)
-           and utils.equal(selfLayout.local_storage, otherLayout.local_storage);
+        return utils.equal(selfLayout.dimensions, otherLayout.dimensions) and utils.equal(selfLayout.local_storage, otherLayout.local_storage);
     }
 
     pub fn getLayout(self: *const Type) error{ InvalidType, OutOfMemory }!*const Layout {

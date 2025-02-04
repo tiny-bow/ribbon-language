@@ -1243,13 +1243,7 @@ pub const Block = struct {
 
     pub fn memcpy(self: *Block, location: enum { register, memory }, size: Rir.Size, destination: *Rir.Register, source: *Rir.Register) !void {
         switch (location) {
-            .register =>
-                if (size <= 0) return
-                else if (size <= 1) try self.active_builder.copy_8(destination.getIndex(), source.getIndex())
-                else if (size <= 2) try self.active_builder.copy_16(destination.getIndex(), source.getIndex())
-                else if (size <= 4) try self.active_builder.copy_32(destination.getIndex(), source.getIndex())
-                else if (size <= 8) try self.active_builder.copy_64(destination.getIndex(), source.getIndex())
-                else return error.InvalidOperand,
+            .register => if (size <= 0) return else if (size <= 1) try self.active_builder.copy_8(destination.getIndex(), source.getIndex()) else if (size <= 2) try self.active_builder.copy_16(destination.getIndex(), source.getIndex()) else if (size <= 4) try self.active_builder.copy_32(destination.getIndex(), source.getIndex()) else if (size <= 8) try self.active_builder.copy_64(destination.getIndex(), source.getIndex()) else return error.InvalidOperand,
             .memory => @panic("memcpy memory nyi"),
         }
     }
@@ -1267,24 +1261,56 @@ pub const Block = struct {
 
     pub fn writeRValue(self: *Block, comptime operationKind: ?WriteOp, destination: *Rir.Register, rValue: Rir.RValue) Error!void {
         const Fns = struct {
-            write8: *const fn(*RbcBuilder.Block, u8, Rbc.RegisterIndex) Error!void,
-            write16: *const fn(*RbcBuilder.Block, u16, Rbc.RegisterIndex) Error!void,
-            write32: *const fn(*RbcBuilder.Block, u32, Rbc.RegisterIndex) Error!void,
-            write64: *const fn(*RbcBuilder.Block, u64, Rbc.RegisterIndex) Error!void,
+            write8: *const fn (*RbcBuilder.Block, u8, Rbc.RegisterIndex) Error!void,
+            write16: *const fn (*RbcBuilder.Block, u16, Rbc.RegisterIndex) Error!void,
+            write32: *const fn (*RbcBuilder.Block, u32, Rbc.RegisterIndex) Error!void,
+            write64: *const fn (*RbcBuilder.Block, u64, Rbc.RegisterIndex) Error!void,
         };
 
-        const copyFns = comptime Fns {
-            .write8 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u8, register: Rbc.RegisterIndex) Error!void { return block.copy_8_im(value, register); } }.fun,
-            .write16 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u16, register: Rbc.RegisterIndex) Error!void { return block.copy_16_im(value, register); } }.fun,
-            .write32 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u32, register: Rbc.RegisterIndex) Error!void { return block.copy_32_im(value, register); } }.fun,
-            .write64 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u64, register: Rbc.RegisterIndex) Error!void { return block.copy_64_im(value, register); } }.fun,
+        const copyFns = comptime Fns{
+            .write8 = &struct {
+                pub fn fun(block: *RbcBuilder.Block, value: u8, register: Rbc.RegisterIndex) Error!void {
+                    return block.copy_8_im(value, register);
+                }
+            }.fun,
+            .write16 = &struct {
+                pub fn fun(block: *RbcBuilder.Block, value: u16, register: Rbc.RegisterIndex) Error!void {
+                    return block.copy_16_im(value, register);
+                }
+            }.fun,
+            .write32 = &struct {
+                pub fn fun(block: *RbcBuilder.Block, value: u32, register: Rbc.RegisterIndex) Error!void {
+                    return block.copy_32_im(value, register);
+                }
+            }.fun,
+            .write64 = &struct {
+                pub fn fun(block: *RbcBuilder.Block, value: u64, register: Rbc.RegisterIndex) Error!void {
+                    return block.copy_64_im(value, register);
+                }
+            }.fun,
         };
 
-        const storeFns = comptime Fns {
-            .write8 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u8, register: Rbc.RegisterIndex) Error!void { return block.store_8_im(value, register); } }.fun,
-            .write16 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u16, register: Rbc.RegisterIndex) Error!void { return block.store_16_im(value, register); } }.fun,
-            .write32 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u32, register: Rbc.RegisterIndex) Error!void { return block.store_32_im(value, register); } }.fun,
-            .write64 = &struct { pub fn fun (block: *RbcBuilder.Block, value: u64, register: Rbc.RegisterIndex) Error!void { return block.store_64_im(value, register); } }.fun,
+        const storeFns = comptime Fns{
+            .write8 = &struct {
+                pub fn fun(block: *RbcBuilder.Block, value: u8, register: Rbc.RegisterIndex) Error!void {
+                    return block.store_8_im(value, register);
+                }
+            }.fun,
+            .write16 = &struct {
+                pub fn fun(block: *RbcBuilder.Block, value: u16, register: Rbc.RegisterIndex) Error!void {
+                    return block.store_16_im(value, register);
+                }
+            }.fun,
+            .write32 = &struct {
+                pub fn fun(block: *RbcBuilder.Block, value: u32, register: Rbc.RegisterIndex) Error!void {
+                    return block.store_32_im(value, register);
+                }
+            }.fun,
+            .write64 = &struct {
+                pub fn fun(block: *RbcBuilder.Block, value: u64, register: Rbc.RegisterIndex) Error!void {
+                    return block.store_64_im(value, register);
+                }
+            }.fun,
         };
 
         const typeLayout = try destination.type.getLayout();
@@ -1297,15 +1323,14 @@ pub const Block = struct {
         switch (rValue) {
             .immediate => |im| {
                 // Immediates are always <=64 bits as of now
-                const registerSize = typeLayout.dimensions.registerSize() orelse unreachable;
+                const registerSize = Rir.RegisterSize.fromByteSize(typeLayout.dimensions.size) orelse unreachable;
 
-                switch(registerSize) {
-                    0 => return,
-                    8 => try fns.write8(self.active_builder, im.asU8Unchecked(), destination.getIndex()),
-                    16 => try fns.write16(self.active_builder, im.asU16Unchecked(), destination.getIndex()),
-                    32 => try fns.write32(self.active_builder, im.asU32Unchecked(), destination.getIndex()),
-                    64 => try fns.write64(self.active_builder, im.asU64Unchecked(), destination.getIndex()),
-                    else => unreachable,
+                switch (registerSize) {
+                    .r0 => return,
+                    .r8 => try fns.write8(self.active_builder, im.asU8Unchecked(), destination.getIndex()),
+                    .r16 => try fns.write16(self.active_builder, im.asU16Unchecked(), destination.getIndex()),
+                    .r32 => try fns.write32(self.active_builder, im.asU32Unchecked(), destination.getIndex()),
+                    .r64 => try fns.write64(self.active_builder, im.asU64Unchecked(), destination.getIndex()),
                 }
             },
             .function => |functionIr| {
@@ -1325,36 +1350,34 @@ pub const Block = struct {
         switch (operand) {
             .meta => return error.InvalidOperand,
             .l_value => |l| switch (l) {
-                .register => |reg|
+                .register => |reg| if (utils.equal(reg.type, typeIr)) {
+                    return reg;
+                } else if (reg.type.isRegisterCoercibleTo(false, false, typeIr)) {
+                    if (self.hasReference(reg.getIndex())) {
+                        const outReg = try self.allocRegister(typeIr);
+
+                        try self.assign(.from(outReg), .from(reg));
+
+                        return outReg;
+                    } else {
+                        reg.type = typeIr;
+                        return reg;
+                    }
+                },
+                .multi_register => @panic("multi register coercion to register nyi"),
+                .local => |localIr| if (localIr.register) |reg| {
                     if (utils.equal(reg.type, typeIr)) {
                         return reg;
                     } else if (reg.type.isRegisterCoercibleTo(false, false, typeIr)) {
-                        if (self.hasReference(reg.getIndex())) {
-                            const outReg = try self.allocRegister(typeIr);
+                        const outReg = try self.allocRegister(typeIr);
 
-                            try self.assign(.from(outReg), .from(reg));
+                        try self.assign(.from(outReg), operand);
 
-                            return outReg;
-                        } else {
-                            reg.type = typeIr;
-                            return reg;
-                        }
-                    },
-                .multi_register => @panic("multi register coercion to register nyi"),
-                .local => |localIr|
-                    if (localIr.register) |reg| {
-                        if (utils.equal(reg.type, typeIr)) {
-                            return reg;
-                        } else if (reg.type.isRegisterCoercibleTo(false, false, typeIr)) {
-                            const outReg = try self.allocRegister(typeIr);
-
-                            try self.assign(.from(outReg), operand);
-
-                            return outReg;
-                        }
-                    } else {
-                        return error.LocalNotAssignedRegister;
-                    },
+                        return outReg;
+                    }
+                } else {
+                    return error.LocalNotAssignedRegister;
+                },
                 .upvalue => {
                     const outReg = try self.allocRegister(typeIr);
                     try self.assign(.from(outReg), operand);
@@ -1390,7 +1413,7 @@ pub const Block = struct {
             },
         }
 
-        log.err("cannot coerce operand {} to a register of type {}", .{operand, typeIr});
+        log.err("cannot coerce operand {} to a register of type {}", .{ operand, typeIr });
         return error.InvalidOperand;
     }
 
@@ -1540,7 +1563,10 @@ pub const Block = struct {
         const output = switch (op) {
             .neg => try unary1(self, a.getType(), a, .neg, .signed, &.{ .floating, .signed }),
             .bnot => try unary1(self, a.getType(), a, .bnot, .no_sign, &.{ .unsigned, .signed }),
-            else => utils.todo(noreturn, .{ a, op, }),
+            else => utils.todo(noreturn, .{
+                a,
+                op,
+            }),
         };
 
         try self.push(output);
@@ -2019,7 +2045,7 @@ fn assign1(self: *Block, lValue: Rir.LValue, rValue: Rir.RegisterOrRValue) !void
                         try self.memcpy(.memory, typeLayout.dimensions.size, localRegister, inReg);
                     },
                     .r_value => |r| try self.writeRValue(.store, localRegister, r),
-                }
+                },
             }
         },
         .upvalue => |upvalueIr| {
@@ -2027,14 +2053,13 @@ fn assign1(self: *Block, lValue: Rir.LValue, rValue: Rir.RegisterOrRValue) !void
 
             switch (rValue) {
                 .register => |inReg| {
-                    if (typeLayout.dimensions.registerSize()) |registerSize| {
-                        switch(registerSize) {
-                            0 => return,
-                            8 => try self.active_builder.write_upvalue_8(upvalueGen.index, inReg.getIndex()),
-                            16 => try self.active_builder.write_upvalue_16(upvalueGen.index, inReg.getIndex()),
-                            32 => try self.active_builder.write_upvalue_32(upvalueGen.index, inReg.getIndex()),
-                            64 => try self.active_builder.write_upvalue_64(upvalueGen.index, inReg.getIndex()),
-                            else => unreachable,
+                    if (Rir.RegisterSize.fromByteSize(typeLayout.dimensions.size)) |registerSize| {
+                        switch (registerSize) {
+                            .r0 => return,
+                            .r8 => try self.active_builder.write_upvalue_8(upvalueGen.index, inReg.getIndex()),
+                            .r16 => try self.active_builder.write_upvalue_16(upvalueGen.index, inReg.getIndex()),
+                            .r32 => try self.active_builder.write_upvalue_32(upvalueGen.index, inReg.getIndex()),
+                            .r64 => try self.active_builder.write_upvalue_64(upvalueGen.index, inReg.getIndex()),
                         }
                     } else {
                         const addrTypeIr = try upvalueGen.ir.type.createPointer();
@@ -2048,15 +2073,14 @@ fn assign1(self: *Block, lValue: Rir.LValue, rValue: Rir.RegisterOrRValue) !void
                 .r_value => |r| switch (r) {
                     .immediate => |im| {
                         // Immediates are always <=64 bits as of now
-                        const registerSize = typeLayout.dimensions.registerSize() orelse unreachable;
+                        const registerSize = Rir.RegisterSize.fromByteSize(typeLayout.dimensions.size) orelse unreachable;
 
                         switch (registerSize) {
-                            0 => return,
-                            8 => try self.active_builder.write_upvalue_8_im(im.asU8Unchecked(), upvalueGen.index),
-                            16 => try self.active_builder.write_upvalue_16_im(im.asU16Unchecked(), upvalueGen.index),
-                            32 => try self.active_builder.write_upvalue_32_im(im.asU32Unchecked(), upvalueGen.index),
-                            64 => try self.active_builder.write_upvalue_64_im(im.asU64Unchecked(), upvalueGen.index),
-                            else => unreachable,
+                            .r0 => return,
+                            .r8 => try self.active_builder.write_upvalue_8_im(im.asU8Unchecked(), upvalueGen.index),
+                            .r16 => try self.active_builder.write_upvalue_16_im(im.asU16Unchecked(), upvalueGen.index),
+                            .r32 => try self.active_builder.write_upvalue_32_im(im.asU32Unchecked(), upvalueGen.index),
+                            .r64 => try self.active_builder.write_upvalue_64_im(im.asU64Unchecked(), upvalueGen.index),
                         }
                     },
                     .function => |functionIr| {
@@ -2075,14 +2099,13 @@ fn assign1(self: *Block, lValue: Rir.LValue, rValue: Rir.RegisterOrRValue) !void
 
             switch (rValue) {
                 .register => |inReg| {
-                    if (typeLayout.dimensions.registerSize()) |registerSize| {
-                        switch(registerSize) {
-                            0 => return,
-                            8 => try self.active_builder.write_global_8(globalGen.index, inReg.getIndex()),
-                            16 => try self.active_builder.write_global_16(globalGen.index, inReg.getIndex()),
-                            32 => try self.active_builder.write_global_32(globalGen.index, inReg.getIndex()),
-                            64 => try self.active_builder.write_global_64(globalGen.index, inReg.getIndex()),
-                            else => unreachable,
+                    if (Rir.RegisterSize.fromByteSize(typeLayout.dimensions.size)) |registerSize| {
+                        switch (registerSize) {
+                            .r0 => return,
+                            .r8 => try self.active_builder.write_global_8(globalGen.index, inReg.getIndex()),
+                            .r16 => try self.active_builder.write_global_16(globalGen.index, inReg.getIndex()),
+                            .r32 => try self.active_builder.write_global_32(globalGen.index, inReg.getIndex()),
+                            .r64 => try self.active_builder.write_global_64(globalGen.index, inReg.getIndex()),
                         }
                     } else {
                         const addrTypeIr = try globalGen.ir.type.createPointer();
@@ -2096,15 +2119,14 @@ fn assign1(self: *Block, lValue: Rir.LValue, rValue: Rir.RegisterOrRValue) !void
                 .r_value => |r| switch (r) {
                     .immediate => |im| {
                         // Immediates are always <=64 bits as of now
-                        const registerSize = typeLayout.dimensions.registerSize() orelse unreachable;
+                        const registerSize = Rir.RegisterSize.fromByteSize(typeLayout.dimensions.size) orelse unreachable;
 
-                        switch(registerSize) {
-                            0 => return,
-                            8 => try self.active_builder.write_global_8_im(im.asU8Unchecked(), globalGen.index),
-                            16 => try self.active_builder.write_global_16_im(im.asU16Unchecked(), globalGen.index),
-                            32 => try self.active_builder.write_global_32_im(im.asU32Unchecked(), globalGen.index),
-                            64 => try self.active_builder.write_global_64_im(im.asU64Unchecked(), globalGen.index),
-                            else => unreachable,
+                        switch (registerSize) {
+                            .r0 => return,
+                            .r8 => try self.active_builder.write_global_8_im(im.asU8Unchecked(), globalGen.index),
+                            .r16 => try self.active_builder.write_global_16_im(im.asU16Unchecked(), globalGen.index),
+                            .r32 => try self.active_builder.write_global_32_im(im.asU32Unchecked(), globalGen.index),
+                            .r64 => try self.active_builder.write_global_64_im(im.asU64Unchecked(), globalGen.index),
                         }
                     },
                     .function => |functionIr| {
@@ -2115,7 +2137,7 @@ fn assign1(self: *Block, lValue: Rir.LValue, rValue: Rir.RegisterOrRValue) !void
                         const foreignIndex = try self.generator.getForeign(foreignIr);
                         try self.active_builder.write_global_16_im(foreignIndex, globalGen.index);
                     },
-                }
+                },
             }
         },
     }
