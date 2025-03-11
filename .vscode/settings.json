@@ -12,9 +12,15 @@
         "NOTES.md",
     ],
     "cSpell.words": [
-        "blobify",
-        "Daan",
-        "Leijen",
-        "Thunderseethe",
-    ]
+        "callc",
+        "nbsp"
+    ],
+    "nasm.outputFormat": "elf64",
+    "nasm.extraFlags": [
+        "-f elf64",
+        "-I src/mod/x64",
+        "-DDBG",
+        "-DJUMP_TABLE rax",
+        "-DJUMP_TABLE_LENGTH rax",
+    ],
 }

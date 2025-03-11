@@ -1,0 +1,21 @@
+maybe de-duplicate Name from Rbc/Builder and Rir
+
+update BuiltinFunction description
+
+fix PUSH_PUSH and POP_POP ???
+
+make mnemonics in isa collapsable + collapsed by default
+
+docs build step
+
+TypeInfo.formatMemory
+
+TypeInfo.fromNative
+
+IR Module contents
+
+IR function builder
+
+Bytecode function builder
+
+RML

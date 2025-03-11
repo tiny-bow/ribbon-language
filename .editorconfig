@@ -1,7 +1,4 @@
-# top-most EditorConfig file
 root = true
-
-
 
 [*]
 charset = unset
@@ -11,8 +8,7 @@ trim_trailing_whitespace = unset
 indent_style = unset
 indent_size = unset
 
-
-[**{.md,.zig,.zon,.bb}]
+[**{.md,.zig,.asm,.zon,.bb,.rml,.gitignore,.editorconfig}]
 indent_style = space
 indent_size = 4
 end_of_line = lf

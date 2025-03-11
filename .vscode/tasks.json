@@ -19,32 +19,77 @@
             }
         },
         {
-            "label": "run-backend",
+            "label": "run",
             "type": "shell",
-            "command": "zig build run-backend -freference-trace --prominent-compile-errors",
+            "command": "zig build run -freference-trace --prominent-compile-errors",
             "group": {
                 "kind": "build",
                 "isDefault": true
             }
         },
         {
-            "label": "run-rml",
+            "label": "gen-doc",
             "type": "shell",
-            "command": "zig build run-rml -freference-trace --prominent-compile-errors",
+            "command": "zig build-lib src/mod/everything.zig -fno-emit-bin -femit-docs=zig-out/docs",
             "group": {
                 "kind": "build",
                 "isDefault": false
             }
         },
-        // {
-        //     "label": "test",
-        //     "type": "shell",
-        //     "command": "zig build test -freference-trace --prominent-compile-errors",
-        //     "group": {
-        //         "kind": "build",
-        //         "isDefault": false
-        //     }
-        // },
+        {
+            "label": "serve-doc",
+            "type": "shell",
+            "command": "cd zig-out/docs && http-server",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "open-doc",
+            "type": "shell",
+            "command": "xdg-open http://localhost:8080",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "browse",
+            "type": "shell",
+            "command": "zig build-lib src/mod/everything.zig -fno-emit-bin -femit-docs=zig-out/docs && cd zig-out/docs && xdg-open http://localhost:8080 && http-server",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "dump-intermediates",
+            "type": "shell",
+            "command": "zig build dump-intermediates -freference-trace --prominent-compile-errors",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "run-release",
+            "type": "shell",
+            "command": "zig build run --release=fast -freference-trace --prominent-compile-errors",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "test",
+            "type": "shell",
+            "command": "zig build unit-tests -freference-trace --prominent-compile-errors",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
         {
             "label": "build",
             "type": "shell",

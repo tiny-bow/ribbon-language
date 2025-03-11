@@ -1,6 +1,2 @@
-.depr
 .zig-cache
 zig-out
-.rli-repl-history
-stdin
-NOTES.md
