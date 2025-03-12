@@ -1,21 +1,31 @@
-maybe de-duplicate Name from Rbc/Builder and Rir
+# active driver tasks:
 
-update BuiltinFunction description
+* bytecode builder
 
-fix PUSH_PUSH and POP_POP ???
+* ir builder
 
-make mnemonics in isa collapsable + collapsed by default
 
-docs build step
 
-TypeInfo.formatMemory
+# immediate action items (unordered):
 
-TypeInfo.fromNative
+* docs build step needs work; not getting all content
 
-IR Module contents
+* TypeInfo.formatMemory
 
-IR function builder
+* TypeInfo.fromNative
 
-Bytecode function builder
 
-RML
+
+# long term (unordered):
+
+* meta language
+
+* user-facing language
+
+* make mnemonics in isa collapsable + collapsed by default
+> Should be trivial to implement when doc gen is further along, but
+> this will require having control over the output html. Currently,
+> generating github-flavored markdown, it is impossible to link to
+> specific mnemonics or instructions, with this design. This is because
+> when you collapse a summary element their body elements are *removed*.
+> To fix this we'd need to add some js or similar to the html.

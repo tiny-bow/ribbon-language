@@ -1,21 +1,28 @@
 //! Provides interfaces for running code on a `core.Fiber`.
 const interpreter = @This();
 
-const pl = @import("platform");
 const core = @import("core");
+const pl = @import("platform");
+const std = @import("std");
 
 extern fn rvm_interpreter_eval(*const core.mem.FiberHeader) callconv(.c) core.BuiltinSignal;
 extern fn rvm_interpreter_step(*const core.mem.FiberHeader) callconv(.c) core.BuiltinSignal;
 
 
-/// Invokes a `core.AllocatedBuiltinFunction` on the provided fiber, returning the result.
-pub fn invokeAllocatedBuiltin(self: core.Fiber, fun: core.AllocatedBuiltinFunction, arguments: []const pl.uword) core.Error!pl.uword {
-    return self.invokeNative(@ptrCast(fun.ptr), arguments);
+pub fn invokeBuiltin(self: *core.Fiber, fun: anytype, arguments: []const pl.uword) core.Error!pl.uword {
+    const T = @TypeOf(fun);
+    // Because the allocated builtin is a packed structure with the pointer at the start, we can just truncate it.
+    // To handle both cases, we cast to the bitsize of the input first and then truncate to the output.
+    return self.invokeStaticBuiltin(@ptrFromInt(@as(usize, @truncate(@as(std.meta(.unsigned, @bitSizeOf(T)), @bitCast(fun))))), arguments);
 }
 
+/// Invokes a `core.AllocatedBuiltinFunction` on the provided fiber, returning the result.
+pub fn invokeAllocatedBuiltin(self: core.Fiber, fun: core.AllocatedBuiltinFunction, arguments: []const pl.uword) core.Error!pl.uword {
+    return self.invokeStaticBuiltin(@ptrCast(fun.ptr), arguments);
+}
 
 /// Invokes a `core.BuiltinFunction` on the provided fiber, returning the result.
-pub fn invokeBuiltin(self: core.Fiber, fun: *const core.BuiltinFunction, arguments: []const pl.uword) core.Error!pl.uword {
+pub fn invokeStaticBuiltin(self: core.Fiber, fun: *const core.BuiltinFunction, arguments: []const pl.uword) core.Error!pl.uword {
     if (!self.header.calls.hasSpace(1)) {
         return error.Overflow;
     }

@@ -23,11 +23,16 @@ pub fn build(b: *std.Build) !void {
     }
 
     const fingerprint = Fingerprint.init("ribbon-lang.zig-api");
-    version.build = std.fmt.allocPrint(b.allocator, "{}", .{fingerprint}) catch @panic("OOM");
 
     const build_info_opts = b.addOptions();
     // build_info_opts.addOptionPath() -- cool!
-    build_info_opts.addOption(u256, "raw_fingerprint", fingerprint.value);
+    if (optimize != .Debug) {
+        version.build = std.fmt.allocPrint(b.allocator, "{}", .{fingerprint}) catch @panic("OOM");
+        build_info_opts.addOption(u256, "raw_fingerprint", fingerprint.value);
+    } else {
+        version.build = "debug";
+        build_info_opts.addOption(u256, "raw_fingerprint", 0);
+    }
     build_info_opts.addOption(std.SemanticVersion, "version", version);
 
 
@@ -176,7 +181,6 @@ pub fn build(b: *std.Build) !void {
     gen_isa.addArg("markdown");
 
     const Isa_markdown = gen_isa.addOutputFileArg("Isa.md");
-    const Isa_markdown_install = b.addInstallFileWithDir(Isa_markdown, .{ .custom = "docs" }, "Isa.md");
 
 
     const gen_types = b.addRunArtifact(gen_tool);
@@ -333,7 +337,6 @@ pub fn build(b: *std.Build) !void {
     // setup steps //
 
     const install_step = b.default_step;
-    install_step.dependOn(&Isa_markdown_install.step);
     install_step.dependOn(&main_install.step);
 
     const run_step = b.step("run", "Run the ribbon driver");
@@ -347,6 +350,7 @@ pub fn build(b: *std.Build) !void {
     dump_intermediates_step.dependOn(&Instruction_src_install.step);
     dump_intermediates_step.dependOn(&assembly_src_install.step);
     dump_intermediates_step.dependOn(&assembly_obj_install.step);
+    dump_intermediates_step.dependOn(&b.addInstallFile(Instruction_src, "Isa.md").step);
 
     const check_step = b.step("check", "Run semantic analysis");
     check_step.dependOn(&abi_test.step);
@@ -393,6 +397,16 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&b.addRunArtifact(ribbon_test).step);
     test_step.dependOn(&b.addRunArtifact(Stack_test).step);
     test_step.dependOn(&b.addRunArtifact(VirtualWriter_test).step);
+
+
+    const docs_step = b.step("docs", "Generate documentation");
+
+    docs_step.dependOn(&b.addInstallDirectory(.{
+        .source_dir = ribbon_test.getEmittedDocs(),
+        .install_dir = .{ .custom = "docs" },
+        .install_subdir = "api",
+    }).step);
+    docs_step.dependOn(&b.addInstallFile(Isa_markdown, "docs/Isa.md").step);
 }
 
 

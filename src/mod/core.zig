@@ -316,21 +316,21 @@ pub const InterpreterSignal = enum(i64) {
     halt = -1,
 };
 
-/// The type of procedures that can operate as "built-in" functions (those provided by the host environment) within `Rvm.Fiber`s.
+/// The type of procedures that can operate as "built-in" functions
+/// (those provided by the host environment) within Ribbon's `core.Fiber`.
 ///
-/// Casting `fn (*mem.FiberHeader) callconv(.c) i64` functions to this signature
-/// is well defined and intended; `Fiber` and `BuiltinSignal` are simply convenient Zig wrappers.
+/// Can be called within a `Fiber` using the `interpreter.invokeBuiltin` family of functions.
 ///
-/// We use the host's C ABI calling convention for these functions, because:
-/// * This makes it easier to use Ribbon from languages besides Zig
-/// * When jit compiling to machine code,
-/// we need a specified calling convention
-/// for the interface between the vm and the jit.
+/// It should be fine to pass a `Fiber` to a function that expects `*mem.FiberHeader`, because
+/// it is simply a wrapper over a pointer; the signature is written this way for clarity.
+///
+/// We use the host's C ABI calling convention for these functions
+/// because we need a specified calling convention for the interface between the vm and the jit.
 pub const BuiltinFunction = fn (*mem.FiberHeader) callconv(.c) BuiltinSignal;
 
-/// A builtin function compiled at runtime for use with `core`.
+/// A `BuiltinFunction`, but compiled at runtime.
 ///
-/// Can be called within a `Fiber` using `interpreter.invokeAllocatedBuiltin`.
+/// Can be called within a `Fiber` using the `interpreter.invokeBuiltin` family of functions.
 ///
 /// This is primarily a memory management structure,
 /// as the jit is expected to disown the memory upon finalization.
