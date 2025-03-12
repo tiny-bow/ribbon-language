@@ -7,7 +7,7 @@
 //! * rvm's `core` bytecode (via the `bytecode` module)
 //! * native machine code, in two ways:
 //!    + in house x64 jit (the `machine` module)
-//!    + llvm for freestanding (eventually)
+//!    + freestanding (eventually; via llvm, likely)
 const ir = @This();
 
 const std = @import("std");

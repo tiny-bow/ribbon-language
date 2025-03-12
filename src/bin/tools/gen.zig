@@ -351,7 +351,7 @@ fn generateTypesCodes(categories: []const isa.Category, writer: anytype) !void {
     for (categories) |category| {
         for (category.mnemonics) |mnemonic| {
             for (mnemonic.instructions) |instruction| {
-                try generateTypesZigDoc(opcode, instruction, writer);
+                try generateTypesZigDoc(mnemonic.name, opcode, instruction, writer);
 
                 try writer.writeAll("    @\"");
                 try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
@@ -367,13 +367,16 @@ fn generateTypesCodes(categories: []const isa.Category, writer: anytype) !void {
     try writer.writeAll("};\n\n");
 }
 
-fn generateTypesZigDoc(opcode: u16, instr: isa.Instruction, writer: anytype) !void {
+fn generateTypesZigDoc(mnemonic: []const u8, opcode: u16, instr: isa.Instruction, writer: anytype) !void {
     try writer.writeAll("    /// `");
     try formatOpcode(opcode, writer);
     try writer.writeAll("`\n");
 
     try formatInstructionDescription("    /// ", false, instr.description, instr.operands, writer);
-    try writer.writeAll("\n");
+    try writer.writeAll("; `");
+    try formatOpcode(opcode, writer);
+    try formatInstructionOperands(mnemonic, instr.name, instr.operands, writer);
+    try writer.writeAll("`\n");
 }
 
 fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
@@ -387,7 +390,7 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
     for (categories) |category| {
         for (category.mnemonics) |mnemonic| {
             for (mnemonic.instructions) |instruction| {
-                try generateTypesZigDoc(opcode,instruction, writer);
+                try generateTypesZigDoc(mnemonic.name, opcode, instruction, writer);
 
                 try writer.writeAll("    pub const @\"");
                 try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
@@ -420,7 +423,7 @@ fn generateTypesUnion(categories: []const isa.Category, writer: anytype) !void {
     for (categories) |category| {
         for (category.mnemonics) |mnemonic| {
             for (mnemonic.instructions) |instruction| {
-                try generateTypesZigDoc(opcode, instruction, writer);
+                try generateTypesZigDoc(mnemonic.name, opcode, instruction, writer);
 
                 try writer.writeAll("    @\"");
                 try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
@@ -653,7 +656,7 @@ fn formatInstructionOperands(mnemonic: []const u8, instr: isa.InstructionName, o
         }
     }
 
-    try writer.writeBytesNTimes("00", 8 - size);
+    // try writer.writeBytesNTimes("00", 8 - size);
 }
 
 fn formatMnemonicArgument(argument: []const u8, writer: anytype) !bool {

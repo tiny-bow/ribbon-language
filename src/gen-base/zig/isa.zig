@@ -386,7 +386,7 @@ pub const CATEGORIES: []const Category = &.{
                     .jitInstr(.suffix("foreignc_v"), "Calls the C ABI function at {1}, placing the result in {0}", &.{ .register, .foreign, .constant }),
 
                     .instr(.override("prompt"),
-                        \\Calls the effect handler designated by {1}
+                        \\Calls the effect handler designated by {0}
                         , &.{ .effect, .constant },
                     ),
                     .instr(.override("prompt_v"),

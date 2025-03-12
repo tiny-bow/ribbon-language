@@ -187,19 +187,24 @@ pub const Name = struct {
 
 
 pub const PseudoInstr = union(enum) {
-    call: struct {
+    no_fixup: Instruction,
+    label: *const Name,
+    branch: struct {
+        opcode: Instruction.OpCode,
+        condition: ?core.Register,
+        target: *const Name,
+    },
+    static_addr: struct {
+        opcode: Instruction.OpCode,
+        target: *const Name,
+        result: core.Register,
+    },
+    static_call: struct {
         name: *const Name,
         opcode: Instruction.OpCode,
         arguments: pl.ArrayList(core.Register),
         result: ?core.Register,
     },
-    label: *const Name,
-    branching: struct {
-        opcode: Instruction.OpCode,
-        condition: ?core.Register,
-        target: *const Name,
-    },
-    standard: Instruction,
 };
 
 pub const Writer = VirtualWriter.new(pl.MAX_VIRTUAL_CODE_SIZE);
@@ -256,10 +261,33 @@ pub const Encoder = struct {
     pub fn writeInt(
         self: *Encoder,
         comptime T: type, value: T,
-        comptime _: enum {little}, // allows backward compat with writer code in X64EZ; but only in provably compatible use-cases
+        comptime _: enum {little}, // allows backward compat with zig's writer interface; but only in provably compatible use-cases
     ) Writer.Error!void {
         const bytes = std.mem.asBytes(&value);
         try self.writeAll(bytes);
+    }
+
+    /// Generalized version of `writeInt` for little-endian only;
+    /// Works for any value with a unique representation.
+    ///
+    /// See `std.meta.hasUniqueRepresentation`.
+    pub fn writeValue(
+        self: *Encoder,
+        value: anytype,
+    ) Writer.Error!void {
+        const T = @TypeOf(value);
+
+        if (comptime !std.meta.hasUniqueRepresentation(T)) {
+            @compileError("bytecode.Encoder.writeValue: Type `" ++ @typeName(T) ++ "` does not have a unique representation");
+        }
+
+        const bytes = std.mem.asBytes(&value);
+        try self.writeAll(bytes);
+    }
+
+    /// Pushes zero bytes (if necessary) to align the current offset of the encoder to the provided alignment value.
+    pub fn alignTo(self: *Encoder, alignment: pl.Alignment) Writer.Error!void {
+        try self.writer.writeByteNTimes(0, pl.alignDelta(self.writer.cursor, alignment));
     }
 
     /// Composes and encodes a bytecode instruction.
@@ -286,12 +314,20 @@ pub const Encoder = struct {
 };
 
 /// A map of symbol references for a linker to resolve.
-pub const LinkerFixups = pl.UniqueReprMap(*const Name, pl.ArrayList(LinkerFixup), 75);
+pub const LinkerFixups = pl.StringMap(pl.ArrayList(LinkerFixup));
 
 /// A symbol reference for a linker to resolve.
 pub const LinkerFixup = struct {
     addr: *align(1) u16,
     expected: core.SymbolKind,
+
+    /// Create a new `LinkerFixup` with the given address and expected symbol kind.
+    pub fn init(addr: *align(1) u16, expected: core.SymbolKind) LinkerFixup {
+        return LinkerFixup{
+            .addr = addr,
+            .expected = expected,
+        };
+    }
 };
 
 /// A function definition that is in-progress within the bytecode unit.
@@ -337,19 +373,20 @@ pub const Function = struct {
         try self.instructions.append(self.root.allocator, instruction);
     }
 
-    pub fn generate(self: *const Function, linkerAllocator: std.mem.Allocator, out: *core.Function, encoder: *Encoder) error{BadEncoding, OutOfMemory}!LinkerFixups {
+    // FIXME: constantInterner
+    pub fn generate(self: *const Function, constantInterner: anytype, linkerAllocator: std.mem.Allocator, out: *core.Function, instructionEncoder: *Encoder) error{BadEncoding, OutOfMemory}!LinkerFixups {
         log.info("Generating bytecode for function `{}`", .{self.name});
 
-        const address: core.InstructionAddr = @ptrCast(@alignCast(encoder.getCurrentAddress()));
+        const address: core.InstructionAddr(.mutable) = @ptrCast(@alignCast(instructionEncoder.getCurrentAddress()));
 
         out.id = @enumFromInt(@intFromEnum(self.id));
         out.extents = .{ .base = address, .upper = undefined };
         out.stack_size = self.stack_size;
 
-        var labelMap: pl.UniqueReprMap(*const Name, core.InstructionAddr, 80) = .empty;
+        var labelMap: pl.UniqueReprMap(*const Name, core.InstructionAddr(.mutable), 80) = .empty;
         defer labelMap.deinit(self.root.allocator);
 
-        var localFixUps: pl.ArrayList(struct {core.InstructionAddr, *const Name}) = .empty;
+        var localFixUps: pl.ArrayList(struct {core.InstructionAddr(.mutable), *const Name}) = .empty;
         defer localFixUps.deinit(self.root.allocator);
 
         var linkerFixups: LinkerFixups = .empty;
@@ -357,21 +394,147 @@ pub const Function = struct {
 
         for (self.instructions.items) |*instr| {
             switch (instr.*) {
-                .call => |*callProto| {
-                    try encoder.opcode(callProto.opcode);
+                .no_fixup => |no_fixup| try instructionEncoder.instrPre(no_fixup),
 
-                },
                 .label => |label| try labelMap.put(self.root.allocator, label, address),
-                .branching => |*branchProto| {
+
+                .branch => |*branchProto| {
                     try localFixUps.append(self.root.allocator, .{address, branchProto.target});
 
-                    try encoder.instr(branchProto.opcode, switch (branchProto.opcode) {
+                    try instructionEncoder.instr(branchProto.opcode, switch (branchProto.opcode) {
                         .br => undefined,
                         .br_if => .{ .br_if = .{ .R = branchProto.condition.?, .C = undefined } },
                         else => return error.BadEncoding,
                     });
                 },
-                .standard => |standard| try encoder.instrPre(standard),
+
+                .static_addr => |*addrProto| {
+                    try instructionEncoder.opcode(addrProto.opcode);
+
+                    const name = try linkerAllocator.dupe(u8, addrProto.target.value);
+
+                    const fixupEntry = try linkerFixups.getOrPut(linkerAllocator, name);
+                    if (!fixupEntry.found_existing) fixupEntry.value_ptr.* = .empty;
+
+                    switch (addrProto.opcode) {
+                        .@"addr_l" => {
+                            // TODO: add local variable offset tracker and use it here with constantInterner
+                        },
+                        .@"addr_u" => {
+                            // TODO: we still dont have a story for binding and accessing upvalues
+                        },
+                        .@"addr_g" => {
+                            try instructionEncoder.writeValue(addrProto.result);
+
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(addrProto.result, .global));
+                            try instructionEncoder.writeValue(core.GlobalId.null);
+                        },
+                        .@"addr_f" => {
+                            try instructionEncoder.writeValue(addrProto.result);
+
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(addrProto.result, .function));
+                            try instructionEncoder.writeValue(core.FunctionId.null);
+                        },
+                        .@"addr_b" => {
+                            try instructionEncoder.writeValue(addrProto.result);
+
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(addrProto.result, .builtin));
+                            try instructionEncoder.writeValue(core.BuiltinAddressId.null);
+                        },
+                        .@"addr_x" => {
+                            try instructionEncoder.writeValue(addrProto.result);
+
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(addrProto.result, .foreign));
+                            try instructionEncoder.writeValue(core.ForeignAddressId.null);
+                        },
+                        .@"addr_c" => {
+                            try instructionEncoder.writeValue(addrProto.result);
+
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(addrProto.result, .constant));
+                            try instructionEncoder.writeValue(core.ConstantId.null);
+                        },
+                        else => return error.BadEncoding,
+                    }
+
+                    try instructionEncoder.alignTo(@alignOf(Instruction.OpCode));
+                },
+
+                .static_call => |*callProto| {
+                    try instructionEncoder.opcode(callProto.opcode);
+
+                    const name = try linkerAllocator.dupe(u8, callProto.name.value);
+
+                    const fixupEntry = try linkerFixups.getOrPut(linkerAllocator, name);
+                    if (!fixupEntry.found_existing) fixupEntry.value_ptr.* = .empty;
+
+                    const args = args: switch (callProto.opcode) {
+                        .@"call_c" => {
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .function));
+                            try instructionEncoder.writeValue(core.FunctionId.null);
+
+                            break :args callProto.arguments.items;
+                        },
+                        .@"call_c_v" => {
+                            try instructionEncoder.writeValue(callProto.arguments.items[0]);
+
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .function));
+                            try instructionEncoder.writeValue(core.FunctionId.null);
+
+                            break :args callProto.arguments.items[1..];
+                        },
+                        .@"call_builtinc" => {
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .builtin));
+                            try instructionEncoder.writeValue(core.BuiltinAddressId.null);
+
+                            break :args callProto.arguments.items;
+                        },
+                        .@"call_builtinc_v" => {
+                            try instructionEncoder.writeValue(callProto.arguments.items[0]);
+
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .builtin));
+                            try instructionEncoder.writeValue(core.BuiltinAddressId.null);
+
+                            break :args callProto.arguments.items[1..];
+                        },
+                        .@"call_foreignc" => {
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .foreign));
+                            try instructionEncoder.writeValue(core.ForeignAddressId.null);
+
+                            break :args callProto.arguments.items;
+                        },
+                        .@"call_foreignc_v" => {
+                            try instructionEncoder.writeValue(callProto.arguments.items[0]);
+
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .foreign));
+                            try instructionEncoder.writeValue(core.ForeignAddressId.null);
+
+                            break :args callProto.arguments.items[1..];
+                        },
+                        .@"prompt" => {
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .effect));
+                            try instructionEncoder.writeValue(core.EffectId.null);
+
+                            break :args callProto.arguments.items;
+                        },
+                        .@"prompt_v" => {
+                            try instructionEncoder.writeValue(callProto.arguments.items[0]);
+
+                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .effect));
+                            try instructionEncoder.writeValue(core.EffectId.null);
+
+                            break :args callProto.arguments.items[1..];
+                        },
+
+                        else => return error.BadEncoding,
+                    };
+
+                    const argCount = try constantInterner.internNative(&callProto.arguments.items.len);
+                    try instructionEncoder.writeValue(argCount.id);
+
+                    for (args) |arg| try instructionEncoder.writeValue(arg);
+
+                    try instructionEncoder.alignTo(@alignOf(Instruction.OpCode));
+                },
             }
         }
 

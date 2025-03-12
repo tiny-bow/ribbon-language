@@ -29,26 +29,28 @@ pub const SetStack = Stack.new(SetFrame, pl.SET_STACK_SIZE);
 
 // TODO: use `Id.of` to generate these
 /// An upvalue reference.
-pub const UpvalueId = enum(u8) {_};
+pub const UpvalueId = enum(u8) {null = 0, _};
 /// A global variable reference.
-pub const GlobalId = enum(u16) {_};
+pub const GlobalId = enum(u16) {null = 0, _};
 /// A function reference.
-pub const FunctionId = enum(u16) {_};
+pub const FunctionId = enum(u16) {null = 0, _};
 /// A builtin function reference.
-pub const BuiltinAddressId = enum(u16) {_};
+pub const BuiltinAddressId = enum(u16) {null = 0, _};
 /// A native function reference.
-pub const ForeignAddressId = enum(u16) {_};
+pub const ForeignAddressId = enum(u16) {null = 0, _};
 /// An effect reference.
-pub const EffectId = enum(u16) {_};
+pub const EffectId = enum(u16) {null = 0, _};
 /// An effect handler reference.
-pub const HandlerId = enum(u16) {_};
+pub const HandlerId = enum(u16) {null = 0, _};
 /// An effect handler set reference.
-pub const HandlerSetId = enum(u16) {_};
+pub const HandlerSetId = enum(u16) {null = 0, _};
 /// A constant reference.
-pub const ConstantId = enum(u16) {_};
+pub const ConstantId = enum(u16) {null = 0, _};
 
 /// The address of an instruction in an `Rbc` program.
-pub const InstructionAddr = [*]align(2) const u8;
+pub fn InstructionAddr(comptime mut: enum { constant, mutable }) type {
+    return switch (mut) { .constant => [*]align(2) const u8, .mutable => [*]align(2) u8 };
+}
 
 pub const Bytecode = struct {
     /// The bytecode unit header.
@@ -150,9 +152,9 @@ pub const Symbol = struct {
 /// The base and upper address of a code section.
 pub const Extents = packed struct {
     /// The base address of the code section.
-    base: InstructionAddr,
+    base: InstructionAddr(.constant),
     /// The upper address of the code section.
-    upper: InstructionAddr,
+    upper: InstructionAddr(.constant),
 };
 
 /// Metadata for an `Rbc` program.
@@ -238,7 +240,7 @@ pub const SetFrame = extern struct {
     /// A placeholder for a handler set.
     handler_set: pl.TODO,
     /// A pointer to the cancellation address.
-    cancellation_address: InstructionAddr,
+    cancellation_address: InstructionAddr(.constant),
     /// A pointer to the data.
     data: [*]pl.uword,
     /// The register for output.
@@ -248,7 +250,7 @@ pub const SetFrame = extern struct {
 /// Represents a call frame.
 pub const CallFrame = extern struct {
     /// A pointer to the instruction.
-    ip: InstructionAddr,
+    ip: InstructionAddr(.constant),
     /// A pointer to either an `Function` or a built-in function.
     function: *const anyopaque,
     /// A pointer to the set frame.

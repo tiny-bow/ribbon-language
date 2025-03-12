@@ -98,8 +98,8 @@ pub const Builder = struct {
     // }
 
 
-    /// Inject the `PRELUDE` into the function being constructed.
-    pub fn prelude(self: *Builder) error{OutOfMemory}!void { // FIXME
+    /// Inject the abi prelude code into the function being constructed.
+    pub fn prelude(self: *Builder) error{OutOfMemory}!void { // FIXME: prelude here is not in sync with that of the interpreter asm
         // We use C ABI for jit compiled builtins, so first we need to capture the arguments into
         // callee-saved registers, so that they get persisted if we end up calling any functions.
         // In C ABI, the first 6 word-sized arguments are passed in registers, so we simply need
