@@ -10,12 +10,12 @@
 //!
 //! See the `bytecode` namespace for encoding and decoding utilities.
 const Instruction = @This();
-
-const std = @import("std");
-const log = std.log.scoped(.Instruction);
-
-const pl = @import("platform");
 const core = @import("core");
+const Id = @import("Id");
+const pl = @import("platform");
+const std = @import("std");
+
+const log = std.log.scoped(.Instruction);
 
 test {
     std.testing.refAllDeclsRecursive(@This());

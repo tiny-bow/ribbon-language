@@ -168,7 +168,7 @@ pub const Operand = enum {
     /// ```
     pub fn writeContextualReference(self: Operand, writer: anytype) !void {
         try writer.writeByte('`');
-        try self.writeTypeReference(writer);
+        try self.writeShorthandType(writer);
         try writer.writeByte('`');
     }
 
@@ -177,17 +177,17 @@ pub const Operand = enum {
     /// ```
     /// .register => "Register"
     /// ```
-    pub fn writeTypeReference(self: Operand, writer: anytype) !void {
+    pub fn writeShorthandType(self: Operand, writer: anytype) !void {
         switch (self) {
             .register => try writer.writeAll("Register"),
-            .upvalue => try writer.writeAll("UpvalueId"),
-            .global => try writer.writeAll("GlobalId"),
-            .function => try writer.writeAll("FunctionId"),
-            .builtin => try writer.writeAll("BuiltinAddressId"),
-            .foreign => try writer.writeAll("ForeignAddressId"),
-            .effect => try writer.writeAll("EffectId"),
-            .handler_set => try writer.writeAll("HandlerSetId"),
-            .constant => try writer.writeAll("ConstantId"),
+            .upvalue => try writer.writeAll("Id.of(Upvalue)"),
+            .global => try writer.writeAll("Id.of(Global)"),
+            .function => try writer.writeAll("Id.of(Function)"),
+            .builtin => try writer.writeAll("Id.of(BuiltinAddress)"),
+            .foreign => try writer.writeAll("Id.of(ForeignAddress)"),
+            .effect => try writer.writeAll("Id.of(Effect)"),
+            .handler_set => try writer.writeAll("Id.of(HandlerSet)"),
+            .constant => try writer.writeAll("Id.of(Constant)"),
         }
     }
 
@@ -335,14 +335,12 @@ pub const CATEGORIES: []const Category = &.{
             .mnemonic("set",
                 \\Effect handler set stack manipulation.
                 , &.{
-                    // TODO: the offset could just be stored in the handler set itself, no?
-                    // TODO: upvalue binding
                     .instr(.prefix("push"),
-                        \\Pushes {1} onto the stack,
-                        \\along with {0} to place any cancellation-yielded values into,
-                        \\and a signed integer offset {2} to jump to in the event that
-                        \\any of the handlers in the set `cancel`
-                        , &.{ .register, .handler_set, .constant },
+                        \\Pushes {0} onto the stack.
+                        \\
+                        \\The handlers in this set will be first in line
+                        \\for their effects' prompts until a corresponding `pop` operation.
+                        , &.{ .handler_set },
                     ),
                     .instr(.prefix("pop"),
                         \\Pops the top most {.handler_set} from the stack,

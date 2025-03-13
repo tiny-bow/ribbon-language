@@ -36,7 +36,7 @@
 //!   ```
 //! * Enums are also acceptable.
 //!   ```zig
-//!   hash: Id(Foo),
+//!   hash: Id.of(Foo),
 //!   ```
 //! * ... etc
 const Interner = @This();

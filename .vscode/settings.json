@@ -9,18 +9,12 @@
     "cSpell.ignorePaths": [
         ".zig-cache/**",
         "zig-out/**",
-        "NOTES.md",
     ],
-    "cSpell.words": [
-        "callc",
-        "nbsp"
-    ],
+    "cSpell.words": [ ],
     "nasm.outputFormat": "elf64",
     "nasm.extraFlags": [
-        "-f elf64",
-        "-I src/mod/x64",
-        "-DDBG",
-        "-DJUMP_TABLE rax",
-        "-DJUMP_TABLE_LENGTH rax",
+        // FIXME: need include flags to work with nasm editor features;
+        // * broke this switching to the new build system
+        // * just requires a bit of extra output from bin/tools/gen, a header.asm
     ],
 }

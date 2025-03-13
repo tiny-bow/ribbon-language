@@ -398,8 +398,18 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
 
                 for (instruction.operands, 0..) |operand, i| {
                     _ = try isa.formatOperand(i, instruction.operands, writer);
-                    try writer.writeAll(": core.");
-                    try operand.writeTypeReference(writer);
+                    try writer.writeAll(": ");
+                    try writer.writeAll(switch (operand) {
+                        .register => "core.Register",
+                        .constant => "Id.of(core.Constant)",
+                        .function => "Id.of(core.Function)",
+                        .global => "Id.of(core.Global)",
+                        .upvalue => "Id.of(core.Upvalue)",
+                        .handler_set => "Id.of(core.HandlerSet)",
+                        .builtin => "Id.of(core.BuiltinAddress)",
+                        .effect => "Id.of(core.Effect)",
+                        .foreign => "Id.of(core.ForeignAddress)",
+                    });
                     try writer.writeAll(", ");
                 }
 

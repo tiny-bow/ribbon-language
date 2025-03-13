@@ -1,0 +1,64 @@
+# action items:
+
+* bytecode builder
+* ir builder
+> These two are very codependent partners. Bytecode builder should be usable on
+> its own, but designed to interface with the ir.
+
+* TypeInfo.formatMemory
+> Going to need this like, everywhere. So it needs to be quite robust.
+
+* TypeInfo.fromNative
+> This should be pretty easy to whip up, just need a comptime function to
+> translate a Zig `Type` to `ir.TypeInfo`.
+> * Would be nice if type info could be
+> broken out into its own subsystem, and if we could do some amount of comptime
+> generation.
+> * The first attempt at this failed because of the complex
+> interconnection between types and other ir structures.
+
+* machine code builder
+* Assembly instruction impls
+> I am not in a hurry to get further into these two quite yet, because I think that there
+> should be a way to get both a codegen for the jit builder and the interpreter
+> assembly from the same basis, like was done with the isa markdown, types etc;
+> and I am still mulling over how to approach it:
+> * A simple assembler-description language? That'd make like the 5th language in this language lol
+> * LLM? Just write the interpreter and have it generate the machine code builder for the bytecode
+> * mechanical translation of the assembly instructions in the interpreter to create jit builder
+> * *current favorite*:
+>   1. make the current "jit" builder in `machine` parametric over
+>      whether its emitting code for the jit vs interpreter,
+>      and utilize it at comptime for the interpreter (via build script as we are already doing with asm objects)
+>   2. create instruction-emitter functions based on this abstract api within the isa definition
+>   3. wrap these functions from the various apis
+>
+>   This is essentially the first idea without having to create a parser etc.
+>
+>   I think it also benefits from the fact that the build is already staged,
+>   I dont think it'll require any changes other than
+>   adding another assembly object and depending on it from `bytecode`,
+>   because that is already at the post-`gen` phase,
+>
+>   + This is assuming I make the *"true jit"* a separate module from `machine`, since we'll be using that to generate it.
+> * ...?
+
+
+
+# long term:
+
+* docs build step needs work; not getting all content
+> I think its the generated intermediate files not getting their docs gen'd up,
+> but I didn't look too closely yet.
+
+* meta language
+* user-facing language
+> The same but also, not 😼
+
+* make mnemonics in isa collapsable + collapsed by default
+> Should be trivial to implement when doc gen is further along, but this will
+> require having control over the output html. Currently, generating
+> github-flavored markdown, it is impossible to link to specific mnemonics or
+> instructions, with this design. This is because when you collapse a summary
+> element their body elements are *removed*. To fix this we'd need to add some
+> js or similar to the html.

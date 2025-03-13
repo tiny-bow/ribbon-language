@@ -8,6 +8,8 @@ const std = @import("std");
 const log = std.log.scoped(.Core);
 
 const pl = @import("platform");
+const Id = @import("Id");
+const Buffer = @import("Buffer");
 const Stack = @import("Stack");
 
 test {
@@ -16,43 +18,30 @@ test {
 
 
 /// Set of `platform.MAX_REGISTERS` virtual registers for a function call.
-pub const RegisterArray = [pl.MAX_REGISTERS]pl.uword;
+pub const RegisterArray = [pl.MAX_REGISTERS]usize;
 
 /// A stack allocator for virtual register arrays.
 pub const RegisterStack = Stack.new(RegisterArray, pl.CALL_STACK_SIZE);
 /// A stack allocator, allocated in 64-bit word increments; for arbitrary data within a fiber.
-pub const DataStack = Stack.new(pl.uword, pl.DATA_STACK_SIZE);
+pub const DataStack = Stack.new(usize, pl.DATA_STACK_SIZE);
 /// A stack allocator; for Rvm's function call frames within a fiber.
 pub const CallStack = Stack.new(CallFrame, pl.CALL_STACK_SIZE);
 /// A stack allocator; for Rvm's effect handler set frames within a fiber.
 pub const SetStack = Stack.new(SetFrame, pl.SET_STACK_SIZE);
 
-// TODO: use `Id.of` to generate these
-/// An upvalue reference.
-pub const UpvalueId = enum(u8) {null = 0, _};
-/// A global variable reference.
-pub const GlobalId = enum(u16) {null = 0, _};
-/// A function reference.
-pub const FunctionId = enum(u16) {null = 0, _};
-/// A builtin function reference.
-pub const BuiltinAddressId = enum(u16) {null = 0, _};
-/// A native function reference.
-pub const ForeignAddressId = enum(u16) {null = 0, _};
-/// An effect reference.
-pub const EffectId = enum(u16) {null = 0, _};
-/// An effect handler reference.
-pub const HandlerId = enum(u16) {null = 0, _};
-/// An effect handler set reference.
-pub const HandlerSetId = enum(u16) {null = 0, _};
-/// A constant reference.
-pub const ConstantId = enum(u16) {null = 0, _};
+/// The type of a relative jump offset within a Ribbon bytecode program.
+pub const InstructionOffset = i32;
+/// The address of an instruction in a Ribbon bytecode program.
+pub const InstructionAddr = [*]align(2) const u8;
+/// The address of an instruction in a Ribbon bytecode program, while it is being constructed.
+pub const MutInstructionAddr = [*]align(2) u8;
 
-/// The address of an instruction in an `Rbc` program.
-pub fn InstructionAddr(comptime mut: enum { constant, mutable }) type {
-    return switch (mut) { .constant => [*]align(2) const u8, .mutable => [*]align(2) u8 };
-}
 
-pub const Bytecode = struct {
+
+
+/// A bytecode binary unit. Not necessarily self contained; may reference other units.
+/// Light wrapper for `Header`.
+pub const Bytecode = packed struct(usize) {
     /// The bytecode unit header.
     header: *const Header,
 
@@ -62,46 +51,31 @@ pub const Bytecode = struct {
     }
 };
 
-/// An `Rbc` constant value definition.
-pub const Constant = struct {
-    /// Pointer to the header of the bytecode unit this constant belongs to.
-    header: *const Header,
-    /// The constant's unique identifier.
-    id: ConstantId,
-    /// The constant's value.
-    value: []const u8,
-};
+/// A Ribbon constant value definition.
+pub const Constant = Buffer.new(u8, .constant);
 
-/// An `Rbc` global variable definition.
-pub const Global = struct {
-    /// Pointer to the header of the bytecode unit this global belongs to.
-    header: *const Header,
-    /// The global's unique identifier.
-    id: GlobalId,
-    /// The global's value.
-    value: []u8,
-};
+/// A Ribbon global variable definition.
+pub const Global = Buffer.new(u8, .mutable);
 
-/// An `Rbc` function definition.
-pub const Function = struct {
-    /// Pointer to the header of the bytecode unit this function belongs to.
+/// Designates a specific Ribbon effect, runtime-wide.
+/// EffectId is used to bind to one of these within individual bytecode units.
+pub const Effect = enum(u16) {_};
+
+/// A Ribbon function definition.
+pub const Function = extern struct {
+    /// The `Header` that owns this function,
+    /// which we rely on to resolve the ids encoded in the function's instructions.
     header: *const Header,
-    /// The function's unique identifier.
-    id: FunctionId,
     /// A pair of offsets:
     /// * `base`: the function's first instruction in the bytecode unit; the entry point
     /// * `upper`: one past the end of its instructions; for bounds checking
     extents: Extents,
     /// The stack window size of the function.
-    stack_size: pl.uword,
+    stack_size: usize,
 };
 
-/// An `Rbc` builtin value definition.
-pub const Builtin = struct {
-    /// Pointer to the header of the bytecode unit this builtin belongs to.
-    header: *const Header,
-    /// The builtin's unique identifier.
-    id: BuiltinAddressId,
+/// A Ribbon builtin value definition.
+pub const BuiltinAddress = extern struct {
     /// The builtin's function, if it has one.
     /// * Signature is actually `fn (Rvm.Fiber) callconv(.c) Rvm.NativeSignal` (aka `Rvm.AllocatedBuiltinFunction`);
     ///
@@ -109,76 +83,263 @@ pub const Builtin = struct {
     function: ?*const fn (*anyopaque) callconv(.c) i64,
     /// The builtin's data pointer. If the builtin has no function, this is just POD; otherwise,
     /// it is the builtin's closure data.
-    data: []const u8,
+    data: Buffer.MutBytes,
 };
 
-/// An `Rbc` effect handler set definition.
-pub const HandlerSet = struct {
-    /// Pointer to the header of the bytecode unit this handler set belongs to.
-    header: *const Header,
-    /// The handler set's unique identifier.
-    id: HandlerSetId,
-    /// The offset and count of the handler set's effects, within the bytecode unit.
-    handlers: []const Handler,
+/// Intent-communication alias for `*const anyopaque`.
+pub const ForeignAddress = *const anyopaque;
+
+/// A frame-local stack value offset into the frame of the parent function of a handler set.
+pub const Upvalue = enum(i32) {_};
+
+
+/// `cancel` configuration for a `HandlerSet`.
+pub const Cancellation = extern struct {
+    /// The (`push_set`-instruction relative) offset to apply to the IP if a handler in this set cancels
+    cancellation_offset: InstructionOffset,
+    /// The register to store any cancellation values in.
+    cancellation_register: Register,
 };
 
-/// An `Rbc` effect handler definition.
-pub const Handler = struct {
-    /// Pointer to the header of the bytecode unit this handler belongs to.
-    header: *const Header,
-    /// The effect handler's unique identifier.
-    id: HandlerId,
+/// A Ribbon effect handler set definition. Data is relative to the function.
+pub const HandlerSet = extern struct {
+    /// The handler set's effects.
+    handlers: Id.Buffer(Handler, .constant),
+    /// The handler set's upvalue offsets.
+    upvalues: Id.Buffer(Upvalue, .constant),
+    /// Cancellation configuration for this handler set.
+    cancellation: Cancellation,
+
+    /// Get a pointer to a `Handler` from its `id`.
+    pub fn getHandler(self: *const HandlerSet, id: Id.of(Handler)) *const Handler {
+        return &self.handlers.asSlice()[id.toInt()];
+    }
+
+    /// Get an `Upvalue` offset from its `id`.
+    pub fn getUpvalue(self: *const HandlerSet, id: Id.of(Upvalue)) Upvalue {
+        return self.upvalues.asSlice()[id.toInt()];
+    }
+};
+
+/// We use pointer tagging here to store the effect type in the unused bits of the pointer.
+pub const Handler = packed struct(usize) {
     /// The effect type this handler is for.
-    effect: EffectId,
+    effect: Id.of(Effect),
     /// The function implementing the handler.
-    function: *const Function,
-    /// The number of upvalues used by the handler.
-    upvalue_count: pl.uword,
+    function: u48,
+
+    /// Unpack the `Function` pointer embedded in this handler.
+    pub fn toPointer(self: Handler) *const anyopaque {
+        return @ptrFromInt(self.function);
+    }
 };
 
-/// Indicates the kind of value bound to a `Symbol`.
-pub const SymbolKind = enum { constant, global, function, builtin, foreign_address, effect, handler_set };
+/// Indicates the kind of value bound to a symbol in a `SymbolTable`.
+pub const SymbolKind = enum(u16) {
+    constant,
+    global,
+    function,
+    builtin,
+    foreign_address,
+    effect,
+    handler_set,
 
-/// Used for debugging and address resolution.
-pub const Symbol = struct {
-    /// The symbol's text value.
-    name: []const u8,
-    /// The kind of value bound to the symbol.
-    kind: SymbolKind,
-    /// The value bound to the symbol.
-    binding: u16,
+    /// Comptime function to convert symbol kinds to zig types.
+    pub fn toType(comptime K: SymbolKind) type {
+        return switch (K) {
+            .constant => Constant,
+            .global => Global,
+            .function => Function,
+            .builtin => BuiltinAddress,
+            .foreign_address => ForeignAddress,
+            .effect => Effect,
+            .handler_set => HandlerSet,
+        };
+    }
+
+    /// Comptime function to convert zig types to symbol kinds.
+    pub fn fromType(comptime T: type) SymbolKind {
+        return switch (T) {
+            Constant => .constant,
+            Global => .global,
+            Function => .function,
+            BuiltinAddress => .builtin,
+            ForeignAddress => .foreign_address,
+            HandlerSet => .handler_set,
+            Effect => .effect,
+            else => @compileError("SymbolKind.fromType: unsupported type `" ++ @typeName(T) ++ "`"),
+        };
+    }
 };
 
 /// The base and upper address of a code section.
-pub const Extents = packed struct {
+pub const Extents = packed struct(u128) {
     /// The base address of the code section.
-    base: InstructionAddr(.constant),
-    /// The upper address of the code section.
-    upper: InstructionAddr(.constant),
+    base: InstructionAddr,
+    /// The upper address of the code section. (1 past the last instruction)
+    upper: InstructionAddr,
 };
 
-/// Metadata for an `Rbc` program.
+/// This is an indirection table for the `Id`s used by instruction encodings.
+///
+/// The addresses are resolved at *link time*, so where they actually point is environment-dependent;
+/// ownership varies.
+pub const AddressTable = extern struct {
+    /// Constant value bindings section.
+    constants: Id.Buffer(*const Constant, .constant),
+    /// Global value bindings section.
+    globals: Id.Buffer(*const Global, .constant),
+    /// Function value bindings section.
+    functions: Id.Buffer(*const Function, .constant),
+    /// Builtin function value bindings section.
+    builtin_addresses: Id.Buffer(*const BuiltinAddress, .constant),
+    /// C ABI value bindings section.
+    foreign_addresses: Id.Buffer(*const ForeignAddress, .constant),
+    /// Effect handler set bindings section.
+    handler_sets: Id.Buffer(*const HandlerSet, .constant),
+    /// Effect identity bindings section.
+    effects: Id.Buffer(*const Effect, .constant),
+
+    /// Get a pointer to a `Constant` from its `id`.
+    pub fn getConstant(self: *const AddressTable, id: Id.of(Constant)) *const Constant {
+        return self.constants.asSlice()[id.toInt()];
+    }
+
+    /// Get a pointer to a `Global` from its `id`.
+    pub fn getGlobal(self: *const AddressTable, id: Id.of(Global)) *const Global {
+        return self.globals.asSlice()[id.toInt()];
+    }
+
+    /// Get a pointer to a `Function` from its `id`.
+    pub fn getFunction(self: *const AddressTable, id: Id.of(Function)) *const Function {
+        return self.functions.asSlice()[id.toInt()];
+    }
+
+    /// Get a pointer to a `BuiltinAddress` from its `id`.
+    pub fn getBuiltinAddress(self: *const AddressTable, id: Id.of(BuiltinAddress)) *const BuiltinAddress {
+        return self.builtin_addresses.asSlice()[id.toInt()];
+    }
+
+    /// Get a pointer to a `ForeignAddress` from its `id`.
+    pub fn getForeignAddress(self: *const AddressTable, id: Id.of(ForeignAddress)) *const ForeignAddress {
+        return self.foreign_addresses.asSlice()[id.toInt()];
+    }
+
+    /// Get a pointer to a `HandlerSet` from its `id`.
+    pub fn getHandlerSet(self: *const AddressTable, id: Id.of(HandlerSet)) *const HandlerSet {
+        return self.handler_sets.asSlice()[id.toInt()];
+    }
+
+    /// Get a pointer to a `Handler` from its `id`.
+    pub fn getHandler(self: *const AddressTable, s: Id.of(HandlerSet), h: Id.of(Handler)) *const Handler {
+        return self.getHandlerSet(s).getHandler(h);
+    }
+
+    /// Get a pointer to an `Effect` from its `id`.
+    pub fn getEffect(self: *const AddressTable, id: Id.of(Effect)) *const Effect {
+        return self.effects.asSlice()[id.toInt()];
+    }
+};
+
+/// An association list binding names to ids.
+///
+/// This is a simple encoding; for runtime purposes it is usually better to construct a hash table.
+///
+/// It is a compilation`*` error for a name to appear in the list more than once,
+/// but ids may appear multiple times under different names.
+///
+///
+/// `*` Within Ribbon's compiler, not Zig's
+pub const SymbolTable = packed struct(u128) {
+    /// This symbol table's keys.
+    keys: Id.Buffer(SymbolTable.Key, .constant),
+    /// This symbol table's values.
+    values: Id.Buffer(SymbolTable.Value, .constant),
+
+    /// One half of a key/value pair used for address resolution in a `SymbolTable`.
+    ///
+    /// See `Value`.
+    pub const Key = packed struct(u128) {
+        /// The symbol text's hash value.
+        hash: u64,
+        /// The symbol's text value.
+        name: Id.Buffer(u8, .constant),
+    };
+
+    /// One half of a key/value pair used for address resolution in the `SymbolTable`.
+    ///
+    /// See `Key`.
+    pub const Value = packed struct(u32) {
+        /// The kind of value bound to the symbol.
+        kind: SymbolKind,
+        /// The id (within a reference `AddressTable`) of the value bound to the symbol.
+        id: Id.of(anyopaque),
+    };
+
+    /// Get the id of a symbol by name.
+    pub fn lookupId(self: SymbolTable, name: []const u8) ?SymbolTable.Value {
+        const hash = pl.hash64(name);
+
+        for (self.keys.asSlice(), 0..) |key, i| {
+            if (key.hash != hash) {
+                @branchHint(.likely);
+                continue;
+            }
+
+            if (std.mem.eql(u8, key.name.asSlice(), name)) {
+                @branchHint(.likely);
+                return self.values.asSlice()[i];
+            }
+        }
+
+        return null;
+    }
+};
+
+/// Metadata for a Ribbon program.
 pub const Header = extern struct {
     /// Instructions section base and upper address.
     extents: Extents,
-    /// Symbol table of the program; what it calls each symbol .
-    symbols: [*:null]const ?*const Symbol,
-    /// Constant value bindings section base address.
-    constants: [*:null]const ?*const Constant,
-    /// Global value bindings section base address.
-    globals: [*:null]const ?*const Global,
-    /// Function value bindings section base address.
-    functions: [*:null]const ?*const Function,
-    /// Builtin function value bindings section base address.
-    builtins: [*:null]const ?*const Builtin,
-    /// C ABI value bindings section base address.
-    foreign_addresses: [*]const ?*anyopaque,
-    /// Effect type bindings section base address.
-    effects: [*:@enumFromInt(0)]const ?EffectId,
-    /// Effect handler set bindings section base address.
-    handler_sets: [*:null]const ?*const HandlerSet,
     /// The total size of the program.
-    size: pl.uword,
+    size: usize,
+    /// Address table used by instructions this header owns.
+    addresses: *const AddressTable,
+    /// Symbol bindings for the address table; what this program calls different addresses.
+    ///
+    /// Not necessarily a complete listing for all bindings;
+    /// only what it wants to be known externally.
+    symbols: *const SymbolTable,
+
+    /// Get the address of a symbol by name, in a type-generic manner.
+    /// * **Note**: This uses the raw table to lookup a symbol. While we do store symbol hashes to
+    /// speed this up a bit, for large symbol tables it is likely better to use a hashmap.
+    pub fn lookupAddress(self: *const Header, name: []const u8) ?struct {SymbolKind, *const anyopaque} {
+        const value = self.symbols.lookupId(name) orelse return null;
+        return switch (value.kind) {
+            .constant => .{ value.kind, @ptrCast(self.addresses.getConstant(value.id.cast(Constant))) },
+            .global => .{ value.kind, @ptrCast(self.addresses.getGlobal(value.id.cast(Global))) },
+            .function => .{ value.kind, @ptrCast(self.addresses.getFunction(value.id.cast(Function))) },
+            .builtin => .{ value.kind, @ptrCast(self.addresses.getBuiltinAddress(value.id.cast(BuiltinAddress))) },
+            .foreign_address => .{ value.kind, @ptrCast(self.addresses.getForeignAddress(value.id.cast(ForeignAddress))) },
+            .handler_set => .{ value.kind, @ptrCast(self.addresses.getHandlerSet(value.id.cast(HandlerSet))) },
+            .effect => .{ value.kind, @ptrCast(self.addresses.getEffect(value.id.cast(Effect))) },
+        };
+    }
+
+    /// Get the address of a symbol within a given type by name.
+    /// * **Note**: This uses the raw table to lookup a symbol. While we do store symbol hashes to
+    /// speed this up a bit, for large symbol tables it is likely better to use a hashmap.
+    pub fn lookupAddressOf(self: *const Header, comptime T: type, name: []const u8) error{TypeError}!?*const T {
+        const K = SymbolKind.fromType(T);
+
+        const erased = self.lookupAddress(name) orelse return null;
+
+        return if (erased.kind == K) @ptrCast(@alignCast(erased.ptr))
+        else {
+            @branchHint(.unlikely);
+            return error.TypeError;
+        };
+    }
 };
 
 /// A reference to a virtual register.
@@ -218,47 +379,43 @@ pub const Register = enum(std.math.IntFittingRange(0, pl.MAX_REGISTERS)) {
     }
 
     pub fn getOffset(self: Register) BackingInteger {
-        return @intFromEnum(self) * @sizeOf(pl.uword);
+        return @intFromEnum(self) * @sizeOf(usize);
     }
 };
 
 
 /// Represents an evidence structure.
 pub const Evidence = extern struct {
-    /// A pointer to the set frame.
+    /// A pointer to the set frame this evidence belongs to.
     frame: *SetFrame,
-    /// A placeholder for a handler.
-    handler: pl.TODO,
-    /// A pointer to the previous evidence.
+    /// A copy of the effect handler this evidence carries.
+    handler: Handler,
+    /// A pointer to the previous evidence, if there was already a set frame when this one was created.
     previous: ?*Evidence,
 };
 
 /// Represents a set frame.
 pub const SetFrame = extern struct {
-    /// A pointer to the call frame.
+    /// A pointer to the call frame that created this set frame.
     call: *CallFrame,
-    /// A placeholder for a handler set.
-    handler_set: pl.TODO,
-    /// A pointer to the cancellation address.
-    cancellation_address: InstructionAddr(.constant),
-    /// A pointer to the data.
-    data: [*]pl.uword,
-    /// The register for output.
-    out: Register,
+    /// The effect handler set that defines this frame.
+    handler_set: *const HandlerSet,
+    /// A pointer to the top of the data stack frame at the time this set frame was created.
+    data: [*]usize,
 };
 
 /// Represents a call frame.
 pub const CallFrame = extern struct {
-    /// A pointer to the instruction.
-    ip: InstructionAddr(.constant),
-    /// A pointer to either an `Function` or a built-in function.
+    /// A pointer to the next instruction to execute.
+    ip: InstructionAddr,
+    /// A pointer to either a `Function`, `BuiltinAddress`, or `ForeignAddress`.
     function: *const anyopaque,
     /// A pointer to the set frame.
     set: [*]SetFrame,
     /// A pointer to the evidence.
     evidence: ?*Evidence,
     /// A pointer to the data.
-    data: [*]pl.uword,
+    data: [*]usize,
 };
 
 /// Signals that can be returned by a built-in function / assembly code.
@@ -334,7 +491,7 @@ pub const BuiltinFunction = fn (*mem.FiberHeader) callconv(.c) BuiltinSignal;
 ///
 /// This is primarily a memory management structure,
 /// as the jit is expected to disown the memory upon finalization.
-pub const AllocatedBuiltinFunction = packed struct {
+pub const AllocatedBuiltinFunction = extern struct {
     /// The function's bytes.
     ptr: [*]align(pl.PAGE_SIZE) const u8,
     /// The function's length in bytes.
@@ -363,6 +520,8 @@ pub const Error = error {
 
 /// Low level fiber memory constants and types.
 pub const mem = comptime_memorySize: {
+    const REQUIRED_ALIGNMENT = 8; // we enforce 8-byte alignment on the entire fiber memory
+
     const FIBER_HEADER = extern struct {
         /// Stack of virtual register arrays - stores intermediate values up to a word in size, `pl.MAX_REGISTERS` per function.
         registers: RegisterStack,
@@ -374,13 +533,12 @@ pub const mem = comptime_memorySize: {
         sets: SetStack,
         /// Used by the interpreter to store follow-up dispatch labels.
         loop: *const anyopaque,
-        /// The cause of a trap, if any.
-        trap: ?*const anyopaque,
+        /// The cause of a trap, if any was known. Pointee-type depends on the trap.
+        trap: ?*const anyopaque, // TODO: error handling function that covers this variance
     };
 
     const FIELDS = std.meta.fieldNames(FIBER_HEADER);
 
-    const REQUIRED_ALIGNMENT = 8;
     std.debug.assert(@alignOf(FIBER_HEADER) == REQUIRED_ALIGNMENT);
 
     var offsets: [FIELDS.len]comptime_int = undefined;

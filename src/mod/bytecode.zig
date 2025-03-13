@@ -340,9 +340,9 @@ pub const Function = struct {
     name: *const Name,
 
     /// The function's stack window size.
-    stack_size: pl.uword = 0,
+    stack_size: usize = 0,
     /// The function's stack window alignment.
-    stack_align: pl.uword = 8,
+    stack_align: usize = 8,
     /// The function's instructions.
     instructions: pl.ArrayList(PseudoInstr) = .empty,
 
@@ -377,16 +377,16 @@ pub const Function = struct {
     pub fn generate(self: *const Function, constantInterner: anytype, linkerAllocator: std.mem.Allocator, out: *core.Function, instructionEncoder: *Encoder) error{BadEncoding, OutOfMemory}!LinkerFixups {
         log.info("Generating bytecode for function `{}`", .{self.name});
 
-        const address: core.InstructionAddr(.mutable) = @ptrCast(@alignCast(instructionEncoder.getCurrentAddress()));
+        const address: core.MutInstructionAddr = @ptrCast(@alignCast(instructionEncoder.getCurrentAddress()));
 
         out.id = @enumFromInt(@intFromEnum(self.id));
         out.extents = .{ .base = address, .upper = undefined };
         out.stack_size = self.stack_size;
 
-        var labelMap: pl.UniqueReprMap(*const Name, core.InstructionAddr(.mutable), 80) = .empty;
+        var labelMap: pl.UniqueReprMap(*const Name, core.MutInstructionAddr, 80) = .empty;
         defer labelMap.deinit(self.root.allocator);
 
-        var localFixUps: pl.ArrayList(struct {core.InstructionAddr(.mutable), *const Name}) = .empty;
+        var localFixUps: pl.ArrayList(struct {core.MutInstructionAddr, *const Name}) = .empty;
         defer localFixUps.deinit(self.root.allocator);
 
         var linkerFixups: LinkerFixups = .empty;

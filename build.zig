@@ -49,6 +49,12 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     }).module("X64EZ");
 
+    const Buffer_mod = b.createModule(.{
+        .root_source_file = b.path("src/mod/common/Buffer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const bytecode_mod = b.createModule(.{
         .root_source_file = b.path("src/mod/bytecode.zig"),
         .target = target,
@@ -235,6 +241,7 @@ pub fn build(b: *std.Build) !void {
     // create tests //
     const abi_test = b.addTest(.{ .root_module = abi_mod });
     const assembler_test = b.addTest(.{ .root_module = assembler_mod });
+    const Buffer_test = b.addTest(.{ .root_module = Buffer_mod });
     const bytecode_test = b.addTest(.{ .root_module = bytecode_mod });
     const common_test = b.addTest(.{ .root_module = common_mod });
     const core_test = b.addTest(.{ .root_module = core_mod });
@@ -264,6 +271,8 @@ pub fn build(b: *std.Build) !void {
 
     // assembler_mod is a dep
 
+    Buffer_mod.addImport("platform", platform_mod);
+
     bytecode_mod.addImport("platform", platform_mod);
     bytecode_mod.addImport("core", core_mod);
     bytecode_mod.addImport("Instruction", Instruction_mod);
@@ -278,6 +287,8 @@ pub fn build(b: *std.Build) !void {
     common_mod.addImport("VirtualWriter", VirtualWriter_mod);
 
     core_mod.addImport("platform", platform_mod);
+    core_mod.addImport("Id", Id_mod);
+    core_mod.addImport("Buffer", Buffer_mod);
     core_mod.addImport("Stack", Stack_mod);
 
     Formatter_mod.addImport("platform", platform_mod);
@@ -292,6 +303,7 @@ pub fn build(b: *std.Build) !void {
 
     Instruction_mod.addImport("platform", platform_mod);
     Instruction_mod.addImport("core", core_mod);
+    Instruction_mod.addImport("Id", Id_mod);
 
     Interner_mod.addImport("platform", platform_mod);
 
@@ -321,6 +333,7 @@ pub fn build(b: *std.Build) !void {
 
     ribbon_mod.addImport("abi", abi_mod);
     ribbon_mod.addImport("platform", platform_mod);
+    ribbon_mod.addImport("Buffer", Buffer_mod);
     ribbon_mod.addImport("bytecode", bytecode_mod);
     ribbon_mod.addImport("common", common_mod);
     ribbon_mod.addImport("core", core_mod);
@@ -355,6 +368,7 @@ pub fn build(b: *std.Build) !void {
     const check_step = b.step("check", "Run semantic analysis");
     check_step.dependOn(&abi_test.step);
     check_step.dependOn(&assembler_test.step);
+    check_step.dependOn(&Buffer_test.step);
     check_step.dependOn(&bytecode_test.step);
     check_step.dependOn(&common_test.step);
     check_step.dependOn(&core_test.step);
@@ -378,6 +392,7 @@ pub fn build(b: *std.Build) !void {
     const test_step = b.step("unit-test", "Run all unit tests");
     test_step.dependOn(&b.addRunArtifact(abi_test).step);
     test_step.dependOn(&b.addRunArtifact(assembler_test).step);
+    test_step.dependOn(&b.addRunArtifact(Buffer_test).step);
     test_step.dependOn(&b.addRunArtifact(bytecode_test).step);
     test_step.dependOn(&b.addRunArtifact(common_test).step);
     test_step.dependOn(&b.addRunArtifact(core_test).step);

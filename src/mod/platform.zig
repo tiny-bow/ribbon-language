@@ -52,7 +52,7 @@ pub const SET_STACK_SIZE = 4096;
 /// The size of a register in bits.
 pub const REGISTER_SIZE_BITS = 64;
 /// The size of a register in bytes.
-pub const REGISTER_SIZE_BYTES = @divExact(REGISTER_SIZE_BITS, 8);
+pub const REGISTER_SIZE_BYTES = 8;
 /// The maximum number of registers.
 pub const MAX_REGISTERS = 255;
 
@@ -83,14 +83,6 @@ comptime {
     }
 }
 
-
-/// Signed integer of register size.
-pub const iword: type = std.meta.Int(.signed, REGISTER_SIZE_BITS);
-/// Unsigned integer of register size.
-pub const uword: type = std.meta.Int(.unsigned, REGISTER_SIZE_BITS);
-
-/// Void, nothing.
-pub const Nil: type = void;
 
 /// Utf-32 codepoint (`u21`).
 pub const Char: type = u21;
@@ -137,6 +129,36 @@ pub fn StringSet(comptime Ctx: type, comptime LOAD_PERCENTAGE: u64) type {
 
 /// Indicates whether an integer type can represent negative values.
 pub const Signedness = std.builtin.Signedness;
+
+/// Indicates whether a value can be modified.
+pub const Mutability = enum(u1) {
+    constant,
+    mutable,
+
+    /// Create a single-value pointer type with this mutability.
+    pub fn PointerType(comptime self: Mutability, comptime T: type) type {
+        return switch (self) {
+            .constant => [*]const T,
+            .mutable => [*]T,
+        };
+    }
+
+    /// Create a multi-value pointer type with this mutability.
+    pub fn MultiPointerType(comptime self: Mutability, comptime T: type) type {
+        return switch (self) {
+            .constant => [*]const T,
+            .mutable => [*]T,
+        };
+    }
+
+    /// Create a slice type with this mutability.
+    pub fn SliceType(comptime self: Mutability, comptime T: type) type {
+        return switch (self) {
+            .constant => []const T,
+            .mutable => []T,
+        };
+    }
+};
 
 
 pub fn UniqueReprMap(comptime K: type, comptime V: type, LOAD_PERCENTAGE: u64) type {

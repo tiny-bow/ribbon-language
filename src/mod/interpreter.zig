@@ -9,7 +9,7 @@ extern fn rvm_interpreter_eval(*const core.mem.FiberHeader) callconv(.c) core.Bu
 extern fn rvm_interpreter_step(*const core.mem.FiberHeader) callconv(.c) core.BuiltinSignal;
 
 
-pub fn invokeBuiltin(self: *core.Fiber, fun: anytype, arguments: []const pl.uword) core.Error!pl.uword {
+pub fn invokeBuiltin(self: *core.Fiber, fun: anytype, arguments: []const usize) core.Error!usize {
     const T = @TypeOf(fun);
     // Because the allocated builtin is a packed structure with the pointer at the start, we can just truncate it.
     // To handle both cases, we cast to the bitsize of the input first and then truncate to the output.
@@ -17,12 +17,12 @@ pub fn invokeBuiltin(self: *core.Fiber, fun: anytype, arguments: []const pl.uwor
 }
 
 /// Invokes a `core.AllocatedBuiltinFunction` on the provided fiber, returning the result.
-pub fn invokeAllocatedBuiltin(self: core.Fiber, fun: core.AllocatedBuiltinFunction, arguments: []const pl.uword) core.Error!pl.uword {
+pub fn invokeAllocatedBuiltin(self: core.Fiber, fun: core.AllocatedBuiltinFunction, arguments: []const usize) core.Error!usize {
     return self.invokeStaticBuiltin(@ptrCast(fun.ptr), arguments);
 }
 
 /// Invokes a `core.BuiltinFunction` on the provided fiber, returning the result.
-pub fn invokeStaticBuiltin(self: core.Fiber, fun: *const core.BuiltinFunction, arguments: []const pl.uword) core.Error!pl.uword {
+pub fn invokeStaticBuiltin(self: core.Fiber, fun: *const core.BuiltinFunction, arguments: []const usize) core.Error!usize {
     if (!self.header.calls.hasSpace(1)) {
         return error.Overflow;
     }
@@ -55,8 +55,8 @@ pub fn invokeStaticBuiltin(self: core.Fiber, fun: *const core.BuiltinFunction, a
 }
 
 /// Invokes a `core.Function` on the provided fiber, returning the result.
-pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []const pl.uword) core.Error!pl.uword {
-    const HALT: pl.uword = undefined; // FIXME
+pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []const usize) core.Error!usize {
+    const HALT: usize = undefined; // FIXME
 
     if (!self.header.calls.hasSpace(2)) {
         return error.Overflow;
