@@ -141,7 +141,7 @@ pub const Builder = struct {
 };
 
 /// Provides deduplication for names in a bytecode unit.
-pub const NameInterner = Interner.new(*const Name, struct {
+pub const NameInterner: type = Interner.new(*const Name, struct {
     pub const DATA_FIELD = .value;
 
     pub fn eql(a: *const []const u8, b: *const []const u8) bool {
@@ -186,38 +186,21 @@ pub const Name = struct {
 };
 
 
-pub const PseudoInstr = union(enum) {
-    no_fixup: Instruction,
-    label: *const Name,
-    branch: struct {
-        opcode: Instruction.OpCode,
-        condition: ?core.Register,
-        target: *const Name,
-    },
-    static_addr: struct {
-        opcode: Instruction.OpCode,
-        target: *const Name,
-        result: core.Register,
-    },
-    static_call: struct {
-        name: *const Name,
-        opcode: Instruction.OpCode,
-        arguments: pl.ArrayList(core.Register),
-        result: ?core.Register,
-    },
-};
-
+/// A `VirtualWriter` with a maximum size for the bytecode unit.
 pub const Writer = VirtualWriter.new(pl.MAX_VIRTUAL_CODE_SIZE);
 
 pub const Encoder = struct {
+    /// The encoder's `VirtualWriter`
     writer: Writer,
 
     pub const Error = Writer.Error;
 
+    /// Get the current offset's address with the encoded memory.
     pub fn getCurrentAddress(self: *Encoder) [*]u8 {
         return self.writer.getCurrentAddress();
     }
 
+    /// Finalize the Encoder's writer, returning the posix pages as a read-only buffer.
     pub fn finalize(self: *Encoder) error{BadEncoding}![]align(pl.PAGE_SIZE) const u8 {
         return self.writer.finalize(.read_only);
     }
@@ -294,6 +277,7 @@ pub const Encoder = struct {
     pub fn instr(self: *Encoder, code: Instruction.OpCode, data: Instruction.OpData) Writer.Error!void {
         try self.opcode(code);
         try self.operands(data);
+        try self.alignTo(pl.BYTECODE_ALIGNMENT);
     }
 
     /// Encodes a pre-composed bytecode instruction.
@@ -313,22 +297,6 @@ pub const Encoder = struct {
     }
 };
 
-/// A map of symbol references for a linker to resolve.
-pub const LinkerFixups = pl.StringMap(pl.ArrayList(LinkerFixup));
-
-/// A symbol reference for a linker to resolve.
-pub const LinkerFixup = struct {
-    addr: *align(1) u16,
-    expected: core.SymbolKind,
-
-    /// Create a new `LinkerFixup` with the given address and expected symbol kind.
-    pub fn init(addr: *align(1) u16, expected: core.SymbolKind) LinkerFixup {
-        return LinkerFixup{
-            .addr = addr,
-            .expected = expected,
-        };
-    }
-};
 
 /// A function definition that is in-progress within the bytecode unit.
 pub const Function = struct {
@@ -343,9 +311,8 @@ pub const Function = struct {
     stack_size: usize = 0,
     /// The function's stack window alignment.
     stack_align: usize = 8,
-    /// The function's instructions.
-    instructions: pl.ArrayList(PseudoInstr) = .empty,
-
+    /// The function's basic blocks.
+    blocks: pl.ArrayList(*const Block) = .empty,
 
     fn init(root: *const Builder, id: Id.of(Function), name: *const Name) !*const Function {
         const self = try root.allocator.create(Function);
@@ -365,179 +332,179 @@ pub const Function = struct {
         const allocator = self.root.allocator;
         defer allocator.destroy(self);
 
-        self.instructions.deinit(allocator);
+        self.blocks.deinit(allocator);
     }
 
-    pub fn addInstruction(ptr: *const Function, instruction: PseudoInstr) error{OutOfMemory}!void {
-        const self: *Function = @constCast(ptr);
-        try self.instructions.append(self.root.allocator, instruction);
+    /// Create a new basic block within this function, returning a pointer to it.
+    pub fn createBlock(ptr: *const Function, name: ?*const Name) error{NameCollision, TooManyBlocks, OutOfMemory}!*const Block {
+        const self = @constCast(ptr);
+
+        const index = self.blocks.items.len;
+
+        if (index > Id.MAX_INT) {
+            log.err("bytecode.Function.createBlock: Cannot create more than {d} blocks in function {s}", .{Id.MAX_INT, self.name.value});
+            return error.TooManyBlocks;
+        }
+
+        const block = try Block.init(self, .fromInt(index), name);
+
+        try self.blocks.append(self.root.allocator, block);
+
+        return block;
+    }
+};
+
+/// A bytecode basic block in unencoded form.
+///
+/// A basic block is a straight-line sequence of instructions with no *local*
+/// control flow, terminated by a branch or similar instruction. Emphasis is placed
+/// on *local*, because a basic block can still call functions; it simply assumes
+/// they always return. (See docs for the field `terminator` for some details about
+/// this.)
+///
+/// This definition of basic block was chosen for convenience of interface. We could track
+/// termination of functional control flow; but it would require more complex data structures
+/// and API. The current design allows for a simple, linear representation of the bytecode
+/// function's control flow, which is sufficient for the intended use cases of the `Builder`.
+pub const Block = struct {
+    /// The bytecode unit that owns this block.
+    root: *const Builder,
+    /// The function this block belongs to.
+    function: *const Function,
+    /// The unique(-within-`function`) identifier for this block.
+    id: Id.of(Block),
+    /// The block's name, if it has one; for debugging purposes.
+    name: ?*const Name,
+    /// The instructions making up the body of this block, in un-encoded form.
+    body: pl.ArrayList(Instruction.Basic) = .empty,
+    /// The instruction that terminates this block.
+    /// * Adding any instruction when this is non-`null` is a `BadEncoding` error
+    /// * For all other purposes, `null` is semantically equivalent to `unreachable`
+    ///
+    /// This is intended for convenience. For example, when calling an effect
+    /// handler *that is known to always cancel*, we can treat the `prompt` as
+    /// terminal in higher-level code.
+    terminator: ?Instruction.Term = null,
+
+    fn init(function: *const Function, id: Id.of(Block), name: ?*const Name) error{OutOfMemory}!*const Block {
+        const root = function.root;
+        const allocator = root.allocator;
+        const self = try allocator.create(Block);
+
+        self.* = Block{
+            .root = root,
+            .function = function,
+            .id = id,
+            .name = name,
+        };
+
+        return self;
     }
 
-    // FIXME: constantInterner
-    pub fn generate(self: *const Function, constantInterner: anytype, linkerAllocator: std.mem.Allocator, out: *core.Function, instructionEncoder: *Encoder) error{BadEncoding, OutOfMemory}!LinkerFixups {
-        log.info("Generating bytecode for function `{}`", .{self.name});
+    fn deinit(ptr: *const Block) void {
+        const self: *Block = @constCast(ptr);
 
-        const address: core.MutInstructionAddr = @ptrCast(@alignCast(instructionEncoder.getCurrentAddress()));
+        const allocator = self.root.allocator;
+        defer allocator.destroy(self);
 
-        out.id = @enumFromInt(@intFromEnum(self.id));
-        out.extents = .{ .base = address, .upper = undefined };
-        out.stack_size = self.stack_size;
+        self.body.deinit(allocator);
+    }
 
-        var labelMap: pl.UniqueReprMap(*const Name, core.MutInstructionAddr, 80) = .empty;
-        defer labelMap.deinit(self.root.allocator);
+    /// Append an instruction into this block, given its `OpCode` and an appropriate operand set.
+    ///
+    /// * `data` must be of the correct type for the instruction, or compilation errors will occur.
+    /// See `Instruction.operand_sets`; each opcode has an associated type with the same name.
+    /// `.{}` syntax should work.
+    ///
+    /// See also `instrPre`, which takes a pre-composed `Instruction` instead of individual components.
+    pub fn instr(ptr: *const Block, code: Instruction.OpCode, data: anytype) error{BadEncoding, OutOfMemory}!void {
+        const opFields = comptime std.meta.fieldNames(Instruction.OpCode);
+        const termFields = comptime std.meta.fieldNames(Instruction.TermOpData);
 
-        var localFixUps: pl.ArrayList(struct {core.MutInstructionAddr, *const Name}) = .empty;
-        defer localFixUps.deinit(self.root.allocator);
+        @setEvalBranchQuota(opFields.len * termFields.len * 3);
 
-        var linkerFixups: LinkerFixups = .empty;
-        errdefer linkerFixups.deinit(linkerAllocator);
+        const self: *Block = @constCast(ptr);
 
-        for (self.instructions.items) |*instr| {
-            switch (instr.*) {
-                .no_fixup => |no_fixup| try instructionEncoder.instrPre(no_fixup),
+        if (self.terminator) |term| {
+            log.err("Cannot insert instruction `{s}` into block with terminator `{s}`", .{@tagName(code), @tagName(term.code)});
+            return error.BadEncoding;
+        }
 
-                .label => |label| try labelMap.put(self.root.allocator, label, address),
+        const icode: u16 = @intFromEnum(code);
 
-                .branch => |*branchProto| {
-                    try localFixUps.append(self.root.allocator, .{address, branchProto.target});
+        inline for (opFields) |opName| {
+            const isTerm = inline for (termFields) |termName| {
+                if (comptime std.mem.eql(u8, opName, termName)) {
+                    break true;
+                }
+            } else false;
 
-                    try instructionEncoder.instr(branchProto.opcode, switch (branchProto.opcode) {
-                        .br => undefined,
-                        .br_if => .{ .br_if = .{ .R = branchProto.condition.?, .C = undefined } },
-                        else => return error.BadEncoding,
-                    });
-                },
-
-                .static_addr => |*addrProto| {
-                    try instructionEncoder.opcode(addrProto.opcode);
-
-                    const name = try linkerAllocator.dupe(u8, addrProto.target.value);
-
-                    const fixupEntry = try linkerFixups.getOrPut(linkerAllocator, name);
-                    if (!fixupEntry.found_existing) fixupEntry.value_ptr.* = .empty;
-
-                    switch (addrProto.opcode) {
-                        .@"addr_l" => {
-                            // TODO: add local variable offset tracker and use it here with constantInterner
-                        },
-                        .@"addr_u" => {
-                            // TODO: we still dont have a story for binding and accessing upvalues
-                        },
-                        .@"addr_g" => {
-                            try instructionEncoder.writeValue(addrProto.result);
-
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(addrProto.result, .global));
-                            try instructionEncoder.writeValue(core.GlobalId.null);
-                        },
-                        .@"addr_f" => {
-                            try instructionEncoder.writeValue(addrProto.result);
-
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(addrProto.result, .function));
-                            try instructionEncoder.writeValue(core.FunctionId.null);
-                        },
-                        .@"addr_b" => {
-                            try instructionEncoder.writeValue(addrProto.result);
-
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(addrProto.result, .builtin));
-                            try instructionEncoder.writeValue(core.BuiltinAddressId.null);
-                        },
-                        .@"addr_x" => {
-                            try instructionEncoder.writeValue(addrProto.result);
-
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(addrProto.result, .foreign));
-                            try instructionEncoder.writeValue(core.ForeignAddressId.null);
-                        },
-                        .@"addr_c" => {
-                            try instructionEncoder.writeValue(addrProto.result);
-
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(addrProto.result, .constant));
-                            try instructionEncoder.writeValue(core.ConstantId.null);
-                        },
-                        else => return error.BadEncoding,
-                    }
-
-                    try instructionEncoder.alignTo(@alignOf(Instruction.OpCode));
-                },
-
-                .static_call => |*callProto| {
-                    try instructionEncoder.opcode(callProto.opcode);
-
-                    const name = try linkerAllocator.dupe(u8, callProto.name.value);
-
-                    const fixupEntry = try linkerFixups.getOrPut(linkerAllocator, name);
-                    if (!fixupEntry.found_existing) fixupEntry.value_ptr.* = .empty;
-
-                    const args = args: switch (callProto.opcode) {
-                        .@"call_c" => {
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .function));
-                            try instructionEncoder.writeValue(core.FunctionId.null);
-
-                            break :args callProto.arguments.items;
-                        },
-                        .@"call_c_v" => {
-                            try instructionEncoder.writeValue(callProto.arguments.items[0]);
-
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .function));
-                            try instructionEncoder.writeValue(core.FunctionId.null);
-
-                            break :args callProto.arguments.items[1..];
-                        },
-                        .@"call_builtinc" => {
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .builtin));
-                            try instructionEncoder.writeValue(core.BuiltinAddressId.null);
-
-                            break :args callProto.arguments.items;
-                        },
-                        .@"call_builtinc_v" => {
-                            try instructionEncoder.writeValue(callProto.arguments.items[0]);
-
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .builtin));
-                            try instructionEncoder.writeValue(core.BuiltinAddressId.null);
-
-                            break :args callProto.arguments.items[1..];
-                        },
-                        .@"call_foreignc" => {
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .foreign));
-                            try instructionEncoder.writeValue(core.ForeignAddressId.null);
-
-                            break :args callProto.arguments.items;
-                        },
-                        .@"call_foreignc_v" => {
-                            try instructionEncoder.writeValue(callProto.arguments.items[0]);
-
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .foreign));
-                            try instructionEncoder.writeValue(core.ForeignAddressId.null);
-
-                            break :args callProto.arguments.items[1..];
-                        },
-                        .@"prompt" => {
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .effect));
-                            try instructionEncoder.writeValue(core.EffectId.null);
-
-                            break :args callProto.arguments.items;
-                        },
-                        .@"prompt_v" => {
-                            try instructionEncoder.writeValue(callProto.arguments.items[0]);
-
-                            try fixupEntry.value_ptr.append(linkerAllocator, LinkerFixup.init(@ptrCast(address), .effect));
-                            try instructionEncoder.writeValue(core.EffectId.null);
-
-                            break :args callProto.arguments.items[1..];
-                        },
-
-                        else => return error.BadEncoding,
+            const ecode = comptime @field(Instruction.OpCode, opName);
+            if (icode == comptime @intFromEnum(ecode)) {
+                if (comptime isTerm) {
+                    self.terminator = Instruction.Term{
+                        .code = @enumFromInt(icode),
+                        .data = @unionInit(Instruction.TermOpData, opName, data),
                     };
+                } else {
+                    try self.body.append(self.root.allocator, Instruction.Basic{
+                        .code = @enumFromInt(icode),
+                        .data = @unionInit(Instruction.BasicOpData, opName, data),
+                    });
+                }
 
-                    const argCount = try constantInterner.internNative(&callProto.arguments.items.len);
-                    try instructionEncoder.writeValue(argCount.id);
-
-                    for (args) |arg| try instructionEncoder.writeValue(arg);
-
-                    try instructionEncoder.alignTo(@alignOf(Instruction.OpCode));
-                },
+                return;
             }
         }
 
-        return linkerFixups;
+        unreachable;
+    }
+
+    /// Append a pre-composed instruction into this block.
+    ///
+    /// * `instruction` must be properly composed, or runtime errors will occur.
+    ///
+    /// See also `instr`, which takes the individual components of an instruction separately.
+    pub fn instrPre(ptr: *const Block, instruction: Instruction) error{BadEncoding, OutOfMemory}!void {
+        const opFields = comptime std.meta.fieldNames(Instruction.OpCode);
+        const termFields = comptime std.meta.fieldNames(Instruction.TermOpData);
+
+        @setEvalBranchQuota(opFields.len * termFields.len * 3);
+
+        const self: *Block = @constCast(ptr);
+
+        if (self.terminator) |term| {
+            log.err("Cannot insert instruction `{s}` into block with terminator `{s}`", .{@tagName(instruction.code), @tagName(term.code)});
+            return error.BadEncoding;
+        }
+
+        const icode: u16 = @intFromEnum(instruction.code);
+
+        inline for (opFields) |opName| {
+            const isTerm = inline for (termFields) |termName| {
+                if (comptime std.mem.eql(u8, opName, termName)) {
+                    break true;
+                }
+            } else false;
+
+            const ecode = comptime @field(Instruction.OpCode, opName);
+            if (icode == comptime @intFromEnum(ecode)) {
+                if (comptime isTerm) {
+                    self.terminator = Instruction.Term{
+                        .code = @enumFromInt(icode),
+                        .data = @unionInit(Instruction.TermOpData, opName, @field(instruction.data, opName)),
+                    };
+                } else {
+                    try self.body.append(self.root.allocator, Instruction.Basic{
+                        .code = @enumFromInt(icode),
+                        .data = @unionInit(Instruction.BasicOpData, opName, @field(instruction.data, opName)),
+                    });
+                }
+
+                return;
+            }
+        }
+
+        unreachable;
     }
 };

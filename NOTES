@@ -3,13 +3,7 @@
 * bytecode builder
 * ir builder
 > These two are very codependent partners. Bytecode builder should be usable on
-> its own, but designed to interface with the ir. After further reflection, I
-> think that I'm probably over-doing the "bytecode builder should be usable on
-> its own" bit. I think, probably, I want to keep it as simple as possible, and
-> if a tool is required to do more assembler-like tasks in the future, then I
-> can make a tool for that based on the bytecode builder. I think a lot of the
-> features that make for a good assembler actually just get in the way of the IR
-> translation
+> its own, but designed to interface with the ir.
 
 * TypeInfo.formatMemory
 > Going to need this like, everywhere. So it needs to be quite robust.

@@ -32,9 +32,9 @@ pub const SetStack = Stack.new(SetFrame, pl.SET_STACK_SIZE);
 /// The type of a relative jump offset within a Ribbon bytecode program.
 pub const InstructionOffset = i32;
 /// The address of an instruction in a Ribbon bytecode program.
-pub const InstructionAddr = [*]align(2) const u8;
+pub const InstructionAddr = [*]align(pl.BYTECODE_ALIGNMENT) const u8;
 /// The address of an instruction in a Ribbon bytecode program, while it is being constructed.
-pub const MutInstructionAddr = [*]align(2) u8;
+pub const MutInstructionAddr = [*]align(pl.BYTECODE_ALIGNMENT) u8;
 
 
 
@@ -47,7 +47,7 @@ pub const Bytecode = packed struct(usize) {
 
     /// De-initialize the bytecode unit, freeing the memory that it owns.
     pub fn deinit(b: Bytecode, allocator: std.mem.Allocator) void {
-        allocator.free(@as([*]align(8) u8, @constCast(@ptrCast(b.header)))[0..b.header.size]);
+        allocator.free(@as(InstructionAddr, @ptrCast(b.header))[0..b.header.size]);
     }
 };
 

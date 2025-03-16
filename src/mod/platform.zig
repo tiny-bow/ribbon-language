@@ -42,6 +42,9 @@ pub const OPCODE_SIZE = 2;
 /// The size of a virtual opcode, in bits.
 pub const OPCODE_SIZE_BITS = bitsFromBytes(OPCODE_SIZE);
 
+/// The alignment of bytecode instructions.
+pub const BYTECODE_ALIGNMENT = 8;
+
 /// The size of the data stack in words.
 pub const DATA_STACK_SIZE = bytesFromMegabytes(1) / 8;
 /// The size of the call stack in frames.

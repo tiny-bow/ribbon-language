@@ -9,6 +9,9 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
+/// The maximum integer that can be converted to an `Id`.
+pub const MAX_INT = std.math.maxInt(u16) - 1;
+
 /// Identity values used to create indirect references.
 ///
 /// Associated type may be accessed with the `Value` constant.
@@ -30,6 +33,11 @@ pub fn of(comptime T: type) type {
         /// Convert this id to a 16-bit integer.
         pub fn toInt(self: Self) u16 {
             return @intFromEnum(self) - 1;
+        }
+
+        /// Convert a 16-bit integer to an `Id`.
+        pub fn fromInt(i: anytype) Self {
+            return @enumFromInt(i + 1);
         }
     };
 }

@@ -322,7 +322,6 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
     try generateTypesIntro(writer);
 
     try writer.writeAll(
-
         \\    /// discriminator for instruction identity
         \\    code: OpCode,
         \\    /// operand set for the instruction
@@ -334,6 +333,7 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
     try generateTypesCodes(categories, writer);
     try generateTypesData(categories, writer);
     try generateTypesUnion(categories, writer);
+    try generateTypesBasicAndTerm(categories, writer);
 }
 
 fn generateTypesIntro(writer: anytype) !void {
@@ -380,6 +380,26 @@ fn generateTypesZigDoc(mnemonic: []const u8, opcode: u16, instr: isa.Instruction
 }
 
 fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
+    try writer.writeAll(
+        \\/// Like `Instruction`, but specialized to instructions that can occur inside a basic block.
+        \\pub const Basic = struct {
+        \\    /// discriminator for instruction identity
+        \\    code: BasicOpCode,
+        \\    /// operand set for the instruction
+        \\    data: BasicOpData,
+        \\};
+        \\
+        \\/// Like `Instruction`, but specialized to instructions that can terminate a basic block.
+        \\pub const Term = struct {
+        \\    /// discriminator for instruction identity
+        \\    code: TermOpCode,
+        \\    /// operand set for the instruction
+        \\    data: TermOpData,
+        \\};
+        \\
+        \\
+    );
+
     try writer.writeAll(
         \\/// Namespace of operand set types for each instruction.
         \\pub const operand_sets = struct {
@@ -440,6 +460,114 @@ fn generateTypesUnion(categories: []const isa.Category, writer: anytype) !void {
                 try writer.writeAll("\": operand_sets.@\"");
                 try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
                 try writer.writeAll("\",\n");
+
+                opcode += 1;
+            }
+        }
+    }
+    try writer.writeAll("};\n\n");
+}
+
+fn generateTypesBasicAndTerm(categories: []const isa.Category, writer: anytype) !void {
+    try writer.writeAll(
+        \\/// Enumeration identifying each instruction that can appear inside a basic block.
+        \\pub const BasicOpCode = enum(u16) {
+        \\
+    );
+
+    var opcode: u16 = 0;
+    for (categories) |category| {
+        for (category.mnemonics) |mnemonic| {
+            for (mnemonic.instructions) |instruction| {
+                if (!instruction.terminal) {
+                    try generateTypesZigDoc(mnemonic.name, opcode, instruction, writer);
+
+                    try writer.writeAll("    @\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\" = 0x");
+                    try formatOpcode(opcode, writer);
+                    try writer.writeAll(",\n");
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
+        \\/// Enumeration identifying each instruction that can terminate a basic block.
+        \\pub const TermOpCode = enum(u16) {
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |category| {
+        for (category.mnemonics) |mnemonic| {
+            for (mnemonic.instructions) |instruction| {
+                if (instruction.terminal) {
+                    try generateTypesZigDoc(mnemonic.name, opcode, instruction, writer);
+
+                    try writer.writeAll("    @\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\" = 0x");
+                    try formatOpcode(opcode, writer);
+                    try writer.writeAll(",\n");
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
+        \\/// Untagged union of all `operand_sets` types that can appear in a basic block.
+        \\pub const BasicOpData = packed union {
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |category| {
+        for (category.mnemonics) |mnemonic| {
+            for (mnemonic.instructions) |instruction| {
+                if (!instruction.terminal) {
+                    try generateTypesZigDoc(mnemonic.name, opcode, instruction, writer);
+
+                    try writer.writeAll("    @\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\": operand_sets.@\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\",\n");
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
+        \\/// Untagged union of all `operand_sets` types that can terminate a basic block.
+        \\pub const TermOpData = packed union {
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |category| {
+        for (category.mnemonics) |mnemonic| {
+            for (mnemonic.instructions) |instruction| {
+                if (instruction.terminal) {
+                    try generateTypesZigDoc(mnemonic.name, opcode, instruction, writer);
+
+                    try writer.writeAll("    @\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\": operand_sets.@\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\",\n");
+                }
 
                 opcode += 1;
             }
