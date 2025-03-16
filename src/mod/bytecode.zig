@@ -3,7 +3,7 @@
 //!
 //! The focal points are:
 //! * `Instruction` - this is the data type representing un-encoded Ribbon bytecode instructions
-//! * `Builder` - the main API for creating Ribbon bytecode units; other types in this namespace are subordinate to it.
+//! * `Builder` - the main API for creating Ribbon bytecode functions; other types in this namespace are subordinate to it.
 const bytecode = @This();
 
 const std = @import("std");
@@ -21,176 +21,44 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-/// A builder abstraction for Ribbon bytecode units.
-pub const Builder = struct {
-    /// The allocator that all memory used by intermediate structures is sourced from.
-    /// * The builder is allocator-agnostic and any allocator can be used here,
-    /// though resulting usage patterns may differ slightly. See `deinit`.
-    allocator: std.mem.Allocator,
-    /// Interned name set for the bytecode unit.
-    names: NameInterner = .empty,
-    /// Constant value bindings for the bytecode unit.
-    constants: pl.ArrayList(core.Constant) = .empty,
-    /// Global value bindings for the bytecode unit.
-    globals: pl.ArrayList(core.Global) = .empty,
-    /// Function value bindings for the bytecode unit.
-    functions: pl.ArrayList(*const Function) = .empty,
-    /// Builtin function value bindings for the bytecode unit.
-    builtins: pl.ArrayList(core.BuiltinAddress) = .empty,
-    /// C ABI value bindings for the bytecode unit.
-    foreign_addresses: pl.ArrayList(core.ForeignAddress) = .empty,
-    /// Effect type bindings for the bytecode unit.
-    effects: pl.ArrayList(core.Effect) = .empty,
-    /// Effect handler set bindings for the bytecode unit.
-    handler_sets: pl.ArrayList(core.Handler) = .empty,
+/// Disassemble a bytecode function, printing to the provided writer.
+pub fn disas(vmem: pl.VirtualMemory, writer: anytype) !void {
+    const MASK
+        = comptime std.math.maxInt(std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpCode)))
+            << (@bitSizeOf(Instruction) - @bitSizeOf(Instruction.OpCode));
 
-    /// Initialize a new bytecode unit builder.
-    ///
-    /// * `allocator`-agnostic, but see `deinit`
-    /// * result `Builder` will own all intermediate memory allocated with the provided allocator;
-    /// it can all be freed at once with `deinit`
-    pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!*const Builder {
-        const self = try allocator.create(Builder);
+    var ptr: core.InstructionAddr = @ptrCast(vmem);
+    const end = ptr + vmem.len;
 
-        self.* = Builder{ .allocator = allocator };
+    try writer.print("[{x:0<16}]:\n", .{ @intFromPtr(ptr) });
 
-        return self;
-    }
+    while (ptr < end) : (ptr) {
+        const encodedBits = @as([*]usize, ptr)[0];
+        ptr += @sizeOf(pl.BYTECODE_ALIGNMENT);
 
-    /// De-initialize the bytecode unit, freeing all allocated memory.
-    ///
-    /// This is not necessary to call if the allocator provided to the `Builder` is a `std.heap.Arena` or similar.
-    pub fn deinit(b: *const Builder) void {
-        const self: *Builder = @constCast(b);
+        const opcode = encodedBits | MASK;
+        const data = encodedBits << @bitSizeOf(Instruction.OpCode);
 
-        const allocator = self.allocator;
-        defer allocator.destroy(self);
+        inline for (comptime std.meta.fieldNames(Instruction.OpCode)) |instrName| {
+            if (opcode == comptime @field(Instruction.Opcode, instrName)) {
+                const T = @FieldType(Instruction.OpData, instrName);
+                const set = @field(data, instrName);
 
-        defer inline for (comptime std.meta.fieldNames(Builder)[1..]) |fieldName| {
-            @field(self, fieldName).deinit(allocator);
-        };
+                try writer.writeAll("    " ++ instrName);
 
-        var nameIt = self.names.keyIterator();
-        while (nameIt.next()) |namePtr| {
-            Name.deinit(namePtr.*);
-        }
+                inline for (comptime std.meta.fieldNames(T)) |opName| {
+                    const operand = @field(set, opName);
 
-        // for (self.constants.items) |constant| {
-        //     allocator.free(constant);
-        // }
-
-        // for (self.globals.items) |global| {
-        //     allocator.free(global);
-        // }
-
-        for (self.functions.items) |function| {
-            function.deinit();
-        }
-
-        // for (self.builtins.items) |builtin| {
-        //     allocator.free(builtin);
-        // }
-
-        // for (self.foreign_addresses.items) |foreign| {
-        //     allocator.free(foreign);
-        // }
-
-        // for (self.effects.items) |effect| {
-        //     allocator.free(effect);
-        // }
-
-        // for (self.handler_sets.items) |handlerSet| {
-        //     allocator.free(handlerSet);
-        // }
-    }
-
-    /// Get a `Name` from a string value.
-    ///
-    /// If the string has already been interned, the existing `Name` will be returned;
-    /// Otherwise a new `Name` will be allocated.
-    ///
-    /// The `Name` that is returned will be owned by this bytecode unit.
-    pub fn internName(ptr: *const Builder, value: []const u8) error{OutOfMemory}!*const Name {
-        const self = @constCast(ptr);
-
-        return (try self.names.intern(self.allocator, null, &Name{
-            .rir = self,
-            .id = @enumFromInt(self.names.count()),
-            .value = value,
-            .hash = pl.hash64(value),
-        })).ptr.*;
-    }
-
-    /// Create a new `FunctionBuilder` with a given name.
-    ///
-    /// If a module with the same name has already been created, `error.DuplicateFunctionName` is returned.
-    ///
-    /// The `FunctionBuilder` that is returned will be owned by this bytecode unit.
-    pub fn createFunction(ptr: *const Builder, name: *const Name) error{DuplicateFunctionName, OutOfMemory}!*const Function {
-        const self = @constCast(ptr);
-
-        for (self.functions.items) |modulePtr| {
-            if (name == modulePtr.*.name) {
-                return error.DuplicateFunctionName;
+                    try writer.print(" (" ++ opName ++ " {d})", .{ @intFromEnum(operand) });
+                }
             }
         }
 
-        const out = try Function.init(self, @enumFromInt(self.functions.items.len), name);
-
-        try self.functions.append(self.allocator, out);
-
-        return out;
+        try writer.writeAll("\n");
     }
-};
+}
 
-/// Provides deduplication for names in a bytecode unit.
-pub const NameInterner: type = Interner.new(*const Name, struct {
-    pub const DATA_FIELD = .value;
-
-    pub fn eql(a: *const []const u8, b: *const []const u8) bool {
-        return std.mem.eql(u8, a.*, b.*);
-    }
-
-    pub fn onFirstIntern(slot: **const Name, allocator: std.mem.Allocator) error{OutOfMemory}!void {
-        const self = try allocator.create(Name);
-
-        self.* = slot.*.*;
-
-        self.value = try allocator.dupe(u8, self.value);
-
-        slot.* = self;
-    }
-});
-
-/// Various data structures in the bytecode can be given a name, for debugging and symbol resolution purposes;
-/// when such a name is provided to the bytecode builder, it is interned in the builder's name set using a `Name`.
-pub const Name = struct {
-    /// The IR unit that owns this name.
-    rir: *const Builder,
-    /// The unique identifier for this name.
-    id: Id.of(Name),
-    /// The actual text value of this name.
-    value: []const u8,
-    /// A 64-bit hash of the text value of this name.
-    hash: u64,
-
-    fn deinit(ptr: *const Name) void {
-        const self: *Name = @constCast(ptr);
-
-        const allocator = self.rir.allocator;
-        defer allocator.destroy(self);
-
-        allocator.free(self.value);
-    }
-
-    /// `Format.fmt` impl
-    pub fn onFormat(self: *const Name, formatter: anytype) !void {
-        try formatter.writeAll(self.value);
-    }
-};
-
-
-/// A `VirtualWriter` with a maximum size for the bytecode unit.
+/// A `VirtualWriter` with a `platform.MAX_VIRTUAL_CODE_SIZE` memory limit.
 pub const Writer = VirtualWriter.new(pl.MAX_VIRTUAL_CODE_SIZE);
 
 /// Wrapper over `VirtualWriter` that provides a bytecode instruction specific API.
@@ -209,6 +77,7 @@ pub const Encoder = struct {
     pub fn finalize(self: *Encoder) error{BadEncoding}![]align(pl.PAGE_SIZE) const u8 {
         return self.writer.finalize(.read_only);
     }
+
     /// Returns the size of the uncommitted region of memory.
     pub fn uncommittedRegion(self: *Encoder) usize {
         return self.writer.uncommittedRegion();
@@ -279,15 +148,24 @@ pub const Encoder = struct {
     }
 
     /// Composes and encodes a bytecode instruction.
-    pub fn instr(self: *Encoder, code: Instruction.OpCode, data: Instruction.OpData) Writer.Error!void {
+    ///
+    /// This function is used internally by `instr` and `instrPre`.
+    /// It can be called directly, though it should be noted that it does not
+    /// type-check the `data` argument, whereas `instr` does.
+    pub fn instrCompose(self: *Encoder, code: Instruction.OpCode, data: anytype) Writer.Error!void {
         try self.opcode(code);
-        try self.operands(data);
-        try self.alignTo(pl.BYTECODE_ALIGNMENT);
+        try self.operands(Instruction.OpData.fromBits(data));
+    }
+
+    /// Composes and encodes a bytecode instruction.
+    pub fn instr(self: *Encoder, comptime code: Instruction.OpCode, data: Instruction.SetType(code)) Writer.Error!void {
+        return self.instrCompose(code, data);
     }
 
     /// Encodes a pre-composed bytecode instruction.
     pub fn instrPre(self: *Encoder, instruction: Instruction) Writer.Error!void {
-        try self.instr(instruction.code, instruction.data);
+        try self.opcode(instruction.code);
+        try self.operands(instruction.data);
     }
 
     /// Encodes an opcode.
@@ -299,18 +177,18 @@ pub const Encoder = struct {
     pub fn operands(self: *Encoder, data: Instruction.OpData) Writer.Error!void {
         try self.writeInt(std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpData)), @bitCast(data), .little);
         try self.writeByteNTimes(0, @ceil(pl.bytesFromBits(64 - (@bitSizeOf(Instruction.OpCode) + @bitSizeOf(Instruction.OpData)))));
+
+        try self.alignTo(pl.BYTECODE_ALIGNMENT);
     }
 };
 
 
-/// A function definition that is in-progress within the bytecode unit.
-pub const Function = struct {
-    /// The bytecode unit that owns this function.
-    root: *const Builder,
+/// A simple builder API for bytecode functions.
+pub const Builder = struct {
+    /// The allocator used by this function.
+    allocator: std.mem.Allocator,
     /// The function's unique identifier.
-    id: Id.of(Function),
-    /// The function's name, for symbol resolution purposes.
-    name: *const Name,
+    id: Id.of(core.Function),
     /// The function's stack window size.
     stack_size: usize = 0,
     /// The function's stack window alignment.
@@ -318,22 +196,23 @@ pub const Function = struct {
     /// The function's basic blocks.
     blocks: pl.ArrayList(*const Block) = .empty,
 
-    fn init(root: *const Builder, id: Id.of(Function), name: *const Name) !*const Function {
-        const self = try root.allocator.create(Function);
+    /// Initialize a new builder for a bytecode function.
+    pub fn init(allocator: std.mem.Allocator, id: Id.of(core.Function)) !*const Builder {
+        const self = try allocator.create(Builder);
 
-        self.* = Function{
-            .root = root,
+        self.* = Builder{
+            .allocator = allocator,
             .id = id,
-            .name = name,
         };
 
         return self;
     }
 
-    fn deinit(ptr: *const Function) void {
-        const self: *Function = @constCast(ptr);
+    /// Deinitialize the builder, freeing all memory associated with it.
+    pub fn deinit(ptr: *const Builder) void {
+        const self: *Builder = @constCast(ptr);
 
-        const allocator = self.root.allocator;
+        const allocator = self.allocator;
         defer allocator.destroy(self);
 
         for (self.blocks.items) |block| {
@@ -344,21 +223,34 @@ pub const Function = struct {
     }
 
     /// Create a new basic block within this function, returning a pointer to it.
-    pub fn createBlock(ptr: *const Function, name: ?*const Name) error{NameCollision, TooManyBlocks, OutOfMemory}!*const Block {
+    pub fn createBlock(ptr: *const Builder) error{NameCollision, TooManyBlocks, OutOfMemory}!*const Block {
         const self = @constCast(ptr);
 
         const index = self.blocks.items.len;
 
         if (index > Id.MAX_INT) {
-            log.err("bytecode.Function.createBlock: Cannot create more than {d} blocks in function {s}", .{Id.MAX_INT, self.name.value});
+            log.err("bytecode.Builder.createBlock: Cannot create more than {d} blocks in function {}", .{Id.MAX_INT, self.id});
             return error.TooManyBlocks;
         }
 
-        const block = try Block.init(self, .fromInt(index), name);
+        const block = try Block.init(self, .fromInt(index));
 
-        try self.blocks.append(self.root.allocator, block);
+        try self.blocks.append(self.allocator, block);
 
         return block;
+    }
+
+    pub fn encode(ptr: *const Builder, encoder: *Encoder) error{BadEncoding, OutOfMemory}!void {
+        const self = @constCast(ptr);
+
+        if (self.blocks.items.len == 0) {
+            log.err("bytecode.Builder.finalize: Cannot finalize a function with no blocks", .{});
+            return error.BadEncoding;
+        }
+
+        for (self.blocks.items) |block| {
+            try block.encode(encoder);
+        }
     }
 };
 
@@ -375,14 +267,10 @@ pub const Function = struct {
 /// and API. The current design allows for a simple, linear representation of the bytecode
 /// function's control flow, which is sufficient for the intended use cases of the `Builder`.
 pub const Block = struct {
-    /// The bytecode unit that owns this block.
-    root: *const Builder,
     /// The function this block belongs to.
-    function: *const Function,
+    function: *const Builder,
     /// The unique(-within-`function`) identifier for this block.
     id: Id.of(Block),
-    /// The block's name, if it has one; for debugging purposes.
-    name: ?*const Name,
     /// The instructions making up the body of this block, in un-encoded form.
     body: pl.ArrayList(Instruction.Basic) = .empty,
     /// The instruction that terminates this block.
@@ -394,16 +282,13 @@ pub const Block = struct {
     /// terminal in higher-level code.
     terminator: ?Instruction.Term = null,
 
-    fn init(function: *const Function, id: Id.of(Block), name: ?*const Name) error{OutOfMemory}!*const Block {
-        const root = function.root;
-        const allocator = root.allocator;
+    fn init(function: *const Builder, id: Id.of(Block)) error{OutOfMemory}!*const Block {
+        const allocator = function.allocator;
         const self = try allocator.create(Block);
 
         self.* = Block{
-            .root = root,
             .function = function,
             .id = id,
-            .name = name,
         };
 
         return self;
@@ -412,10 +297,58 @@ pub const Block = struct {
     fn deinit(ptr: *const Block) void {
         const self: *Block = @constCast(ptr);
 
-        const allocator = self.root.allocator;
+        const allocator = self.function.allocator;
         defer allocator.destroy(self);
 
         self.body.deinit(allocator);
+    }
+
+    /// Write this block's instructions into the provided bytecode encoder.
+    pub fn encode(ptr: *const Block, encoder: *Encoder) error{BadEncoding, OutOfMemory}!void {
+        const self: *Block = @constCast(ptr);
+
+        for (self.body.items) |basic| {
+            try encoder.instrPre(basic.upcast());
+        }
+
+        if (self.terminator) |term| {
+            try encoder.instrPre(term.upcast());
+        } else {
+            try encoder.instr(.@"unreachable", .{});
+        }
+    }
+
+    /// Append an instruction into this block, given its `OpCode` and an appropriate operand set.
+    ///
+    /// * `data` must be of the correct shape for the instruction, or undefined behavior will occur.
+    /// See `Instruction.operand_sets`; each opcode has an associated type with the same name.
+    /// You can also use `OpData` directly.
+    ///
+    /// This function is used internally by `instr` and `instrPre`.
+    /// It can be called directly, though it should be noted that it does not
+    /// type-check the `data` argument, whereas `instr` does.
+    pub fn composeInstr(ptr: *const Block, code: Instruction.OpCode, data: anytype) error{BadEncoding, OutOfMemory}!void {
+        const self: *Block = @constCast(ptr);
+
+        if (self.terminator) |term| {
+            log.err("Cannot insert instruction `{s}` into block with terminator `{s}`", .{@tagName(code), @tagName(term.code)});
+            return error.BadEncoding;
+        }
+
+        switch (code.downcast()) {
+            .basic => |b| {
+                try self.body.append(self.function.allocator, Instruction.Basic{
+                    .code = b,
+                    .data = Instruction.BasicOpData.fromBits(data),
+                });
+            },
+            .term => |t| {
+                self.terminator = Instruction.Term{
+                    .code = t,
+                    .data = Instruction.TermOpData.fromBits(data),
+                };
+            },
+        }
     }
 
     /// Append an instruction into this block, given its `OpCode` and an appropriate operand set.
@@ -425,47 +358,8 @@ pub const Block = struct {
     /// `.{}` syntax should work.
     ///
     /// See also `instrPre`, which takes a pre-composed `Instruction` instead of individual components.
-    pub fn instr(ptr: *const Block, code: Instruction.OpCode, data: anytype) error{BadEncoding, OutOfMemory}!void {
-        const opFields = comptime std.meta.fieldNames(Instruction.OpCode);
-        const termFields = comptime std.meta.fieldNames(Instruction.TermOpData);
-
-        @setEvalBranchQuota(opFields.len * termFields.len * 3);
-
-        const self: *Block = @constCast(ptr);
-
-        if (self.terminator) |term| {
-            log.err("Cannot insert instruction `{s}` into block with terminator `{s}`", .{@tagName(code), @tagName(term.code)});
-            return error.BadEncoding;
-        }
-
-        const icode: u16 = @intFromEnum(code);
-
-        inline for (opFields) |opName| {
-            const isTerm = inline for (termFields) |termName| {
-                if (comptime std.mem.eql(u8, opName, termName)) {
-                    break true;
-                }
-            } else false;
-
-            const ecode = comptime @field(Instruction.OpCode, opName);
-            if (icode == comptime @intFromEnum(ecode)) {
-                if (comptime isTerm) {
-                    self.terminator = Instruction.Term{
-                        .code = @enumFromInt(icode),
-                        .data = @unionInit(Instruction.TermOpData, opName, data),
-                    };
-                } else {
-                    try self.body.append(self.root.allocator, Instruction.Basic{
-                        .code = @enumFromInt(icode),
-                        .data = @unionInit(Instruction.BasicOpData, opName, data),
-                    });
-                }
-
-                return;
-            }
-        }
-
-        unreachable;
+    pub fn instr(ptr: *const Block, comptime code: Instruction.OpCode, data: Instruction.SetType(code)) error{BadEncoding, OutOfMemory}!void {
+        return ptr.composeInstr(code, data);
     }
 
     /// Append a pre-composed instruction into this block.
@@ -474,44 +368,6 @@ pub const Block = struct {
     ///
     /// See also `instr`, which takes the individual components of an instruction separately.
     pub fn instrPre(ptr: *const Block, instruction: Instruction) error{BadEncoding, OutOfMemory}!void {
-        const opFields = comptime std.meta.fieldNames(Instruction.OpCode);
-        const termFields = comptime std.meta.fieldNames(Instruction.TermOpData);
-
-        @setEvalBranchQuota(opFields.len * termFields.len * 3);
-
-        const self: *Block = @constCast(ptr);
-
-        if (self.terminator) |term| {
-            log.err("Cannot insert instruction `{s}` into block with terminator `{s}`", .{@tagName(instruction.code), @tagName(term.code)});
-            return error.BadEncoding;
-        }
-
-        const icode: u16 = @intFromEnum(instruction.code);
-
-        inline for (opFields) |opName| {
-            const isTerm = inline for (termFields) |termName| {
-                if (comptime std.mem.eql(u8, opName, termName)) {
-                    break true;
-                }
-            } else false;
-
-            if (icode == comptime @intFromEnum(@field(Instruction.OpCode, opName))) {
-                if (comptime isTerm) {
-                    self.terminator = Instruction.Term{
-                        .code = @enumFromInt(icode),
-                        .data = @unionInit(Instruction.TermOpData, opName, @field(instruction.data, opName)),
-                    };
-                } else {
-                    try self.body.append(self.root.allocator, Instruction.Basic{
-                        .code = @enumFromInt(icode),
-                        .data = @unionInit(Instruction.BasicOpData, opName, @field(instruction.data, opName)),
-                    });
-                }
-
-                return;
-            }
-        }
-
-        unreachable;
+        return ptr.composeInstr(instruction.code, instruction.data);
     }
 };

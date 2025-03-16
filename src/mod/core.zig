@@ -18,24 +18,25 @@ test {
 
 
 /// Set of `platform.MAX_REGISTERS` virtual registers for a function call.
-pub const RegisterArray = [pl.MAX_REGISTERS]usize;
+pub const RegisterArray: type = [pl.MAX_REGISTERS]usize;
 
 /// A stack allocator for virtual register arrays.
-pub const RegisterStack = Stack.new(RegisterArray, pl.CALL_STACK_SIZE);
+pub const RegisterStack: type = Stack.new(RegisterArray, pl.CALL_STACK_SIZE);
 /// A stack allocator, allocated in 64-bit word increments; for arbitrary data within a fiber.
-pub const DataStack = Stack.new(usize, pl.DATA_STACK_SIZE);
+pub const DataStack: type = Stack.new(usize, pl.DATA_STACK_SIZE);
 /// A stack allocator; for Rvm's function call frames within a fiber.
-pub const CallStack = Stack.new(CallFrame, pl.CALL_STACK_SIZE);
+pub const CallStack: type = Stack.new(CallFrame, pl.CALL_STACK_SIZE);
 /// A stack allocator; for Rvm's effect handler set frames within a fiber.
-pub const SetStack = Stack.new(SetFrame, pl.SET_STACK_SIZE);
+pub const SetStack: type = Stack.new(SetFrame, pl.SET_STACK_SIZE);
 
 /// The type of a relative jump offset within a Ribbon bytecode program.
 pub const InstructionOffset = i32;
 /// The address of an instruction in a Ribbon bytecode program.
-pub const InstructionAddr = [*]align(pl.BYTECODE_ALIGNMENT) const u8;
+pub const InstructionAddr: type = [*]const InstructionBits;
 /// The address of an instruction in a Ribbon bytecode program, while it is being constructed.
-pub const MutInstructionAddr = [*]align(pl.BYTECODE_ALIGNMENT) u8;
-
+pub const MutInstructionAddr: type = [*]InstructionBits;
+/// The bits of an encoded instruction, represented by an unsigned integer of the same size.
+pub const InstructionBits: type = std.meta.Int(.unsigned, pl.BYTECODE_ALIGNMENT);
 
 
 

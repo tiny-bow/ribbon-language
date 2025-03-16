@@ -322,11 +322,18 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
     try generateTypesIntro(writer);
 
     try writer.writeAll(
+        \\    /// Downcast full instruction -> basic instruction | term instruction
+        \\    pub fn downcast(self: Instruction) union(enum) { basic: Basic, term: Term } {
+        \\        switch (self.code.downcast()) {
+        \\            .basic => |b| return .{ .basic = .{ .code = b, .data = @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(BasicOpData)), @truncate(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @bitCast(self.data))))) } },
+        \\            .term => |t| return .{ .term = .{ .code = t, .data = @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TermOpData)), @truncate(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @bitCast(self.data))))) } },
+        \\        }
+        \\    }
+        \\
         \\    /// discriminator for instruction identity
         \\    code: OpCode,
         \\    /// operand set for the instruction
         \\    data: OpData,
-        \\
         \\
     );
 
@@ -344,6 +351,24 @@ fn generateTypesCodes(categories: []const isa.Category, writer: anytype) !void {
     try writer.writeAll(
         \\/// Enumeration identifying each instruction.
         \\pub const OpCode = enum(u16) {
+        \\    /// Downcast full opcode -> basic opcode | term opcode
+        \\    pub fn downcast(self: OpCode) union(enum) { basic: BasicOpCode, term: TermOpCode } {
+        \\        @setEvalBranchQuota(std.meta.fieldNames(OpCode).len * 4);
+        \\
+        \\        inline for (comptime std.meta.fieldNames(BasicOpCode)) |fieldName| {
+        \\            if (self == comptime @field(BasicOpCode, fieldName).upcast()) {
+        \\                 return .{ .basic = @enumFromInt(@intFromEnum(self)) };
+        \\            }
+        \\        }
+        \\
+        \\        inline for (comptime std.meta.fieldNames(TermOpCode)) |fieldName| {
+        \\            if (self == comptime @field(TermOpCode, fieldName).upcast()) {
+        \\                 return .{ .term = @enumFromInt(@intFromEnum(self)) };
+        \\            }
+        \\        }
+        \\
+        \\        unreachable;
+        \\    }
         \\
     );
 
@@ -383,20 +408,39 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
     try writer.writeAll(
         \\/// Like `Instruction`, but specialized to instructions that can occur inside a basic block.
         \\pub const Basic = struct {
-        \\    /// discriminator for instruction identity
+        \\    /// Discriminator for instruction identity.
         \\    code: BasicOpCode,
-        \\    /// operand set for the instruction
+        \\    /// Operand set for the instruction.
         \\    data: BasicOpData,
+        \\    /// Convert basic -> full instruction.
+        \\    pub fn upcast(self: Basic) Instruction { return .{ .code = self.code.upcast(), .data = self.data.upcast() }; }
         \\};
         \\
         \\/// Like `Instruction`, but specialized to instructions that can terminate a basic block.
         \\pub const Term = struct {
-        \\    /// discriminator for instruction identity
+        \\    /// Discriminator for instruction identity.
         \\    code: TermOpCode,
-        \\    /// operand set for the instruction
+        \\    /// Operand set for the instruction.
         \\    data: TermOpData,
+        \\    /// Convert terminator -> full instruction.
+        \\    pub fn upcast(self: Term) Instruction { return .{ .code = self.code.upcast(), .data = self.data.upcast() }; }
         \\};
         \\
+        \\/// Derive a type from `operand_sets` using the provided opcode.
+        \\pub fn SetType(comptime code: OpCode) type {
+        \\    return @FieldType(OpData, @tagName(code));
+        \\}
+        \\
+        \\/// Determine if a type is from `operand_sets`.
+        \\pub fn isSetType(comptime T: type) bool {
+        \\    comptime {
+        \\        for (std.meta.declarations(operand_sets)) |typeDecl| {
+        \\            const F = @field(operand_sets, typeDecl.name);
+        \\            if (T == F) return true;
+        \\        }
+        \\        return false;
+        \\    }
+        \\}
         \\
     );
 
@@ -446,6 +490,21 @@ fn generateTypesUnion(categories: []const isa.Category, writer: anytype) !void {
     try writer.writeAll(
         \\/// Untagged union of all `operand_sets` types.
         \\pub const OpData = packed union {
+        \\    /// Extract the operand set for a given opcode.
+        \\    pub fn extractSet(self: OpData, comptime code: OpCode) SetType(code) {
+        \\        inline for (comptime std.meta.fieldNames(OpCode)) |fieldName| {
+        \\            if (code == comptime @field(OpCode, fieldName).upcast()) {
+        \\                return @field(self, fieldName);
+        \\            }
+        \\        }
+        \\
+        \\        unreachable;
+        \\    }
+        \\
+        \\    /// Create an operand data union from the bits of one of its variants
+        \\    pub fn fromBits(set: anytype) OpData {
+        \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set))));
+        \\    }
         \\
     );
 
@@ -472,6 +531,8 @@ fn generateTypesBasicAndTerm(categories: []const isa.Category, writer: anytype) 
     try writer.writeAll(
         \\/// Enumeration identifying each instruction that can appear inside a basic block.
         \\pub const BasicOpCode = enum(u16) {
+        \\    /// convert basic opcode -> full opcode
+        \\    pub fn upcast(self: BasicOpCode) OpCode { return @enumFromInt(@intFromEnum(self)); }
         \\
     );
 
@@ -499,6 +560,8 @@ fn generateTypesBasicAndTerm(categories: []const isa.Category, writer: anytype) 
     try writer.writeAll(
         \\/// Enumeration identifying each instruction that can terminate a basic block.
         \\pub const TermOpCode = enum(u16) {
+        \\    /// convert term opcode -> full opcode
+        \\    pub fn upcast(self: TermOpCode) OpCode { return @enumFromInt(@intFromEnum(self)); }
         \\
     );
 
@@ -526,6 +589,13 @@ fn generateTypesBasicAndTerm(categories: []const isa.Category, writer: anytype) 
     try writer.writeAll(
         \\/// Untagged union of all `operand_sets` types that can appear in a basic block.
         \\pub const BasicOpData = packed union {
+        \\    /// convert basic operand data -> full operand data
+        \\    pub fn upcast(self: BasicOpData) OpData { return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @as(std.meta.Int(.unsigned, @bitSizeOf(BasicOpData)), @bitCast(self)))); }
+        \\
+        \\    /// Create an operand data union from the bits of one of its variants
+        \\    pub fn fromBits(set: anytype) BasicOpData {
+        \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(BasicOpData)), @truncate(@as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set)))));
+        \\    }
         \\
     );
 
@@ -552,6 +622,13 @@ fn generateTypesBasicAndTerm(categories: []const isa.Category, writer: anytype) 
     try writer.writeAll(
         \\/// Untagged union of all `operand_sets` types that can terminate a basic block.
         \\pub const TermOpData = packed union {
+        \\    /// convert term operand set -> full operand set
+        \\    pub fn upcast(self: TermOpData) OpData { return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @as(std.meta.Int(.unsigned, @bitSizeOf(TermOpData)), @bitCast(self)))); }
+        \\
+        \\    /// Create an operand data union from the bits of one of its variants
+        \\    pub fn fromBits(set: anytype) TermOpData {
+        \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TermOpData)), @truncate(@as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set)))));
+        \\    }
         \\
     );
 

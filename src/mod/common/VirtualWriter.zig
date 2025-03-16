@@ -38,13 +38,13 @@ pub const Access = enum(u32) {
     read_only = std.posix.PROT.READ,
 };
 
-/// Creates a new `VirtualWriter`.
+/// Creates a new `VirtualWriter` type with the given max address space.
 pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
     return struct {
         const Self = @This();
 
         /// The memory buffer used by the encoder.
-        memory: []align(std.heap.page_size_min) u8 = &.{},
+        memory: pl.MutVirtualMemory,
         /// The current cursor position in the memory buffer.
         cursor: usize = 0,
         /// The top of the allocated memory region.

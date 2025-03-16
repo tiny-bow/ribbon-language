@@ -90,6 +90,12 @@ comptime {
 /// Utf-32 codepoint (`u21`).
 pub const Char: type = u21;
 
+/// The type of constant virtual memory regions allocated with posix.
+pub const VirtualMemory = []const align(std.heap.page_size_min) u8;
+
+/// The type of mutable virtual memory regions allocated with posix.
+pub const MutVirtualMemory = []align(std.heap.page_size_min) u8;
+
 pub const ArrayList = std.ArrayListUnmanaged;
 
 pub const ArrayMap = std.ArrayHashMapUnmanaged;

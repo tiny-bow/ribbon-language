@@ -37,16 +37,15 @@ const abi = @import("abi");
 
 
 /// Disassemble an allocated machine function, printing to the provided writer.
-pub fn disas(self: core.AllocatedBuiltinFunction, options: assembler.DisassemblerOptions, writer: anytype) !void {
-    return assembler.disas(self.ptr[0..self.len], options, writer);
+pub fn disas(mem: pl.VirtualMemory, options: assembler.DisassemblerOptions, writer: anytype) !void {
+    return assembler.disas(mem, options, writer);
 }
 
-pub const Writer: type = VirtualWriter.new(pl.MAX_MACHINE_CODE_SIZE);
 
 /// Machine code function builder. `x64`
 pub const Builder = struct {
     /// The x64 encoder used to generate machine code.
-    encoder: Encoder = .{ .writer = .{} },
+    encoder: Encoder,
 
     /// Represents an error that can occur during machine function building.
     pub const Error = error{
@@ -60,7 +59,9 @@ pub const Builder = struct {
     /// then calls `Builder.prelude`,
     /// and returns the jit.
     pub fn init() error{OutOfMemory}!Builder {
-        var self = Builder {};
+        var self = Builder {
+            .encoder = try Encoder.init(),
+        };
 
         try self.prelude();
 
@@ -191,10 +192,23 @@ pub const Operand = union(enum) {
     }
 };
 
+/// A `VirtualWriter` with a `platform.MAX_MACHINE_CODE_SIZE` memory limit.
+pub const Writer: type = VirtualWriter.new(pl.MAX_MACHINE_CODE_SIZE);
+
+
+/// Wrapper over `VirtualWriter` that provides a machine instruction specific API.
 pub const Encoder = struct {
+    /// The `VirtualWriter` used by the encoder to write machine code.
     writer: Writer,
 
     pub const Error = Writer.Error || error { BadEncoding };
+
+    /// Creates a new `Encoder` and a `Writer`.
+    pub fn init() error{OutOfMemory}!Encoder {
+        return Encoder{
+            .writer = try Writer.init(),
+        };
+    }
 
     /// Writes as much of a slice of bytes to the encoder as will fit without an allocation.
     /// Returns the number of bytes written.

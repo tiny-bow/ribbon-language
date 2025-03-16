@@ -7,7 +7,7 @@ pub const Bytes = new(u8, .constant);
 /// Mutable buffer of bytes.
 pub const MutBytes = new(u8, .mutable);
 
-/// See `Buffer` documentation.
+/// Creates a new `Buffer` type with the given element type and mutability.
 pub fn new(comptime T: type, comptime MUT: pl.Mutability) type {
     return packed struct {
         const Self = @This();
