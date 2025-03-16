@@ -42,6 +42,7 @@ pub const Access = enum(u32) {
 pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
     return struct {
         const Self = @This();
+
         /// The memory buffer used by the encoder.
         memory: []align(std.heap.page_size_min) u8 = &.{},
         /// The current cursor position in the memory buffer.
@@ -56,6 +57,8 @@ pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
         /// The only error is `OutOfMemory`,
         /// which is a generalization of several different kinds of syscall errors,
         /// that all have the same end result for the purposes of writing to memory.
+        ///
+        /// This is provided here for use by the zig std writer api.
         pub const Error = error{
             /// The system ran out of memory, or otherwise did not allow page acquisition.
             OutOfMemory,

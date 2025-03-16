@@ -1,9 +1,13 @@
 //! # bytecode
-//! This is a namespace for the Ribbon bytecode builder.
+//! This is a namespace for Ribbon bytecode data types, and the builder.
+//!
+//! The focal points are:
+//! * `Instruction` - this is the data type representing un-encoded Ribbon bytecode instructions
+//! * `Builder` - the main API for creating Ribbon bytecode units; other types in this namespace are subordinate to it.
 const bytecode = @This();
 
 const std = @import("std");
-const log = std.log.scoped(.rbc);
+const log = std.log.scoped(.bytecode);
 
 const pl = @import("platform");
 const core = @import("core");
@@ -17,6 +21,7 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
+/// A builder abstraction for Ribbon bytecode units.
 pub const Builder = struct {
     /// The allocator that all memory used by intermediate structures is sourced from.
     /// * The builder is allocator-agnostic and any allocator can be used here,
@@ -180,6 +185,7 @@ pub const Name = struct {
         allocator.free(self.value);
     }
 
+    /// `Format.fmt` impl
     pub fn onFormat(self: *const Name, formatter: anytype) !void {
         try formatter.writeAll(self.value);
     }
@@ -189,6 +195,7 @@ pub const Name = struct {
 /// A `VirtualWriter` with a maximum size for the bytecode unit.
 pub const Writer = VirtualWriter.new(pl.MAX_VIRTUAL_CODE_SIZE);
 
+/// Wrapper over `VirtualWriter` that provides a bytecode instruction specific API.
 pub const Encoder = struct {
     /// The encoder's `VirtualWriter`
     writer: Writer,
@@ -306,7 +313,6 @@ pub const Function = struct {
     id: Id.of(Function),
     /// The function's name, for symbol resolution purposes.
     name: *const Name,
-
     /// The function's stack window size.
     stack_size: usize = 0,
     /// The function's stack window alignment.
@@ -331,6 +337,10 @@ pub const Function = struct {
 
         const allocator = self.root.allocator;
         defer allocator.destroy(self);
+
+        for (self.blocks.items) |block| {
+            block.deinit();
+        }
 
         self.blocks.deinit(allocator);
     }
