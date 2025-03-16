@@ -30,19 +30,19 @@ pub const Builder = struct {
     /// Interned name set for the bytecode unit.
     names: NameInterner = .empty,
     /// Constant value bindings for the bytecode unit.
-    constants: pl.ArrayList(*anyopaque) = .empty,
+    constants: pl.ArrayList(core.Constant) = .empty,
     /// Global value bindings for the bytecode unit.
-    globals: pl.ArrayList(*anyopaque) = .empty,
+    globals: pl.ArrayList(core.Global) = .empty,
     /// Function value bindings for the bytecode unit.
     functions: pl.ArrayList(*const Function) = .empty,
     /// Builtin function value bindings for the bytecode unit.
-    builtins: pl.ArrayList(*anyopaque) = .empty,
+    builtins: pl.ArrayList(core.BuiltinAddress) = .empty,
     /// C ABI value bindings for the bytecode unit.
     foreign_addresses: pl.ArrayList(*anyopaque) = .empty,
     /// Effect type bindings for the bytecode unit.
-    effects: pl.ArrayList(*anyopaque) = .empty,
+    effects: pl.ArrayList(core.Effect) = .empty,
     /// Effect handler set bindings for the bytecode unit.
-    handler_sets: pl.ArrayList(*anyopaque) = .empty,
+    handler_sets: pl.ArrayList(core.Handler) = .empty,
 
     /// Initialize a new bytecode unit builder.
     ///
@@ -52,9 +52,7 @@ pub const Builder = struct {
     pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!*const Builder {
         const self = try allocator.create(Builder);
 
-        self.* = Builder{
-            .allocator = allocator,
-        };
+        self.* = Builder{ .allocator = allocator };
 
         return self;
     }
@@ -497,8 +495,7 @@ pub const Block = struct {
                 }
             } else false;
 
-            const ecode = comptime @field(Instruction.OpCode, opName);
-            if (icode == comptime @intFromEnum(ecode)) {
+            if (icode == comptime @intFromEnum(@field(Instruction.OpCode, opName))) {
                 if (comptime isTerm) {
                     self.terminator = Instruction.Term{
                         .code = @enumFromInt(icode),

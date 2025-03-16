@@ -86,8 +86,8 @@ pub const BuiltinAddress = extern struct {
     data: Buffer.MutBytes,
 };
 
-/// Intent-communication alias for `*const anyopaque`.
-pub const ForeignAddress = *const anyopaque;
+/// Intent-communication alias for `*anyopaque`.
+pub const ForeignAddress = *anyopaque;
 
 /// A frame-local stack value offset into the frame of the parent function of a handler set.
 pub const Upvalue = enum(i32) {_};
