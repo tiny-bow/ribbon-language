@@ -38,7 +38,7 @@ pub const Builder = struct {
     /// Builtin function value bindings for the bytecode unit.
     builtins: pl.ArrayList(core.BuiltinAddress) = .empty,
     /// C ABI value bindings for the bytecode unit.
-    foreign_addresses: pl.ArrayList(*anyopaque) = .empty,
+    foreign_addresses: pl.ArrayList(core.ForeignAddress) = .empty,
     /// Effect type bindings for the bytecode unit.
     effects: pl.ArrayList(core.Effect) = .empty,
     /// Effect handler set bindings for the bytecode unit.
