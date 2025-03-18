@@ -23,10 +23,6 @@ test {
 
 /// Disassemble a bytecode function, printing to the provided writer.
 pub fn disas(vmem: pl.VirtualMemory, writer: anytype) !void {
-    const MASK
-        = comptime std.math.maxInt(std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpCode)))
-            << (@bitSizeOf(Instruction) - @bitSizeOf(Instruction.OpCode));
-
     var ptr: core.InstructionAddr = @ptrCast(vmem);
     const end = ptr + vmem.len;
 
@@ -36,7 +32,7 @@ pub fn disas(vmem: pl.VirtualMemory, writer: anytype) !void {
         const encodedBits = @as([*]usize, ptr)[0];
         ptr += @sizeOf(pl.BYTECODE_ALIGNMENT);
 
-        const opcode = encodedBits | MASK;
+        const opcode = encodedBits & Instruction.OPCODE_MASK;
         const data = encodedBits << @bitSizeOf(Instruction.OpCode);
 
         inline for (comptime std.meta.fieldNames(Instruction.OpCode)) |instrName| {

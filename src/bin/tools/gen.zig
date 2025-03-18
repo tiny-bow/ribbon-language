@@ -442,6 +442,11 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
         \\    }
         \\}
         \\
+        \\///
+        \\pub const OPCODE_MASK
+        \\    = std.math.maxInt(std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpCode)))
+        \\        << (@bitSizeOf(Instruction) - @bitSizeOf(Instruction.OpCode));
+        \\
     );
 
     try writer.writeAll(
