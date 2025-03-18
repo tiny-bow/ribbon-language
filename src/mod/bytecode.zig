@@ -141,7 +141,6 @@ pub const Encoder = struct {
     /// Pushes zero bytes (if necessary) to align the current offset of the encoder to the provided alignment value.
     pub fn alignTo(self: *Encoder, alignment: pl.Alignment) Writer.Error!void {
         const delta = pl.alignDelta(self.writer.cursor, alignment);
-        log.info("{} % {} = {}; requires {} bytes of padding", .{self.writer.cursor, alignment, @rem(self.writer.cursor, alignment), delta});
         try self.writer.writeByteNTimes(0, delta);
     }
 
