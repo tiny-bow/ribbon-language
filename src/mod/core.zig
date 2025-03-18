@@ -36,7 +36,7 @@ pub const InstructionAddr: type = [*]const InstructionBits;
 /// The address of an instruction in a Ribbon bytecode program, while it is being constructed.
 pub const MutInstructionAddr: type = [*]InstructionBits;
 /// The bits of an encoded instruction, represented by an unsigned integer of the same size.
-pub const InstructionBits: type = std.meta.Int(.unsigned, pl.BYTECODE_ALIGNMENT);
+pub const InstructionBits: type = std.meta.Int(.unsigned, pl.bitsFromBytes(pl.BYTECODE_ALIGNMENT));
 
 
 

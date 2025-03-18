@@ -442,10 +442,20 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
         \\    }
         \\}
         \\
-        \\///
-        \\pub const OPCODE_MASK
-        \\    = std.math.maxInt(std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpCode)))
-        \\        << (@bitSizeOf(Instruction) - @bitSizeOf(Instruction.OpCode));
+        \\/// Masks out the operands from encoded instruction bits, leaving only the opcode.
+        \\pub const OPCODE_MASK = @as(core.InstructionBits, std.math.maxInt(std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpCode))));
+        \\
+        \\/// Split an encoded instruction word into its opcode and operand data, and return it as an `Instruction`.
+        \\pub fn fromBits(encodedBits: core.InstructionBits) Instruction {
+        \\    const opcode: std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpCode)) = @truncate(encodedBits & Instruction.OPCODE_MASK);
+        \\    const data: std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpData)) = @truncate(encodedBits >> @bitSizeOf(Instruction.OpCode));
+        \\
+        \\    return Instruction{
+        \\        .code = @enumFromInt(opcode),
+        \\        .data = @bitCast(data),
+        \\    };
+        \\}
+        \\
         \\
     );
 
@@ -510,6 +520,38 @@ fn generateTypesUnion(categories: []const isa.Category, writer: anytype) !void {
         \\    pub fn fromBits(set: anytype) OpData {
         \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set))));
         \\    }
+        \\
+        \\    /// Create a 48-bit integer from an `OpData` value.
+        \\    /// * **NOTE**: Previously, this was done with a bitcast.
+        \\    /// However, that can sometimes lead to undefined bytes in encoded bytecode streams;
+        \\    /// So now, this uses compile-time reflection to extract the fields of the union,
+        \\    /// and copies them into a 48-bit integer.
+        \\    /// This new process requires an `OpCode` to discriminate the union.
+        \\    pub fn toBits(self: OpData, code: OpCode) u48 {
+        \\        var i: usize = 0;
+        \\        var out: u48 = 0;
+        \\        const bytes = std.mem.asBytes(&out);
+        \\
+        \\        const opcodes = comptime std.meta.fieldNames(Instruction.OpCode);
+        \\        @setEvalBranchQuota(opcodes.len * 32);
+        \\
+        \\        inline for (opcodes) |instrName| {
+        \\            if (code == comptime @field(Instruction.OpCode, instrName)) {
+        \\                const T = @FieldType(Instruction.OpData, instrName);
+        \\                const set = @field(self, instrName);
+        \\
+        \\                inline for (comptime std.meta.fieldNames(T)) |opName| {
+        \\                    const operand = @field(set, opName);
+        \\                    const size = @sizeOf(@FieldType(T, opName));
+        \\                    @memcpy(bytes[i..i + size], std.mem.asBytes(&operand));
+        \\                    i += size;
+        \\                }
+        \\
+        \\                return out;
+        \\            }
+        \\        } else unreachable;
+        \\    }
+        \\
         \\
     );
 
@@ -599,7 +641,7 @@ fn generateTypesBasicAndTerm(categories: []const isa.Category, writer: anytype) 
         \\
         \\    /// Create an operand data union from the bits of one of its variants
         \\    pub fn fromBits(set: anytype) BasicOpData {
-        \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(BasicOpData)), @truncate(@as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set)))));
+        \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(BasicOpData)), @intCast(@as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set)))));
         \\    }
         \\
     );
@@ -632,7 +674,7 @@ fn generateTypesBasicAndTerm(categories: []const isa.Category, writer: anytype) 
         \\
         \\    /// Create an operand data union from the bits of one of its variants
         \\    pub fn fromBits(set: anytype) TermOpData {
-        \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TermOpData)), @truncate(@as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set)))));
+        \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TermOpData)), @intCast(@as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set)))));
         \\    }
         \\
     );

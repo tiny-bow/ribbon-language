@@ -24,21 +24,22 @@ test {
 /// Disassemble a bytecode function, printing to the provided writer.
 pub fn disas(vmem: pl.VirtualMemory, writer: anytype) !void {
     var ptr: core.InstructionAddr = @ptrCast(vmem);
-    const end = ptr + vmem.len;
+    const end = ptr + @divExact(vmem.len, 8);
 
-    try writer.print("[{x:0<16}]:\n", .{ @intFromPtr(ptr) });
+    try writer.print("[{x:0<16}]:\n", .{ @intFromPtr(ptr)});
 
-    while (ptr < end) : (ptr) {
-        const encodedBits = @as([*]usize, ptr)[0];
-        ptr += @sizeOf(pl.BYTECODE_ALIGNMENT);
+    while (@intFromPtr(ptr) < @intFromPtr(end)) : (ptr += 1) {
+        const encodedBits: u64 = @as([*]const core.InstructionBits, ptr)[0];
 
-        const opcode = encodedBits & Instruction.OPCODE_MASK;
-        const data = encodedBits << @bitSizeOf(Instruction.OpCode);
+        const instr = Instruction.fromBits(encodedBits);
 
-        inline for (comptime std.meta.fieldNames(Instruction.OpCode)) |instrName| {
-            if (opcode == comptime @field(Instruction.Opcode, instrName)) {
+        const opcodes = comptime std.meta.fieldNames(Instruction.OpCode);
+        @setEvalBranchQuota(opcodes.len * 32);
+
+        inline for (opcodes) |instrName| {
+            if (instr.code == comptime @field(Instruction.OpCode, instrName)) {
                 const T = @FieldType(Instruction.OpData, instrName);
-                const set = @field(data, instrName);
+                const set = @field(instr.data, instrName);
 
                 try writer.writeAll("    " ++ instrName);
 
@@ -70,7 +71,7 @@ pub const Encoder = struct {
     }
 
     /// Finalize the Encoder's writer, returning the posix pages as a read-only buffer.
-    pub fn finalize(self: *Encoder) error{BadEncoding}![]align(pl.PAGE_SIZE) const u8 {
+    pub fn finalize(self: *Encoder) error{BadEncoding}!pl.VirtualMemory {
         return self.writer.finalize(.read_only);
     }
 
@@ -116,8 +117,7 @@ pub const Encoder = struct {
         comptime T: type, value: T,
         comptime _: enum {little}, // allows backward compat with zig's writer interface; but only in provably compatible use-cases
     ) Writer.Error!void {
-        const bytes = std.mem.asBytes(&value);
-        try self.writeAll(bytes);
+        try self.writer.writeInt(T, value, .little);
     }
 
     /// Generalized version of `writeInt` for little-endian only;
@@ -140,7 +140,9 @@ pub const Encoder = struct {
 
     /// Pushes zero bytes (if necessary) to align the current offset of the encoder to the provided alignment value.
     pub fn alignTo(self: *Encoder, alignment: pl.Alignment) Writer.Error!void {
-        try self.writer.writeByteNTimes(0, pl.alignDelta(self.writer.cursor, alignment));
+        const delta = pl.alignDelta(self.writer.cursor, alignment);
+        log.info("{} % {} = {}; requires {} bytes of padding", .{self.writer.cursor, alignment, @rem(self.writer.cursor, alignment), delta});
+        try self.writer.writeByteNTimes(0, delta);
     }
 
     /// Composes and encodes a bytecode instruction.
@@ -148,9 +150,23 @@ pub const Encoder = struct {
     /// This function is used internally by `instr` and `instrPre`.
     /// It can be called directly, though it should be noted that it does not
     /// type-check the `data` argument, whereas `instr` does.
+    ///
+    /// ### Panics
+    /// If the starting offset of the encoder is not aligned to `pl.BYTECODE_ALIGNMENT`.
     pub fn instrCompose(self: *Encoder, code: Instruction.OpCode, data: anytype) Writer.Error!void {
+        const delta = pl.alignDelta(self.writer.cursor, pl.BYTECODE_ALIGNMENT);
+
+        if (delta != 0) {
+            std.debug.panic(
+                "VirtualWriter cursor is at {}, but must be aligned to {} for bytecode instructions; off by {} bytes",
+                .{ self.writer.cursor, pl.BYTECODE_ALIGNMENT, delta },
+            );
+        }
+
         try self.opcode(code);
-        try self.operands(Instruction.OpData.fromBits(data));
+        try self.operands(code, Instruction.OpData.fromBits(data));
+
+        std.debug.assert(pl.alignDelta(self.writer.cursor, pl.BYTECODE_ALIGNMENT) == 0);
     }
 
     /// Composes and encodes a bytecode instruction.
@@ -160,21 +176,17 @@ pub const Encoder = struct {
 
     /// Encodes a pre-composed bytecode instruction.
     pub fn instrPre(self: *Encoder, instruction: Instruction) Writer.Error!void {
-        try self.opcode(instruction.code);
-        try self.operands(instruction.data);
+        return self.instrCompose(instruction.code, instruction.data);
     }
 
     /// Encodes an opcode.
     pub fn opcode(self: *Encoder, code: Instruction.OpCode) Writer.Error!void {
-        try self.writeInt(std.meta.Tag(Instruction.OpCode), @intFromEnum(code), .little);
+        try self.writeInt(u16, @intFromEnum(code), .little);
     }
 
     /// Encodes instruction operands.
-    pub fn operands(self: *Encoder, data: Instruction.OpData) Writer.Error!void {
-        try self.writeInt(std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpData)), @bitCast(data), .little);
-        try self.writeByteNTimes(0, @ceil(pl.bytesFromBits(64 - (@bitSizeOf(Instruction.OpCode) + @bitSizeOf(Instruction.OpData)))));
-
-        try self.alignTo(pl.BYTECODE_ALIGNMENT);
+    pub fn operands(self: *Encoder, code: Instruction.OpCode, data: Instruction.OpData) Writer.Error!void {
+        try self.writeInt(u48, data.toBits(code), .little);
     }
 };
 

@@ -12,7 +12,7 @@ pub const std_options = std.Options{
 
 
 pub fn main() !void {
-    @breakpoint();
+    // @breakpoint();
 
     log.info("Running tests ...", .{});
 
@@ -30,13 +30,24 @@ fn test_bytecode_builder() !void {
 
     const allocator = gpa.allocator();
 
-    const b = try ribbon.bytecode.Builder.init(allocator);
+    const b = try ribbon.bytecode.Builder.init(allocator, ribbon.common.Id.of(ribbon.core.Function).fromInt(0));
     defer b.deinit();
 
-    const fooName = try b.internName("foo");
-    const f = try b.createFunction(fooName);
+    const entry = try b.createBlock();
 
-    std.debug.print("{}\n", .{f});
+    try entry.instr(.i_add64, .{ .Rx = .r7, .Ry = .r32, .Rz = .r255 });
+
+    var encoder = ribbon.bytecode.Encoder { .writer = try ribbon.bytecode.Writer.init() };
+    defer encoder.writer.deinit();
+
+    try b.encode(&encoder);
+
+    const mem = try encoder.finalize();
+    defer std.posix.munmap(mem);
+
+    const stdout = std.io.getStdOut();
+
+    try ribbon.bytecode.disas(mem, stdout.writer());
 }
 
 fn test_rir() !void {
