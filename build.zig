@@ -2,6 +2,8 @@ const std = @import("std");
 
 const Fingerprint = @import("src/mod/common/Fingerprint.zig");
 
+const nasm = @import("nasm");
+
 const SUPPORTED_ARCH = &.{ .x86_64 };
 const SUPPORTED_OS = &.{ .windows, .linux };
 
@@ -225,7 +227,10 @@ pub fn build(b: *std.Build) !void {
 
 
 
-    const gen_object = b.addSystemCommand(&.{ "nasm" });
+    const gen_object = b.addRunArtifact(b.dependency("nasm", .{
+        .target = b.graph.host,
+        .optimize = .ReleaseFast,
+    }).artifact("nasm"));
 
     gen_object.addFileArg(assembly_src);
 

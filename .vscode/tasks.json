@@ -13,7 +13,7 @@
             "label": "watch",
             "detail": "Continually runs main on source changes (Uses bash, watchexec)",
             "type": "shell",
-            "command": "watchexec -wsrc bash src/bin/tools/watcher.sh",
+            "command": "watchexec -wsrc -wbuild.zig -wbuild.zig.zon bash src/bin/tools/watcher.sh",
             "group": {
                 "kind": "build",
                 "isDefault": true

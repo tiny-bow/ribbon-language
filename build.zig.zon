@@ -2,10 +2,31 @@
     .name = .ribbon,
     .fingerprint = 0xf11903a43ca0fa41,
     .version = "0.1.3-draft",
+    // For X64, there are two separate assembler dependencies, used together.
+    // Together they will allow one api to generate both the interpreter and jit code.
+    //
+    // * X64EZ is a fork of zig-dis-x86_64 that will be maintained under the ribbon-lang repo,
+    //   which is used for its x64 encoding api. This is much better than assembling text
+    //   at runtime in the jit. In addition, it can be used in comptime expressions.
+    //   The disassembler it provides is also useful, for debugging jit code.
+    //
+    // * allyourcodebase's zig wrapper for nasm is used to compile the interpreter
+    //   from assembler code, which is generated using the unified api based on X64EZ, at comptime.
+    //   Using nasm here gives a few advantages at the moment; mainly the ability to generate debug
+    //   information, as well as very easily producing elf and coff objects.
+    //
+    // TODO: in future, it'd be better to have an in-house solution for this,
+    // that skips translation to text for the comptime portion.
+    //
+    // FIXME: these should be lazy dependencies
     .dependencies = .{
         .X64EZ = .{
-            .url = "git+https://github.com/noxabellus/X64EZ#fbc17999e0cbf4dea82b8c003af2c46afe85ca43",
-            .hash = "122082ebefb4b2f220d0385bc7e6659fa3cae9035d85c84315f915e7650d52a65f4d",
+            .url = "git+https://github.com/noxabellus/X64EZ#c06b7de007ae500ecf8dfc59d1e5da76ec0b2938",
+            .hash = "X64EZ-0.1.0-AAAAADzFAwCC6--0svIg0Dhbx-Zln6PK6QNdhchDFfkV",
+        },
+        .nasm = .{
+            .url = "git+https://github.com/allyourcodebase/nasm#c153aec97cfe50a4600d9cf3d5f703d58f9ccd56",
+            .hash = "nasm-2.16.1-4-J30EdyVnXADate9iz7jWR4Q9tL1jU9S2Lw7PGgfOjP0v",
         },
     },
     .paths = .{
