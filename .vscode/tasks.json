@@ -11,7 +11,7 @@
     "tasks": [
         {
             "label": "watch",
-            "detail": "Continually runs main on source changes (Uses bash, grep, awk, watchexec, ...)",
+            "detail": "Continually runs main on source changes (Uses bash, watchexec)",
             "type": "shell",
             "command": "watchexec -wsrc bash src/bin/tools/watcher.sh",
             "group": {
