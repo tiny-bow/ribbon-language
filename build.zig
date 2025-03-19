@@ -217,6 +217,13 @@ pub fn build(b: *std.Build) !void {
     const assembly_header_install = b.addInstallFileWithDir(assembly_header, .{ .custom = "tmp" }, "ribbon.h.asm");
 
 
+    const gen_assembly_template = b.addRunArtifact(gen_tool);
+    gen_assembly_template.addArg("assembly_template");
+
+    const assembly_template = gen_assembly_template.addOutputFileArg("interpreter.template.asm");
+    const assembly_template_install = b.addInstallFileWithDir(assembly_template, .{ .custom = "tmp" }, "interpreter.template.asm");
+
+
 
     const gen_object = b.addSystemCommand(&.{ "nasm" });
 
@@ -379,14 +386,19 @@ pub fn build(b: *std.Build) !void {
     dump_intermediates_step.dependOn(&assembly_src_install.step);
     dump_intermediates_step.dependOn(&assembly_obj_install.step);
     dump_intermediates_step.dependOn(&assembly_header_install.step);
+    dump_intermediates_step.dependOn(&assembly_template_install.step);
     dump_intermediates_step.dependOn(&b.addInstallFile(Isa_markdown, "tmp/Isa.md").step);
 
     if (optimize == .Debug) { // debugging assembly codegen somewhat requires this atm TODO: re-evaluate when stable
         install_step.dependOn(dump_intermediates_step);
+        run_step.dependOn(dump_intermediates_step);
     }
 
     const write_assembly_header_step = b.step("asm-header", "Output the assembly header file for nasm language features");
     write_assembly_header_step.dependOn(&assembly_header_install.step);
+
+    const write_assembly_template_step = b.step("asm-template", "Output an interpreter assembly template");
+    write_assembly_template_step.dependOn(&assembly_template_install.step);
 
     const check_step = b.step("check", "Run semantic analysis");
     check_step.dependOn(&abi_test.step);

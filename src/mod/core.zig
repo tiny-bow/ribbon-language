@@ -536,6 +536,8 @@ pub const mem = comptime_memorySize: {
         loop: *const anyopaque,
         /// The cause of a trap, if any was known. Pointee-type depends on the trap.
         trap: ?*const anyopaque, // TODO: error handling function that covers this variance
+        /// Used by the interpreter to store debugger labels.
+        breakpoint: *const anyopaque,
     };
 
     const FIELDS = std.meta.fieldNames(FIBER_HEADER);
@@ -639,7 +641,7 @@ pub const Fiber = extern struct {
         const header: *mem.FiberHeader = @ptrCast(buf.ptr);
 
         fiber_fields: inline for (comptime std.meta.fieldNames(mem.FiberHeader)) |fieldName| {
-            inline for (&.{ "loop", "trap" }) |ignoredField| {
+            inline for (&.{ "loop", "trap", "breakpoint" }) |ignoredField| {
                 if (comptime std.mem.eql(u8, fieldName, ignoredField)) {
                     continue :fiber_fields;
                 }

@@ -10,6 +10,16 @@
     },
     "tasks": [
         {
+            "label": "watch",
+            "detail": "Continually runs main on source changes (Uses bash, grep, awk, watchexec, ...)",
+            "type": "shell",
+            "command": "watchexec -wsrc bash src/bin/tools/watcher.sh",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+        },
+        {
             "label": "check",
             "detail": "Run semantic analysis",
             "type": "shell",
@@ -17,7 +27,8 @@
             "group": {
                 "kind": "build",
                 "isDefault": false
-            }
+            },
+            "problemMatcher": "$zig",
         },
         {
             "label": "run debug",
@@ -26,8 +37,9 @@
             "command": "zig build run -freference-trace --prominent-compile-errors",
             "group": {
                 "kind": "build",
-                "isDefault": true
-            }
+                "isDefault": false
+            },
+            "problemMatcher": "$zig",
         },
         {
             "label": "run --release",
@@ -37,17 +49,19 @@
             "group": {
                 "kind": "build",
                 "isDefault": false
-            }
+            },
+            "problemMatcher": "$zig",
         },
         {
-            "label": "run-unit-tests",
+            "label": "unit-tests",
             "detail": "Runs all unit tests in the project",
             "type": "shell",
             "command": "zig build unit-tests -freference-trace --prominent-compile-errors",
             "group": {
                 "kind": "build",
                 "isDefault": false
-            }
+            },
+            "problemMatcher": "$zig",
         },
         {
             "label": "build",
@@ -57,7 +71,8 @@
             "group": {
                 "kind": "build",
                 "isDefault": false
-            }
+            },
+            "problemMatcher": "$zig",
         },
         {
             "label": "build --release",
@@ -67,7 +82,8 @@
             "group": {
                 "kind": "build",
                 "isDefault": false
-            }
+            },
+            "problemMatcher": "$zig",
         },
         {
             "label": "asm-header",
@@ -77,7 +93,8 @@
             "group": {
                 "kind": "build",
                 "isDefault": false
-            }
+            },
+            "problemMatcher": "$zig",
         },
         {
             "label": "docs",
@@ -87,26 +104,19 @@
             "group": {
                 "kind": "build",
                 "isDefault": false
-            }
+            },
+            "problemMatcher": "$zig",
         },
         {
-            "label": "serve-docs",
-            "detail": "Serve the generated documentation (uses http-server)",
+            "label": "isa",
+            "detail": "Generate the ISA (Instruction Specification Architecture) file for the project",
             "type": "shell",
-            "command": "zig build docs && http-server ./zig-out/docs/api/",
+            "command": "zig build isa",
             "group": {
                 "kind": "build",
                 "isDefault": false
-            }
-        },
-        {
-            "label": "open-isa",
-            "detail": "Open the ISA (Instruction Specification Architecture) file for the project",
-            "type": "shell",
-            "command": "zig build isa && code ./zig-out/docs/Isa.md",
-            "problemMatcher": [
-                "$zig"
-            ]
+            },
+            "problemMatcher": "$zig",
         },
         {
             "label": "dump-intermediates",
@@ -116,7 +126,41 @@
             "group": {
                 "kind": "build",
                 "isDefault": false
-            }
+            },
+            "problemMatcher": "$zig",
+        },
+        {
+            "label": "open isa",
+            "detail": "Open the ISA (Instruction Specification Architecture) file for the project",
+            "type": "shell",
+            "command": "zig build isa && code ./zig-out/docs/Isa.md",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": "$zig",
+        },
+        {
+            "label": "open asm-header",
+            "detail": "Open the asm header file",
+            "type": "shell",
+            "command": "zig build asm-header && code ./zig-out/tmp/ribbon.h.asm",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": "$zig",
+        },
+        {
+            "label": "open docs",
+            "detail": "Serve the generated documentation (uses http-server, outputs link in terminal)",
+            "type": "shell",
+            "command": "zig build docs && http-server ./zig-out/docs/api/",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": "$zig",
         }
     ]
 }

@@ -8,11 +8,16 @@ const std = @import("std");
 
 const log = std.log.scoped(.@"gen");
 
+pub const std_options = std.Options {
+    .log_level = .info,
+};
+
 const OutputTypes = enum {
     markdown,
     types,
     assembly,
     assembly_header,
+    assembly_template,
 };
 
 const OUTPUT_NAMES = std.meta.fieldNames(OutputTypes);
@@ -73,62 +78,190 @@ pub fn main() !void {
 
             try generateHeaderAssembly(true, file.writer());
         },
+
+        .assembly_template => {
+            const file = try std.fs.cwd().createFile(args[2], .{});
+            defer file.close();
+
+            try generateAssemblyTemplate(isa.CATEGORIES, file.writer());
+        },
     }
 }
 
 
-const InstrBlock = []const []const u8;
 
-fn parseInstructionsFile(allocator: std.mem.Allocator, text: []const u8) !std.StringHashMap(InstrBlock) {
+// Assembly generation
+
+const InstrDef = struct {
+    name: []const u8,
+    line_origin: usize,
+    block: []const []const u8,
+
+    fn dumpDefs(defs: *const std.StringArrayHashMap(InstrDef)) void {
+        std.debug.print("defs found: {}\n", .{defs.count()});
+        for (defs.values()) |def| {
+            std.debug.print("    `{s}` at line {d}\n", .{ def.name, def.line_origin });
+        }
+    }
+
+    fn validate(defs: *const std.StringArrayHashMap(InstrDef), categories: []const isa.Category) !void {
+        var buf: [1024]u8 = undefined;
+        for (categories) |category| {
+            for (category.mnemonics) |mnemonics| {
+                for (mnemonics.instructions) |instruction| {
+                    var stream = std.io.fixedBufferStream(&buf);
+                    const writer = stream.writer();
+                    try isa.formatInstructionName(mnemonics.name, instruction.name, writer);
+
+                    const instrName = stream.getWritten();
+
+                    if (!defs.contains(instrName)) {
+                        std.debug.print("Error [instructions.asm]: Missing bytecode instruction `{s}`\n", .{ instrName });
+
+                        dumpDefs(defs);
+
+                        std.process.exit(1);
+                    }
+                }
+            }
+        }
+
+        var opcode: u16 = 0;
+        for (defs.values()) |def| {
+            try def.validateTitle(opcode, categories);
+            opcode += 1;
+        }
+    }
+
+    fn validateTitle(self: InstrDef, opcode: u16, categories: []const isa.Category) !void {
+        var buf: [1024]u8 = undefined;
+
+        var expectedOpcode: u16 = 0;
+
+        for (categories) |category| {
+            for (category.mnemonics) |mnemonics| {
+                for (mnemonics.instructions) |instruction| {
+                    var stream = std.io.fixedBufferStream(&buf);
+                    const writer = stream.writer();
+
+                    try isa.formatInstructionName(mnemonics.name, instruction.name, writer);
+
+                    const instrName = stream.getWritten();
+
+                    if (std.mem.eql(u8, self.name, instrName)) {
+                        if (opcode != expectedOpcode) {
+                            std.debug.print("Error [instructions.asm:{}]: Instruction `{s}` has unexpected index {d}; expected {d}\n", .{ self.line_origin, self.name, opcode, expectedOpcode });
+                            std.process.exit(1);
+                        }
+
+                        return;
+                    }
+
+                    expectedOpcode += 1;
+                }
+            }
+        }
+
+        std.debug.print("Error [instructions.asm:{}]: Invalid bytecode instruction name `{s}`", .{ self.line_origin, self.name });
+        std.process.exit(1);
+    }
+};
+
+
+fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.Category, text: []const u8) !std.StringArrayHashMap(InstrDef) {
     // split file into non-empty lines, then, in a loop:
     // find first line with no leading whitespace
     // parse first line to title by looking backwards from the end of the line;
-    // ensure there is a `:` at the end of the line; if not, discard this block and continue (its likely a macro we don't need in the generated code)
+    // ensure there is a `:` at the end of the line; if not, discard this block and continue
+    // (its likely a macro we don't need in the generated code)
     // consume all lines with leading whitespace into block
 
     var lines = std.mem.splitScalar(u8, text, '\n');
 
-    var blocks = std.StringHashMap(InstrBlock).init(allocator);
+    var defs = std.StringArrayHashMap(InstrDef).init(allocator);
 
     var blockLines = std.ArrayList([]const u8).init(allocator);
 
     var inBlock = false;
+
+    var name: []const u8 = undefined;
 
     var l: usize = 0;
     while (lines.next()) |line| {
         l += 1;
 
         if (std.mem.eql(u8, line, "")) {
+            log.debug("skipping blank line {} {s}", .{ l, if (inBlock) "(in)" else "(out)" });
             continue;
         }
 
-        if (line[0] != ' ' and line[0] != '\t') {
-            if (!inBlock) continue;
+        log.debug("processing line {} {s}:\n    `{s}`", .{ l, if (inBlock) "(in)" else "(out)", line });
 
-            if (line[line.len - 1] != ':') {
-                std.debug.panic("unexpected source line at {}; it should end with `:`, or be indented under such a line", .{ l });
+        if (line[0] != ' ' and line[0] != '\t') {
+            log.debug("top level line", .{});
+
+            var lineEnd = for (line, 0..) |ch, i| {
+                if (ch == ';') break i - 1;
+            } else line.len - 1;
+
+            while (std.ascii.isWhitespace(line[lineEnd])) {
+                lineEnd -= 1;
             }
 
-            const name = line[0..line.len - 1];
+            if (line[lineEnd] != ':') {
+                if (!inBlock) {
+                    log.debug("discarding line {} as macro", .{ l });
+                    continue;
+                } else {
+                    std.debug.print("Error[instructions.asm:{}]: line should end with `:`, or be indented under such a line", .{ l });
+                    std.process.exit(1);
+                }
+            }
+
+            log.debug("processing as instruction def", .{});
 
             if (inBlock) {
-                const block = try blockLines.toOwnedSlice();
-                try blocks.put(name, block);
+                log.debug("Adding InstrDef for {s}", .{ name });
+                try defs.put(name, InstrDef {
+                    .name = name,
+                    .line_origin = l,
+                    .block = try blockLines.toOwnedSlice(),
+                });
+            } else {
+                log.debug("found first instruction {s}", .{line[0..lineEnd]});
+                inBlock = true;
             }
 
-            inBlock = true;
+            name = line[0..lineEnd];
         } else if (inBlock) {
+            log.debug("adding line to block for {s}", .{ name });
             try blockLines.append(std.mem.trimLeft(u8, line, " \t"));
         } else {
+            log.info("discarding line {} as macro", .{ l });
             continue;
+        }
+    } else {
+        if (inBlock) {
+            log.debug("Adding final InstrDef for {s}", .{ name });
+            try defs.put(name, InstrDef {
+                .name = name,
+                .line_origin = l,
+                .block = try blockLines.toOwnedSlice(),
+            });
         }
     }
 
-    return blocks;
+
+    if (defs.count() == 0) {
+        std.debug.print("Error[instructions.asm / gen.zig]: no valid instruction definitions found\nsource text was:\n{s}{s}\n\n", .{text[0..@min(text.len, 256)], if (text.len > 256) "\n..." else ""});
+        std.process.exit(1);
+    }
+
+    try InstrDef.validate(&defs, categories);
+
+    return defs;
 }
 
-
-// Assembly generation
 fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
     try writer.print("%define OP_SIZE 0x{x}\n", .{ pl.OPCODE_SIZE });
 
@@ -225,11 +358,13 @@ fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
             \\%define R_JUMP_TABLE_LENGTH rax
             \\%define R_EXIT_OKAY rax
             \\%define R_EXIT_HALT rax
+            \\%define R_TRAP_REQUESTED rax
             \\%define R_TRAP_BAD_ENCODING rax
             \\%define R_TRAP_OVERFLOW rax
             \\%define R_TRAP_REQUESTED rax
             \\%define R_DECODE rax
             \\%define R_DISPATCH rax
+            \\%define R_BREAKPOINT rax
             \\%endif
             \\
         );
@@ -240,7 +375,7 @@ fn generateMainAssembly(categories: []const isa.Category, allocator: std.mem.All
     try generateAssemblyJumpTable(categories, writer);
     try generateAssemblyIntro(writer);
 
-    const impls = try parseInstructionsFile(allocator, @embedFile("instructions.asm"));
+    const impls = try parseInstructionsFile(allocator, categories, @embedFile("instructions.asm"));
     try generateAssemblyBody(categories, &impls, writer);
 }
 
@@ -263,7 +398,7 @@ fn generateAssemblyIntro(writer: anytype) !void {
     try pl.stream(reader, writer);
 }
 
-fn generateAssemblyBody(categories: []const isa.Category, impls: *const std.StringHashMap(InstrBlock), writer: anytype) !void {
+fn generateAssemblyBody(categories: []const isa.Category, impls: *const std.StringArrayHashMap(InstrDef), writer: anytype) !void {
     try writer.writeAll("\nsection .text\n\n");
 
     var opcode: u16 = 0;
@@ -279,9 +414,9 @@ fn generateAssemblyBody(categories: []const isa.Category, impls: *const std.Stri
                 try isa.formatInstructionName(mnemonic.name, instruction.name, nameWriter);
                 const name = stream.getWritten();
 
-                if (impls.get(name)) |block| {
+                if (impls.get(name)) |instr| {
                     try writer.print("{s}:\n", .{ name });
-                    for (block) |line| {
+                    for (instr.block) |line| {
                         try writer.writeAll(line);
                         try writer.writeAll("\n");
                     }
@@ -329,6 +464,32 @@ fn generateAssemblyJumpTable(categories: []const isa.Category, writer: anytype) 
     }
 
     try writer.print("\nR_JUMP_TABLE_LENGTH equ 0x{x} ; {d}\n\n\n", .{opcode, opcode});
+}
+
+fn generateAssemblyTemplate(categories: []const isa.Category, writer: anytype) !void {
+    try writer.writeAll(
+        \\%include "ribbon.h.asm"
+        \\
+    );
+
+    var opcode: u16 = 0;
+    for (categories) |category| {
+        for (category.mnemonics) |mnemonic| {
+            for (mnemonic.instructions) |instruction| {
+                try writer.writeAll("\n\n");
+                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                try writer.writeAll(": ; ");
+                try formatOpcode(opcode, writer);
+                try writer.writeAll(" ");
+                try formatInstructionOperands(mnemonic.name, instruction.name, instruction.operands, writer);
+                try writer.writeAll("\n    TODO\n");
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll("\n");
 }
 
 
@@ -921,7 +1082,8 @@ fn formatInstructionOperands(mnemonic: []const u8, instr: isa.InstructionName, o
     }
 
     if (size > 8) {
-        log.warn("Instruction {s}/{} is {} bytes in size", .{ mnemonic, instr, size });
+        std.debug.print("Error[isa.zig]: Instruction {s}/{} is {} bytes in size", .{ mnemonic, instr, size });
+        std.process.exit(1);
     }
 
     if (operands.len != 0) {

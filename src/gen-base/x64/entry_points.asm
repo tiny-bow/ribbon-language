@@ -1,9 +1,9 @@
 %include "ribbon.h.asm"
 %undef R_EXIT_OKAY
 %undef R_EXIT_HALT
+%undef R_TRAP_REQUESTED
 %undef R_TRAP_BAD_ENCODING
 %undef R_TRAP_OVERFLOW
-%undef R_TRAP_REQUESTED
 %undef R_DECODE
 %undef R_DISPATCH
 
@@ -19,15 +19,15 @@ R_EXIT_OKAY:
 R_EXIT_HALT:
     EXIT BuiltinSignal.halt
 
+R_TRAP_REQUESTED:
+    EXIT BuiltinSignal.request_trap
+
 R_TRAP_BAD_ENCODING:
     mov [FIBER + Fiber.trap], IP
     EXIT BuiltinSignal.bad_encoding
 
 R_TRAP_OVERFLOW:
     EXIT BuiltinSignal.overflow
-
-R_TRAP_REQUESTED:
-    EXIT BuiltinSignal.request_trap
 
 R_DECODE:
     ; put the opcode into TER_A
