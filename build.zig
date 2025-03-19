@@ -379,7 +379,7 @@ pub fn build(b: *std.Build) !void {
     dump_intermediates_step.dependOn(&assembly_src_install.step);
     dump_intermediates_step.dependOn(&assembly_obj_install.step);
     dump_intermediates_step.dependOn(&assembly_header_install.step);
-    dump_intermediates_step.dependOn(&b.addInstallFile(Instruction_src, "Isa.md").step);
+    dump_intermediates_step.dependOn(&b.addInstallFile(Isa_markdown, "tmp/Isa.md").step);
 
     if (optimize == .Debug) { // debugging assembly codegen somewhat requires this atm TODO: re-evaluate when stable
         install_step.dependOn(dump_intermediates_step);
