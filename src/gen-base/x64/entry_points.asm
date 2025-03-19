@@ -1,3 +1,12 @@
+%include "ribbon.h.asm"
+%undef R_EXIT_OKAY
+%undef R_EXIT_HALT
+%undef R_TRAP_BAD_ENCODING
+%undef R_TRAP_OVERFLOW
+%undef R_TRAP_REQUESTED
+%undef R_DECODE
+%undef R_DISPATCH
+
 section .text
 
 ENTRY_POINT rvm_interpreter_step, R_EXIT_OKAY

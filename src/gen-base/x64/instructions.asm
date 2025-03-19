@@ -1,3 +1,5 @@
+%include "ribbon.h.asm"
+
 nop:
     TODO
 

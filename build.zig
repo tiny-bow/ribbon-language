@@ -188,6 +188,8 @@ pub fn build(b: *std.Build) !void {
 
     const Isa_markdown = gen_isa.addOutputFileArg("Isa.md");
 
+    const Isa_markdown_install = b.addInstallFile(Isa_markdown, "docs/Isa.md");
+
 
     const gen_types = b.addRunArtifact(gen_tool);
 
@@ -205,6 +207,14 @@ pub fn build(b: *std.Build) !void {
 
     const assembly_src = gen_assembly.addOutputFileArg("interpreter.asm");
     const assembly_src_install = b.addInstallFileWithDir(assembly_src, .{ .custom = "tmp" }, "interpreter.asm");
+
+
+    const gen_assembly_header = b.addRunArtifact(gen_tool);
+
+    gen_assembly_header.addArg("assembly_header");
+
+    const assembly_header = gen_assembly_header.addOutputFileArg("ribbon.h.asm");
+    const assembly_header_install = b.addInstallFileWithDir(assembly_header, .{ .custom = "tmp" }, "ribbon.h.asm");
 
 
 
@@ -240,7 +250,7 @@ pub fn build(b: *std.Build) !void {
 
     // create tests //
     const abi_test = b.addTest(.{ .root_module = abi_mod });
-    const assembler_test = b.addTest(.{ .root_module = assembler_mod });
+    // assembler mod is a dep
     const Buffer_test = b.addTest(.{ .root_module = Buffer_mod });
     const bytecode_test = b.addTest(.{ .root_module = bytecode_mod });
     const common_test = b.addTest(.{ .root_module = common_mod });
@@ -298,6 +308,11 @@ pub fn build(b: *std.Build) !void {
     gen_mod.addImport("core", core_mod);
     gen_mod.addImport("assembler", assembler_mod);
     gen_mod.addImport("abi", abi_mod);
+
+    gen_mod.addAnonymousImport("Isa_intro.md", .{ .root_source_file = b.path("src/gen-base/markdown/Isa_intro.md") });
+    gen_mod.addAnonymousImport("entry_points.asm", .{ .root_source_file = b.path("src/gen-base/x64/entry_points.asm") });
+    gen_mod.addAnonymousImport("instructions.asm", .{ .root_source_file = b.path("src/gen-base/x64/instructions.asm") });
+    gen_mod.addAnonymousImport("Instruction_intro.zig", .{ .root_source_file = b.path("src/gen-base/zig/Instruction_intro.zig") });
 
     Id_mod.addImport("platform", platform_mod);
 
@@ -363,11 +378,19 @@ pub fn build(b: *std.Build) !void {
     dump_intermediates_step.dependOn(&Instruction_src_install.step);
     dump_intermediates_step.dependOn(&assembly_src_install.step);
     dump_intermediates_step.dependOn(&assembly_obj_install.step);
+    dump_intermediates_step.dependOn(&assembly_header_install.step);
     dump_intermediates_step.dependOn(&b.addInstallFile(Instruction_src, "Isa.md").step);
+
+    if (optimize == .Debug) { // debugging assembly codegen somewhat requires this atm TODO: re-evaluate when stable
+        install_step.dependOn(dump_intermediates_step);
+    }
+
+    const write_assembly_header_step = b.step("asm-header", "Output the assembly header file for nasm language features");
+    write_assembly_header_step.dependOn(&assembly_header_install.step);
 
     const check_step = b.step("check", "Run semantic analysis");
     check_step.dependOn(&abi_test.step);
-    check_step.dependOn(&assembler_test.step);
+
     check_step.dependOn(&Buffer_test.step);
     check_step.dependOn(&bytecode_test.step);
     check_step.dependOn(&common_test.step);
@@ -391,7 +414,7 @@ pub fn build(b: *std.Build) !void {
 
     const test_step = b.step("unit-test", "Run all unit tests");
     test_step.dependOn(&b.addRunArtifact(abi_test).step);
-    test_step.dependOn(&b.addRunArtifact(assembler_test).step);
+
     test_step.dependOn(&b.addRunArtifact(Buffer_test).step);
     test_step.dependOn(&b.addRunArtifact(bytecode_test).step);
     test_step.dependOn(&b.addRunArtifact(common_test).step);
@@ -421,7 +444,12 @@ pub fn build(b: *std.Build) !void {
         .install_dir = .{ .custom = "docs" },
         .install_subdir = "api",
     }).step);
-    docs_step.dependOn(&b.addInstallFile(Isa_markdown, "docs/Isa.md").step);
+    docs_step.dependOn(&Isa_markdown_install.step);
+
+
+    const isa_step = b.step("isa", "Generate ISA documentation");
+
+    isa_step.dependOn(&Isa_markdown_install.step);
 }
 
 

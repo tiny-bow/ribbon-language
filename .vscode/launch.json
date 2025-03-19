@@ -1,13 +1,13 @@
 {
     "version": "0.2.0",
     "configurations": [
-      {
-        "type": "cppdbg",
-        "request": "launch",
-        "name": "Launch Program",
-        "cwd": "${workspaceFolder}",
-        "program": "${workspaceFolder}/zig-out/bin/ribbon",
-        "preLaunchTask": "build"
-      }
+        {
+            "type": "cppdbg",
+            "request": "launch",
+            "name": "Launch Program",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/zig-out/bin/ribbon",
+            "preLaunchTask": "build"
+        }
     ]
 }

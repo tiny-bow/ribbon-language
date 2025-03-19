@@ -360,7 +360,7 @@ pub fn print(self: Formatter, comptime fmtStr: []const u8, args: anytype) anyerr
 
                 const specifier = placeholder.specifier_arg[0];
 
-                if (comptime std.mem.indexOfScalar(u8, "ubcdxX", specifier) != null) {
+                if (comptime std.mem.indexOfScalar(u8, &.{'u','b','c','d','x','X'}, specifier) != null) {
                     const extractSpecifier = struct {
                         pub fn fun(out: anytype, in: std.fmt.Specifier) void {
                             const T: type = pl.typeInfo(@TypeOf(out), .pointer).child;

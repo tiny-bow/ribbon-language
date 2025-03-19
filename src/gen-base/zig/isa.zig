@@ -1,10 +1,10 @@
 //! # isa
 //! This is a namespace defining the Ribbon bytecode ISA, containing
-//! compile-time accessible representations of all of Ribbon's bytecode basicuctions,
+//! compile-time accessible representations of all of Ribbon's bytecode instructions,
 //! as well as types and functions for working with these.
 //!
 //! From this data, we generate the following (via `bin/tools/gen`):
-//! * The basicuction type definition exported at `ribbon.bytecode.Instruction`.
+//! * The instruction type definition exported at `ribbon.bytecode.Instruction`.
 //! * Interpreter assembly, using asm source components from `gen-base`.
 //! * `docs/Isa.md`, using `gen-base/Isa_intro.md`.
 const Isa = @This();
@@ -18,20 +18,20 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-/// Represents the name of an rvm bytecode basicuction in an `InstructionDescriptor`.
+/// Represents the name of an rvm bytecode instruction in an `InstructionDescriptor`.
 pub const InstructionName = union(enum) {
-    /// The name of the basicuction is the same as its parent mnemonic.
+    /// The name of the instruction is the same as its parent mnemonic.
     mnemonic: void,
-    /// The name of the basicuction is not based on its parent mnemonic.
+    /// The name of the instruction is not based on its parent mnemonic.
     overridden: []const u8,
-    /// The name of the basicuction is the `base_name` of its parent mnemonic with a prefix.
+    /// The name of the instruction is the `base_name` of its parent mnemonic with a prefix.
     prefixed: []const u8,
-    /// The name of the basicuction is the `base_name` of its parent mnemonic with a suffix.
+    /// The name of the instruction is the `base_name` of its parent mnemonic with a suffix.
     suffixed: []const u8,
-    /// The name of the basicuction is the `base_name` of its parent mnemonic with a prefix and a suffix.
+    /// The name of the instruction is the `base_name` of its parent mnemonic with a prefix and a suffix.
     wrapped: struct { []const u8, []const u8 },
 
-    /// Writes the basicuction name to the given `writer`, formatted with using the provided mnemonic.
+    /// Writes the instruction name to the given `writer`, formatted with using the provided mnemonic.
     pub fn fmt(self: *const InstructionName, mnemonic: []const u8, writer: anytype) !void {
         try formatInstructionName(mnemonic, self.*, writer);
     }

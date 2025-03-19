@@ -11,6 +11,7 @@
     "tasks": [
         {
             "label": "check",
+            "detail": "Run semantic analysis",
             "type": "shell",
             "command": "zig build check -freference-trace --prominent-compile-errors",
             "group": {
@@ -19,7 +20,8 @@
             }
         },
         {
-            "label": "run",
+            "label": "run debug",
+            "detail": "Build and run the project with default (debug) settings",
             "type": "shell",
             "command": "zig build run -freference-trace --prominent-compile-errors",
             "group": {
@@ -28,52 +30,8 @@
             }
         },
         {
-            "label": "gen-doc",
-            "type": "shell",
-            "command": "zig build-lib src/mod/everything.zig -fno-emit-bin -femit-docs=zig-out/docs",
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            }
-        },
-        {
-            "label": "serve-doc",
-            "type": "shell",
-            "command": "cd zig-out/docs && http-server",
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            }
-        },
-        {
-            "label": "open-doc",
-            "type": "shell",
-            "command": "xdg-open http://localhost:8080",
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            }
-        },
-        {
-            "label": "browse",
-            "type": "shell",
-            "command": "zig build-lib src/mod/everything.zig -fno-emit-bin -femit-docs=zig-out/docs && cd zig-out/docs && xdg-open http://localhost:8080 && http-server",
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            }
-        },
-        {
-            "label": "dump-intermediates",
-            "type": "shell",
-            "command": "zig build dump-intermediates -freference-trace --prominent-compile-errors",
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            }
-        },
-        {
-            "label": "run-release",
+            "label": "run --release",
+            "detail": "Build and run the project with release (fast) settings",
             "type": "shell",
             "command": "zig build run --release=fast -freference-trace --prominent-compile-errors",
             "group": {
@@ -82,7 +40,8 @@
             }
         },
         {
-            "label": "test",
+            "label": "run-unit-tests",
+            "detail": "Runs all unit tests in the project",
             "type": "shell",
             "command": "zig build unit-tests -freference-trace --prominent-compile-errors",
             "group": {
@@ -92,8 +51,68 @@
         },
         {
             "label": "build",
+            "detail": "Build the project with default (debug) settings",
             "type": "shell",
             "command": "zig build -freference-trace --prominent-compile-errors",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "build --release",
+            "detail": "Build the project with release (fast) settings",
+            "type": "shell",
+            "command": "zig build --release=fast -freference-trace --prominent-compile-errors",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "asm-header",
+            "detail": "Generate assembly header for the project; useful when working in `gen-base/x64/`, particularly with extensions like @ext:doinkythederp.nasm-language-support",
+            "type": "shell",
+            "command": "zig build asm-header",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "docs",
+            "detail": "Generate documentation for the project",
+            "type": "shell",
+            "command": "zig build docs",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "serve-docs",
+            "detail": "Serve the generated documentation (uses http-server)",
+            "type": "shell",
+            "command": "zig build docs && http-server ./zig-out/docs/api/",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "open-isa",
+            "detail": "Open the ISA (Instruction Specification Architecture) file for the project",
+            "type": "shell",
+            "command": "zig build isa && code ./zig-out/docs/Isa.md",
+            "problemMatcher": [
+                "$zig"
+            ]
+        },
+        {
+            "label": "dump-intermediates",
+            "detail": "Write all generated files to zig-out/tmp",
+            "type": "shell",
+            "command": "zig build dump-intermediates -freference-trace --prominent-compile-errors",
             "group": {
                 "kind": "build",
                 "isDefault": false

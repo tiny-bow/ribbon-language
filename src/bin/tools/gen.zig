@@ -12,6 +12,7 @@ const OutputTypes = enum {
     markdown,
     types,
     assembly,
+    assembly_header,
 };
 
 const OUTPUT_NAMES = std.meta.fieldNames(OutputTypes);
@@ -65,6 +66,13 @@ pub fn main() !void {
             try generateHeaderAssembly(false, file.writer());
             try generateMainAssembly(isa.CATEGORIES, allocator, file.writer());
         },
+
+        .assembly_header => {
+            const file = try std.fs.cwd().createFile(args[2], .{});
+            defer file.close();
+
+            try generateHeaderAssembly(true, file.writer());
+        },
     }
 }
 
@@ -75,7 +83,7 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, text: []const u8) !std.St
     // split file into non-empty lines, then, in a loop:
     // find first line with no leading whitespace
     // parse first line to title by looking backwards from the end of the line;
-    // ensure there is a `:` at the end of the line; if not, discard this block and continue (its likely a macro we dont need in the generated code)
+    // ensure there is a `:` at the end of the line; if not, discard this block and continue (its likely a macro we don't need in the generated code)
     // consume all lines with leading whitespace into block
 
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -121,7 +129,7 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, text: []const u8) !std.St
 
 
 // Assembly generation
-fn generateHeaderAssembly(includeStandins: bool, writer: anytype) !void {
+fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
     try writer.print("%define OP_SIZE 0x{x}\n", .{ pl.OPCODE_SIZE });
 
     inline for (comptime std.meta.fieldNames(core.mem.FiberHeader)) |fieldName| {
@@ -209,7 +217,7 @@ fn generateHeaderAssembly(includeStandins: bool, writer: anytype) !void {
         \\
     );
 
-    if (includeStandins) {
+    if (includePlaceholders) {
         try writer.writeAll(
             \\
             \\%ifndef R_JUMP_TABLE
@@ -232,16 +240,25 @@ fn generateMainAssembly(categories: []const isa.Category, allocator: std.mem.All
     try generateAssemblyJumpTable(categories, writer);
     try generateAssemblyIntro(writer);
 
-    const implsSrc = try std.fs.cwd().readFileAlloc(allocator, "src/gen-base/x64/instructions.asm", std.math.maxInt(usize));
-    const impls = try parseInstructionsFile(allocator, implsSrc);
+    const impls = try parseInstructionsFile(allocator, @embedFile("instructions.asm"));
     try generateAssemblyBody(categories, &impls, writer);
 }
 
 fn generateAssemblyIntro(writer: anytype) !void {
-    const entries = try std.fs.cwd().openFile("src/gen-base/x64/entry_points.asm", .{});
-    defer entries.close();
+    var entries = std.io.fixedBufferStream(@embedFile("entry_points.asm"));
 
     const reader = entries.reader();
+
+    var buf: [1024]u8 = undefined;
+
+    while (true) {
+        const line = try reader.readUntilDelimiter(&buf, '\n');
+
+        if (std.mem.eql(u8, line, "section .text")) {
+            try writer.writeAll("\n\nsection .text\n\n");
+            break;
+        }
+    }
 
     try pl.stream(reader, writer);
 }
@@ -344,7 +361,7 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
 }
 
 fn generateTypesIntro(writer: anytype) !void {
-    try paste("generateTypes", "", "//", "//", "src/gen-base/zig/Instruction_intro.zig", writer);
+    try paste("generateTypes", "", "//", "//", "Instruction_intro.zig", writer);
 }
 
 fn generateTypesCodes(categories: []const isa.Category, writer: anytype) !void {
@@ -736,7 +753,7 @@ fn generateMarkdownIntro(writer: anytype) !void {
         \\
     );
 
-    try paste("generateMarkdown", stream.getWritten(), "<!--", "-->", "src/gen-base/markdown/Isa_intro.md", writer);
+    try paste("generateMarkdown", stream.getWritten(), "<!--", "-->", "Isa_intro.md", writer);
 }
 
 fn generateMarkdownInstructionToc(categories: []const isa.Category, writer: anytype) !void {
@@ -1047,9 +1064,8 @@ fn writeLink(name: []const u8, writer: anytype) !void {
     try writer.writeByte(')');
 }
 
-fn paste(generatorName: []const u8, header: []const u8, commentPre: []const u8, commentPost: []const u8, path: []const u8, writer: anytype) !void {
-    const genBase = try std.fs.cwd().openFile(path, .{});
-    defer genBase.close();
+fn paste(generatorName: []const u8, header: []const u8, commentPre: []const u8, commentPost: []const u8, comptime path: []const u8, writer: anytype) !void {
+    var genBase = std.io.fixedBufferStream(@embedFile(path));
 
     const reader = genBase.reader();
 
