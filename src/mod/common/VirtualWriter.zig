@@ -102,8 +102,8 @@ pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
         /// After calling this function, the writer will be in its default uninitialized state.
         /// In other words, it is safe but not necessary to call `deinit` on it, and it must be re-initialized before use.
         ///
-        /// Returns the generated code as a byte slice.
-        /// This must be freed with `std.posix.munmap`. Leaks will not be detected.
+        /// The resulting byte slice needs to be freed with `std.posix.munmap`.
+        /// Leaks will not be detected.
         ///
         /// ### Errors
         /// + `BadEncoding` if a zero-length buffer is passed.
@@ -121,7 +121,7 @@ pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
 
             self.cursor += pl.alignDelta(self.cursor, pl.PAGE_SIZE);
 
-            std.posix.munmap(@alignCast((self.memory.ptr + self.cursor)[self.memory.len - self.cursor..self.memory.len]));
+            std.posix.munmap(@alignCast((self.memory.ptr + self.cursor)[0..self.memory.len - self.cursor]));
 
             std.posix.mprotect(out, @intFromEnum(access)) catch |err| {
                 std.debug.panic("mprotect rejected `{}`: {s}", .{@intFromEnum(access), @errorName(err)});

@@ -220,7 +220,7 @@ pub const Builder = struct {
         const self: *Builder = @constCast(ptr);
 
         const allocator = self.allocator;
-        defer allocator.destroy(ptr); // FIXME: occasionally seg faulting here in tests
+        defer allocator.destroy(ptr);
 
         for (self.blocks.items) |block| {
             block.deinit();
