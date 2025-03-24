@@ -85,17 +85,17 @@
             },
             "problemMatcher": "$zig",
         },
-        {
-            "label": "asm-header",
-            "detail": "Generate assembly header for the project; useful when working in `gen-base/x64/`, particularly with extensions like @ext:doinkythederp.nasm-language-support",
-            "type": "shell",
-            "command": "zig build asm-header",
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            },
-            "problemMatcher": "$zig",
-        },
+        // {
+        //     "label": "asm-header",
+        //     "detail": "Generate assembly header for the project; useful when working in `gen-base/x64/`, particularly with extensions like @ext:doinkythederp.nasm-language-support",
+        //     "type": "shell",
+        //     "command": "zig build asm-header",
+        //     "group": {
+        //         "kind": "build",
+        //         "isDefault": false
+        //     },
+        //     "problemMatcher": "$zig",
+        // },
         {
             "label": "docs",
             "detail": "Generate documentation for the project",
@@ -140,17 +140,17 @@
             },
             "problemMatcher": "$zig",
         },
-        {
-            "label": "open asm-header",
-            "detail": "Open the asm header file",
-            "type": "shell",
-            "command": "zig build asm-header && code ./zig-out/tmp/ribbon.h.asm",
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            },
-            "problemMatcher": "$zig",
-        },
+        // {
+        //     "label": "open asm-header",
+        //     "detail": "Open the asm header file",
+        //     "type": "shell",
+        //     "command": "zig build asm-header && code ./zig-out/tmp/ribbon.h.asm",
+        //     "group": {
+        //         "kind": "build",
+        //         "isDefault": false
+        //     },
+        //     "problemMatcher": "$zig",
+        // },
         {
             "label": "open docs",
             "detail": "Serve the generated documentation (uses http-server, outputs link in terminal)",

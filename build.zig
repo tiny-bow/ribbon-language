@@ -203,47 +203,47 @@ pub fn build(b: *std.Build) !void {
     Instruction_mod.root_source_file = Instruction_src;
 
 
-    const gen_assembly = b.addRunArtifact(gen_tool);
+    // const gen_assembly = b.addRunArtifact(gen_tool);
 
-    gen_assembly.addArg("assembly");
+    // gen_assembly.addArg("assembly");
 
-    const assembly_src = gen_assembly.addOutputFileArg("interpreter.asm");
-    const assembly_src_install = b.addInstallFileWithDir(assembly_src, .{ .custom = "tmp" }, "interpreter.asm");
-
-
-    const gen_assembly_header = b.addRunArtifact(gen_tool);
-
-    gen_assembly_header.addArg("assembly_header");
-
-    const assembly_header = gen_assembly_header.addOutputFileArg("ribbon.h.asm");
-    const assembly_header_install = b.addInstallFileWithDir(assembly_header, .{ .custom = "tmp" }, "ribbon.h.asm");
+    // const assembly_src = gen_assembly.addOutputFileArg("interpreter.asm");
+    // const assembly_src_install = b.addInstallFileWithDir(assembly_src, .{ .custom = "tmp" }, "interpreter.asm");
 
 
-    const gen_assembly_template = b.addRunArtifact(gen_tool);
-    gen_assembly_template.addArg("assembly_template");
+    // const gen_assembly_header = b.addRunArtifact(gen_tool);
 
-    const assembly_template = gen_assembly_template.addOutputFileArg("interpreter.template.asm");
-    const assembly_template_install = b.addInstallFileWithDir(assembly_template, .{ .custom = "tmp" }, "interpreter.template.asm");
+    // gen_assembly_header.addArg("assembly_header");
+
+    // const assembly_header = gen_assembly_header.addOutputFileArg("ribbon.h.asm");
+    // const assembly_header_install = b.addInstallFileWithDir(assembly_header, .{ .custom = "tmp" }, "ribbon.h.asm");
+
+
+    // const gen_assembly_template = b.addRunArtifact(gen_tool);
+    // gen_assembly_template.addArg("assembly_template");
+
+    // const assembly_template = gen_assembly_template.addOutputFileArg("interpreter.template.asm");
+    // const assembly_template_install = b.addInstallFileWithDir(assembly_template, .{ .custom = "tmp" }, "interpreter.template.asm");
 
 
 
-    const gen_object = b.addRunArtifact(b.dependency("nasm", .{
-        .target = b.graph.host,
-        .optimize = .ReleaseFast,
-    }).artifact("nasm"));
+    // const gen_object = b.addRunArtifact(b.dependency("nasm", .{
+    //     .target = b.graph.host,
+    //     .optimize = .ReleaseFast,
+    // }).artifact("nasm"));
 
-    gen_object.addFileArg(assembly_src);
+    // gen_object.addFileArg(assembly_src);
 
-    gen_object.addArg("-f");
-    gen_object.addArg(zigObjectFmtToNasm(target.result.ofmt));
+    // gen_object.addArg("-f");
+    // gen_object.addArg(zigObjectFmtToNasm(target.result.ofmt));
 
-    if (optimize == .Debug or optimize == .ReleaseSafe) {
-        gen_object.addArgs(&.{"-g", "-F dwarf", "-DDBG"});
-    }
+    // if (optimize == .Debug or optimize == .ReleaseSafe) {
+    //     gen_object.addArgs(&.{"-g", "-F dwarf", "-DDBG"});
+    // }
 
-    gen_object.addArg("-o");
-    const assembly_obj = gen_object.addOutputFileArg("interpreter.o");
-    const assembly_obj_install = b.addInstallFileWithDir(assembly_obj, .{ .custom = "tmp" }, "interpreter.o");
+    // gen_object.addArg("-o");
+    // const assembly_obj = gen_object.addOutputFileArg("interpreter.o");
+    // const assembly_obj_install = b.addInstallFileWithDir(assembly_obj, .{ .custom = "tmp" }, "interpreter.o");
 
 
 
@@ -322,8 +322,6 @@ pub fn build(b: *std.Build) !void {
     gen_mod.addImport("abi", abi_mod);
 
     gen_mod.addAnonymousImport("Isa_intro.md", .{ .root_source_file = b.path("src/gen-base/markdown/Isa_intro.md") });
-    gen_mod.addAnonymousImport("entry_points.asm", .{ .root_source_file = b.path("src/gen-base/x64/entry_points.asm") });
-    gen_mod.addAnonymousImport("instructions.asm", .{ .root_source_file = b.path("src/gen-base/x64/instructions.asm") });
     gen_mod.addAnonymousImport("Instruction_intro.zig", .{ .root_source_file = b.path("src/gen-base/zig/Instruction_intro.zig") });
 
     Id_mod.addImport("platform", platform_mod);
@@ -336,7 +334,7 @@ pub fn build(b: *std.Build) !void {
 
     interpreter_mod.addImport("platform", platform_mod);
     interpreter_mod.addImport("core", core_mod);
-    interpreter_mod.addObjectFile(assembly_obj);
+    // interpreter_mod.addObjectFile(assembly_obj);
 
 
     ir_mod.addImport("platform", platform_mod);
@@ -388,10 +386,10 @@ pub fn build(b: *std.Build) !void {
 
     const dump_intermediates_step = b.step("dump-intermediates", "Dump intermediate files to zig-out");
     dump_intermediates_step.dependOn(&Instruction_src_install.step);
-    dump_intermediates_step.dependOn(&assembly_src_install.step);
-    dump_intermediates_step.dependOn(&assembly_obj_install.step);
-    dump_intermediates_step.dependOn(&assembly_header_install.step);
-    dump_intermediates_step.dependOn(&assembly_template_install.step);
+    // dump_intermediates_step.dependOn(&assembly_src_install.step);
+    // dump_intermediates_step.dependOn(&assembly_obj_install.step);
+    // dump_intermediates_step.dependOn(&assembly_header_install.step);
+    // dump_intermediates_step.dependOn(&assembly_template_install.step);
     dump_intermediates_step.dependOn(&b.addInstallFile(Isa_markdown, "tmp/Isa.md").step);
 
     if (optimize == .Debug) { // debugging assembly codegen somewhat requires this atm TODO: re-evaluate when stable
@@ -399,11 +397,11 @@ pub fn build(b: *std.Build) !void {
         run_step.dependOn(dump_intermediates_step);
     }
 
-    const write_assembly_header_step = b.step("asm-header", "Output the assembly header file for nasm language features");
-    write_assembly_header_step.dependOn(&assembly_header_install.step);
+    // const write_assembly_header_step = b.step("asm-header", "Output the assembly header file for nasm language features");
+    // write_assembly_header_step.dependOn(&assembly_header_install.step);
 
-    const write_assembly_template_step = b.step("asm-template", "Output an interpreter assembly template");
-    write_assembly_template_step.dependOn(&assembly_template_install.step);
+    // const write_assembly_template_step = b.step("asm-template", "Output an interpreter assembly template");
+    // write_assembly_template_step.dependOn(&assembly_template_install.step);
 
     const check_step = b.step("check", "Run semantic analysis");
     check_step.dependOn(&abi_test.step);

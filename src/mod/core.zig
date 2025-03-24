@@ -60,7 +60,13 @@ pub const Global = Buffer.new(u8, .mutable);
 
 /// Designates a specific Ribbon effect, runtime-wide.
 /// EffectId is used to bind to one of these within individual bytecode units.
-pub const Effect = enum(u16) {_};
+pub const Effect = enum(std.math.IntFittingRange(0, pl.MAX_EFFECT_TYPES)) {
+    _,
+
+    pub fn toIndex(self: Effect) usize {
+        return @intFromEnum(self);
+    }
+};
 
 /// A Ribbon function definition.
 pub const Function = extern struct {
@@ -108,6 +114,8 @@ pub const HandlerSet = extern struct {
     handlers: Id.Buffer(Handler, .constant),
     /// The handler set's upvalue offsets.
     upvalues: Id.Buffer(Upvalue, .constant),
+    /// Frame-relative stack offset for the evidence this handler set carries.
+    evidence: usize,
     /// Cancellation configuration for this handler set.
     cancellation: Cancellation,
 
@@ -119,6 +127,16 @@ pub const HandlerSet = extern struct {
     /// Get an `Upvalue` offset from its `id`.
     pub fn getUpvalue(self: *const HandlerSet, id: Id.of(Upvalue)) Upvalue {
         return self.upvalues.asSlice()[id.toInt()];
+    }
+
+    /// Validate a `Handler` id.
+    pub fn validateHandler(self: *const HandlerSet, id: Id.of(Handler)) bool {
+        return self.handlers.asSlice().len > id.toInt();
+    }
+
+    /// Validate an `Upvalue` id.
+    pub fn validateUpvalue(self: *const HandlerSet, id: Id.of(Upvalue)) bool {
+        return self.upvalues.asSlice().len > id.toInt();
     }
 };
 
@@ -179,6 +197,11 @@ pub const Extents = packed struct(u128) {
     base: InstructionAddr,
     /// The upper address of the code section. (1 past the last instruction)
     upper: InstructionAddr,
+
+    /// Returns whether an instruction address is within the bounds of this code section.
+    pub fn boundsCheck(self: Extents, addr: InstructionAddr) bool {
+        return (@intFromPtr(addr) >= @intFromPtr(self.base)) and (@intFromPtr(addr) < @intFromPtr(self.upper));
+    }
 };
 
 /// This is an indirection table for the `Id`s used by instruction encodings.
@@ -239,6 +262,50 @@ pub const AddressTable = extern struct {
     /// Get a pointer to an `Effect` from its `id`.
     pub fn getEffect(self: *const AddressTable, id: Id.of(Effect)) *const Effect {
         return self.effects.asSlice()[id.toInt()];
+    }
+
+
+
+    /// Validate a `Constant` id.
+    pub fn validateConstant(self: *const AddressTable, id: Id.of(Constant)) bool {
+        return self.constants.asSlice().len > id.toInt();
+    }
+
+    /// Validate a `Global` id.
+    pub fn validateGlobal(self: *const AddressTable, id: Id.of(Global)) bool {
+        return self.globals.asSlice().len > id.toInt();
+    }
+
+    /// Validate a `Function` id.
+    pub fn validateFunction(self: *const AddressTable, id: Id.of(Function)) bool {
+        return self.functions.asSlice().len > id.toInt();
+    }
+
+    /// Validate a `BuiltinAddress` id.
+    pub fn validateBuiltinAddress(self: *const AddressTable, id: Id.of(BuiltinAddress)) bool {
+        return self.builtin_addresses.asSlice().len > id.toInt();
+    }
+
+    /// Validate a `ForeignAddress` id.
+    pub fn validateForeignAddress(self: *const AddressTable, id: Id.of(ForeignAddress)) bool {
+        return self.foreign_addresses.asSlice().len > id.toInt();
+    }
+
+    /// Validate a `HandlerSet` id.
+    pub fn validateHandlerSet(self: *const AddressTable, id: Id.of(HandlerSet)) bool {
+        return self.handler_sets.asSlice().len > id.toInt();
+    }
+
+    /// Validate a `Handler` id.
+    pub fn validateHandler(self: *const AddressTable, s: Id.of(HandlerSet), h: Id.of(Handler)) bool {
+        if (!self.validateHandlerSet(s)) return false;
+
+        return self.getHandlerSet(s).validateHandler(h);
+    }
+
+    /// Validate an `Effect` id.
+    pub fn validateEffect(self: *const AddressTable, id: Id.of(Effect)) bool {
+        return self.effects.asSlice().len > id.toInt();
     }
 };
 
@@ -401,11 +468,6 @@ pub const SetFrame = extern struct {
     call: *CallFrame,
     /// The effect handler set that defines this frame.
     handler_set: *const HandlerSet,
-    // TODO: data in SetFrame seems redundant, we can just grab the data from
-    // the call frame with one more step
-    // need to compare performance when possible
-    /// A pointer to the top of the data stack frame at the time this set frame was created.
-    data: [*]usize,
 };
 
 /// Represents a call frame.
@@ -511,6 +573,8 @@ pub const AllocatedBuiltinFunction = extern struct {
 
 /// All errors that can occur during execution of an Rvm fiber.
 pub const Error = error {
+    /// Indicates that a guest function call reached an invalid state.
+    Unreachable,
     /// Indicates that a built-in function call requested the fiber to trap.
     FunctionTrapped,
     /// Indicates that the interpreter encountered an invalid encoding.
@@ -535,12 +599,10 @@ pub const mem = comptime_memorySize: {
         calls: CallStack,
         /// The effect handler set stack - manages lexically scoped effect handler sets.
         sets: SetStack,
-        /// Used by the interpreter to store follow-up dispatch labels.
-        loop: *const anyopaque,
+        /// The evidence buffer - stores bindings to currently accessible effect handlers by effect id + linked lists via Evidence
+        evidence: [pl.MAX_EFFECT_TYPES]?*Evidence,
         /// The cause of a trap, if any was known. Pointee-type depends on the trap.
         trap: ?*const anyopaque, // TODO: error handling function that covers this variance
-        /// Used by the interpreter to store debugger labels.
-        breakpoint: *const anyopaque,
     };
 
     const FIELDS = std.meta.fieldNames(FIBER_HEADER);
@@ -617,8 +679,8 @@ pub const mem = comptime_memorySize: {
 comptime {
     const mb = pl.megabytesFromBytes(mem.SIZE);
 
-    if (mb > 4.0) {
-        @compileError(std.fmt.comptimePrint("Fiber total size is {d}mb", .{}));
+    if (mb > 5.0) {
+        @compileError(std.fmt.comptimePrint("Fiber total size is {d:.2}mb", .{mb}));
     }
 }
 
@@ -644,7 +706,7 @@ pub const Fiber = extern struct {
         const header: *mem.FiberHeader = @ptrCast(buf.ptr);
 
         fiber_fields: inline for (comptime std.meta.fieldNames(mem.FiberHeader)) |fieldName| {
-            inline for (&.{ "loop", "trap", "breakpoint" }) |ignoredField| {
+            inline for (&.{ "loop", "trap", "breakpoint", "evidence" }) |ignoredField| {
                 if (comptime std.mem.eql(u8, fieldName, ignoredField)) {
                     continue :fiber_fields;
                 }

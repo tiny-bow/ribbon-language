@@ -64,27 +64,32 @@ pub fn main() !void {
             try generateTypes(isa.CATEGORIES, file.writer());
         },
 
-        .assembly => {
-            const file = try std.fs.cwd().createFile(args[2], .{});
-            defer file.close();
-
-            try generateHeaderAssembly(false, file.writer());
-            try generateMainAssembly(isa.CATEGORIES, allocator, file.writer());
+        else => {
+            log.info("Output type `{s}` is deprecated", .{@tagName(output)});
+            std.process.exit(1);
         },
 
-        .assembly_header => {
-            const file = try std.fs.cwd().createFile(args[2], .{});
-            defer file.close();
+        // .assembly => {
+        //     const file = try std.fs.cwd().createFile(args[2], .{});
+        //     defer file.close();
 
-            try generateHeaderAssembly(true, file.writer());
-        },
+        //     try generateHeaderAssembly(false, file.writer());
+        //     try generateMainAssembly(isa.CATEGORIES, allocator, file.writer());
+        // },
 
-        .assembly_template => {
-            const file = try std.fs.cwd().createFile(args[2], .{});
-            defer file.close();
+        // .assembly_header => {
+        //     const file = try std.fs.cwd().createFile(args[2], .{});
+        //     defer file.close();
 
-            try generateAssemblyTemplate(isa.CATEGORIES, file.writer());
-        },
+        //     try generateHeaderAssembly(true, file.writer());
+        // },
+
+        // .assembly_template => {
+        //     const file = try std.fs.cwd().createFile(args[2], .{});
+        //     defer file.close();
+
+        //     try generateAssemblyTemplate(isa.CATEGORIES, file.writer());
+        // },
     }
 }
 

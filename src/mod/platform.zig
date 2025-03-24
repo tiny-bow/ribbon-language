@@ -58,6 +58,8 @@ pub const REGISTER_SIZE_BITS = 64;
 pub const REGISTER_SIZE_BYTES = 8;
 /// The maximum number of registers.
 pub const MAX_REGISTERS = 255;
+/// The maximum number of unique effect types within a ribbon runtime instance.
+pub const MAX_EFFECT_TYPES = std.math.maxInt(u16);
 
 /// The maximum alignment value.
 pub const MAX_ALIGNMENT = 4096;
