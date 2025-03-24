@@ -253,7 +253,10 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.C
 
 
     if (defs.count() == 0) {
-        std.debug.print("Error[instructions.asm / gen.zig]: no valid instruction definitions found\nsource text was:\n{s}{s}\n\n", .{text[0..@min(text.len, 256)], if (text.len > 256) "\n..." else ""});
+        std.debug.print(
+            "Error[instructions.asm / gen.zig]: no valid instruction definitions found\nsource text was:\n{s}{s}\n\n",
+            .{text[0..@min(text.len, 256)], if (text.len > 256) "\n..." else ""},
+        );
         std.process.exit(1);
     }
 
@@ -263,7 +266,7 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.C
 }
 
 fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
-    try writer.print("%define OP_SIZE 0x{x}\n", .{ pl.OPCODE_SIZE });
+    try writer.print("%define OP_SIZE 0x{x}\n\n", .{ pl.OPCODE_SIZE });
 
     inline for (comptime std.meta.fieldNames(core.mem.FiberHeader)) |fieldName| {
         const baseOffset = @offsetOf(core.mem.FiberHeader, fieldName);
@@ -271,6 +274,13 @@ fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
         // Because the `Stack` structure has its top_ptr at the beginning of its data,
         // we can just use the stack's offset as the top_ptr offset, which is all we need.
         try writer.print("%define Fiber.{s} 0x{x}\n", .{ fieldName, baseOffset });
+
+        const T: type = @FieldType(core.mem.FiberHeader, fieldName);
+
+        if (comptime pl.hasDecl(T, .IS_RIBBON_STACK)) {
+            try writer.print("%define Fiber.{s}.base 0x{x}\n", .{ fieldName, baseOffset + @offsetOf(T, "base") });
+            try writer.print("%define Fiber.{s}.limit 0x{x}\n", .{ fieldName, baseOffset + @offsetOf(T, "limit") });
+        }
     }
 
     try writer.writeAll("\n");
@@ -283,10 +293,66 @@ fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
 
     try writer.writeAll("\n");
 
+    inline for (comptime std.meta.fieldNames(core.SetFrame)) |fieldName| {
+        const baseOffset = @offsetOf(core.SetFrame, fieldName);
+
+        try writer.print("%define SetFrame.{s} 0x{x}\n", .{ fieldName, baseOffset });
+    }
+
+    try writer.writeAll("\n");
+
+    inline for (comptime std.meta.fieldNames(core.Evidence)) |fieldName| {
+        const baseOffset = @offsetOf(core.Evidence, fieldName);
+
+        try writer.print("%define Evidence.{s} 0x{x}\n", .{ fieldName, baseOffset });
+    }
+
+    try writer.writeAll("\n");
+
     inline for (comptime std.meta.fieldNames(core.BuiltinSignal)) |fieldName| {
         const d = @field(core.BuiltinSignal, fieldName);
 
         try writer.print("%define BuiltinSignal.{s} 0x{x}\n", .{ fieldName, @as(u64, @bitCast(@intFromEnum(d))) });
+    }
+
+    try writer.writeAll("\n");
+
+    inline for (comptime std.meta.fieldNames(core.Function)) |fieldName| {
+        const baseOffset = @offsetOf(core.Function, fieldName);
+
+        try writer.print("%define Function.{s} 0x{x}\n", .{ fieldName, baseOffset });
+    }
+
+    try writer.writeAll("\n");
+
+    inline for (comptime std.meta.fieldNames(core.Header)) |fieldName| {
+        const baseOffset = @offsetOf(core.Header, fieldName);
+
+        try writer.print("%define Header.{s} 0x{x}\n", .{ fieldName, baseOffset });
+    }
+
+    try writer.writeAll("\n");
+
+    inline for (comptime std.meta.fieldNames(core.Extents)) |fieldName| {
+        const baseOffset = @offsetOf(core.Extents, fieldName);
+
+        try writer.print("%define Extents.{s} 0x{x}\n", .{ fieldName, baseOffset });
+    }
+
+    try writer.writeAll("\n");
+
+    inline for (comptime std.meta.fieldNames(core.AddressTable)) |fieldName| {
+        const baseOffset = @offsetOf(core.AddressTable, fieldName);
+
+        try writer.print("%define AddressTable.{s} 0x{x}\n", .{ fieldName, baseOffset });
+    }
+
+    try writer.writeAll("\n");
+
+    inline for (comptime std.meta.fieldNames(core.HandlerSet)) |fieldName| {
+        const baseOffset = @offsetOf(core.HandlerSet, fieldName);
+
+        try writer.print("%define HandlerSet.{s} 0x{x}\n", .{ fieldName, baseOffset });
     }
 
     try writer.writeAll("\n");
@@ -354,17 +420,18 @@ fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
         try writer.writeAll(
             \\
             \\%ifndef R_JUMP_TABLE
-            \\%define R_JUMP_TABLE rax
-            \\%define R_JUMP_TABLE_LENGTH rax
-            \\%define R_EXIT_OKAY rax
-            \\%define R_EXIT_HALT rax
-            \\%define R_TRAP_REQUESTED rax
-            \\%define R_TRAP_BAD_ENCODING rax
-            \\%define R_TRAP_OVERFLOW rax
-            \\%define R_TRAP_REQUESTED rax
-            \\%define R_DECODE rax
-            \\%define R_DISPATCH rax
-            \\%define R_BREAKPOINT rax
+            \\%define R_JUMP_TABLE 0
+            \\%define R_JUMP_TABLE_LENGTH 0
+            \\%define R_EXIT_OKAY 0
+            \\%define R_EXIT_HALT 0
+            \\%define R_TRAP_REQUESTED 0
+            \\%define R_TRAP_BAD_ENCODING 0
+            \\%define R_TRAP_OVERFLOW 0
+            \\%define R_TRAP_UNDERFLOW 0
+            \\%define R_TRAP_REQUESTED 0
+            \\%define R_DECODE 0
+            \\%define R_DISPATCH 0
+            \\%define R_BREAKPOINT 0
             \\%endif
             \\
         );
@@ -482,14 +549,18 @@ fn generateAssemblyTemplate(categories: []const isa.Category, writer: anytype) !
                 try formatOpcode(opcode, writer);
                 try writer.writeAll(" ");
                 try formatInstructionOperands(mnemonic.name, instruction.name, instruction.operands, writer);
+                try writer.writeAll(" ");
+                try formatInstructionDescription("", " ", instruction.description, instruction.operands, writer);
                 try writer.writeAll("\n    TODO\n");
 
                 opcode += 1;
             }
-        }
-    }
 
-    try writer.writeAll("\n");
+            try writer.writeAll("\n");
+        }
+
+        try writer.writeAll("\n");
+    }
 }
 
 
@@ -575,7 +646,7 @@ fn generateTypesZigDoc(mnemonic: []const u8, opcode: u16, instr: isa.Instruction
     try formatOpcode(opcode, writer);
     try writer.writeAll("`\n");
 
-    try formatInstructionDescription("    /// ", false, instr.description, instr.operands, writer);
+    try formatInstructionDescription("    /// ", null, instr.description, instr.operands, writer);
     try writer.writeAll("; `");
     try formatOpcode(opcode, writer);
     try formatInstructionOperands(mnemonic, instr.name, instr.operands, writer);
@@ -1010,12 +1081,12 @@ fn generateMarkdownBody(categories: []const isa.Category, writer: anytype) !void
     for (categories) |category| {
         try writer.print("### {s}\n\n", .{ category.name });
 
-        try formatMnemonicDescription(null, false, category.description, writer);
+        try formatMnemonicDescription(null, null, category.description, writer);
 
         for (category.mnemonics) |mnemonic| {
             try writer.print("#### {s}\n\n", .{ mnemonic.name });
 
-            try formatMnemonicDescription(null, false, mnemonic.description, writer);
+            try formatMnemonicDescription(null, null, mnemonic.description, writer);
 
             try writer.writeAll("| Name | Encoding | Description |\n|-|-|-|\n");
 
@@ -1035,7 +1106,7 @@ fn generateMarkdownBody(categories: []const isa.Category, writer: anytype) !void
                 try formatInstructionOperands(mnemonic.name, instruction.name, instruction.operands, writer);
                 try writer.writeAll("` | ");
 
-                try formatInstructionDescription(null, true, instruction.description, instruction.operands, writer);
+                try formatInstructionDescription(null, "<br>", instruction.description, instruction.operands, writer);
 
                 try writer.writeAll(" |\n");
 
@@ -1124,7 +1195,7 @@ fn formatMnemonicArgument(argument: []const u8, writer: anytype) !bool {
     }
 }
 
-fn formatMnemonicDescription(linePrefix: ?[]const u8, sanitizeBreak: bool, formatString: []const u8, writer: anytype) !void {
+fn formatMnemonicDescription(linePrefix: ?[]const u8, sanitizeBreak: ?[]const u8, formatString: []const u8, writer: anytype) !void {
     try formatDescriptionWith(linePrefix, sanitizeBreak, formatString, writer, struct {
         pub const formatArgument = formatMnemonicArgument;
     });
@@ -1132,7 +1203,7 @@ fn formatMnemonicDescription(linePrefix: ?[]const u8, sanitizeBreak: bool, forma
     try writer.writeAll("\n\n");
 }
 
-fn formatInstructionDescription(linePrefix: ?[]const u8, sanitizeBreak: bool, description: []const u8, operands: []const isa.Operand, writer: anytype) !void {
+fn formatInstructionDescription(linePrefix: ?[]const u8, sanitizeBreak: ?[]const u8, description: []const u8, operands: []const isa.Operand, writer: anytype) !void {
     const Ctx = struct {
         operands: []const isa.Operand,
 
@@ -1144,7 +1215,7 @@ fn formatInstructionDescription(linePrefix: ?[]const u8, sanitizeBreak: bool, de
     return formatDescriptionWith(linePrefix, sanitizeBreak, description, writer, Ctx { .operands = operands });
 }
 
-fn formatDescriptionWith(linePrefix: ?[]const u8, sanitizeBreak: bool, formatString: []const u8, writer: anytype, ctx: anytype) !void {
+fn formatDescriptionWith(linePrefix: ?[]const u8, sanitizeBreak: ?[]const u8, formatString: []const u8, writer: anytype, ctx: anytype) !void {
     var i: usize = 0;
 
     if (linePrefix) |pfx| {
@@ -1188,8 +1259,8 @@ fn formatDescriptionWith(linePrefix: ?[]const u8, sanitizeBreak: bool, formatStr
                 return error.UnknownArg;
             }
         } else if (ch == '\n') {
-            if (sanitizeBreak) {
-                try writer.writeAll("<br>");
+            if (sanitizeBreak) |san| {
+                try writer.writeAll(san);
             } else {
                 try writer.writeByte('\n');
             }

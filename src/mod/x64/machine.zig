@@ -1,23 +1,18 @@
-//! This module provides a Just-In-Time (JIT) compiler and other utilities for the host architecture,
+//! This module provides a Just-In-Time (JIT) compiler and other utilities for the host architecture, (x64 in this case),
 //! enabling dynamic generation and execution of machine code. Parts of this module are specialized
 //! for use with `core`, while others are more general-purpose architecture-related items.
 //!
-//! * **Machine Code Generation** - supports encoding and writing architecture instructions
-//! * **Memory Management** - allocates and manages executable memory for generated code
-//! * **Operand Abstraction** - provides a flexible way to represent architecture operands
-//! * **Native Function Invocation** - allows invoking compiled functions within a virtual machine context
-//! * **Disassembly Support** - includes functionality to disassemble generated machine code for debugging
-//!
 //! This module serves as both the primary data structure and interface for the Builder,
 //! as well as the namespace for supporting functions, types, etc.
+//! A simple machine code disassembler is also provided here.
 //!
 //! ## Usage
 //! 1. Initialize a `Builder` instance using `Builder.init`.
-//! 2. Use the `Builder` instance to encode and write architecture instructions.
-//! 3. Finalize the jit to obtain a `NativeFunction`.
+//! 2. Use the `Builder` instance to encode and write architecture-specific machine instructions.
+//! 3. Finalize the builder to obtain a `NativeFunction`.
 //! 4. Invoke the compiled function using `NativeFunction.invoke`.
 //! 5. De-initialize any generated functions using `NativeFunction.deinit`.
-//! 6. De-initialize the jit to free any allocated memory it still owns.
+//! 6. De-initialize the builder to free any allocated memory it still owns.
 const machine = @This();
 
 const std = @import("std");
@@ -136,7 +131,7 @@ pub const Builder = struct {
     }
 
     /// Builds a 64-bit integer add instruction.
-    pub fn i_add_64(self: *Builder, out: core.Register, a: Operand, b: Operand) Error!void {
+    pub fn i_add64(self: *Builder, out: core.Register, a: Operand, b: Operand) Error!void {
         switch (a) {
             .register_index => |ra| switch (b) {
                 .register_index => |rb| {

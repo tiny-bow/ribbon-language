@@ -304,12 +304,12 @@ pub const Header = extern struct {
     /// The total size of the program.
     size: usize,
     /// Address table used by instructions this header owns.
-    addresses: *const AddressTable,
+    addresses: AddressTable,
     /// Symbol bindings for the address table; what this program calls different addresses.
     ///
     /// Not necessarily a complete listing for all bindings;
     /// only what it wants to be known externally.
-    symbols: *const SymbolTable,
+    symbols: SymbolTable,
 
     /// Get the address of a symbol by name, in a type-generic manner.
     /// * **Note**: This uses the raw table to lookup a symbol. While we do store symbol hashes to
@@ -401,6 +401,9 @@ pub const SetFrame = extern struct {
     call: *CallFrame,
     /// The effect handler set that defines this frame.
     handler_set: *const HandlerSet,
+    // TODO: data in SetFrame seems redundant, we can just grab the data from
+    // the call frame with one more step
+    // need to compare performance when possible
     /// A pointer to the top of the data stack frame at the time this set frame was created.
     data: [*]usize,
 };

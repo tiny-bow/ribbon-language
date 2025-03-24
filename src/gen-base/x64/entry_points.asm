@@ -4,6 +4,7 @@
 %undef R_TRAP_REQUESTED
 %undef R_TRAP_BAD_ENCODING
 %undef R_TRAP_OVERFLOW
+%undef R_TRAP_UNDERFLOW
 %undef R_DECODE
 %undef R_DISPATCH
 
@@ -29,9 +30,17 @@ R_TRAP_BAD_ENCODING:
 R_TRAP_OVERFLOW:
     EXIT BuiltinSignal.overflow
 
+R_TRAP_UNDERFLOW:
+    EXIT BuiltinSignal.underflow
+
 R_DECODE:
+    ; TODO: in dbg, check if the instruction pointer is within bounds
+
     ; put the opcode into TER_A
     movzx TER_A_short, [IP]
+
+    ; put the operands into TER_B
+    mov TER_B, [IP + 2]
 
     %ifdef DBG ; check if the opcode is valid
         cmp TER_A, R_JUMP_TABLE_LENGTH

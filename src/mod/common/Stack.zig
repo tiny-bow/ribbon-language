@@ -1,4 +1,5 @@
-//! A minimal, low-level stack data structure in two pointers, performing no error checking.
+//! A minimal, low-level pre-increment stack data structure in three pointers,
+//! performing no error checking.
 const Stack = @This();
 
 const std = @import("std");
@@ -15,8 +16,13 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
 
         /// A pointer to the top of the stack.
         top_ptr: [*]T,
-        /// The underlying memory buffer for the stack.
-        memory: [*]T,
+        /// The start of the stack's memory.
+        base: [*]T,
+        /// Maximum value of top_ptr + 1.
+        limit: [*]T,
+
+        /// Used by internal apis to determine if types were constructed with `Stack.new`.
+        pub const IS_RIBBON_STACK = true;
 
         pub const mem = struct {
             /// The total number of bytes required to store the full stack's data
@@ -34,7 +40,9 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
             log.debug("initializing {s} stack at {d} to {d}\n", .{ @typeName(T), @intFromPtr(ptr), @intFromPtr(ptr + STACK_SIZE) });
             return Self {
                 .top_ptr = ptr - 1,
-                .memory = ptr,
+                .base = ptr,
+                // TODO: are we off by one between here and the assembly code?
+                .limit = ptr + STACK_SIZE,
             };
         }
 
@@ -156,17 +164,20 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
 
         /// Checks if the stack has space for a specified number of elements.
         pub fn hasSpace(self: *Self, additionalCount: usize) bool {
-            return @intFromPtr(self.top_ptr + additionalCount) <= @intFromPtr(self.memory + STACK_SIZE);
+            return @intFromPtr(self.top_ptr + additionalCount) < @intFromPtr(self.limit);
         }
 
         /// Checks if the stack has no values
         pub fn isEmpty(self: *Self) bool {
-            return @intFromPtr(self.top_ptr) == @intFromPtr(&self.memory[0]) - 1;
+            return @intFromPtr(self.top_ptr) < @intFromPtr(self.base);
         }
 
         /// Returns the number of values on the stack
         pub fn count(self: *Self) usize {
-            return @intFromPtr(self.top_ptr) - @intFromPtr(&self.memory[0]) + 1;
+            const a = @intFromPtr(self.base);
+            const b = @intFromPtr(self.top_ptr);
+            return if (b < a) 0
+            else b - a + 1;
         }
     };
 }
