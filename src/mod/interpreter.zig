@@ -119,7 +119,7 @@ const RunSignal = enum(u8) {
 fn decode(frame: *core.CallFrame, instruction: *Instruction) Instruction.OpCode {
     const function: *const core.Function = @ptrCast(@alignCast(frame.function));
 
-    std.debug.assert(function.data.bytecode.extents.boundsCheck(frame.ip));
+    std.debug.assert(function.extents.boundsCheck(frame.ip));
 
     instruction.* = Instruction.fromBits(frame.ip[0]);
 
@@ -131,9 +131,9 @@ fn decode(frame: *core.CallFrame, instruction: *Instruction) Instruction.OpCode 
 fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal {
     const callFrame = self.calls.top();
     std.debug.assert(@intFromPtr(callFrame) >= @intFromPtr(self.calls.base));
+    std.debug.assert(callFrame.kind == .bytecode);
 
     const function: *const core.Function = @ptrCast(@alignCast(callFrame.function));
-    std.debug.assert(function.kind == .bytecode);
 
     const vregs = self.registers.top();
     std.debug.assert(@intFromPtr(vregs) >= @intFromPtr(self.registers.base));
@@ -206,7 +206,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal 
             std.debug.assert(offset != 0);
 
             const newIp: core.InstructionAddr = @ptrFromInt(@intFromPtr(callFrame.ip) + @as(u32, @bitCast(offset)));
-            std.debug.assert(function.data.bytecode.extents.boundsCheck(newIp));
+            std.debug.assert(function.extents.boundsCheck(newIp));
 
             callFrame.ip = newIp;
 
@@ -219,7 +219,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal 
             const registerId = instruction.data.br_if.R;
 
             const newIp: core.InstructionAddr = @ptrFromInt(@intFromPtr(callFrame.ip) + @as(u32, @bitCast(offset)));
-            std.debug.assert(function.data.bytecode.extents.boundsCheck(newIp));
+            std.debug.assert(function.extents.boundsCheck(newIp));
 
             const register = &vregs[registerId.getIndex()];
 

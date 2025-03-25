@@ -73,31 +73,6 @@ pub const Function = extern struct {
     /// The `Header` that owns this function,
     /// which we rely on to resolve the ids encoded in the function's instructions.
     header: *const Header,
-    kind: FunctionKind,
-    data: FunctionData,
-};
-
-/// Tag indicating the type of function contained in `FunctionData`.
-pub const FunctionKind = enum(u8) {
-    /// A foreign function.
-    foreign,
-    /// A built-in function.
-    builtin,
-    /// A bytecode function.
-    bytecode,
-};
-
-/// Packed union of the different kinds of functions that can be utilized in Ribbon.
-pub const FunctionData = extern union {
-    /// The function's foreign address.
-    foreign: ForeignAddress,
-    /// The function's builtin address.
-    builtin: *const BuiltinFunction,
-    /// The function's bytecode.
-    bytecode: BytecodeFunction,
-};
-
-pub const BytecodeFunction = extern struct {
     /// A pair of offsets:
     /// * `base`: the function's first instruction in the bytecode unit; the entry point
     /// * `upper`: one past the end of its instructions; for bounds checking
@@ -105,6 +80,18 @@ pub const BytecodeFunction = extern struct {
     /// The stack window size of the function.
     stack_size: usize,
 };
+
+
+/// Represents the type of function referenced by a `CallFrame`.
+pub const FunctionKind = enum(u8) {
+    /// A bytecode function.
+    bytecode,
+    /// A built-in function.
+    builtin,
+    /// A C ABI function.
+    foreign,
+};
+
 
 /// A Ribbon builtin value definition.
 pub const BuiltinAddress = extern struct {
@@ -499,8 +486,11 @@ pub const SetFrame = extern struct {
 pub const CallFrame = extern struct {
     /// A pointer to the next instruction to execute.
     ip: InstructionAddr,
+    /// The kind of function being executed within this frame.
+    kind: FunctionKind,
     /// A pointer to the function being executed in this frame;
-    /// this is `*const core.Function`, but Zig doesn't allow this.
+    /// * may be either `*const Function`, `*const BuiltinFunction` or `ForeignAddress`;
+    /// discriminated by `kind` field
     function: *const anyopaque,
     /// A pointer to the evidence that this call frame was spawned by.
     evidence: ?*Evidence,

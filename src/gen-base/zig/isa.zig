@@ -493,18 +493,6 @@ pub const CATEGORIES: []const Category = &.{
                         , &.{ .register, .effect, .byte },
                     ),
 
-                    // TODO: doubling of information in call instruction / functions
-                    // We have a `core.Function` that is representing all 3 kinds of function now.
-                    // Do we:
-                    // 1. keep core.function and eliminate these instructions
-                    // 2. keep these instructions and return core.function to containing only bytecode
-                    // 3. keep both, and have the extra data within core.function for debug assertions
-                    // 4. ..?
-                    //
-                    // as for now we are going with 3 but, is this the ideal compromise?
-                    // if we do 1, we lose some performance, likely a negligible amount compared to the overhead of calls in general
-                    // if we do 2, the information is still present in the type info of the IR, but bytecode from untrusted sources is even more unsafe
-
                     .variable(.suffix("builtin"), "Calls the builtin function in {0}", &.{ .register, .byte }),
                     .variable(.suffix("builtinc"), "Calls the builtin function at {0}", &.{ .builtin, .byte }),
                     .variable(.suffix("builtin_v"), "Calls the builtin function in {1}, placing the result in {0}", &.{ .register, .register, .byte }),
