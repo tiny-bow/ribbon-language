@@ -421,75 +421,61 @@ pub const VERSION = pl.VERSION; // TODO: make isa version independent when it ha
 /// Compile-time accessible data describing all of Ribbon's bytecode instructions.
 pub const CATEGORIES: []const Category = &.{
     .category("Miscellaneous",
-        \\Items that do not fit into another category.
-        , &.{
+        "Items that do not fit into another category",
+        &.{
             .basicSingleton("nop", "No operation", &.{}),
             .basicSingleton("breakpoint", "Triggers a breakpoint in debuggers; does nothing otherwise", &.{}),
         },
     ),
 
     .category("Control flow",
-        \\Instructions that control the flow of execution.
-        , &.{
+        "Instructions that control the flow of execution",
+        &.{
             .terminatorSingleton("halt", "Halts execution at this instruction offset", &.{}),
 
             .mnemonic("trap",
-                \\Marks a point in the code as not normally reachable, in two ways.
-                , &.{
+                "Marks a point in the code as not normally reachable, in two ways",
+                &.{
                     .terminator(.mnemonic,
                         \\Traps execution of the `Rvm.Fiber` at this instruction offset
-                        \\
-                        \\Unlike `unreachable`, this indicates expected behavior;
-                        \\optimizing compilers should *not* assume it is never reached
+                        \\Unlike `unreachable`, this indicates expected behavior; optimizing compilers should *not* assume it is never reached
                         , &.{},
                     ),
                     .terminator(.override("unreachable"),
-                        \\Marks a point in the code as unreachable;
-                        \\if executed in Rvm, it is the same as `trap`
-                        \\
-                        \\Unlike `trap`, however, this indicates undefined behavior;
-                        \\optimizing compilers should assume it is never reached
+                        \\Marks a point in the code as unreachable; if executed in Rvm, it is the same as `trap`
+                        \\Unlike `trap`, however, this indicates undefined behavior; optimizing compilers should assume it is never reached
                         , &.{},
                     ),
                 },
             ),
 
             .mnemonic("set",
-                \\Effect handler set stack manipulation.
-                , &.{
+                "Effect handler set stack manipulation",
+                &.{
                     .basic(.prefix("push"),
                         \\Pushes {0} onto the stack.
-                        \\
-                        \\The handlers in this set will be first in line
-                        \\for their effects' prompts until a corresponding `pop` operation.
+                        \\The handlers in this set will be first in line for their effects' prompts until a corresponding `pop` operation.
                         , &.{ .handler_set },
                     ),
                     .basic(.prefix("pop"),
-                        \\Pops the top most {.handler_set} from the stack,
-                        \\restoring the old one if there was any
-                        , &.{},
+                        "Pops the top most {.handler_set} from the stack, restoring the previous if present",
+                        &.{},
                     ),
                 },
             ),
 
             .mnemonic("br",
-                \\Instruction pointer manipulation.
-                , &.{
+                "Instruction pointer manipulation",
+                &.{
                     .terminator(.mnemonic, "Applies a signed integer offset {0} to the instruction pointer", &.{ .int }),
                     .terminator(.suffix("if"), "Applies a signed integer offset {1} to the instruction pointer, if the value stored in {0} is non-zero", &.{ .register, .int }),
                 },
             ),
 
             .mnemonic("call",
-                \\Various ways of calling functions,
-                \\in all cases taking up to max({.byte}) number of arguments.
-                \\
-                \\Arguments are expected to be {.register} values,
-                \\encoded in the instruction stream after the call instruction.
-                \\
-                \\* {.register} is not instruction-aligned;
-                \\padding bytes may need to be added and accounted for following the arguments,
-                \\to ensure the next instruction is aligned.
+                \\Various ways of calling functions, in all cases taking up to max({.byte}) number of arguments.
+                \\Arguments are expected to be {.register} values, encoded in the instruction stream after the call instruction.
+                \\* {.register} is not instruction-aligned; padding bytes may need to be added and accounted for following the arguments, to ensure the next instruction is aligned
                 , &.{
                     .variable(.mnemonic, "Calls the function in {0}", &.{ .register, .byte }),
                     .variable(.suffix("c"), "Calls the function at {0}", &.{ .function, .byte }),
@@ -532,8 +518,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("return",
-                \\End the current function, in one of two ways.
-                , &.{
+                "End the current function, in one of two ways",
+                &.{
                     .terminator(.mnemonic, "Returns flow control to the caller of current function", &.{}),
                     .terminator(.suffix("v"), "Returns flow control to the caller of current function, yielding {0} to the caller", &.{ .register }),
                     .terminator(.override("cancel"), "Returns flow control to the offset associated with the current effect handler's {.handler_set}", &.{}),
@@ -544,65 +530,59 @@ pub const CATEGORIES: []const Category = &.{
     ),
 
     .category("Memory",
-        \\Instructions that provide memory access.
-        , &.{
+        "Instructions that provide memory access",
+        &.{
             .mnemonic("mem_set",
-                \\Set bytes in memory.
-                , &.{
+                "Set bytes in memory",
+                &.{
                     .basic(.mnemonic,
-                        \\Each byte, starting from the address in {0}, up to an offset of {2},
-                        \\is set to the least significant byte of {1}
-                        , &.{ .register, .register, .register },
+                        "Each byte, starting from the address in {0}, up to an offset of {2}, is set to the least significant byte of {1}",
+                        &.{ .register, .register, .register },
                     ),
                     .basic(.suffix("a"),
-                        \\Each byte, starting from the address in {0}, up to an offset of {2},
-                        \\is set to {1}
-                        , &.{ .register, .register, .int },
+                        "Each byte, starting from the address in {0}, up to an offset of {2}, is set to {1}",
+                        &.{ .register, .register, .int },
                     ),
                     .basic(.suffix("b"),
-                        \\Each byte, starting from the address in {0}, up to an offset of {1},
-                        \\is set to {2}
-                        , &.{ .register, .register, .byte },
+                        "Each byte, starting from the address in {0}, up to an offset of {1}, is set to {2}",
+                        &.{ .register, .register, .byte },
                     ),
                 },
             ),
             .mnemonic("mem_copy",
-                \\Copy bytes in memory.
-                , &.{
+                "Copy bytes in memory",
+                &.{
                     .basic(.mnemonic,
-                        \\Each byte, starting from the address in {1}, up to an offset of {2},
-                        \\is copied to the same offset of the address in {0}
-                        , &.{ .register, .register, .register },
+                        "Each byte, starting from the address in {1}, up to an offset of {2}, is copied to the same offset of the address in {0}",
+                        &.{ .register, .register, .register },
                     ),
                     .basic(.suffix("a"),
-                        \\Each byte, starting from the address in {1}, up to an offset of {2},
-                        \\is copied to the same offset from the address in {0}
-                        , &.{ .register, .register, .int },
+                        "Each byte, starting from the address in {1}, up to an offset of {2}, is copied to the same offset from the address in {0}",
+                        &.{ .register, .register, .int },
                     ),
                     .basic(.suffix("b"),
-                        \\Each byte, starting from the address of {2}, up to an offset of {1},
-                        \\is copied to the same offset from the address in {0}
-                        , &.{ .register, .register, .constant },
+                        "Each byte, starting from the address of {2}, up to an offset of {1}, is copied to the same offset from the address in {0}",
+                        &.{ .register, .register, .constant },
                     ),
                 },
             ),
             .mnemonic("mem_swap",
-                \\Swap bytes in memory.
-                , &.{
+                "Swap bytes in memory.",
+                &.{
                     .basic(.mnemonic,
-                        \\Each byte, starting from the addresses in {0} and {1}, up to an offset of {2}, are swapped with each-other
-                        , &.{ .register, .register, .register },
+                        "Each byte, starting from the addresses in {0} and {1}, up to an offset of {2}, are swapped with each-other",
+                        &.{ .register, .register, .register },
                     ),
                     .basic(.suffix("c"),
-                        \\Each byte, starting from the addresses in {0} and {1}, up to an offset of {2}, are swapped with each-other
-                        , &.{ .register, .register, .int },
+                        "Each byte, starting from the addresses in {0} and {1}, up to an offset of {2}, are swapped with each-other",
+                        &.{ .register, .register, .int },
                     ),
                 },
             ),
 
             .mnemonic("addr",
-                \\Get addresses from special values.
-                , &.{
+                "Get addresses from special values.",
+                &.{
                     .basic(.suffix("l"), "Get the address of a signed integer frame-relative operand stack offset {1}, placing it in {0}.\n\nAn operand stack offset of 1 is equivalent to 8 bytes down from the base of the stack frame", &.{.register, .constant}),
                     .basic(.suffix("u"), "Get the address of {1}, placing it in {0}", &.{ .register, .upvalue }),
                     .basic(.suffix("g"), "Get the address of {1}, placing it in {0}", &.{ .register, .global }),
@@ -614,8 +594,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("load",
-                \\Loads a value from memory.
-                , &.{
+                "Loads a value from memory",
+                &.{
                     .basic(.suffix("8"), "Loads an 8-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .constant }),
                     .basic(.suffix("16"), "Loads a 16-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .constant }),
                     .basic(.suffix("32"), "Loads a 32-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .constant }),
@@ -623,8 +603,8 @@ pub const CATEGORIES: []const Category = &.{
                 },
             ),
             .mnemonic("store",
-                \\Stores a value to memory.
-                , &.{
+                "Stores a value to memory",
+                &.{
                     .basic(.suffix("8"), "Stores an 8-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("16"), "Stores a 16-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("32"), "Stores a 32-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
@@ -641,14 +621,11 @@ pub const CATEGORIES: []const Category = &.{
 
     .category("Bitwise",
         \\Instructions that manipulate values at the bit level.
-        \\
-        \\* Where the size is < 64-bits,
-        \\the least significant bits of the input value(s) are used,
-        \\and the remainder of the output value is zeroed.
+        \\* Where the size is < 64-bits, the least significant bits of the input value(s) are used, and the remainder of the output value is zeroed
         , &.{
             .mnemonic("bit_swap",
-                \\Swaps bits of two registers.
-                , &.{
+                "Swaps bits of two registers",
+                &.{
                     .basic(.suffix("8"), "8-bit {0} *xor_swap* {1}", &.{ .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} *xor_swap* {1}", &.{ .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} *xor_swap* {1}", &.{ .register, .register }),
@@ -656,8 +633,8 @@ pub const CATEGORIES: []const Category = &.{
                 },
             ),
             .mnemonic("bit_copy",
-                \\Copies bits from one register into another.
-                , &.{
+                "Copies bits from one register into another",
+                &.{
                     .basic(.suffix("8"), "8-bit {0} = {1}", &.{ .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1}", &.{ .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1}", &.{ .register, .register }),
@@ -671,8 +648,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("bit_clz",
-                \\Counts the number of leading zero bits in the provided value.
-                , &.{
+                "Counts the number of leading zero bits in the provided value",
+                &.{
                     .basic(.suffix("8"), "Counts the leading zeroes in 8-bits of {1}, placing the result in {0}", &.{ .register, .register }),
                     .basic(.suffix("16"), "Counts the leading zeroes in 16-bits of {1}, placing the result in {0}", &.{ .register, .register }),
                     .basic(.suffix("32"), "Counts the leading zeroes in 32-bits of {1}, placing the result in {0}", &.{ .register, .register }),
@@ -680,8 +657,8 @@ pub const CATEGORIES: []const Category = &.{
                 },
             ),
             .mnemonic("bit_pop",
-                \\Counts the number of bits that are set to 1 in the provided value.
-                , &.{
+                "Counts the number of bits that are set to 1 in the provided value",
+                &.{
                     .basic(.suffix("8"), "Counts the set bits in 8-bits of {1}, placing the result in {0}", &.{ .register, .register }),
                     .basic(.suffix("16"), "Counts the set bits in 16-bits of {1}, placing the result in {0}", &.{ .register, .register }),
                     .basic(.suffix("32"), "Counts the set bits in 32-bits of {1}, placing the result in {0}", &.{ .register, .register }),
@@ -690,8 +667,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("bit_not",
-                \\Performs a bitwise `NOT` operation on the provided value.
-                , &.{
+                "Performs a bitwise `NOT` operation on the provided value",
+                &.{
                     .basic(.suffix("8"), "8-bit {0} = *not* {1}", &.{ .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = *not* {1}", &.{ .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = *not* {1}", &.{ .register, .register }),
@@ -700,8 +677,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("bit_and",
-                \\Performs a bitwise `AND` operation on the provided values.
-                , &.{
+                "Performs a bitwise `AND` operation on the provided values",
+                &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} *and* {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "6-bit {0} = {1} *and* {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} *and* {2}", &.{ .register, .register, .register }),
@@ -715,8 +692,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("bit_or",
-                \\Performs a bitwise `OR` operation on the provided values.
-                , &.{
+                "Performs a bitwise `OR` operation on the provided values",
+                &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} *or* {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} *or* {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} *or* {2}", &.{ .register, .register, .register }),
@@ -730,8 +707,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("bit_xor",
-                \\Performs a bitwise `XOR` operation on the provided values.
-                , &.{
+                "Performs a bitwise `XOR` operation on the provided values",
+                &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} *xor* {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} *xor* {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} *xor* {2}", &.{ .register, .register, .register }),
@@ -745,8 +722,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("bit_lshift",
-                \\Performs a bitwise left shift operation on the provided values.
-                , &.{
+                "Performs a bitwise left shift operation on the provided values",
+                &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} << {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} << {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} << {2}", &.{ .register, .register, .register }),
@@ -765,8 +742,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("bit_rshift",
-                \\Performs a bitwise right shift operation on the provided values.
-                , &.{
+                "Performs a bitwise right shift operation on the provided values",
+                &.{
                     .basic(.override("u_rshift8"), "8-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_rshift16"), "16-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_rshift32"), "32-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .register }),
@@ -802,11 +779,11 @@ pub const CATEGORIES: []const Category = &.{
     ),
 
     .category("Comparison",
-        \\Instructions that compare values.
-        , &.{
+        "Instructions that compare values",
+        &.{
             .mnemonic("eq",
-                \\Performs an equality comparison on the provided values.
-                , &.{
+                "Performs an equality comparison on the provided values",
+                &.{
                     .basic(.wrap("i", "8"), "8-bit integer {0} = {1} == {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "16"), "16-bit integer {0} = {1} == {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "32"), "32-bit integer {0} = {1} == {2}", &.{ .register, .register, .register }),
@@ -825,8 +802,8 @@ pub const CATEGORIES: []const Category = &.{
                 },
             ),
             .mnemonic("ne",
-                \\Performs an inequality comparison on the provided values.
-                , &.{
+                "Performs an inequality comparison on the provided values",
+                &.{
                     .basic(.wrap("i", "8"), "8-bit integer {0} = {1} != {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "16"), "16-bit integer {0} = {1} != {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "32"), "32-bit integer {0} = {1} != {2}", &.{ .register, .register, .register }),
@@ -845,8 +822,8 @@ pub const CATEGORIES: []const Category = &.{
                 },
             ),
             .mnemonic("lt",
-                \\Performs a less-than comparison on the provided values.
-                , &.{
+                "Performs a less-than comparison on the provided values",
+                &.{
                     .basic(.wrap("u", "8"), "8-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "16"), "16-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .register }),
@@ -887,8 +864,8 @@ pub const CATEGORIES: []const Category = &.{
                 },
             ),
             .mnemonic("gt",
-                \\Performs a greater-than comparison on the provided values.
-                , &.{
+                "Performs a greater-than comparison on the provided values",
+                &.{
                     .basic(.wrap("u", "8"), "8-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "16"), "16-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .register }),
@@ -929,8 +906,8 @@ pub const CATEGORIES: []const Category = &.{
                 },
             ),
             .mnemonic("le",
-                \\Performs a less-than-or-equal comparison on the provided values.
-                , &.{
+                "Performs a less-than-or-equal comparison on the provided values",
+                &.{
                     .basic(.wrap("u", "8"), "8-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "16"), "16-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
@@ -971,8 +948,8 @@ pub const CATEGORIES: []const Category = &.{
                 },
             ),
             .mnemonic("ge",
-                \\Performs a greater-than-or-equal comparison on the provided values.
-                , &.{
+                "Performs a greater-than-or-equal comparison on the provided values",
+                &.{
                     .basic(.wrap("u", "8"), "8-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "16"), "16-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
@@ -1017,16 +994,11 @@ pub const CATEGORIES: []const Category = &.{
 
     .category("Integer arithmetic",
         \\Instructions that perform integer arithmetic operations on values.
-        \\
-        \\* Where the size is < 64-bits,
-        \\the least significant bits of the input value(s) are used,
-        \\and the remainder of the output value is zeroed.
+        \\Because we use two's compliment integers, the signedness of the operands does not affect all operations. Where it does, the mnemonic will be prefixed with "u" or "s", otherwise with "i".
+        \\* Where the size is < 64-bits, the least significant bits of the input value(s) are used, and the remainder of the output value is zeroed
         , &.{
             .mnemonic("i_neg",
                 \\Performs integer negation on the provided value.
-                \\
-                \\Since we use two's complement arithmetic,
-                \\this mnemonic does not vary over signedness.
                 , &.{
                     .basic(.override("s_neg8"), "8-bit {0} = -{1}", &.{ .register, .register }),
                     .basic(.override("s_neg16"), "16-bit {0} = -{1}", &.{ .register, .register }),
@@ -1036,8 +1008,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("i_abs",
-                \\Finds the absolute value of the provided value.
-                , &.{
+                "Finds the absolute value of the provided value",
+                &.{
                     .basic(.override("s_abs8"), "8-bit {0} = |{1}|", &.{ .register, .register }),
                     .basic(.override("s_abs16"), "16-bit {0} = |{1}|", &.{ .register, .register }),
                     .basic(.override("s_abs32"), "32-bit {0} = |{1}|", &.{ .register, .register }),
@@ -1046,11 +1018,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("i_add",
-                \\Performs integer addition on the provided values.
-                \\
-                \\Since we use two's complement arithmetic,
-                \\this mnemonic does not vary over signedness.
-                , &.{
+                "Performs integer addition on the provided values.",
+                &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
@@ -1064,11 +1033,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("i_sub",
-                \\Performs integer subtraction on the provided values.
-                \\
-                \\Since we use two's complement arithmetic,
-                \\this mnemonic does not vary over signedness.
-                , &.{
+                "Performs integer subtraction on the provided values.",
+                &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
@@ -1087,11 +1053,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("i_mul",
-                \\Performs integer multiplication on the provided values.
-                \\
-                \\Since we use two's complement arithmetic,
-                \\this mnemonic does not vary over signedness.
-                , &.{
+                "Performs integer multiplication on the provided values.",
+                &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
@@ -1105,11 +1068,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("i_div",
-                \\Performs integer division on the provided values.
-                \\
-                \\Since we use two's complement arithmetic,
-                \\this mnemonic must vary over signedness.
-                , &.{
+                "Performs integer division on the provided values.",
+                &.{
                     .basic(.wrap("u", "8"), "8-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "16"), "16-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "32"), "32-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .register }),
@@ -1143,11 +1103,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("i_rem",
-                \\Gets the remainder of integer division on the provided values.
-                \\
-                \\Since we use two's complement arithmetic,
-                \\this mnemonic must vary over signedness.
-                , &.{
+                "Gets the remainder of integer division on the provided values.",
+                &.{
                     .basic(.wrap("u", "8"), "8-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "16"), "16-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "32"), "32-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .register }),
@@ -1181,11 +1138,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("i_pow",
-                \\Raises a provided value to the power of the other provided value.
-                \\
-                \\Since we use two's complement arithmetic,
-                \\this mnemonic does not vary over signedness.
-                , &.{
+                "Raises a provided value to the power of the other provided value.",
+                &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
@@ -1207,86 +1161,83 @@ pub const CATEGORIES: []const Category = &.{
 
     .category("Floating point arithmetic",
         \\Instructions that perform floating point arithmetic operations on values.
-        \\
-        \\* Where the size is < 64-bits,
-        \\the least significant bits of the input value(s) are used,
-        \\and the remainder of the output value is zeroed.
+        \\* Where the size is < 64-bits, the least significant bits of the input value(s) are used and the remainder of the output value is zeroed
         , &.{
             .mnemonic("f_neg",
-                \\Performs floating point negation on the provided value.
-                , &.{
+                "Performs floating point negation on the provided value",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = -{1}", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = -{1}", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_abs",
-                \\Performs a floating point absolute value operation on the provided value.
-                , &.{
+                "Performs a floating point absolute value operation on the provided value",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = |{1}|", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = |{1}|", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_sqrt",
-                \\Performs a square root operation on the provided value.
-                , &.{
+                "Performs a square root operation on the provided value",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = *sqrt* {1}", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = *sqrt* {1}", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_floor",
-                \\Performs a flooring operation on the provided value.
-                , &.{
+                "Performs a flooring operation on the provided value",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = *floor* {1}", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = *floor* {1}", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_ceil",
-                \\Performs a ceiling operation on the provided value.
-                , &.{
+                "Performs a ceiling operation on the provided value",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = *ceiling* {1}", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = *ceiling* {1}", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_round",
-                \\Performs a rounding operation on the provided value.
-                , &.{
+                "Performs a rounding operation on the provided value",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = *round* {1}", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = *round* {1}", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_trunc",
-                \\Performs a truncation operation on the provided value.
-                , &.{
+                "Performs a truncation operation on the provided value",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = *truncate* {1}", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = *truncate* {1}", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_man",
-                \\Extracts the mantissa part of the provided value.
-                , &.{
+                "Extracts the mantissa part of the provided value",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = *man* {1}", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = *man* {1}", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_frac",
-                \\Extracts the fractional part of the provided value.
-                , &.{
+                "Extracts the fractional part of the provided value",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = *frac* {1}", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = *frac* {1}", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_add",
-                \\Performs floating point addition on the provided values.
-                , &.{
+                "Performs floating point addition on the provided values",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32c"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .int }),
 
@@ -1296,8 +1247,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("f_sub",
-                \\Performs floating point subtraction on the provided values.
-                , &.{
+                "Performs floating point subtraction on the provided values",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32a"), "32-bit {0} = {2} - {1}", &.{ .register, .register, .int }),
                     .basic(.suffix("32b"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .int }),
@@ -1309,8 +1260,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("f_mul",
-                \\Performs floating point multiplication on the provided values.
-                , &.{
+                "Performs floating point multiplication on the provided values",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32c"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .int }),
 
@@ -1320,8 +1271,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("f_div",
-                \\Performs floating point division on the provided values.
-                , &.{
+                "Performs floating point division on the provided values",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32a"), "32-bit {0} = {2} / {1}", &.{ .register, .register, .int }),
                     .basic(.suffix("32b"), "32-bit {0} = {1} / {2}", &.{ .register, .register, .int }),
@@ -1333,8 +1284,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("f_rem",
-                \\Gets the remainder of floating point division on the provided values.
-                , &.{
+                "Gets the remainder of floating point division on the provided values",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32a"), "32-bit {0} = {2} % {1}", &.{ .register, .register, .int }),
                     .basic(.suffix("32b"), "32-bit {0} = {1} % {2}", &.{ .register, .register, .int }),
@@ -1346,8 +1297,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("f_pow",
-                \\Raises a provided value to the power of the other provided value.
-                , &.{
+                "Raises a provided value to the power of the other provided value",
+                &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32a"), "32-bit {0} = {2} ** {1}", &.{ .register, .register, .int }),
                     .basic(.suffix("32b"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .int }),
@@ -1361,13 +1312,13 @@ pub const CATEGORIES: []const Category = &.{
     ),
 
     .category("Value conversion",
-        \\Instructions that convert values between different bit representations.
-        , &.{
+        "Instructions that convert values between different bit representations",
+        &.{
             // u_ext is not necessary since the default behavior when moving a value into a larger register is to zero extend.
 
             .mnemonic("s_ext",
-                \\Signed bit extension.
-                , &.{
+                "Signed bit extension",
+                &.{
                     .basic(.suffix("8_16"), "Sign extend 8-bits of {1} to 16-bits, placing the result in {0}", &.{ .register, .register }),
                     .basic(.suffix("8_32"), "Sign extend 8-bits of {1} to 32-bits, placing the result in {0}", &.{ .register, .register }),
                     .basic(.suffix("8_64"), "Sign extend 8-bits of {1} to 64-bits, placing the result in {0}", &.{ .register, .register }),
@@ -1380,9 +1331,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("f_to_i",
-                \\Convert floats to various integer representations.
-                \\Performings rounding, abs, etc as necessary.
-                , &.{
+                "Convert floats to various integer representations.",
+                &.{
                     .basic(.override("f32_to_u8"), "Convert of 32-bit float in {1} to 8-bit integer; discards sign, places the result in {0}", &.{ .register, .register }),
                     .basic(.override("f32_to_u16"), "Convert of 32-bit float in {1} to 16-bit integer; discards sign, places the result in {0}", &.{ .register, .register }),
                     .basic(.override("f32_to_u32"), "Convert of 32-bit float in {1} to 32-bit integer; discards sign, places the result in {0}", &.{ .register, .register }),
@@ -1397,7 +1347,7 @@ pub const CATEGORIES: []const Category = &.{
 
             .mnemonic("i_to_f",
                 \\Convert various integers to float representations.
-                \\Information loss is possible if the integer most significant bit index is larger than the float's mantissa bit size.
+                \\* Information loss is possible if the integer's most significant bit index is larger than the float's mantissa bit size
                 , &.{
                     .basic(.override("u8_to_f32"), "Convert 8-bits in {1} to 32-bit float; discards sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("u16_to_f32"), "Convert 16-bits in {1} to 32-bit float; discards sign, places result in {0}", &.{ .register, .register }),
@@ -1422,8 +1372,8 @@ pub const CATEGORIES: []const Category = &.{
             ),
 
             .mnemonic("f_to_f",
-                \\Floating point to floating point conversion.
-                , &.{
+                "Floating point to floating point conversion",
+                &.{
                     .basic(.override("f32_to_f64"), "Convert 32-bit float in {1} to 64-bit float; places the result in {0}", &.{ .register, .register }),
                     .basic(.override("f64_to_f32"), "Convert 64-bit float in {1} to 32-bit float; places the result in {0}", &.{ .register, .register }),
                 },
