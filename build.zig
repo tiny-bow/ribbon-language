@@ -334,6 +334,7 @@ pub fn build(b: *std.Build) !void {
 
     interpreter_mod.addImport("platform", platform_mod);
     interpreter_mod.addImport("core", core_mod);
+    interpreter_mod.addImport("Instruction", Instruction_mod);
     // interpreter_mod.addObjectFile(assembly_obj);
 
 

@@ -73,6 +73,31 @@ pub const Function = extern struct {
     /// The `Header` that owns this function,
     /// which we rely on to resolve the ids encoded in the function's instructions.
     header: *const Header,
+    kind: FunctionKind,
+    data: FunctionData,
+};
+
+/// Tag indicating the type of function contained in `FunctionData`.
+pub const FunctionKind = enum(u8) {
+    /// A foreign function.
+    foreign,
+    /// A built-in function.
+    builtin,
+    /// A bytecode function.
+    bytecode,
+};
+
+/// Packed union of the different kinds of functions that can be utilized in Ribbon.
+pub const FunctionData = extern union {
+    /// The function's foreign address.
+    foreign: ForeignAddress,
+    /// The function's builtin address.
+    builtin: *const BuiltinFunction,
+    /// The function's bytecode.
+    bytecode: BytecodeFunction,
+};
+
+pub const BytecodeFunction = extern struct {
     /// A pair of offsets:
     /// * `base`: the function's first instruction in the bytecode unit; the entry point
     /// * `upper`: one past the end of its instructions; for bounds checking
@@ -474,11 +499,10 @@ pub const SetFrame = extern struct {
 pub const CallFrame = extern struct {
     /// A pointer to the next instruction to execute.
     ip: InstructionAddr,
-    /// A pointer to either a `Function`, `BuiltinAddress`, or `ForeignAddress`.
+    /// A pointer to the function being executed in this frame;
+    /// this is `*const core.Function`, but Zig doesn't allow this.
     function: *const anyopaque,
-    /// A pointer to the set frame.
-    set: [*]SetFrame,
-    /// A pointer to the evidence.
+    /// A pointer to the evidence that this call frame was spawned by.
     evidence: ?*Evidence,
     /// A pointer to the data.
     data: [*]usize,

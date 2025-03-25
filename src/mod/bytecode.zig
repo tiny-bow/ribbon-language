@@ -44,9 +44,9 @@ pub fn disas(vmem: pl.VirtualMemory, writer: anytype) !void {
                 try writer.writeAll("    " ++ instrName);
 
                 inline for (comptime std.meta.fieldNames(T)) |opName| {
-                    const operand = @field(set, opName);
+                    const operandBytes = std.mem.asBytes(&@field(set, opName));
 
-                    try writer.print(" (" ++ opName ++ " {d})", .{ @intFromEnum(operand) });
+                    try writer.print(" (" ++ opName ++ " {x})", .{ operandBytes });
                 }
             }
         }

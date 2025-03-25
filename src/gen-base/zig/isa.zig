@@ -123,6 +123,8 @@ pub const Instruction = struct {
     jit_only: bool = false,
     /// Whether this instruction terminates the basic block it is in.
     terminal: bool = false,
+    /// Whether this instruction expects a variable-length amount of data to be encoded after it.
+    variable_length: bool = false,
 
     fn basic(name: InstructionName, description: []const u8, operands: []const Operand) Instruction {
         return Instruction{ .name = name, .description = description, .operands = operands };
@@ -138,6 +140,14 @@ pub const Instruction = struct {
 
     fn jitTerminator(name: InstructionName, description: []const u8, operands: []const Operand) Instruction {
         return Instruction{ .name = name, .description = description, .operands = operands, .jit_only = true, .terminal = true };
+    }
+
+    fn variable(name: InstructionName, description: []const u8, operands: []const Operand) Instruction {
+        return Instruction{ .name = name, .description = description, .operands = operands, .variable_length = true };
+    }
+
+    fn jitVariable(name: InstructionName, description: []const u8, operands: []const Operand) Instruction {
+        return Instruction{ .name = name, .description = description, .operands = operands, .jit_only = true, .variable_length = true };
     }
 };
 
@@ -161,13 +171,24 @@ pub const Operand = enum {
     /// The operand is a static reference to an effect handler set in the current program.
     handler_set,
     /// The operand is a static reference to data encoded in the constant section of the current program.
-    constant,
+    constant, // TODO: re-evaluate the need for constants
+
+    /// The operand is a constant value encoded into 1 byte.
+    byte,
+    /// The operand is a constant value encoded into 2 bytes.
+    short,
+    /// The operand is a constant value encoded into 4 bytes.
+    int,
+    /// Indicates the operand is a constant value encoded into 8 bytes.
+    /// This will follow the instruction itself, as the next word.
+    /// Only valid in tail position.
+    word,
 
     fn multipleEntries(operand: Operand, operands: []const Operand) bool {
         var seen = false;
 
         for (operands) |op| {
-            if (op == operand) {
+            if (op.getShortcode() == operand.getShortcode()) {
                 if (seen) {
                     return true;
                 } else {
@@ -186,8 +207,26 @@ pub const Operand = enum {
     /// ```
     pub fn writeContextualReference(self: Operand, writer: anytype) !void {
         try writer.writeByte('`');
-        try self.writeShorthandType(writer);
+        _ = try self.writeShorthandType(writer);
         try writer.writeByte('`');
+    }
+
+
+    /// Returns whether the operand type is a an immediate value.
+    /// ### Example
+    /// ```
+    /// .register => false
+    /// .byte => true
+    /// ```
+    pub fn isImmediate(self: Operand) bool {
+        switch (self) {
+            .register, .upvalue, .global, .function, .builtin,
+            .foreign, .effect, .handler_set, .constant,
+            => return false,
+
+            .byte, .short, .int, .word,
+            => return true,
+        }
     }
 
     /// Writes a typename-style representation of an `Operand` type.
@@ -206,6 +245,10 @@ pub const Operand = enum {
             .effect => try writer.writeAll("Id.of(Effect)"),
             .handler_set => try writer.writeAll("Id.of(HandlerSet)"),
             .constant => try writer.writeAll("Id.of(Constant)"),
+            .byte => try writer.writeAll("u8"),
+            .short => try writer.writeAll("u16"),
+            .int => try writer.writeAll("u32"),
+            .word => try writer.writeAll("u64"),
         }
     }
 
@@ -215,25 +258,60 @@ pub const Operand = enum {
     /// .register => "R"
     /// ```
     pub fn writeShortcode(self: Operand, writer: anytype) !void {
-        switch (self) {
-            .register => try writer.writeByte('R'),
-            .upvalue => try writer.writeByte('U'),
-            .global => try writer.writeByte('G'),
-            .function => try writer.writeByte('F'),
-            .builtin => try writer.writeByte('B'),
-            .foreign => try writer.writeByte('X'),
-            .effect => try writer.writeByte('E'),
-            .handler_set => try writer.writeByte('H'),
-            .constant => try writer.writeByte('C'),
-        }
+        try writer.writeByte(self.getShortcode());
+    }
+
+    /// Returns a single byte representation of an `Operand` type.
+    /// ### Example
+    /// ```
+    /// .register => "R"
+    /// ```
+    pub fn getShortcode(self: Operand) u8 {
+        return switch (self) {
+            .register => 'R',
+            .upvalue => 'U',
+            .global => 'G',
+            .function => 'F',
+            .builtin => 'B',
+            .foreign => 'X',
+            .effect => 'E',
+            .handler_set => 'H',
+            .constant => 'C',
+            .byte => 'I',
+            .short => 'I',
+            .int => 'I',
+            .word => 'I',
+        };
     }
 
     /// Gives the size of an `Operand` type in bytes.
     pub fn sizeOf(self: Operand) usize {
-        switch (self) {
-            .upvalue, .register => return 1,
-            else => return 2,
+        return switch (self) {
+            .register => 1,
+            .upvalue => 1,
+            .global => 2,
+            .function => 2,
+            .builtin => 2,
+            .foreign => 2,
+            .effect => 2,
+            .handler_set => 2,
+            .constant => 2,
+            .byte => 1,
+            .short => 2,
+            .int => 4,
+            .word => 8,
+        };
+    }
+
+    /// Simple sum of the sizes of a list of operands.
+    pub fn totalSizeNoPadding(operands: []const Operand) usize {
+        var size: usize = 0;
+
+        for (operands) |op| {
+            size += op.sizeOf();
         }
+
+        return size;
     }
 };
 
@@ -243,6 +321,32 @@ fn startsWithDigits(str: []const u8) bool {
 
 fn endsWithDigits(str: []const u8) bool {
     return str.len != 0 and str[str.len - 1] >= '0' and str[str.len - 1] <= '9';
+}
+
+pub fn wordBoundaryHeuristic(operand: Operand, remSize: anytype, wordOffset: anytype) bool {
+    const wordRem = 8 - wordOffset;
+    const operandSize = operand.sizeOf();
+
+    // we of course break at actual word boundaries
+    if (wordOffset >= 8) return true;
+
+    // or if the operand cant fit in this word
+    if (operandSize > wordRem) return true;
+
+    // if we reached here, we *could* fit it //
+
+    // only consider ending early if we definitely need another word
+    if (operandSize + remSize <= wordRem) return false;
+
+    // personal preference here, but only packing the immediates into the next word seems nicer
+    if (!operand.isImmediate()) return false;
+
+    // but if we do need another word, and we'd be left with a single fully-packed word of immediates,
+    // we should break now because it will make the decode operation cleaner
+    if (operandSize + remSize == 8) return true;
+
+    // otherwise let's only break now when doing so doesnt cause us to require an extra word
+    return (operandSize + remSize < 8);
 }
 
 pub fn formatInstructionName(mnemonic: []const u8, instr: InstructionName, writer: anytype) !void {
@@ -289,7 +393,7 @@ pub fn formatIndex(index: usize, operands: []const Operand, writer: anytype) !vo
     var relativeIndex: usize = 0;
 
     for (0..index) |i| {
-        if (operands[i] == operands[index]) {
+        if (operands[i].getShortcode() == operands[index].getShortcode()) {
             relativeIndex += 1;
         }
     }
@@ -371,14 +475,14 @@ pub const CATEGORIES: []const Category = &.{
             .mnemonic("br",
                 \\Instruction pointer manipulation.
                 , &.{
-                    .terminator(.mnemonic, "Applies a signed integer offset {0} to the instruction pointer", &.{ .constant }),
-                    .terminator(.suffix("if"), "Applies a signed integer offset {0} to the instruction pointer, if the value stored in {1} is non-zero", &.{ .constant, .register }),
+                    .terminator(.mnemonic, "Applies a signed integer offset {0} to the instruction pointer", &.{ .int }),
+                    .terminator(.suffix("if"), "Applies a signed integer offset {1} to the instruction pointer, if the value stored in {0} is non-zero", &.{ .register, .int }),
                 },
             ),
 
             .mnemonic("call",
                 \\Various ways of calling functions,
-                \\in all cases taking a {.constant} number of arguments.
+                \\in all cases taking up to max({.byte}) number of arguments.
                 \\
                 \\Arguments are expected to be {.register} values,
                 \\encoded in the instruction stream after the call instruction.
@@ -387,29 +491,43 @@ pub const CATEGORIES: []const Category = &.{
                 \\padding bytes may need to be added and accounted for following the arguments,
                 \\to ensure the next instruction is aligned.
                 , &.{
-                    .basic(.mnemonic, "Calls the function in {0}", &.{ .register, .constant }),
-                    .basic(.suffix("c"), "Calls the function at {0}", &.{ .function, .constant }),
-                    .basic(.suffix("builtin"), "Calls the builtin function in {0}", &.{ .register, .constant }),
-                    .basic(.suffix("builtinc"), "Calls the builtin function at {0}", &.{ .builtin, .constant }),
-                    .jitBasic(.suffix("foreign"), "Calls the C ABI function in {0}", &.{ .register, .constant }),
-                    .jitBasic(.suffix("foreignc"), "Calls the C ABI function at {0}", &.{ .foreign, .constant }),
+                    .variable(.mnemonic, "Calls the function in {0}", &.{ .register, .byte }),
+                    .variable(.suffix("c"), "Calls the function at {0}", &.{ .function, .byte }),
 
-                    .basic(.suffix("v"), "Calls the function in {1}, placing the result in {0}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("c_v"), "Calls the function at {1}, placing the result in {0}", &.{ .register, .function, .constant }),
-                    .basic(.suffix("builtin_v"), "Calls the builtin function in {1}, placing the result in {0}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("builtinc_v"), "Calls the builtin function at {1}, placing the result in {0}", &.{ .register, .builtin, .constant }),
-                    .jitBasic(.suffix("foreign_v"), "Calls the C ABI function in {1}, placing the result in {0}", &.{ .register, .register, .constant }),
-                    .jitBasic(.suffix("foreignc_v"), "Calls the C ABI function at {1}, placing the result in {0}", &.{ .register, .foreign, .constant }),
+                    .variable(.suffix("v"), "Calls the function in {1}, placing the result in {0}", &.{ .register, .register, .byte }),
+                    .variable(.suffix("c_v"), "Calls the function at {1}, placing the result in {0}", &.{ .register, .function, .byte }),
 
-                    .basic(.override("prompt"),
+                    .variable(.override("prompt"),
                         \\Calls the effect handler designated by {0}
-                        , &.{ .effect, .constant },
+                        , &.{ .effect, .byte },
                     ),
-                    .basic(.override("prompt_v"),
+                    .variable(.override("prompt_v"),
                         \\Calls the effect handler designated by {1},
                         \\placing the result in {0}
-                        , &.{ .register, .effect, .constant },
+                        , &.{ .register, .effect, .byte },
                     ),
+
+                    // TODO: doubling of information in call instruction / functions
+                    // We have a `core.Function` that is representing all 3 kinds of function now.
+                    // Do we:
+                    // 1. keep core.function and eliminate these instructions
+                    // 2. keep these instructions and return core.function to containing only bytecode
+                    // 3. keep both, and have the extra data within core.function for debug assertions
+                    // 4. ..?
+                    //
+                    // as for now we are going with 3 but, is this the ideal compromise?
+                    // if we do 1, we lose some performance, likely a negligible amount compared to the overhead of calls in general
+                    // if we do 2, the information is still present in the type info of the IR, but bytecode from untrusted sources is even more unsafe
+
+                    .variable(.suffix("builtin"), "Calls the builtin function in {0}", &.{ .register, .byte }),
+                    .variable(.suffix("builtinc"), "Calls the builtin function at {0}", &.{ .builtin, .byte }),
+                    .variable(.suffix("builtin_v"), "Calls the builtin function in {1}, placing the result in {0}", &.{ .register, .register, .byte }),
+                    .variable(.suffix("builtinc_v"), "Calls the builtin function at {1}, placing the result in {0}", &.{ .register, .builtin, .byte }),
+
+                    .jitVariable(.suffix("foreign"), "Calls the C ABI function in {0}", &.{ .register, .byte }),
+                    .jitVariable(.suffix("foreignc"), "Calls the C ABI function at {0}", &.{ .foreign, .byte }),
+                    .jitVariable(.suffix("foreign_v"), "Calls the C ABI function in {1}, placing the result in {0}", &.{ .register, .register, .byte }),
+                    .jitVariable(.suffix("foreignc_v"), "Calls the C ABI function at {1}, placing the result in {0}", &.{ .register, .foreign, .byte }),
                 },
             ),
 
@@ -437,19 +555,14 @@ pub const CATEGORIES: []const Category = &.{
                         , &.{ .register, .register, .register },
                     ),
                     .basic(.suffix("a"),
-                        \\Each byte, starting from the address in {0}, up to an offset of {1},
-                        \\is set to the least significant byte of {2}
-                        , &.{ .register, .register, .constant },
+                        \\Each byte, starting from the address in {0}, up to an offset of {2},
+                        \\is set to {1}
+                        , &.{ .register, .register, .int },
                     ),
                     .basic(.suffix("b"),
-                        \\Each byte, starting from the address in {0}, up to an offset of {2},
-                        \\is set to the least significant byte of {1}
-                        , &.{ .register, .register, .constant },
-                    ),
-                    .basic(.suffix("c"),
-                        \\Each byte, starting from the address in {0}, up to an offset of {2},
-                        \\is set to the least significant byte of {1}
-                        , &.{ .register, .constant, .constant },
+                        \\Each byte, starting from the address in {0}, up to an offset of {1},
+                        \\is set to {2}
+                        , &.{ .register, .register, .byte },
                     ),
                 },
             ),
@@ -462,19 +575,14 @@ pub const CATEGORIES: []const Category = &.{
                         , &.{ .register, .register, .register },
                     ),
                     .basic(.suffix("a"),
+                        \\Each byte, starting from the address in {1}, up to an offset of {2},
+                        \\is copied to the same offset from the address in {0}
+                        , &.{ .register, .register, .int },
+                    ),
+                    .basic(.suffix("b"),
                         \\Each byte, starting from the address of {2}, up to an offset of {1},
                         \\is copied to the same offset from the address in {0}
                         , &.{ .register, .register, .constant },
-                    ),
-                    .basic(.suffix("b"),
-                        \\Each byte, starting from the address in {1}, up to an offset of {2},
-                        \\is copied to the same offset from the address in {0}
-                        , &.{ .register, .register, .constant },
-                    ),
-                    .basic(.suffix("c"),
-                        \\Each byte, starting from the address of {1}, up to an offset of {2},
-                        \\is copied to the same offset from the address in {0}
-                        , &.{ .register, .constant, .constant },
                     ),
                 },
             ),
@@ -487,7 +595,7 @@ pub const CATEGORIES: []const Category = &.{
                     ),
                     .basic(.suffix("c"),
                         \\Each byte, starting from the addresses in {0} and {1}, up to an offset of {2}, are swapped with each-other
-                        , &.{ .register, .register, .constant },
+                        , &.{ .register, .register, .int },
                     ),
                 },
             ),
@@ -512,25 +620,20 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("16"), "Loads a 16-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .constant }),
                     .basic(.suffix("32"), "Loads a 32-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .constant }),
                     .basic(.suffix("64"), "Loads a 64-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .constant }),
-
-                    .basic(.suffix("8c"), "Loads an 8-bit {1} into {0}", &.{ .register, .constant }),
-                    .basic(.suffix("16c"), "Loads a 16-bit {1} into {0}", &.{ .register, .constant }),
-                    .basic(.suffix("32c"), "Loads a 32-bit {1} into {0}", &.{ .register, .constant }),
-                    .basic(.suffix("64c"), "Loads a 64-bit {1} into {0}", &.{ .register, .constant }),
                 },
             ),
             .mnemonic("store",
                 \\Stores a value to memory.
                 , &.{
-                    .basic(.suffix("8"), "Stores an 8-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16"), "Stores a 16-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32"), "Stores a 32-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64"), "Stores a 64-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8"), "Stores an 8-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
+                    .basic(.suffix("16"), "Stores a 16-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
+                    .basic(.suffix("32"), "Stores a 32-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64"), "Stores a 64-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
 
-                    .basic(.suffix("8c"), "Stores an 8-bit {1} to memory at the address in {0} offset by {2}", &.{ .register, .constant, .constant }),
-                    .basic(.suffix("16c"), "Stores a 16-bit {1} to memory at the address in {0} offset by {2}", &.{ .register, .constant, .constant }),
-                    .basic(.suffix("32c"), "Stores a 32-bit {1} to memory at the address in {0} offset by {2}", &.{ .register, .constant, .constant }),
-                    .basic(.suffix("64c"), "Stores a 64-bit {1} to memory at the address in {0} offset by {2}", &.{ .register, .constant, .constant }),
+                    .basic(.suffix("8c"), "Stores an 8-bit value to memory at the address in {0} offset by {2}", &.{ .register, .byte, .int }),
+                    .basic(.suffix("16c"), "Stores a 16-bit value to memory at the address in {0} offset by {2}", &.{ .register, .short, .int }),
+                    .basic(.suffix("32c"), "Stores a 32-bit value to memory at the address in {0} offset by {2}", &.{ .register, .int, .int }),
+                    .basic(.suffix("64c"), "Stores a 64-bit value (encoded as {2}) to memory at the address in {0} offset by {1}", &.{ .register, .int, .word }),
                 },
             ),
         },
@@ -559,6 +662,11 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("16"), "16-bit {0} = {1}", &.{ .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1}", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1}", &.{ .register, .register }),
+
+                    .basic(.suffix("8c"), "Loads an 8-bit value into {0}", &.{ .register, .byte }),
+                    .basic(.suffix("16c"), "Loads a 16-bit value into {0}", &.{ .register, .short }),
+                    .basic(.suffix("32c"), "Loads a 32-bit value into {0}", &.{ .register, .int }),
+                    .basic(.suffix("64c"), "Loads a 64-bit value into {0}", &.{ .register, .word }),
                 },
             ),
 
@@ -599,25 +707,25 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} *and* {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} *and* {2}", &.{ .register, .register, .register }),
 
-                    .basic(.suffix("8c"), "8-bit {0} = {1} *and* {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16c"), "6-bit {0} = {1} *and* {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32c"), "32-bit {0} = {1} *and* {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64c"), "64-bit {0} = {1} *and* {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8c"), "8-bit {0} = {1} *and* {2}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("16c"), "6-bit {0} = {1} *and* {2}", &.{ .register, .register, .short }),
+                    .basic(.suffix("32c"), "32-bit {0} = {1} *and* {2}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64c"), "64-bit {0} = {1} *and* {2}", &.{ .register, .register, .word }),
                 },
             ),
 
             .mnemonic("bit_or",
                 \\Performs a bitwise `OR` operation on the provided values.
                 , &.{
-                    .basic(.suffix("8"), "8-bit {0} = {1} *and* {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("16"), "16-bit {0} = {1} *and* {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("32"), "32-bit {0} = {1} *and* {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("64"), "64-bit {0} = {1} *and* {2}", &.{ .register, .register, .register }),
+                    .basic(.suffix("8"), "8-bit {0} = {1} *or* {2}", &.{ .register, .register, .register }),
+                    .basic(.suffix("16"), "16-bit {0} = {1} *or* {2}", &.{ .register, .register, .register }),
+                    .basic(.suffix("32"), "32-bit {0} = {1} *or* {2}", &.{ .register, .register, .register }),
+                    .basic(.suffix("64"), "64-bit {0} = {1} *or* {2}", &.{ .register, .register, .register }),
 
-                    .basic(.suffix("8c"), "8-bit {0} = {1} *or* {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16c"), "16-bit {0} = {1} *or* {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32c"), "32-bit {0} = {1} *or* {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64c"), "64-bit {0} = {1} *or* {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8c"), "8-bit {0} = {1} *or* {2}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("16c"), "16-bit {0} = {1} *or* {2}", &.{ .register, .register, .short }),
+                    .basic(.suffix("32c"), "32-bit {0} = {1} *or* {2}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64c"), "64-bit {0} = {1} *or* {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -629,10 +737,10 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} *xor* {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} *xor* {2}", &.{ .register, .register, .register }),
 
-                    .basic(.suffix("8c"), "8-bit {0} = {1} *xor* {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16c"), "16-bit {0} = {1} *xor* {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32c"), "32-bit {0} = {1} *xor* {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64c"), "64-bit {0} = {1} *xor* {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8c"), "8-bit {0} = {1} *xor* {2}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("16c"), "16-bit {0} = {1} *xor* {2}", &.{ .register, .register, .short }),
+                    .basic(.suffix("32c"), "32-bit {0} = {1} *xor* {2}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64c"), "64-bit {0} = {1} *xor* {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -644,15 +752,15 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} << {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} << {2}", &.{ .register, .register, .register }),
 
-                    .basic(.suffix("8a"), "8-bit {0} = {2} << {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16a"), "16-bit {0} = {2} << {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32a"), "32-bit {0} = {2} << {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64a"), "64-bit {0} = {2} << {1}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8a"), "8-bit {0} = {2} << {1}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("16a"), "16-bit {0} = {2} << {1}", &.{ .register, .register, .short }),
+                    .basic(.suffix("32a"), "32-bit {0} = {2} << {1}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64a"), "64-bit {0} = {2} << {1}", &.{ .register, .register, .word }),
 
-                    .basic(.suffix("8b"), "8-bit {0} = {1} << {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16b"), "16-bit {0} = {1} << {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32b"), "32-bit {0} = {1} << {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64b"), "64-bit {0} = {1} << {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8b"), "8-bit {0} = {1} << {2}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("16b"), "16-bit {0} = {1} << {2}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("32b"), "32-bit {0} = {1} << {2}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("64b"), "64-bit {0} = {1} << {2}", &.{ .register, .register, .byte }),
                 },
             ),
 
@@ -664,30 +772,30 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.override("u_rshift32"), "32-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_rshift64"), "64-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .register }),
 
-                    .basic(.override("u_rshift8a"), "8-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .constant }),
-                    .basic(.override("u_rshift16a"), "16-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .constant }),
-                    .basic(.override("u_rshift32a"), "32-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .constant }),
-                    .basic(.override("u_rshift64a"), "64-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .constant }),
+                    .basic(.override("u_rshift8a"), "8-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .byte }),
+                    .basic(.override("u_rshift16a"), "16-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .short }),
+                    .basic(.override("u_rshift32a"), "32-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .int }),
+                    .basic(.override("u_rshift64a"), "64-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .word }),
 
-                    .basic(.override("u_rshift8b"), "8-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .constant }),
-                    .basic(.override("u_rshift16b"), "16-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .constant }),
-                    .basic(.override("u_rshift32b"), "32-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .constant }),
-                    .basic(.override("u_rshift64b"), "64-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .constant }),
+                    .basic(.override("u_rshift8b"), "8-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .byte }),
+                    .basic(.override("u_rshift16b"), "16-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .byte }),
+                    .basic(.override("u_rshift32b"), "32-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .byte }),
+                    .basic(.override("u_rshift64b"), "64-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .byte }),
 
                     .basic(.override("s_rshift8"), "8-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_rshift16"), "16-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_rshift32"), "32-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_rshift64"), "64-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .register }),
 
-                    .basic(.override("s_rshift8a"), "8-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .constant }),
-                    .basic(.override("s_rshift16a"), "16-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .constant }),
-                    .basic(.override("s_rshift32a"), "32-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .constant }),
-                    .basic(.override("s_rshift64a"), "64-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .constant }),
+                    .basic(.override("s_rshift8a"), "8-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .byte }),
+                    .basic(.override("s_rshift16a"), "16-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .short }),
+                    .basic(.override("s_rshift32a"), "32-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .int }),
+                    .basic(.override("s_rshift64a"), "64-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .word }),
 
-                    .basic(.override("s_rshift8b"), "8-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .constant }),
-                    .basic(.override("s_rshift16b"), "16-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .constant }),
-                    .basic(.override("s_rshift32b"), "32-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .constant }),
-                    .basic(.override("s_rshift64b"), "64-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .constant }),
+                    .basic(.override("s_rshift8b"), "8-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .byte }),
+                    .basic(.override("s_rshift16b"), "16-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .byte }),
+                    .basic(.override("s_rshift32b"), "32-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .byte }),
+                    .basic(.override("s_rshift64b"), "64-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .byte }),
                 },
             ),
         },
@@ -704,13 +812,16 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.wrap("i", "32"), "32-bit integer {0} = {1} == {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "64"), "64-bit integer {0} = {1} == {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("i", "8c"), "8-bit integer {0} = {1} == {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("i", "16c"), "16-bit integer {0} = {1} == {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("i", "32c"), "32-bit integer {0} = {1} == {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("i", "64c"), "64-bit integer {0} = {1} == {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("i", "8c"), "8-bit integer {0} = {1} == {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("i", "16c"), "16-bit integer {0} = {1} == {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("i", "32c"), "32-bit integer {0} = {1} == {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("i", "64c"), "64-bit integer {0} = {1} == {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} == {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} == {2}", &.{ .register, .register, .register }),
+
+                    .basic(.wrap("f", "32c"), "32-bit floating point {0} = {1} == {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("f", "64c"), "64-bit floating point {0} = {1} == {2}", &.{ .register, .register, .word }),
                 },
             ),
             .mnemonic("ne",
@@ -721,13 +832,16 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.wrap("i", "32"), "32-bit integer {0} = {1} != {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "64"), "64-bit integer {0} = {1} != {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("i", "8c"), "8-bit integer {0} = {1} != {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("i", "16c"), "16-bit integer {0} = {1} != {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("i", "32c"), "32-bit integer {0} = {1} != {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("i", "64c"), "64-bit integer {0} = {1} != {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("i", "8c"), "8-bit integer {0} = {1} != {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("i", "16c"), "16-bit integer {0} = {1} != {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("i", "32c"), "32-bit integer {0} = {1} != {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("i", "64c"), "64-bit integer {0} = {1} != {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} != {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} != {2}", &.{ .register, .register, .register }),
+
+                    .basic(.wrap("f", "32c"), "32-bit floating point {0} = {1} != {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("f", "64c"), "64-bit floating point {0} = {1} != {2}", &.{ .register, .register, .word }),
                 },
             ),
             .mnemonic("lt",
@@ -738,38 +852,38 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "64"), "64-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("s", "8"), "8-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "16"), "16-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "32"), "32-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "64"), "64-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} < {2}", &.{ .register, .register, .register }),
-                    .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} < {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} < {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} < {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} < {2}", &.{ .register, .register, .int }),
 
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} < {2}", &.{ .register, .register, .register }),
-                    .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} < {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} < {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} < {1}", &.{ .register, .register, .word }),
+                    .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} < {2}", &.{ .register, .register, .word }),
                 },
             ),
             .mnemonic("gt",
@@ -780,38 +894,38 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "64"), "64-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("s", "8"), "8-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "16"), "16-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "32"), "32-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "64"), "64-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} > {2}", &.{ .register, .register, .register }),
-                    .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} > {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} > {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} > {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} > {2}", &.{ .register, .register, .int }),
 
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} > {2}", &.{ .register, .register, .register }),
-                    .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} > {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} > {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} > {1}", &.{ .register, .register, .word }),
+                    .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} > {2}", &.{ .register, .register, .word }),
                 },
             ),
             .mnemonic("le",
@@ -822,38 +936,38 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "64"), "64-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("s", "8"), "8-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "16"), "16-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "32"), "32-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "64"), "64-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} <= {2}", &.{ .register, .register, .register }),
-                    .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} <= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} <= {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} <= {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} <= {2}", &.{ .register, .register, .int }),
 
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} <= {2}", &.{ .register, .register, .register }),
-                    .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} <= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} <= {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} <= {1}", &.{ .register, .register, .word }),
+                    .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} <= {2}", &.{ .register, .register, .word }),
                 },
             ),
             .mnemonic("ge",
@@ -864,38 +978,38 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "64"), "64-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("s", "8"), "8-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "16"), "16-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "32"), "32-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "64"), "64-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} >= {2}", &.{ .register, .register, .register }),
-                    .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} >= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} >= {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} >= {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} >= {2}", &.{ .register, .register, .int }),
 
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} >= {2}", &.{ .register, .register, .register }),
-                    .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} >= {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} >= {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} >= {1}", &.{ .register, .register, .word }),
+                    .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} >= {2}", &.{ .register, .register, .word }),
                 },
             ),
         },
@@ -942,10 +1056,10 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
 
-                    .basic(.suffix("8c"), "8-bit {0} = {1} + {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16c"), "16-bit {0} = {1} + {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32c"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64c"), "64-bit {0} = {1} + {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8c"), "8-bit {0} = {1} + {2}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("16c"), "16-bit {0} = {1} + {2}", &.{ .register, .register, .short }),
+                    .basic(.suffix("32c"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64c"), "64-bit {0} = {1} + {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -960,15 +1074,15 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
 
-                    .basic(.suffix("8a"), "8-bit {0} = {2} - {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16a"), "16-bit {0} = {2} - {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32a"), "32-bit {0} = {2} - {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64a"), "64-bit {0} = {2} - {1}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8a"), "8-bit {0} = {2} - {1}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("16a"), "16-bit {0} = {2} - {1}", &.{ .register, .register, .short }),
+                    .basic(.suffix("32a"), "32-bit {0} = {2} - {1}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64a"), "64-bit {0} = {2} - {1}", &.{ .register, .register, .word }),
 
-                    .basic(.suffix("8b"), "8-bit {0} = {1} - {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16b"), "16-bit {0} = {1} - {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32b"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64b"), "64-bit {0} = {1} - {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8b"), "8-bit {0} = {1} - {2}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("16b"), "16-bit {0} = {1} - {2}", &.{ .register, .register, .short }),
+                    .basic(.suffix("32b"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64b"), "64-bit {0} = {1} - {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -983,10 +1097,10 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
 
-                    .basic(.suffix("8c"), "8-bit {0} = {1} * {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16c"), "16-bit {0} = {1} * {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32c"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64c"), "64-bit {0} = {1} * {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8c"), "8-bit {0} = {1} * {2}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("16c"), "16-bit {0} = {1} * {2}", &.{ .register, .register, .short }),
+                    .basic(.suffix("32c"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64c"), "64-bit {0} = {1} * {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -1001,30 +1115,30 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.wrap("u", "32"), "32-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "64"), "64-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("u", "8a"), "8-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16a"), "16-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32a"), "32-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64a"), "64-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8a"), "8-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16a"), "16-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32a"), "32-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64a"), "64-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("u", "8b"), "8-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16b"), "16-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32b"), "32-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64b"), "64-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8b"), "8-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16b"), "16-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32b"), "32-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64b"), "64-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("s", "8"), "8-bit signed {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "16"), "16-bit signed {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "32"), "32-bit signed {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "64"), "64-bit signed {0} = {1} / {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("s", "8a"), "8-bit signed {0} = {2} / {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16a"), "16-bit signed {0} = {2} / {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32a"), "32-bit signed {0} = {2} / {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64a"), "64-bit signed {0} = {2} / {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8a"), "8-bit signed {0} = {2} / {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16a"), "16-bit signed {0} = {2} / {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32a"), "32-bit signed {0} = {2} / {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64a"), "64-bit signed {0} = {2} / {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("s", "8b"), "8-bit signed {0} = {1} / {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16b"), "16-bit signed {0} = {1} / {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32b"), "32-bit signed {0} = {1} / {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64b"), "64-bit signed {0} = {1} / {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8b"), "8-bit signed {0} = {1} / {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16b"), "16-bit signed {0} = {1} / {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32b"), "32-bit signed {0} = {1} / {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64b"), "64-bit signed {0} = {1} / {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -1039,30 +1153,30 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.wrap("u", "32"), "32-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "64"), "64-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("u", "8a"), "8-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16a"), "16-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32a"), "32-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64a"), "64-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8a"), "8-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16a"), "16-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32a"), "32-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64a"), "64-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("u", "8b"), "8-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "16b"), "16-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "32b"), "32-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("u", "64b"), "64-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("u", "8b"), "8-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("u", "16b"), "16-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("u", "32b"), "32-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("u", "64b"), "64-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .word }),
 
                     .basic(.wrap("s", "8"), "8-bit signed {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "16"), "16-bit signed {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "32"), "32-bit signed {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "64"), "64-bit signed {0} = {1} % {2}", &.{ .register, .register, .register }),
 
-                    .basic(.wrap("s", "8a"), "8-bit signed {0} = {2} % {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16a"), "16-bit signed {0} = {2} % {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32a"), "32-bit signed {0} = {2} % {1}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64a"), "64-bit signed {0} = {2} % {1}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8a"), "8-bit signed {0} = {2} % {1}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16a"), "16-bit signed {0} = {2} % {1}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32a"), "32-bit signed {0} = {2} % {1}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64a"), "64-bit signed {0} = {2} % {1}", &.{ .register, .register, .word }),
 
-                    .basic(.wrap("s", "8b"), "8-bit signed {0} = {1} % {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "16b"), "16-bit signed {0} = {1} % {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "32b"), "32-bit signed {0} = {1} % {2}", &.{ .register, .register, .constant }),
-                    .basic(.wrap("s", "64b"), "64-bit signed {0} = {1} % {2}", &.{ .register, .register, .constant }),
+                    .basic(.wrap("s", "8b"), "8-bit signed {0} = {1} % {2}", &.{ .register, .register, .byte }),
+                    .basic(.wrap("s", "16b"), "16-bit signed {0} = {1} % {2}", &.{ .register, .register, .short }),
+                    .basic(.wrap("s", "32b"), "32-bit signed {0} = {1} % {2}", &.{ .register, .register, .int }),
+                    .basic(.wrap("s", "64b"), "64-bit signed {0} = {1} % {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -1077,15 +1191,15 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
 
-                    .basic(.suffix("8a"), "8-bit {0} = {2} ** {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16a"), "16-bit {0} = {2} ** {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32a"), "32-bit {0} = {2} ** {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64a"), "64-bit {0} = {2} ** {1}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8a"), "8-bit {0} = {2} ** {1}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("16a"), "16-bit {0} = {2} ** {1}", &.{ .register, .register, .short }),
+                    .basic(.suffix("32a"), "32-bit {0} = {2} ** {1}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64a"), "64-bit {0} = {2} ** {1}", &.{ .register, .register, .word }),
 
-                    .basic(.suffix("8b"), "8-bit {0} = {1} ** {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16b"), "16-bit {0} = {1} ** {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32b"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64b"), "64-bit {0} = {1} ** {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8b"), "8-bit {0} = {1} ** {2}", &.{ .register, .register, .byte }),
+                    .basic(.suffix("16b"), "16-bit {0} = {1} ** {2}", &.{ .register, .register, .short }),
+                    .basic(.suffix("32b"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64b"), "64-bit {0} = {1} ** {2}", &.{ .register, .register, .word }),
                 },
             ),
         },
@@ -1174,10 +1288,10 @@ pub const CATEGORIES: []const Category = &.{
                 \\Performs floating point addition on the provided values.
                 , &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("32c"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("32c"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .int }),
 
                     .basic(.suffix("64"), "64-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("64c"), "64-bit {0} = {1} + {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("64c"), "64-bit {0} = {1} + {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -1185,12 +1299,12 @@ pub const CATEGORIES: []const Category = &.{
                 \\Performs floating point subtraction on the provided values.
                 , &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("32a"), "32-bit {0} = {2} - {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32b"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("32a"), "32-bit {0} = {2} - {1}", &.{ .register, .register, .int }),
+                    .basic(.suffix("32b"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .int }),
 
                     .basic(.suffix("64"), "64-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("64a"), "64-bit {0} = {2} - {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64b"), "64-bit {0} = {1} - {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("64a"), "64-bit {0} = {2} - {1}", &.{ .register, .register, .word }),
+                    .basic(.suffix("64b"), "64-bit {0} = {1} - {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -1198,10 +1312,10 @@ pub const CATEGORIES: []const Category = &.{
                 \\Performs floating point multiplication on the provided values.
                 , &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("32c"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("32c"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .int }),
 
                     .basic(.suffix("64"), "64-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("64c"), "64-bit {0} = {1} * {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("64c"), "64-bit {0} = {1} * {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -1209,12 +1323,12 @@ pub const CATEGORIES: []const Category = &.{
                 \\Performs floating point division on the provided values.
                 , &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} / {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("32a"), "32-bit {0} = {2} / {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32b"), "32-bit {0} = {1} / {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("32a"), "32-bit {0} = {2} / {1}", &.{ .register, .register, .int }),
+                    .basic(.suffix("32b"), "32-bit {0} = {1} / {2}", &.{ .register, .register, .int }),
 
                     .basic(.suffix("64"), "64-bit {0} = {1} / {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("64a"), "64-bit {0} = {2} / {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64b"), "64-bit {0} = {1} / {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("64a"), "64-bit {0} = {2} / {1}", &.{ .register, .register, .word }),
+                    .basic(.suffix("64b"), "64-bit {0} = {1} / {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -1222,12 +1336,12 @@ pub const CATEGORIES: []const Category = &.{
                 \\Gets the remainder of floating point division on the provided values.
                 , &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} % {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("32a"), "32-bit {0} = {2} % {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32b"), "32-bit {0} = {1} % {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("32a"), "32-bit {0} = {2} % {1}", &.{ .register, .register, .int }),
+                    .basic(.suffix("32b"), "32-bit {0} = {1} % {2}", &.{ .register, .register, .int }),
 
                     .basic(.suffix("64"), "64-bit {0} = {1} % {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("64a"), "64-bit {0} = {2} % {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64b"), "64-bit {0} = {1} % {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("64a"), "64-bit {0} = {2} % {1}", &.{ .register, .register, .word }),
+                    .basic(.suffix("64b"), "64-bit {0} = {1} % {2}", &.{ .register, .register, .word }),
                 },
             ),
 
@@ -1235,12 +1349,12 @@ pub const CATEGORIES: []const Category = &.{
                 \\Raises a provided value to the power of the other provided value.
                 , &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("32a"), "32-bit {0} = {2} ** {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32b"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("32a"), "32-bit {0} = {2} ** {1}", &.{ .register, .register, .int }),
+                    .basic(.suffix("32b"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .int }),
 
                     .basic(.suffix("64"), "64-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("64a"), "64-bit {0} = {2} ** {1}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64b"), "64-bit {0} = {1} ** {2}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("64a"), "64-bit {0} = {2} ** {1}", &.{ .register, .register, .word }),
+                    .basic(.suffix("64b"), "64-bit {0} = {1} ** {2}", &.{ .register, .register, .word }),
                 },
             ),
         },

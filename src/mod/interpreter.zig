@@ -14,12 +14,12 @@ pub fn invokeBuiltin(self: *core.Fiber, fun: anytype, arguments: []const usize) 
     const T = @TypeOf(fun);
     // Because the allocated builtin is a packed structure with the pointer at the start, we can just truncate it.
     // To handle both cases, we cast to the bitsize of the input first and then truncate to the output.
-    return self.invokeStaticBuiltin(@ptrFromInt(@as(usize, @truncate(@as(std.meta(.unsigned, @bitSizeOf(T)), @bitCast(fun))))), arguments);
+    return invokeStaticBuiltin(self, @ptrFromInt(@as(usize, @truncate(@as(std.meta(.unsigned, @bitSizeOf(T)), @bitCast(fun))))), arguments);
 }
 
 /// Invokes a `core.AllocatedBuiltinFunction` on the provided fiber, returning the result.
 pub fn invokeAllocatedBuiltin(self: core.Fiber, fun: core.AllocatedBuiltinFunction, arguments: []const usize) core.Error!usize {
-    return self.invokeStaticBuiltin(@ptrCast(fun.ptr), arguments);
+    return invokeStaticBuiltin(self, @ptrCast(fun.ptr), arguments);
 }
 
 /// Invokes a `core.BuiltinFunction` on the provided fiber, returning the result.
@@ -83,7 +83,7 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
     const newRegisters = self.header.registers.allocSlice(2);
     @memcpy(newRegisters[1][0..arguments.len], arguments);
 
-    try self.eval();
+    try eval(self);
 
     // second frame will have already been popped by the interpreter,
     // so we only pop 1 each here.
@@ -96,7 +96,7 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
 
 /// Run the interpreter loop until `halt`.
 pub fn eval(self: core.Fiber) core.Error!void {
-    while (try run(true, self.header) != .halted) {}
+    while (try run(true, self.header) != .halt) {}
 }
 
 
@@ -106,23 +106,10 @@ pub fn step(self: core.Fiber) core.Error!?core.InterpreterSignal {
         .halt => return .halt,
         .@"return" => return .@"return",
         .breakpoint => return null,
-        .nop => return null,
+        .step => return null,
     }
 }
 
-
-fn decode(frame: *core.CallFrame, instruction: *Instruction) Instruction.OpCode {
-    // TODO: would be nice to assert that this is a bytecode function, can't do that atm
-    const function: *core.Function = @ptrCast(frame.function);
-
-    std.debug.assert(function.extents.boundsCheck(frame.ip));
-
-    instruction.* = Instruction.fromBits(frame.ip[0]);
-
-    frame.ip += 1;
-
-    return instruction.code;
-}
 
 
 const RunSignal = enum(u8) {
@@ -132,15 +119,27 @@ const RunSignal = enum(u8) {
     @"return" = 0x30,
 };
 
+fn decode(frame: *core.CallFrame, instruction: *Instruction) Instruction.OpCode {
+    const function: *const core.Function = @ptrCast(@alignCast(frame.function));
+
+    std.debug.assert(function.data.bytecode.extents.boundsCheck(frame.ip));
+
+    instruction.* = Instruction.fromBits(frame.ip[0]);
+
+    frame.ip += 1;
+
+    return instruction.code;
+}
+
 fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal {
     const callFrame = self.calls.top();
-    std.debug.assert(@intFromPtr(callFrame) >= @intFromPtr(self.calls.base_ptr));
+    std.debug.assert(@intFromPtr(callFrame) >= @intFromPtr(self.calls.base));
 
-    // TODO: would be nice to assert that this is a bytecode function, can't do that atm
-    const function: *core.Function = @ptrCast(callFrame.function);
+    const function: *const core.Function = @ptrCast(@alignCast(callFrame.function));
+    std.debug.assert(function.kind == .bytecode);
 
     const vregs = self.registers.top();
-    std.debug.assert(@intFromPtr(vregs) >= @intFromPtr(self.registers.base_ptr));
+    std.debug.assert(@intFromPtr(vregs) >= @intFromPtr(self.registers.base));
 
     var instruction: Instruction = undefined;
     dispatch: switch (decode(callFrame, &instruction)) {
@@ -160,7 +159,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal 
             std.debug.assert(function.header.addresses.validateHandlerSet(handlerSetId));
             const handlerSet = function.header.addresses.getHandlerSet(handlerSetId);
 
-            self.sets.push(core.SetFrame {
+            const setFrame = self.sets.create(core.SetFrame {
                 .call = callFrame,
                 .handler_set = handlerSet,
             });
@@ -179,8 +178,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal 
                 evidencePointerSlot.* = evidenceSlot;
 
                 evidenceSlot.* = core.Evidence{
-                    .prev = prevEvidence,
-                    .frame = callFrame,
+                    .previous = prevEvidence,
+                    .frame = setFrame,
                     .handler = handler,
                 };
             }
@@ -199,46 +198,31 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal 
                 const effectIndex = function.header.addresses.getEffect(handler.effect).toIndex();
                 const evidencePointerSlot = &self.evidence[effectIndex];
 
-                evidencePointerSlot.* = evidencePointerSlot.*.?.prev;
+                evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
             }
 
             if (comptime isLoop) continue :dispatch decode(callFrame, &instruction) else return .step;
         },
 
         .@"br" => {
-            const constantId = instruction.data.br.C;
-
-            std.debug.assert(!function.header.addresses.validateConstant(constantId));
-            const constantPtr = function.header.addresses.getConstant(constantId);
-
-            const constantBytes = constantPtr.asSlice();
-            std.debug.assert(constantBytes.len == @sizeOf(i32));
-
-            const offset = @as(*const i32, @ptrCast(constantBytes.ptr)).*;
+            const offset: i32 = @bitCast(instruction.data.br.I);
             std.debug.assert(offset != 0);
 
-            const newIp = callFrame.ip + offset;
-            std.debug.assert(function.extents.boundsCheck(newIp));
+            const newIp: core.InstructionAddr = @ptrFromInt(@intFromPtr(callFrame.ip) + @as(u32, @bitCast(offset)));
+            std.debug.assert(function.data.bytecode.extents.boundsCheck(newIp));
 
             callFrame.ip = newIp;
 
             if (comptime isLoop) continue :dispatch decode(callFrame, &instruction) else return .step;
         },
         .@"br_if" => {
-            const constantId = instruction.data.br_if.C;
-            const registerId = instruction.data.br_if.R;
-
-            std.debug.assert(!function.header.addresses.validateConstant(constantId));
-            const constantPtr = function.header.addresses.getConstant(constantId);
-
-            const constantBytes = constantPtr.asSlice();
-            std.debug.assert(constantBytes.len == @sizeOf(i32));
-
-            const offset = @as(*const i32, @ptrCast(constantBytes.ptr)).*;
+            const offset: i32 = @bitCast(instruction.data.br.I);
             std.debug.assert(offset != 0);
 
-            const newIp = callFrame.ip + offset;
-            std.debug.assert(function.extents.boundsCheck(newIp));
+            const registerId = instruction.data.br_if.R;
+
+            const newIp: core.InstructionAddr = @ptrFromInt(@intFromPtr(callFrame.ip) + @as(u32, @bitCast(offset)));
+            std.debug.assert(function.data.bytecode.extents.boundsCheck(newIp));
 
             const register = &vregs[registerId.getIndex()];
 
@@ -247,30 +231,30 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal 
             if (comptime isLoop) continue :dispatch decode(callFrame, &instruction) else return .step;
         },
 
-        // FIXME: okay, no. we need to be able to call functions without this much indirection to get the number of arguments.
-        //        and like, its only a byte. what was i thinking lol
+        // RESOLVED: we need to be able to call functions without this much indirection to get the number of arguments
+        // TODO: actually implement this now that we resolved the indirection
         .@"call" => {
-            const constantId = instruction.data.call.C;
-            // const registerId = instruction.data.call.R;
+            const argumentCount = instruction.data.call.I;
+            const registerId = instruction.data.call.R;
 
-            std.debug.assert(!function.header.addresses.validateConstant(constantId));
-            const constantPtr = function.header.addresses.getConstant(constantId);
-            const constantBytes = constantPtr.asSlice();
-            std.debug.assert(constantBytes.len == @sizeOf(i8));
+            pl.todo(noreturn, .{ "call", argumentCount, registerId });
         },
         .@"call_c" => pl.todo(noreturn, "call_c"),
-        .@"call_builtin" => pl.todo(noreturn, "call_builtin"),
-        .@"call_builtinc" => pl.todo(noreturn, "call_builtinc"),
-        .@"call_foreign" => pl.todo(noreturn, "call_foreign"),
-        .@"call_foreignc" => pl.todo(noreturn, "call_foreignc"),
         .@"call_v" => pl.todo(noreturn, "call_v"),
         .@"call_c_v" => pl.todo(noreturn, "call_c_v"),
-        .@"call_builtin_v" => pl.todo(noreturn, "call_builtin_v"),
-        .@"call_builtinc_v" => pl.todo(noreturn, "call_builtinc_v"),
-        .@"call_foreign_v" => pl.todo(noreturn, "call_foreign_v"),
-        .@"call_foreignc_v" => pl.todo(noreturn, "call_foreignc_v"),
+
         .@"prompt" => pl.todo(noreturn, "prompt"),
         .@"prompt_v" => pl.todo(noreturn, "prompt_v"),
+
+        .@"call_builtin" => pl.todo(noreturn, "call_builtin"),
+        .@"call_builtin_v" => pl.todo(noreturn, "call_builtin_v"),
+        .@"call_builtinc_v" => pl.todo(noreturn, "call_builtinc_v"),
+        .@"call_builtinc" => pl.todo(noreturn, "call_builtinc"),
+
+        .@"call_foreign" => pl.todo(noreturn, "call_foreign"),
+        .@"call_foreignc" => pl.todo(noreturn, "call_foreignc"),
+        .@"call_foreign_v" => pl.todo(noreturn, "call_foreign_v"),
+        .@"call_foreignc_v" => pl.todo(noreturn, "call_foreignc_v"),
 
         .@"return" => pl.todo(noreturn, "return"),
         .@"return_v" => pl.todo(noreturn, "return_v"),
