@@ -9,13 +9,13 @@ pub const MutBytes = new(u8, .mutable);
 
 /// Creates a new `Buffer` type with the given element type and mutability.
 pub fn new(comptime T: type, comptime MUT: pl.Mutability) type {
-    return packed struct {
+    return packed struct(u128) {
         const Self = @This();
 
-        /// number of elements in the buffer.
-        len: usize,
         /// pointer to the first element in the buffer.
-        ptr: usize,
+        ptr: u64,
+        /// number of elements in the buffer.
+        len: u64,
 
         /// The pointer sibling type of this buffer.
         pub const PointerType = MUT.MultiPointerType(T);
@@ -30,14 +30,14 @@ pub fn new(comptime T: type, comptime MUT: pl.Mutability) type {
         /// Create a buffer from a pointer and length.
         pub fn fromPtr(ptr: PointerType, len: usize) Self {
             return Self {
-                .len = @intCast(len),
                 .ptr = @intCast(@intFromPtr(ptr)),
+                .len = @intCast(len),
             };
         }
 
         /// Extract the 48-bit address part of this buffer.
         pub fn asPtr(self: Self) PointerType {
-            return @ptrFromInt(self.ptr);
+            return @ptrFromInt(@as(usize, @intCast(self.ptr)));
         }
 
         /// Extract both parts of this buffer and construct a slice.

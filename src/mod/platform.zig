@@ -71,7 +71,48 @@ pub const MAX_VIRTUAL_CODE_SIZE = bytesFromMegabytes(64);
 pub const MAX_MACHINE_CODE_SIZE = bytesFromMegabytes(64);
 
 /// The C ABI we're using.
-pub const ABI: enum { sys_v, win } = if (@import("builtin").os.tag == .windows) .win else .sys_v;
+pub const ABI: Abi = if (@import("builtin").os.tag == .windows) .win else .sys_v;
+
+/// Description of the C ABI used by the current hardware.
+pub const Abi = enum {
+    sys_v, win,
+
+    /// The number of registers used for passing arguments under this Abi.
+    pub fn argumentRegisterCount(self: Abi) usize {
+        return switch (self) {
+            .sys_v => 6,
+            .win => 4,
+        };
+    }
+};
+
+/// The maximum number of arguments we allow to be passed in `callForeign`.
+pub const MAX_FOREIGN_ARGUMENTS = 16;
+
+/// Call a foreign function with a dynamic number of arguments.
+/// * It is (debug safety-checked) undefined behavior to call this function with slices of a length more than `MAX_FOREIGN_ARGUMENTS`.
+pub fn callForeign(fnPtr: *const anyopaque, args: []const usize) usize {
+    return switch (args.len) {
+        0 => @as(*const fn () usize, @alignCast(@ptrCast(fnPtr)))(),
+        1 => @as(*const fn (usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0]),
+        2 => @as(*const fn (usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1]),
+        3 => @as(*const fn (usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2]),
+        4 => @as(*const fn (usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3]),
+        5 => @as(*const fn (usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4]),
+        6 => @as(*const fn (usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5]),
+        7 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6]),
+        8 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]),
+        9 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]),
+        10 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]),
+        11 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]),
+        12 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]),
+        13 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]),
+        14 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]),
+        15 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]),
+        16 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]),
+        else => unreachable,
+    };
+}
 
 /// Whether runtime safety checks are enabled.
 pub const RUNTIME_SAFETY: bool = switch (@import("builtin").mode) {
@@ -323,13 +364,18 @@ pub fn gigabytesFromBytes(bytes: anytype) FloatOrDouble(@TypeOf(bytes)) {
     return megabytesFromBytes(bytes) / 1024.0;
 }
 
-/// Trims the haystack before the first occurrence of the needle.
-pub fn trimBeforeSub(haystack: anytype, needle: anytype, includeNeedle: bool) @TypeOf(haystack) {
+/// Drops values from the haystack up to and optionally including the first occurrence of the needle.
+/// If the needle is the empty string, or is otherwise unable to be found, the haystack is returned unchanged.
+pub fn trimBeforeSub(haystack: anytype, needle: anytype, needleMode: enum { include_needle, drop_needle }) @TypeOf(haystack) {
+    if (needle.len == 0) {
+        return haystack;
+    }
+
     const i = std.mem.indexOf(haystack, needle) orelse {
         return haystack;
     };
 
-    return if (includeNeedle) haystack[i..] else haystack[i + needle.len ..];
+    return if (needleMode == .include_needle) haystack[i..] else haystack[i + needle.len ..];
 }
 
 /// Represents a source code location.
@@ -342,7 +388,9 @@ pub const SourceLocation = struct {
     column: usize,
 
     pub fn onFormat(self: *const SourceLocation, formatter: anytype) !void {
-        try formatter.print("[{}:{}:{}]", .{ trimBeforeSub(self.file_name, "src/", true), self.line, self.column });
+        var realpath: [2048]u8 = undefined;
+        const cwd = std.fs.cwd().realpath(".", &realpath) catch "";
+        try formatter.print("[{}:{}:{}]", .{ trimBeforeSub(self.file_name, cwd, .drop_needle), self.line, self.column });
     }
 
     pub fn deinit(self: SourceLocation, allocator: std.mem.Allocator) void {

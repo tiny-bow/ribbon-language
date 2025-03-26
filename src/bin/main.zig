@@ -35,7 +35,7 @@ fn test_bytecode_builder() !void {
 
     const entry = try b.createBlock();
 
-    try entry.instr(.i_add64, .{ .Rx = .r7, .Ry = .r32, .Rz = .r255 });
+    try entry.instr(.i_add64, .{ .Rx = .r7, .Ry = .r32, .Rz = .r254 });
 
     var encoder = ribbon.bytecode.Encoder { .writer = try ribbon.bytecode.Writer.init() };
     defer encoder.writer.deinit();

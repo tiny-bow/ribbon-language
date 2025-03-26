@@ -10,43 +10,66 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-pub fn invokeBuiltin(self: *core.Fiber, fun: anytype, arguments: []const usize) core.Error!usize {
+pub fn invokeBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: anytype, arguments: []const core.RegisterBits) core.Error!BuiltinResult {
     const T = @TypeOf(fun);
     // Because the allocated builtin is a packed structure with the pointer at the start, we can just truncate it.
     // To handle both cases, we cast to the bitsize of the input first and then truncate to the output.
-    return invokeStaticBuiltin(self, @ptrFromInt(@as(usize, @truncate(@as(std.meta(.unsigned, @bitSizeOf(T)), @bitCast(fun))))), arguments);
+    return invokeStaticBuiltin(self, evidence, @ptrFromInt(@as(u64, @truncate(@as(std.meta(.unsigned, @bitSizeOf(T)), @bitCast(fun))))), arguments);
 }
 
 /// Invokes a `core.AllocatedBuiltinFunction` on the provided fiber, returning the result.
-pub fn invokeAllocatedBuiltin(self: core.Fiber, fun: core.AllocatedBuiltinFunction, arguments: []const usize) core.Error!usize {
-    return invokeStaticBuiltin(self, @ptrCast(fun.ptr), arguments);
+pub fn invokeAllocatedBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: core.AllocatedBuiltinFunction, arguments: []const core.RegisterBits) core.Error!BuiltinResult {
+    return invokeStaticBuiltin(self, evidence, @ptrCast(fun.ptr), arguments);
 }
 
+/// The indicates the kind of control flow yield being performed by a builtin function.
+pub const BuiltinSignal = enum {
+    /// Nominal return value.
+    @"return",
+    /// Effect handler cancellation.
+    cancel,
+};
+
+/// The result of invoking a builtin function.
+pub const BuiltinResult = struct {
+    /// The return value of the function;
+    /// may or not be initialized, depending on signature of callee.
+    u64,
+    /// The kind of control flow to perform, either return or cancel;
+    /// errors are lifted to zig errors by the time this struct is relevant.
+    BuiltinSignal,
+};
+
 /// Invokes a `core.BuiltinFunction` on the provided fiber, returning the result.
-pub fn invokeStaticBuiltin(self: core.Fiber, fun: *const core.BuiltinFunction, arguments: []const usize) core.Error!usize {
+pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *const core.BuiltinFunction, arguments: []const u64) core.Error!BuiltinResult {
     if (!self.header.calls.hasSpace(1)) {
         return error.Overflow;
     }
 
     self.header.calls.push(core.CallFrame{
         .function = @ptrCast(fun),
-        .kind = .builtin,
-        .evidence = null,
+        .evidence = evidence,
         .data = self.header.data.top_ptr,
+        .set_frame = self.header.sets.top(),
         .ip = undefined,
+        .output = .scratch,
     });
 
     const newRegisters = self.header.registers.allocPtr();
     @memcpy(newRegisters[0..arguments.len], arguments);
 
     return switch (fun(self.header)) {
-        .halt => @panic("unexpected halt signal from builtin function"),
+        .halt => {
+            self.header.calls.pop();
+
+            return .{ self.header.registers.popPtr()[comptime core.Register.native_ret.getIndex()], .@"cancel" };
+        },
 
         .request_trap => error.FunctionTrapped,
         .@"return" => {
             self.header.calls.pop();
 
-            return self.header.registers.popPtr()[comptime core.Register.native_ret.getIndex()];
+            return .{ self.header.registers.popPtr()[comptime core.Register.native_ret.getIndex()], .@"return" };
         },
         .bad_encoding => error.BadEncoding,
         .panic => @panic("An unexpected error occurred in native code; exiting"),
@@ -56,8 +79,8 @@ pub fn invokeStaticBuiltin(self: core.Fiber, fun: *const core.BuiltinFunction, a
 }
 
 /// Invokes a `core.Function` on the provided fiber, returning the result.
-pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []const usize) core.Error!usize {
-    const HALT: usize = undefined; // FIXME
+pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []const u64) core.Error!u64 {
+    const HALT: core.InstructionAddr = &.{ 0x02 }; // TODO: switch on endian?
 
     if (!self.header.calls.hasSpace(2)) {
         return error.Overflow;
@@ -66,17 +89,17 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
     self.header.calls.pushSlice(&.{
         core.CallFrame {
             .function = undefined,
-            .kind = .builtin,
             .evidence = null,
             .data = self.header.data.top_ptr,
-            .ip = @ptrCast(&HALT),
+            .ip = HALT,
+            .output = .scratch,
         },
         core.CallFrame {
             .function = @ptrCast(fun),
-            .kind = .bytecode,
             .evidence = null,
             .data = self.header.data.top_ptr,
             .ip = fun.extents.base,
+            .output = .native_ret,
         },
     });
 
@@ -94,79 +117,132 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
     return registers[1][comptime core.Register.native_ret.getIndex()];
 }
 
-/// Run the interpreter loop until `halt`.
-pub fn eval(self: core.Fiber) core.Error!void {
-    while (try run(true, self.header) != .halt) {}
-}
+/// Run the interpreter loop until `halt`; and optionally stop at breakpoints.
+pub fn eval(self: core.Fiber, comptime mode: enum {breakpoints_halt, skip_breakpoints}) core.Error!void {
+    while (true) {
+        run(true, self.header) catch |signalOrError| {
+            if (comptime mode == .breakpoints_halt) {
+                switch (signalOrError) {
+                    .breakpoint => break,
+                    inline .step, .@"return" => continue,
+                    inline else => |e| return e,
+                }
+            } else {
+                switch (signalOrError) {
+                    inline .step, .breakpoint, .@"return" => continue,
+                    inline else => |e| return e,
+                }
+            }
+        };
 
-
-/// Run the interpreter loop for a single instruction.
-pub fn step(self: core.Fiber) core.Error!?core.InterpreterSignal {
-    switch (try run(false, self.header)) {
-        .halt => return .halt,
-        .@"return" => return .@"return",
-        .breakpoint => return null,
-        .step => return null,
+        break;
     }
 }
 
 
+/// Run the interpreter loop for a single instruction.
+pub fn step(self: core.Fiber) core.Error!?InterpreterSignal {
+    run(false, self.header) catch |signalOrError| {
+        switch (signalOrError) {
+            RunSignal.@"return" => return .@"return",
+            RunSignal.cancel => return .cancel,
+            RunSignal.breakpoint => return .breakpoint,
+            RunSignal.step => return null,
+            inline else => |e| return e,
+        }
+    };
 
-const RunSignal = enum(u8) {
-    halt = 0x00,
-    step = 0x10,
-    breakpoint = 0x20,
-    @"return" = 0x30,
-};
-
-fn decode(frame: *core.CallFrame, instruction: *Instruction) Instruction.OpCode {
-    const function: *const core.Function = @ptrCast(@alignCast(frame.function));
-
-    std.debug.assert(function.extents.boundsCheck(frame.ip));
-
-    instruction.* = Instruction.fromBits(frame.ip[0]);
-
-    frame.ip += 1;
-
-    return instruction.code;
+    return .halt;
 }
 
-fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal {
-    const callFrame = self.calls.top();
-    std.debug.assert(@intFromPtr(callFrame) >= @intFromPtr(self.calls.base));
-    std.debug.assert(callFrame.kind == .bytecode);
 
-    const function: *const core.Function = @ptrCast(@alignCast(callFrame.function));
+/// Signals that can be returned by the interpreter
+pub const InterpreterSignal = enum(i64) {
+    @"return" = 0,
+    cancel = 1,
 
-    const vregs = self.registers.top();
-    std.debug.assert(@intFromPtr(vregs) >= @intFromPtr(self.registers.base));
+    halt = -1,
+    breakpoint = -2,
+};
 
-    var instruction: Instruction = undefined;
-    dispatch: switch (decode(callFrame, &instruction)) {
-        .nop => if (comptime isLoop) continue :dispatch decode(callFrame, &instruction) else return .step,
-        .@"breakpoint" => return .breakpoint,
-        .halt => return .halt,
+const RunSignal = error {
+    step,
+    breakpoint,
+    @"return",
+    cancel,
+};
+
+fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSignal)!void {
+    const State = struct {
+        callFrame: *core.CallFrame,
+        function: *const core.Function,
+        stackFrame: []const core.RegisterBits,
+        instruction: Instruction,
+        tempRegisters: core.RegisterArray,
+
+        fn decode(st: *@This(), header: *core.mem.FiberHeader) Instruction.OpCode {
+            st.callFrame = header.calls.top();
+            std.debug.assert(@intFromPtr(st.callFrame) >= @intFromPtr(header.calls.base));
+
+            st.function = @ptrCast(@alignCast(st.callFrame.function));
+
+            std.debug.assert(st.function.extents.boundsCheck(st.callFrame.ip));
+
+            st.instruction.* = Instruction.fromBits(st.callFrame.ip[0]);
+
+            st.callFrame.ip += 1;
+
+            st.stackFrame = st.callFrame.data[0..st.function.stack_size];
+            std.debug.assert(@intFromPtr(st.stackFrame.ptr) >= @intFromPtr(header.data.base));
+            std.debug.assert(@intFromPtr(st.stackFrame.ptr + st.stackFrame.len) <= @intFromPtr(header.data.limit));
+
+            return st.instruction.code;
+        }
+
+        inline fn advance(st: *@This(), header: *core.mem.FiberHeader, signal: RunSignal) RunSignal!Instruction.OpCode {
+            if (comptime isLoop) {
+                return st.decode(header);
+            } else {
+                return signal;
+            }
+        }
+
+        inline fn step(st: *@This(), header: *core.mem.FiberHeader) RunSignal!Instruction.OpCode {
+            return st.advance(header, RunSignal.step);
+        }
+    };
+
+    var state: State = undefined;
+    const current = &state;
+
+    dispatch: switch (current.decode(self)) {
+        .nop => continue :dispatch try state.step(self),
+        .@"breakpoint" => return RunSignal.breakpoint,
+        .halt => return,
         .trap => return error.Unreachable,
         .@"unreachable" => return error.Unreachable,
 
         .@"push_set" => {
-            const handlerSetId = instruction.data.push_set.H;
             if (!self.sets.hasSpace(1)) {
                 @branchHint(.cold);
                 return error.Overflow;
             }
 
-            const handlerSet = function.header.get(handlerSetId);
+            const handlerSetId = current.instruction.data.push_set.H;
+
+            const handlerSet = current.function.header.get(handlerSetId);
 
             const setFrame = self.sets.create(core.SetFrame {
-                .call = callFrame,
+                .call = current.callFrame,
                 .handler_set = handlerSet,
             });
 
-            const evidenceStorage: [*]u8 = @ptrCast(callFrame.data + handlerSet.evidence);
+            current.callFrame.set_frame = setFrame;
 
-            for (handlerSet.handlers.asSlice(), 0..) |handler, i| {
-                const effectIndex = function.header.get(handler.effect).toIndex();
+            const evidenceStorage: [*]u8 = @ptrCast(current.callFrame.data + handlerSet.evidence);
+
+            for (handlerSet.effects.asSlice(), 0..) |effectId, i| {
+                const effectIndex = current.function.header.get(effectId).toIndex();
                 const evidenceOffset = i * @sizeOf(core.Evidence);
 
                 const evidencePointerSlot = &self.evidence[effectIndex];
@@ -178,85 +254,328 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal 
                 evidenceSlot.* = core.Evidence{
                     .previous = prevEvidence,
                     .frame = setFrame,
-                    .handler = handler,
+                    .handler = handlerSet.handlers.asSlice()[i],
                 };
             }
 
-            if (comptime isLoop) continue :dispatch decode(callFrame, &instruction) else return .step;
+            continue :dispatch try state.step(self);
         },
         .@"pop_set" => {
-            if (@intFromBool(self.sets.count() == 0) | @intFromBool(self.sets.top().call != callFrame) != 0) {
+            if (@intFromBool(self.sets.count() == 0) | @intFromBool(self.sets.top().call != current.callFrame) != 0) {
                 @branchHint(.cold);
                 return error.Underflow;
             }
 
             const setFrame = self.sets.popPtr();
-            for (setFrame.handler_set.handlers.asSlice()) |handler| {
-                const effectIndex = function.header.get(handler.effect).toIndex();
+            current.callFrame.set_frame = self.sets.top();
+
+            for (setFrame.handler_set.effects.asSlice()) |effectId| {
+                const effectIndex = current.function.header.get(effectId).toIndex();
                 const evidencePointerSlot = &self.evidence[effectIndex];
 
                 evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
             }
 
-            if (comptime isLoop) continue :dispatch decode(callFrame, &instruction) else return .step;
+            continue :dispatch try state.step(self);
         },
 
         .@"br" => {
-            const offset: i32 = @bitCast(instruction.data.br.I);
+            const offset: core.InstructionOffset = @bitCast(current.instruction.data.br.I);
             std.debug.assert(offset != 0);
 
-            const newIp: core.InstructionAddr = @ptrFromInt(@intFromPtr(callFrame.ip) + @as(u32, @bitCast(offset)));
-            std.debug.assert(function.extents.boundsCheck(newIp));
+            const newIp: core.InstructionAddr = @ptrFromInt(@intFromPtr(current.callFrame.ip) + @as(u32, @bitCast(offset)));
+            std.debug.assert(current.function.extents.boundsCheck(newIp));
 
-            callFrame.ip = newIp;
+            current.callFrame.ip = newIp;
 
-            if (comptime isLoop) continue :dispatch decode(callFrame, &instruction) else return .step;
+            continue :dispatch try state.step(self);
         },
         .@"br_if" => {
-            const offset: i32 = @bitCast(instruction.data.br.I);
+            const offset: core.InstructionOffset = @bitCast(current.instruction.data.br.I);
             std.debug.assert(offset != 0);
 
-            const registerId = instruction.data.br_if.R;
+            const registerId = current.instruction.data.br_if.R;
 
-            const newIp: core.InstructionAddr = @ptrFromInt(@intFromPtr(callFrame.ip) + @as(u32, @bitCast(offset)));
-            std.debug.assert(function.extents.boundsCheck(newIp));
+            const newIp: core.InstructionAddr = @ptrFromInt(@intFromPtr(current.callFrame.ip) + @as(u32, @bitCast(offset)));
+            std.debug.assert(current.function.extents.boundsCheck(newIp));
 
-            const register = &vregs[registerId.getIndex()];
+            const register = &current.callFrame.vregs[registerId.getIndex()];
 
-            if (register.* != 0) callFrame.ip = newIp;
+            if (register.* != 0) current.callFrame.ip = newIp;
 
-            if (comptime isLoop) continue :dispatch decode(callFrame, &instruction) else return .step;
+            continue :dispatch try state.step(self);
         },
 
-        // RESOLVED: we need to be able to call functions without this much indirection to get the number of arguments
-        // TODO: actually implement this now that we resolved the indirection
         .@"call" => {
-            const argumentCount = instruction.data.call.I;
-            const registerId = instruction.data.call.R;
+            const registerIdX = current.instruction.data.call.Rx;
+            const registerIdY = current.instruction.data.call.Ry;
+            const abi = current.instruction.data.call.A;
+            const argumentCount = current.instruction.data.call.I;
 
-            pl.todo(noreturn, .{ "call", argumentCount, registerId });
+            const functionOpaquePtr: *const anyopaque = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            std.debug.assert(@intFromPtr(current.callFrame.ip + argumentCount * @sizeOf(core.Register)) <= @intFromPtr(current.function.extents.upper));
+            const argumentRegisterIds = @as([*]const core.Register, @ptrCast(@alignCast(current.callFrame.ip)))[0..argumentCount];
+
+            switch (abi) {
+                .bytecode => {
+                    const functionPtr: *const core.Function = @ptrCast(functionOpaquePtr);
+
+                    if (@intFromBool(self.calls.hasSpace(1)) & @intFromBool(self.data.hasSpace(functionPtr.stack_size)) == 0) {
+                        @branchHint(.cold);
+                        return error.Overflow;
+                    }
+
+                    const data = self.data.allocSlice(functionPtr.stack_size);
+
+                    const newRegisters = self.registers.allocPtr();
+
+                    self.calls.push(core.CallFrame{
+                        .function = functionOpaquePtr,
+                        .evidence = null,
+                        .set_frame = self.sets.top(),
+                        .data = data,
+                        .ip = current.function.extents.base,
+                        .output = registerIdX,
+                    });
+
+                    for (argumentRegisterIds, 0..) |reg, i| {
+                        newRegisters[i] = current.callFrame.vregs[reg.getIndex()];
+                    }
+                },
+                .builtin => {
+                    const functionPtr: *const core.BuiltinFunction = @as(*const core.BuiltinAddress, @ptrCast(functionOpaquePtr)).toFunction();
+
+                    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
+                    for (argumentRegisterIds, 0..) |reg, i| {
+                        arguments[i] = current.callFrame.vregs[reg.getIndex()];
+                    }
+
+                    const retVal = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
+
+                    current.callFrame.vregs[registerIdX.getIndex()] = retVal;
+                },
+                .foreign => {
+                    if (argumentRegisterIds.len > pl.MAX_FOREIGN_ARGUMENTS) {
+                        @branchHint(.cold);
+                        return error.Overflow;
+                    }
+
+                    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
+                    for (argumentRegisterIds, 0..) |reg, i| {
+                        arguments[i] = current.callFrame.vregs[reg.getIndex()];
+                    }
+
+                    const retVal = pl.callForeign(functionOpaquePtr, arguments);
+
+                    current.callFrame.vregs[registerIdX.getIndex()] = retVal;
+                },
+            }
+
+            continue :dispatch try state.step(self);
         },
-        .@"call_c" => pl.todo(noreturn, "call_c"),
-        .@"call_v" => pl.todo(noreturn, "call_v"),
-        .@"call_c_v" => pl.todo(noreturn, "call_c_v"),
+        .@"call_c" => {
+            const registerId = current.instruction.data.call_c.R;
+            const functionId = current.instruction.data.call_c.F.cast(anyopaque);
+            const abi = current.instruction.data.call_c.A;
+            const argumentCount = current.instruction.data.call_c.I;
 
-        .@"prompt" => pl.todo(noreturn, "prompt"),
-        .@"prompt_v" => pl.todo(noreturn, "prompt_v"),
+            std.debug.assert(current.function.extents.boundsCheck(current.callFrame.ip + argumentCount * @sizeOf(core.Register)));
+            const argumentRegisterIds = @as([*]const core.Register, @ptrCast(@alignCast(current.callFrame.ip)))[0..argumentCount];
 
-        .@"call_builtin" => pl.todo(noreturn, "call_builtin"),
-        .@"call_builtin_v" => pl.todo(noreturn, "call_builtin_v"),
-        .@"call_builtinc_v" => pl.todo(noreturn, "call_builtinc_v"),
-        .@"call_builtinc" => pl.todo(noreturn, "call_builtinc"),
+            switch (abi) {
+                .bytecode => {
+                    const functionPtr = current.function.header.get(functionId.cast(core.Function));
 
-        .@"call_foreign" => pl.todo(noreturn, "call_foreign"),
-        .@"call_foreignc" => pl.todo(noreturn, "call_foreignc"),
-        .@"call_foreign_v" => pl.todo(noreturn, "call_foreign_v"),
-        .@"call_foreignc_v" => pl.todo(noreturn, "call_foreignc_v"),
+                    if (@intFromBool(self.calls.hasSpace(1)) & @intFromBool(self.data.hasSpace(functionPtr.stack_size)) == 0) {
+                        @branchHint(.cold);
+                        return error.Overflow;
+                    }
 
-        .@"return" => pl.todo(noreturn, "return"),
-        .@"return_v" => pl.todo(noreturn, "return_v"),
-        .@"cancel" => pl.todo(noreturn, "cancel"),
-        .@"cancel_v" => pl.todo(noreturn, "cancel_v"),
+                    const data = self.data.allocSlice(functionPtr.stack_size);
+
+                    const newRegisters = self.registers.allocPtr();
+
+                    self.calls.push(core.CallFrame{
+                        .function = functionPtr,
+                        .evidence = null,
+                        .data = data.ptr,
+                        .set_frame = self.sets.top(),
+                        .ip = functionPtr.extents.base,
+                        .output = registerId,
+                    });
+
+                    for (argumentRegisterIds, 0..) |reg, i| {
+                        newRegisters[i] = current.callFrame.vregs[reg.getIndex()];
+                    }
+
+                },
+                .builtin => {
+                    const functionPtr: *const core.BuiltinFunction = current.function.header.get(functionId.cast(core.BuiltinAddress)).asFunction();
+
+                    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
+                    for (argumentRegisterIds, 0..) |reg, i| {
+                        arguments[i] = current.callFrame.vregs[reg.getIndex()];
+                    }
+
+                    const retVal = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
+
+                    current.callFrame.vregs[registerId.getIndex()] = retVal;
+                },
+                .foreign => {
+                    if (argumentRegisterIds.len > pl.MAX_FOREIGN_ARGUMENTS) {
+                        @branchHint(.cold);
+                        return error.Overflow;
+                    }
+
+                    const functionPtr = current.function.header.get(functionId.cast(core.ForeignAddress));
+
+                    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
+                    for (argumentRegisterIds, 0..) |reg, i| {
+                        arguments[i] = current.callFrame.vregs[reg.getIndex()];
+                    }
+
+                    const retVal = pl.callForeign(functionPtr, arguments);
+
+                    current.callFrame.vregs[registerId.getIndex()] = retVal;
+                },
+            }
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"prompt" => {
+            const registerId = current.instruction.data.prompt.R;
+            const abi = current.instruction.data.prompt.A;
+            const effectId = current.instruction.data.prompt.E;
+            const argumentCount = current.instruction.data.prompt.I;
+
+            const effectIndex = current.function.header.get(effectId).toIndex();
+
+            const evidencePtr = self.evidence[effectIndex] orelse {
+                @branchHint(.cold);
+                return error.MissingEvidence;
+            };
+
+            const handler = evidencePtr.handler;
+
+            std.debug.assert(current.function.extents.boundsCheck(current.callFrame.ip + argumentCount * @sizeOf(core.Register)));
+            const argumentRegisterIds = @as([*]const core.Register, @ptrCast(@alignCast(current.callFrame.ip)))[0..argumentCount];
+
+            switch (abi) {
+                .bytecode => {
+                    const functionPtr = handler.toPointer(*const core.Function);
+
+                    if (@intFromBool(self.calls.hasSpace(1)) & @intFromBool(self.data.hasSpace(functionPtr.stack_size)) == 0) {
+                        @branchHint(.cold);
+                        return error.Overflow;
+                    }
+
+                    const data = self.data.allocSlice(functionPtr.stack_size);
+
+                    const newRegisters = self.registers.allocPtr();
+
+                    self.calls.push(core.CallFrame{
+                        .function = functionPtr,
+                        .evidence = evidencePtr,
+                        .data = data.ptr,
+                        .set_frame = self.sets.top(),
+                        .ip = functionPtr.extents.base,
+                        .output = registerId,
+                    });
+
+                    for (argumentRegisterIds, 0..) |reg, i| {
+                        newRegisters[i] = current.callFrame.vregs[reg.getIndex()];
+                    }
+                },
+                .builtin => {
+                    const functionPtr: *const core.BuiltinFunction = handler.toPointer(*const core.BuiltinAddress).asFunction();
+
+                    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
+                    for (argumentRegisterIds, 0..) |reg, i| {
+                        arguments[i] = current.callFrame.vregs[reg.getIndex()];
+                    }
+
+                    const retVal = try invokeStaticBuiltin(.{ .header = self }, evidencePtr, functionPtr, arguments);
+
+                    current.callFrame.vregs[registerId.getIndex()] = retVal;
+                },
+                .foreign => {
+                    // TODO: document the fact that we are not assuming the foreign function
+                    // knows about prompting, and not passing it the evidence.
+                    // TODO: re-evaluate if this is the best strategy for foreign prompt.
+                    // it might be nicer to pass the evidence here; but this method allows
+                    // code to use arbitrary foreign functions as side effect handlers;
+                    // they just can never cancel or do anything contextual within the Ribbon fiber.
+                    // Could potentially introduce another abi for "ribbon-aware foreign".
+                    if (argumentRegisterIds.len > pl.MAX_FOREIGN_ARGUMENTS) {
+                        @branchHint(.cold);
+                        return error.Overflow;
+                    }
+
+                    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
+                    for (argumentRegisterIds, 0..) |reg, i| {
+                        arguments[i] = current.callFrame.vregs[reg.getIndex()];
+                    }
+
+                    const functionPtr = handler.toPointer(*const core.ForeignAddress);
+
+                    const retVal = pl.callForeign(functionPtr, arguments);
+
+                    current.callFrame.vregs[registerId.getIndex()] = retVal;
+                },
+            }
+
+            continue :dispatch try state.step(self);
+        },
+
+
+        .@"return" => {
+            const registerId = current.instruction.data.@"return".R;
+            const retVal: u64 = current.callFrame.vregs[registerId.getIndex()];
+
+            self.calls.pop();
+            self.registers.pop();
+            self.data.top_ptr = current.callFrame.data;
+
+            const newCallFrame = self.calls.top();
+            const newRegisters = self.registers.top();
+            std.debug.assert(@intFromPtr(newCallFrame) >= @intFromPtr(self.calls.base));
+
+            newRegisters[current.callFrame.output.getIndex()] = retVal;
+
+            continue :dispatch try state.advance(self, RunSignal.@"return");
+        },
+        .@"cancel" => {
+            const cancelledSetFrame = if (current.callFrame.evidence) |ev| ev.?.frame else {
+                @branchHint(.cold);
+                return error.MissingEvidence;
+            };
+
+            const registerId = current.instruction.data.cancel.R;
+            const cancelVal: u64 = current.callFrame.vregs[registerId.getIndex()];
+            const canceledCallFrame: *core.CallFrame = cancelledSetFrame.call;
+            const cancellation: core.Cancellation = cancelledSetFrame.handler_set.cancellation;
+
+            self.calls.top_ptr = @ptrCast(canceledCallFrame);
+            self.registers.top_ptr = self.calls.top().vregs;
+
+            const newIp: core.InstructionAddr = cancellation.address;
+            std.debug.assert(current.function.extents.boundsCheck(newIp));
+
+            canceledCallFrame.ip = newIp;
+            canceledCallFrame.vregs[cancellation.register.getIndex()] = cancelVal;
+
+            while (self.sets.top_ptr > canceledCallFrame.set_frame) {
+                const setFrame = self.sets.popPtr();
+                for (setFrame.handler_set.effects.asSlice()) |effectId| {
+                    const effectIndex = current.function.header.get(effectId).toIndex();
+                    const evidencePointerSlot = &self.evidence[effectIndex];
+
+                    evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
+                }
+            }
+        },
 
         .@"mem_set" => pl.todo(noreturn, "mem_set"),
         .@"mem_set_a" => pl.todo(noreturn, "mem_set_a"),

@@ -161,6 +161,8 @@ pub const Operand = enum {
     global,
     /// The operand is a static reference to a function in the current program.
     function,
+    /// The operand is a static discriminator indicating the abi with which to call a function.
+    abi,
     /// The operand is a static reference to a builtin value in the current program.
     builtin,
     /// The operand is a static reference to a C ABI value in the current program.
@@ -220,8 +222,8 @@ pub const Operand = enum {
     /// ```
     pub fn isImmediate(self: Operand) bool {
         switch (self) {
-            .register, .upvalue, .global, .function, .builtin,
-            .foreign, .effect, .handler_set, .constant,
+            .register, .upvalue, .global, .function, .abi,
+            .builtin, .foreign, .effect, .handler_set, .constant,
             => return false,
 
             .byte, .short, .int, .word,
@@ -240,6 +242,7 @@ pub const Operand = enum {
             .upvalue => try writer.writeAll("Id.of(Upvalue)"),
             .global => try writer.writeAll("Id.of(Global)"),
             .function => try writer.writeAll("Id.of(Function)"),
+            .abi => try writer.writeAll("Abi"),
             .builtin => try writer.writeAll("Id.of(BuiltinAddress)"),
             .foreign => try writer.writeAll("Id.of(ForeignAddress)"),
             .effect => try writer.writeAll("Id.of(Effect)"),
@@ -271,6 +274,7 @@ pub const Operand = enum {
             .register => 'R',
             .upvalue => 'U',
             .global => 'G',
+            .abi => 'A',
             .function => 'F',
             .builtin => 'B',
             .foreign => 'X',
@@ -291,6 +295,7 @@ pub const Operand = enum {
             .upvalue => 1,
             .global => 2,
             .function => 2,
+            .abi => 1,
             .builtin => 2,
             .foreign => 2,
             .effect => 2,
@@ -477,41 +482,21 @@ pub const CATEGORIES: []const Category = &.{
                 \\Arguments are expected to be {.register} values, encoded in the instruction stream after the call instruction.
                 \\* {.register} is not instruction-aligned; padding bytes may need to be added and accounted for following the arguments, to ensure the next instruction is aligned
                 , &.{
-                    .variable(.mnemonic, "Calls the function in {0}", &.{ .register, .byte }),
-                    .variable(.suffix("c"), "Calls the function at {0}", &.{ .function, .byte }),
-
-                    .variable(.suffix("v"), "Calls the function in {1}, placing the result in {0}", &.{ .register, .register, .byte }),
-                    .variable(.suffix("c_v"), "Calls the function at {1}, placing the result in {0}", &.{ .register, .function, .byte }),
+                    .variable(.mnemonic, "Calls the function in {1} using {2}, placing the result in {0}", &.{ .register, .register, .abi, .byte }),
+                    .variable(.suffix("c"), "Calls the function at {1} using {2}, placing the result in {0}", &.{ .register, .function, .abi, .byte }),
 
                     .variable(.override("prompt"),
-                        \\Calls the effect handler designated by {0}
-                        , &.{ .effect, .byte },
+                        \\Calls the effect handler designated by {1} using {2}, placing the result in {0}.
+                        , &.{ .register, .effect, .abi, .byte },
                     ),
-                    .variable(.override("prompt_v"),
-                        \\Calls the effect handler designated by {1},
-                        \\placing the result in {0}
-                        , &.{ .register, .effect, .byte },
-                    ),
-
-                    .variable(.suffix("builtin"), "Calls the builtin function in {0}", &.{ .register, .byte }),
-                    .variable(.suffix("builtinc"), "Calls the builtin function at {0}", &.{ .builtin, .byte }),
-                    .variable(.suffix("builtin_v"), "Calls the builtin function in {1}, placing the result in {0}", &.{ .register, .register, .byte }),
-                    .variable(.suffix("builtinc_v"), "Calls the builtin function at {1}, placing the result in {0}", &.{ .register, .builtin, .byte }),
-
-                    .jitVariable(.suffix("foreign"), "Calls the C ABI function in {0}", &.{ .register, .byte }),
-                    .jitVariable(.suffix("foreignc"), "Calls the C ABI function at {0}", &.{ .foreign, .byte }),
-                    .jitVariable(.suffix("foreign_v"), "Calls the C ABI function in {1}, placing the result in {0}", &.{ .register, .register, .byte }),
-                    .jitVariable(.suffix("foreignc_v"), "Calls the C ABI function at {1}, placing the result in {0}", &.{ .register, .foreign, .byte }),
                 },
             ),
 
             .mnemonic("return",
                 "End the current function, in one of two ways",
                 &.{
-                    .terminator(.mnemonic, "Returns flow control to the caller of current function", &.{}),
-                    .terminator(.suffix("v"), "Returns flow control to the caller of current function, yielding {0} to the caller", &.{ .register }),
-                    .terminator(.override("cancel"), "Returns flow control to the offset associated with the current effect handler's {.handler_set}", &.{}),
-                    .terminator(.override("cancel_v"), "Returns flow control to the offset associated with the current effect handler's {.handler_set}, yielding {0} as the cancellation value", &.{ .register }),
+                    .terminator(.mnemonic, "Returns flow control to the caller of current function, yielding {0} to the caller", &.{ .register }),
+                    .terminator(.override("cancel"), "Returns flow control to the offset associated with the current effect handler's {.handler_set}, yielding {0} as the cancellation value", &.{ .register }),
                 },
             ),
         },
