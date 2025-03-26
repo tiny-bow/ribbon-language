@@ -30,6 +30,7 @@ pub fn invokeStaticBuiltin(self: core.Fiber, fun: *const core.BuiltinFunction, a
 
     self.header.calls.push(core.CallFrame{
         .function = @ptrCast(fun),
+        .kind = .builtin,
         .evidence = null,
         .data = self.header.data.top_ptr,
         .ip = undefined,
@@ -65,15 +66,17 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
     self.header.calls.pushSlice(&.{
         core.CallFrame {
             .function = undefined,
+            .kind = .builtin,
             .evidence = null,
             .data = self.header.data.top_ptr,
             .ip = @ptrCast(&HALT),
         },
         core.CallFrame {
             .function = @ptrCast(fun),
+            .kind = .bytecode,
             .evidence = null,
             .data = self.header.data.top_ptr,
-            .ip = fun.data.bytecode.extents.base,
+            .ip = fun.extents.base,
         },
     });
 
@@ -153,8 +156,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal 
                 return error.Overflow;
             }
 
-            std.debug.assert(function.header.addresses.validateHandlerSet(handlerSetId));
-            const handlerSet = function.header.addresses.getHandlerSet(handlerSetId);
+            const handlerSet = function.header.get(handlerSetId);
 
             const setFrame = self.sets.create(core.SetFrame {
                 .call = callFrame,
@@ -164,8 +166,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal 
             const evidenceStorage: [*]u8 = @ptrCast(callFrame.data + handlerSet.evidence);
 
             for (handlerSet.handlers.asSlice(), 0..) |handler, i| {
-                std.debug.assert(function.header.addresses.validateEffect(handler.effect));
-                const effectIndex = function.header.addresses.getEffect(handler.effect).toIndex();
+                const effectIndex = function.header.get(handler.effect).toIndex();
                 const evidenceOffset = i * @sizeOf(core.Evidence);
 
                 const evidencePointerSlot = &self.evidence[effectIndex];
@@ -191,8 +192,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) core.Error!RunSignal 
 
             const setFrame = self.sets.popPtr();
             for (setFrame.handler_set.handlers.asSlice()) |handler| {
-                std.debug.assert(function.header.addresses.validateEffect(handler.effect));
-                const effectIndex = function.header.addresses.getEffect(handler.effect).toIndex();
+                const effectIndex = function.header.get(handler.effect).toIndex();
                 const evidencePointerSlot = &self.evidence[effectIndex];
 
                 evidencePointerSlot.* = evidencePointerSlot.*.?.previous;

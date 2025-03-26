@@ -15,6 +15,11 @@ pub const MAX_INT = std.math.maxInt(u16) - 1;
 /// Identity values used to create indirect references.
 ///
 /// Associated type may be accessed with the `Value` constant.
+///
+/// Null ids are encoded as part of the enum for layout efficiency; the methods account for this by
+/// incrementing integers when creating enums, and decrementing enums when creating integers.
+/// Therefore, despite the null id being zero, we can still index into arrays simply by calling `.toInt()`.
+/// Additionally, "null dereference" will be caught by safe-mode checks due to overflow.
 pub fn of(comptime T: type) type {
     return enum(u16) {
         const Self = @This();
@@ -39,6 +44,15 @@ pub fn of(comptime T: type) type {
         pub fn fromInt(i: anytype) Self {
             return @enumFromInt(i + 1);
         }
+
+        /// Convert an `Id` to an optional of itself.
+        /// This is useful for `orelse` clauses on the null status of the id.
+        pub fn maybe(self: Self) ?Self {
+            if (self == .null) {
+                return null;
+            }
+            return self;
+        }
     };
 }
 
@@ -50,8 +64,11 @@ pub fn of(comptime T: type) type {
 /// could never be larger than `std.math.maxInt(u16)` elements.
 /// + Pointer values on our supported architectures only use 48-bits of their word,
 /// leaving us a super convenient space to store arbitrary data
-/// (assuming we mask it off before using it as a pointer, see methods).
+/// (assuming we decompose before using it as a pointer, see methods).
 pub fn Buffer(comptime T: type, comptime MUT: pl.Mutability) type {
+    // NOTE: the original description of this type said "assuming we mask it off"
+    // but actually, some platforms require you to sign-extend the 47th bit to 64 bits.
+    // The code remains unchanged, though, because zig handles this for us in @ptrFromInt.
     return packed struct {
         const Self = @This();
 

@@ -237,41 +237,49 @@ pub const AddressTable = extern struct {
     effects: Id.Buffer(*const Effect, .constant),
 
     /// Get a pointer to a `Constant` from its `id`.
+    /// * Does not perform any validation outside of debug mode
     pub fn getConstant(self: *const AddressTable, id: Id.of(Constant)) *const Constant {
         return self.constants.asSlice()[id.toInt()];
     }
 
     /// Get a pointer to a `Global` from its `id`.
+    /// * Does not perform any validation outside of debug mode
     pub fn getGlobal(self: *const AddressTable, id: Id.of(Global)) *const Global {
         return self.globals.asSlice()[id.toInt()];
     }
 
     /// Get a pointer to a `Function` from its `id`.
+    /// * Does not perform any validation outside of debug mode
     pub fn getFunction(self: *const AddressTable, id: Id.of(Function)) *const Function {
         return self.functions.asSlice()[id.toInt()];
     }
 
     /// Get a pointer to a `BuiltinAddress` from its `id`.
+    /// * Does not perform any validation outside of debug mode
     pub fn getBuiltinAddress(self: *const AddressTable, id: Id.of(BuiltinAddress)) *const BuiltinAddress {
         return self.builtin_addresses.asSlice()[id.toInt()];
     }
 
     /// Get a pointer to a `ForeignAddress` from its `id`.
+    /// * Does not perform any validation outside of debug mode
     pub fn getForeignAddress(self: *const AddressTable, id: Id.of(ForeignAddress)) *const ForeignAddress {
         return self.foreign_addresses.asSlice()[id.toInt()];
     }
 
     /// Get a pointer to a `HandlerSet` from its `id`.
+    /// * Does not perform any validation outside of debug mode
     pub fn getHandlerSet(self: *const AddressTable, id: Id.of(HandlerSet)) *const HandlerSet {
         return self.handler_sets.asSlice()[id.toInt()];
     }
 
     /// Get a pointer to a `Handler` from its `id`.
+    /// * Does not perform any validation outside of debug mode
     pub fn getHandler(self: *const AddressTable, s: Id.of(HandlerSet), h: Id.of(Handler)) *const Handler {
         return self.getHandlerSet(s).getHandler(h);
     }
 
     /// Get a pointer to an `Effect` from its `id`.
+    /// * Does not perform any validation outside of debug mode
     pub fn getEffect(self: *const AddressTable, id: Id.of(Effect)) *const Effect {
         return self.effects.asSlice()[id.toInt()];
     }
@@ -389,6 +397,20 @@ pub const Header = extern struct {
     /// Not necessarily a complete listing for all bindings;
     /// only what it wants to be known externally.
     symbols: SymbolTable,
+
+    /// Get an address from an ID.
+    /// * Does not perform any validation outside of debug mode
+    pub fn get(self: *const Header, id: anytype) *const @TypeOf(id).Value {
+        return switch (comptime SymbolKind.fromType(@TypeOf(id).Value)) {
+            .constant => self.addresses.getConstant(id),
+            .global => self.addresses.getGlobal(id),
+            .function => self.addresses.getFunction(id),
+            .builtin => self.addresses.getBuiltinAddress(id),
+            .foreign_address => self.addresses.getForeignAddress(id),
+            .handler_set => self.addresses.getHandlerSet(id),
+            .effect => self.addresses.getEffect(id),
+        };
+    }
 
     /// Get the address of a symbol by name, in a type-generic manner.
     /// * **Note**: This uses the raw table to lookup a symbol. While we do store symbol hashes to

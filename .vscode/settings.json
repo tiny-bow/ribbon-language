@@ -50,6 +50,7 @@
         "denormal",
         "disas",
         "endmacro",
+        "errdefer",
         "foreignc",
         "ifndef",
         "immediates",
