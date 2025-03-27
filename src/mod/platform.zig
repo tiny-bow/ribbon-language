@@ -273,37 +273,59 @@ pub const Alignment: type = std.math.IntFittingRange(0, MAX_ALIGNMENT);
 
 /// Offsets an address to the next multiple of the provided alignment, if it is not already aligned.
 pub fn alignTo(address: anytype, alignment: anytype) @TypeOf(address) {
-    return address + @call(.always_inline, alignDelta, .{address, alignment});
+    const addr = integerFromUnknownAddressType(address);
+    const algn = integerFromUnknownAddressType(alignment);
+    return integerToUnknownAddressType(@TypeOf(address), (addr + algn - 1) & (~algn + 1));
+}
+
+pub fn integerFromUnknownAddressType(address: anytype) u64 {
+    const T = @TypeOf(address);
+    const tInfo = @typeInfo(T);
+    return switch (tInfo) {
+        .pointer => @intFromPtr(address),
+        .comptime_int => @intCast(address),
+        .int => @as(std.meta.Int(.unsigned, @bitSizeOf(T)), @bitCast(address)),
+        else => @compileError("addressFromUnknown: invalid type " ++ @typeName(T)),
+    };
+}
+
+pub fn integerToUnknownAddressType(comptime T: type, address: u64) T {
+    const tInfo = @typeInfo(T);
+    return switch (tInfo) {
+        .pointer => @ptrCast(@alignCast(@as([*]u8, @ptrFromInt(address)))),
+        .comptime_int => @intCast(address),
+        .int => |info| ints: {
+            const out = @as(std.meta.Int(info.signedness, 64), @bitCast(address));
+            if (@bitSizeOf(T) < 64) {
+                break :ints @intCast(out);
+            } else {
+                break :ints out;
+            }
+        },
+        else => @compileError("addressFromUnknown: invalid type " ++ @typeName(T)),
+    };
+}
+
+/// Filter function for comptime_int types preventing errors when comparing the output of `alignDelta` with a literal.
+pub fn AlignOutput(comptime T: type) type {
+    return if (T != comptime_int) T else u64;
 }
 
 /// Calculates the offset necessary to increment an address to the next multiple of the provided alignment.
-pub fn alignDelta(address: anytype, alignment: anytype) @TypeOf(address) {
-    comptime var T = @TypeOf(address);
-    comptime var A = @TypeOf(alignment);
-    comptime var isComptime = false;
-    if (comptime T == comptime_int or A == comptime_int) {
-        T = usize;
-        A = usize;
-        isComptime = true;
-    }
+pub fn alignDelta(address: anytype, alignment: anytype) AlignOutput(@TypeOf(alignment)) {
+    const addr = integerFromUnknownAddressType(address);
+    const algn = integerFromUnknownAddressType(alignment);
+    const off = (algn - (addr % algn)) % algn;
+    return integerToUnknownAddressType(AlignOutput(@TypeOf(alignment)), off);
+}
 
-    const I = std.meta.Int(.unsigned, @bitSizeOf(T));
-    const U = std.meta.Int(.unsigned, @max(@bitSizeOf(T), @bitSizeOf(A)));
-    const tInfo = @typeInfo(T);
-
-    const ptr: U = if (comptime tInfo == .pointer) @intFromPtr(address) else if (comptime !isComptime) @as(I, @bitCast(address)) else @intCast(address);
-    const aln: U = alignment;
-
-    const alnMask: U = aln - 1;
-    const delta: U = (aln - (ptr & alnMask)) & alnMask;
-
-    if (comptime tInfo == .pointer) {
-        return @ptrFromInt(delta);
-    } else if (comptime @bitSizeOf(T) < @bitSizeOf(U)) {
-        return @intCast(delta);
-    } else {
-        return delta;
-    }
+/// Applies an offset to a pointer
+/// * preserves pointer attributes
+/// * offset may be a signed or unsigned integer; it is bitcast before addition
+pub fn offsetPointer(ptr: anytype, offset: anytype) @TypeOf(ptr) {
+    const addr = integerFromUnknownAddressType(ptr);
+    const off = integerFromUnknownAddressType(offset);
+    return integerToUnknownAddressType(@TypeOf(ptr), addr + off);
 }
 
 /// Represents the bit size of an integer type; we allow arbitrary bit-width integers, from 0 up to the max `Alignment`.

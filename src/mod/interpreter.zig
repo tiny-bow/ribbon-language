@@ -51,6 +51,7 @@ pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *co
         .evidence = evidence,
         .data = self.header.data.top_ptr,
         .set_frame = self.header.sets.top(),
+        .vregs = self.header.registers.allocPtr(),
         .ip = undefined,
         .output = .scratch,
     });
@@ -59,20 +60,20 @@ pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *co
     @memcpy(newRegisters[0..arguments.len], arguments);
 
     return switch (fun(self.header)) {
-        .halt => {
+        .cancel => {
             self.header.calls.pop();
 
-            return .{ self.header.registers.popPtr()[comptime core.Register.native_ret.getIndex()], .@"cancel" };
+            return .{ self.header.registers.popPtr()[comptime core.Register.native_ret.getIndex()], .cancel };
         },
-
-        .request_trap => error.FunctionTrapped,
         .@"return" => {
             self.header.calls.pop();
 
             return .{ self.header.registers.popPtr()[comptime core.Register.native_ret.getIndex()], .@"return" };
         },
-        .bad_encoding => error.BadEncoding,
+
         .panic => @panic("An unexpected error occurred in native code; exiting"),
+
+        .request_trap => error.FunctionTrapped,
         .overflow => error.Overflow,
         .underflow => error.Underflow,
     };
@@ -86,11 +87,16 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
         return error.Overflow;
     }
 
+    const newRegisters = self.header.registers.allocSlice(2);
+    @memcpy(newRegisters[1][0..arguments.len], arguments);
+
     self.header.calls.pushSlice(&.{
         core.CallFrame {
             .function = undefined,
             .evidence = null,
             .data = self.header.data.top_ptr,
+            .set_frame = self.header.sets.top(),
+            .vregs = &newRegisters[0],
             .ip = HALT,
             .output = .scratch,
         },
@@ -98,15 +104,14 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
             .function = @ptrCast(fun),
             .evidence = null,
             .data = self.header.data.top_ptr,
+            .set_frame = self.header.sets.top(),
+            .vregs = &newRegisters[1],
             .ip = fun.extents.base,
             .output = .native_ret,
         },
     });
 
-    const newRegisters = self.header.registers.allocSlice(2);
-    @memcpy(newRegisters[1][0..arguments.len], arguments);
-
-    try eval(self);
+    try eval(self, .skip_breakpoints);
 
     // second frame will have already been popped by the interpreter,
     // so we only pop 1 each here.
@@ -123,13 +128,13 @@ pub fn eval(self: core.Fiber, comptime mode: enum {breakpoints_halt, skip_breakp
         run(true, self.header) catch |signalOrError| {
             if (comptime mode == .breakpoints_halt) {
                 switch (signalOrError) {
-                    .breakpoint => break,
-                    inline .step, .@"return" => continue,
+                    RunSignal.breakpoint => break,
+                    inline RunSignal.step, RunSignal.@"return", RunSignal.cancel => continue,
                     inline else => |e| return e,
                 }
             } else {
                 switch (signalOrError) {
-                    inline .step, .breakpoint, .@"return" => continue,
+                    inline RunSignal.step, RunSignal.breakpoint, RunSignal.@"return", RunSignal.cancel => continue,
                     inline else => |e| return e,
                 }
             }
@@ -188,7 +193,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
 
             std.debug.assert(st.function.extents.boundsCheck(st.callFrame.ip));
 
-            st.instruction.* = Instruction.fromBits(st.callFrame.ip[0]);
+            st.instruction = Instruction.fromBits(st.callFrame.ip[0]);
 
             st.callFrame.ip += 1;
 
@@ -199,7 +204,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
             return st.instruction.code;
         }
 
-        inline fn advance(st: *@This(), header: *core.mem.FiberHeader, signal: RunSignal) RunSignal!Instruction.OpCode {
+        fn advance(st: *@This(), header: *core.mem.FiberHeader, signal: RunSignal) RunSignal!Instruction.OpCode {
             if (comptime isLoop) {
                 return st.decode(header);
             } else {
@@ -207,7 +212,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
             }
         }
 
-        inline fn step(st: *@This(), header: *core.mem.FiberHeader) RunSignal!Instruction.OpCode {
+        fn step(st: *@This(), header: *core.mem.FiberHeader) RunSignal!Instruction.OpCode {
             return st.advance(header, RunSignal.step);
         }
     };
@@ -230,7 +235,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
 
             const handlerSetId = current.instruction.data.push_set.H;
 
-            const handlerSet = current.function.header.get(handlerSetId);
+            const handlerSet: *const core.HandlerSet = current.function.header.get(handlerSetId);
 
             const setFrame = self.sets.create(core.SetFrame {
                 .call = current.callFrame,
@@ -239,23 +244,13 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
 
             current.callFrame.set_frame = setFrame;
 
-            const evidenceStorage: [*]u8 = @ptrCast(current.callFrame.data + handlerSet.evidence);
-
-            for (handlerSet.effects.asSlice(), 0..) |effectId, i| {
+            for (handlerSet.effects.asSlice()) |effectId| {
                 const effectIndex = current.function.header.get(effectId).toIndex();
-                const evidenceOffset = i * @sizeOf(core.Evidence);
 
                 const evidencePointerSlot = &self.evidence[effectIndex];
-                const evidenceSlot: *core.Evidence = @ptrCast(@alignCast(evidenceStorage + evidenceOffset));
 
-                const prevEvidence = evidencePointerSlot.*;
-                evidencePointerSlot.* = evidenceSlot;
-
-                evidenceSlot.* = core.Evidence{
-                    .previous = prevEvidence,
-                    .frame = setFrame,
-                    .handler = handlerSet.handlers.asSlice()[i],
-                };
+                const oldEvidence = evidencePointerSlot.*;
+                evidencePointerSlot.* = oldEvidence.?.previous;
             }
 
             continue :dispatch try state.step(self);
@@ -283,7 +278,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
             const offset: core.InstructionOffset = @bitCast(current.instruction.data.br.I);
             std.debug.assert(offset != 0);
 
-            const newIp: core.InstructionAddr = @ptrFromInt(@intFromPtr(current.callFrame.ip) + @as(u32, @bitCast(offset)));
+            const newIp: core.InstructionAddr = pl.offsetPointer(current.callFrame.ip, offset);
+            std.debug.assert(pl.alignDelta(newIp, @alignOf(core.InstructionBits)) == 0);
             std.debug.assert(current.function.extents.boundsCheck(newIp));
 
             current.callFrame.ip = newIp;
@@ -296,7 +292,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
 
             const registerId = current.instruction.data.br_if.R;
 
-            const newIp: core.InstructionAddr = @ptrFromInt(@intFromPtr(current.callFrame.ip) + @as(u32, @bitCast(offset)));
+            const newIp: core.InstructionAddr = pl.offsetPointer(current.callFrame.ip, offset);
+            std.debug.assert(pl.alignDelta(newIp, @alignOf(core.InstructionBits)) == 0);
             std.debug.assert(current.function.extents.boundsCheck(newIp));
 
             const register = &current.callFrame.vregs[registerId.getIndex()];
@@ -314,12 +311,15 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
 
             const functionOpaquePtr: *const anyopaque = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            std.debug.assert(@intFromPtr(current.callFrame.ip + argumentCount * @sizeOf(core.Register)) <= @intFromPtr(current.function.extents.upper));
+            const newIp: core.InstructionAddr = pl.alignTo(pl.offsetPointer(current.callFrame.ip, argumentCount * @sizeOf(core.Register)), @alignOf(core.InstructionBits));
+            std.debug.assert(current.function.extents.boundsCheck(newIp));
+            current.callFrame.ip = newIp;
+
             const argumentRegisterIds = @as([*]const core.Register, @ptrCast(@alignCast(current.callFrame.ip)))[0..argumentCount];
 
             switch (abi) {
                 .bytecode => {
-                    const functionPtr: *const core.Function = @ptrCast(functionOpaquePtr);
+                    const functionPtr: *const core.Function = @ptrCast(@alignCast(functionOpaquePtr));
 
                     if (@intFromBool(self.calls.hasSpace(1)) & @intFromBool(self.data.hasSpace(functionPtr.stack_size)) == 0) {
                         @branchHint(.cold);
@@ -334,7 +334,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                         .function = functionOpaquePtr,
                         .evidence = null,
                         .set_frame = self.sets.top(),
-                        .data = data,
+                        .data = data.ptr,
+                        .vregs = newRegisters,
                         .ip = current.function.extents.base,
                         .output = registerIdX,
                     });
@@ -344,14 +345,15 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                     }
                 },
                 .builtin => {
-                    const functionPtr: *const core.BuiltinFunction = @as(*const core.BuiltinAddress, @ptrCast(functionOpaquePtr)).toFunction();
+                    const functionPtr: *const core.BuiltinFunction = @as(*const core.BuiltinAddress, @ptrCast(@alignCast(functionOpaquePtr))).asFunction();
 
                     const arguments = current.tempRegisters[0..argumentRegisterIds.len];
                     for (argumentRegisterIds, 0..) |reg, i| {
                         arguments[i] = current.callFrame.vregs[reg.getIndex()];
                     }
 
-                    const retVal = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
+                    const retVal, const signal = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
+                    _ = signal; // FIXME: signal handling
 
                     current.callFrame.vregs[registerIdX.getIndex()] = retVal;
                 },
@@ -400,6 +402,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                         .function = functionPtr,
                         .evidence = null,
                         .data = data.ptr,
+                        .vregs = newRegisters,
                         .set_frame = self.sets.top(),
                         .ip = functionPtr.extents.base,
                         .output = registerId,
@@ -418,7 +421,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                         arguments[i] = current.callFrame.vregs[reg.getIndex()];
                     }
 
-                    const retVal = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
+                    const retVal, const signal = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
+                    _ = signal; // FIXME: signal handling
 
                     current.callFrame.vregs[registerId.getIndex()] = retVal;
                 },
@@ -428,7 +432,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                         return error.Overflow;
                     }
 
-                    const functionPtr = current.function.header.get(functionId.cast(core.ForeignAddress));
+                    const functionPtr = current.function.header.get(functionId.cast(core.ForeignAddress)).*;
 
                     const arguments = current.tempRegisters[0..argumentRegisterIds.len];
                     for (argumentRegisterIds, 0..) |reg, i| {
@@ -479,6 +483,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                         .function = functionPtr,
                         .evidence = evidencePtr,
                         .data = data.ptr,
+                        .vregs = newRegisters,
                         .set_frame = self.sets.top(),
                         .ip = functionPtr.extents.base,
                         .output = registerId,
@@ -496,7 +501,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                         arguments[i] = current.callFrame.vregs[reg.getIndex()];
                     }
 
-                    const retVal = try invokeStaticBuiltin(.{ .header = self }, evidencePtr, functionPtr, arguments);
+                    const retVal, const signal = try invokeStaticBuiltin(.{ .header = self }, evidencePtr, functionPtr, arguments);
+                    _ = signal; // FIXME: signal handling
 
                     current.callFrame.vregs[registerId.getIndex()] = retVal;
                 },
@@ -518,7 +524,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                         arguments[i] = current.callFrame.vregs[reg.getIndex()];
                     }
 
-                    const functionPtr = handler.toPointer(*const core.ForeignAddress);
+                    const functionPtr = handler.toPointer(core.ForeignAddress);
 
                     const retVal = pl.callForeign(functionPtr, arguments);
 
@@ -547,7 +553,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
             continue :dispatch try state.advance(self, RunSignal.@"return");
         },
         .@"cancel" => {
-            const cancelledSetFrame = if (current.callFrame.evidence) |ev| ev.?.frame else {
+            const cancelledSetFrame = if (current.callFrame.evidence) |ev| ev.frame else {
                 @branchHint(.cold);
                 return error.MissingEvidence;
             };
@@ -558,7 +564,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
             const cancellation: core.Cancellation = cancelledSetFrame.handler_set.cancellation;
 
             self.calls.top_ptr = @ptrCast(canceledCallFrame);
-            self.registers.top_ptr = self.calls.top().vregs;
+            self.registers.top_ptr = @ptrCast(self.calls.top().vregs);
 
             const newIp: core.InstructionAddr = cancellation.address;
             std.debug.assert(current.function.extents.boundsCheck(newIp));
@@ -566,7 +572,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
             canceledCallFrame.ip = newIp;
             canceledCallFrame.vregs[cancellation.register.getIndex()] = cancelVal;
 
-            while (self.sets.top_ptr > canceledCallFrame.set_frame) {
+            while (@intFromPtr(self.sets.top()) >= @intFromPtr(canceledCallFrame.set_frame)) {
                 const setFrame = self.sets.popPtr();
                 for (setFrame.handler_set.effects.asSlice()) |effectId| {
                     const effectIndex = current.function.header.get(effectId).toIndex();

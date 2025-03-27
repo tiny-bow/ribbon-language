@@ -35,6 +35,7 @@ pub const InstructionOffset = i32;
 pub const StackOffset = i32;
 
 
+
 /// The address of an instruction in a Ribbon bytecode program.
 pub const InstructionAddr: type = [*]const InstructionBits;
 /// The address of an instruction in a Ribbon bytecode program, while it is being constructed.
@@ -84,7 +85,7 @@ pub const Function = extern struct {
     /// * `upper`: one past the end of its instructions; for bounds checking
     extents: Extents,
     /// The stack window size of the function.
-    stack_size: StackOffset,
+    stack_size: u16,
 };
 
 
@@ -225,7 +226,7 @@ pub const Handler = packed struct(u64) {
     /// Unpack the function pointer embedded in this handler.
     /// * Cannot perform type checking
     pub fn toPointer(self: Handler, comptime T: type) T {
-        return @ptrCast(@alignCast(self.function));
+        return @ptrCast(@alignCast(@constCast(self.function)));
     }
 };
 
@@ -617,21 +618,6 @@ pub const BuiltinSignal = enum(i64) {
 
     /// The built-in function has encountered a stack overflow.
     underflow = -3,
-
-
-    /// Convert a `BuiltinSignal` into `Error!InterpreterSignal`.
-    pub fn toNative(self: BuiltinSignal) Error!void {
-        switch (self) {
-            .@"return" => return,
-
-            .overflow => return error.Overflow,
-            .underflow => return error.Underflow,
-
-            .request_trap => return error.FunctionTrapped,
-
-            .panic => @panic("An unexpected error occurred in native code; exiting"),
-        }
-    }
 };
 
 
