@@ -23,25 +23,23 @@ pub fn invokeAllocatedBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: 
 }
 
 /// The indicates the kind of control flow yield being performed by a builtin function.
-pub const BuiltinSignal = enum {
+pub const BuiltinResult = union(enum) {
     /// Nominal return value.
-    @"return",
+    /// May or may not be initialized depending on function signature.
+    @"return": core.RegisterBits,
     /// Effect handler cancellation.
-    cancel,
+    cancel: struct {
+        /// Cancellation value.
+        /// May or may not be initialized depending on function signature.
+        value: core.RegisterBits,
+        /// The effect handler set frame that was cancelled.
+        set_frame: *const core.SetFrame,
+    },
 };
 
-/// The result of invoking a builtin function.
-pub const BuiltinResult = struct {
-    /// The return value of the function;
-    /// may or not be initialized, depending on signature of callee.
-    u64,
-    /// The kind of control flow to perform, either return or cancel;
-    /// errors are lifted to zig errors by the time this struct is relevant.
-    BuiltinSignal,
-};
 
 /// Invokes a `core.BuiltinFunction` on the provided fiber, returning the result.
-pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *const core.BuiltinFunction, arguments: []const u64) core.Error!BuiltinResult {
+pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *const core.BuiltinFunction, arguments: []const core.RegisterBits) core.Error!BuiltinResult {
     if (!self.header.calls.hasSpace(1)) {
         return error.Overflow;
     }
@@ -63,12 +61,17 @@ pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *co
         .cancel => {
             self.header.calls.pop();
 
-            return .{ self.header.registers.popPtr()[comptime core.Register.native_ret.getIndex()], .cancel };
+            const oldRegisters = self.header.registers.popPtr();
+
+            return .{ .cancel = .{
+                .value = oldRegisters[comptime core.Register.native_ret.getIndex()],
+                .set_frame = @ptrFromInt(oldRegisters[comptime core.Register.native_cancelled_frame.getIndex()]),
+            } };
         },
         .@"return" => {
             self.header.calls.pop();
 
-            return .{ self.header.registers.popPtr()[comptime core.Register.native_ret.getIndex()], .@"return" };
+            return .{ .@"return" = self.header.registers.popPtr()[comptime core.Register.native_ret.getIndex()],  };
         },
 
         .panic => @panic("An unexpected error occurred in native code; exiting"),
@@ -352,10 +355,31 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                         arguments[i] = current.callFrame.vregs[reg.getIndex()];
                     }
 
-                    const retVal, const signal = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
-                    _ = signal; // FIXME: signal handling
+                    const result = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
+                    switch (result) {
+                        .cancel => |cancelInfo| {
+                            const cancelledSet = cancelInfo.set_frame;
 
-                    current.callFrame.vregs[registerIdX.getIndex()] = retVal;
+                            cancelledSet.call.ip = cancelledSet.handler_set.cancellation.address;
+                            cancelledSet.call.vregs[cancelledSet.handler_set.cancellation.register.getIndex()] = cancelInfo.value;
+
+                            self.calls.top_ptr = @ptrCast(cancelledSet.call);
+                            self.registers.top_ptr = @ptrCast(cancelledSet.call.vregs);
+
+                            while (@intFromPtr(self.sets.top()) >= @intFromPtr(cancelledSet.handler_set)) {
+                                const setFrame = self.sets.popPtr();
+                                for (setFrame.handler_set.effects.asSlice()) |effectId| {
+                                    const effectIndex = current.function.header.get(effectId).toIndex();
+                                    const evidencePointerSlot = &self.evidence[effectIndex];
+
+                                    self.data.top_ptr = pl.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
+
+                                    evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
+                                }
+                            }
+                        },
+                        .@"return" => |retVal| current.callFrame.vregs[registerIdX.getIndex()] = retVal,
+                    }
                 },
                 .foreign => {
                     if (argumentRegisterIds.len > pl.MAX_FOREIGN_ARGUMENTS) {

@@ -532,6 +532,7 @@ pub const Register = enum(std.math.IntFittingRange(0, pl.MAX_REGISTERS)) {
     // zig fmt: on
 
     pub const native_ret: Register = .r0;
+    pub const native_cancelled_frame: Register = .r1;
 
 
     /// Creates a `Register` from an integer value.
