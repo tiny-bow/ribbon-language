@@ -445,10 +445,31 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                         arguments[i] = current.callFrame.vregs[reg.getIndex()];
                     }
 
-                    const retVal, const signal = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
-                    _ = signal; // FIXME: signal handling
+                    const result = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
+                    switch (result) {
+                        .cancel => |cancelVal| {
+                            const cancelledSet = cancelVal.set_frame;
 
-                    current.callFrame.vregs[registerId.getIndex()] = retVal;
+                            cancelledSet.call.ip = cancelledSet.handler_set.cancellation.address;
+                            cancelledSet.call.vregs[cancelledSet.handler_set.cancellation.register.getIndex()] = cancelVal.value;
+
+                            self.calls.top_ptr = @ptrCast(cancelledSet.call);
+                            self.registers.top_ptr = @ptrCast(cancelledSet.call.vregs);
+
+                            while (@intFromPtr(self.sets.top()) >= @intFromPtr(cancelledSet.handler_set)) {
+                                const setFrame = self.sets.popPtr();
+                                for (setFrame.handler_set.effects.asSlice()) |effectId| {
+                                    const effectIndex = current.function.header.get(effectId).toIndex();
+                                    const evidencePointerSlot = &self.evidence[effectIndex];
+
+                                    self.data.top_ptr = pl.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
+
+                                    evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
+                                }
+                            }
+                        },
+                        .@"return" => |retVal| current.callFrame.vregs[registerId.getIndex()] = retVal,
+                    }
                 },
                 .foreign => {
                     if (argumentRegisterIds.len > pl.MAX_FOREIGN_ARGUMENTS) {
@@ -475,12 +496,12 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
         .@"prompt" => {
             const registerId = current.instruction.data.prompt.R;
             const abi = current.instruction.data.prompt.A;
-            const effectId = current.instruction.data.prompt.E;
+            const promptId = current.instruction.data.prompt.E;
             const argumentCount = current.instruction.data.prompt.I;
 
-            const effectIndex = current.function.header.get(effectId).toIndex();
+            const promptIndex = current.function.header.get(promptId).toIndex();
 
-            const evidencePtr = self.evidence[effectIndex] orelse {
+            const evidencePtr = self.evidence[promptIndex] orelse {
                 @branchHint(.cold);
                 return error.MissingEvidence;
             };
@@ -525,17 +546,38 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                         arguments[i] = current.callFrame.vregs[reg.getIndex()];
                     }
 
-                    const retVal, const signal = try invokeStaticBuiltin(.{ .header = self }, evidencePtr, functionPtr, arguments);
-                    _ = signal; // FIXME: signal handling
+                    const result = try invokeStaticBuiltin(.{ .header = self }, evidencePtr, functionPtr, arguments);
+                    switch (result) {
+                        .cancel => |cancelVal| {
+                            const cancelledSet = cancelVal.set_frame;
 
-                    current.callFrame.vregs[registerId.getIndex()] = retVal;
+                            cancelledSet.call.ip = cancelledSet.handler_set.cancellation.address;
+                            cancelledSet.call.vregs[cancelledSet.handler_set.cancellation.register.getIndex()] = cancelVal.value;
+
+                            self.calls.top_ptr = @ptrCast(cancelledSet.call);
+                            self.registers.top_ptr = @ptrCast(cancelledSet.call.vregs);
+
+                            while (@intFromPtr(self.sets.top()) >= @intFromPtr(cancelledSet.handler_set)) {
+                                const setFrame = self.sets.popPtr();
+                                for (setFrame.handler_set.effects.asSlice()) |effectId| {
+                                    const effectIndex = current.function.header.get(effectId).toIndex();
+                                    const evidencePointerSlot = &self.evidence[effectIndex];
+
+                                    self.data.top_ptr = pl.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
+
+                                    evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
+                                }
+                            }
+                        },
+                        .@"return" => |retVal| current.callFrame.vregs[registerId.getIndex()] = retVal,
+                    }
                 },
                 .foreign => {
                     // TODO: document the fact that we are not assuming the foreign function
                     // knows about prompting, and not passing it the evidence.
                     // TODO: re-evaluate if this is the best strategy for foreign prompt.
                     // it might be nicer to pass the evidence here; but this method allows
-                    // code to use arbitrary foreign functions as side effect handlers;
+                    // code to classify arbitrary foreign functions as side effects;
                     // they just can never cancel or do anything contextual within the Ribbon fiber.
                     // Could potentially introduce another abi for "ribbon-aware foreign".
                     if (argumentRegisterIds.len > pl.MAX_FOREIGN_ARGUMENTS) {
