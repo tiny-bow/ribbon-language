@@ -125,20 +125,27 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
     return registers[1][comptime core.Register.native_ret.getIndex()];
 }
 
+/// Passed to `eval`, indicates how to handle breakpoints in the interpreter loop.
+pub const BreakpointMode = enum {
+    /// Stop at breakpoints, and return to the caller.
+    breakpoints_halt,
+    /// Skip breakpoints and continue until halt.
+    skip_breakpoints,
+};
+
 /// Run the interpreter loop until `halt`; and optionally stop at breakpoints.
-pub fn eval(self: core.Fiber, comptime mode: enum {breakpoints_halt, skip_breakpoints}) core.Error!void {
+pub fn eval(self: core.Fiber, comptime mode: BreakpointMode) core.Error!void {
     while (true) {
         run(true, self.header) catch |signalOrError| {
             if (comptime mode == .breakpoints_halt) {
                 switch (signalOrError) {
-                    RunSignal.breakpoint => break,
-                    inline RunSignal.step, RunSignal.@"return", RunSignal.cancel => continue,
-                    inline else => |e| return e,
+                    LoopSignal.breakpoint => break,
+                    else => |e| return e,
                 }
             } else {
                 switch (signalOrError) {
-                    inline RunSignal.step, RunSignal.breakpoint, RunSignal.@"return", RunSignal.cancel => continue,
-                    inline else => |e| return e,
+                    LoopSignal.breakpoint => continue,
+                    else => |e| return e,
                 }
             }
         };
@@ -148,24 +155,9 @@ pub fn eval(self: core.Fiber, comptime mode: enum {breakpoints_halt, skip_breakp
 }
 
 
-/// Run the interpreter loop for a single instruction.
-pub fn step(self: core.Fiber) core.Error!?InterpreterSignal {
-    run(false, self.header) catch |signalOrError| {
-        switch (signalOrError) {
-            RunSignal.@"return" => return .@"return",
-            RunSignal.cancel => return .cancel,
-            RunSignal.breakpoint => return .breakpoint,
-            RunSignal.step => return null,
-            inline else => |e| return e,
-        }
-    };
 
-    return .halt;
-}
-
-
-/// Signals that can be returned by the interpreter
-pub const InterpreterSignal = enum(i64) {
+/// Signals that can be returned by the `step` function
+pub const Signal = enum(i64) {
     @"return" = 0,
     cancel = 1,
 
@@ -173,14 +165,37 @@ pub const InterpreterSignal = enum(i64) {
     breakpoint = -2,
 };
 
-const RunSignal = error {
+/// Run the interpreter loop for a single instruction.
+pub fn step(self: core.Fiber) core.Error!?Signal {
+    run(false, self.header) catch |signalOrError| {
+        switch (signalOrError) {
+            StepSignal.@"return" => return .@"return",
+            StepSignal.cancel => return .cancel,
+            StepSignal.breakpoint => return .breakpoint,
+            StepSignal.step => return null,
+            inline else => |e| return e,
+        }
+    };
+
+    return .halt;
+}
+
+const StepSignal = error {
     step,
     breakpoint,
     @"return",
     cancel,
 };
 
-fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSignal)!void {
+const LoopSignal = error {
+    breakpoint,
+};
+
+fn SignalSubset(comptime isLoop: bool) type {
+    return if (isLoop) LoopSignal else StepSignal;
+}
+
+fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || SignalSubset(isLoop))!void {
     const State = struct {
         callFrame: *core.CallFrame,
         function: *const core.Function,
@@ -207,16 +222,17 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
             return st.instruction.code;
         }
 
-        fn advance(st: *@This(), header: *core.mem.FiberHeader, signal: RunSignal) RunSignal!Instruction.OpCode {
+        fn advance(st: *@This(), header: *core.mem.FiberHeader, comptime signal: anyerror) SignalSubset(isLoop)!Instruction.OpCode {
             if (comptime isLoop) {
                 return st.decode(header);
             } else {
-                return signal;
+                return @errorCast(signal);
             }
         }
 
-        fn step(st: *@This(), header: *core.mem.FiberHeader) RunSignal!Instruction.OpCode {
-            return st.advance(header, RunSignal.step);
+        fn step(st: *@This(), header: *core.mem.FiberHeader) SignalSubset(isLoop)!Instruction.OpCode {
+            return if (comptime isLoop) st.decode(header)
+            else @errorFromInt(@intFromError(error.step));
         }
     };
 
@@ -225,7 +241,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
 
     dispatch: switch (current.decode(self)) {
         .nop => continue :dispatch try state.step(self),
-        .@"breakpoint" => return RunSignal.breakpoint,
+        .@"breakpoint" => return StepSignal.breakpoint,
         .halt => return,
         .trap => return error.Unreachable,
         .@"unreachable" => return error.Unreachable,
@@ -616,7 +632,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
 
             newRegisters[current.callFrame.output.getIndex()] = retVal;
 
-            continue :dispatch try state.advance(self, RunSignal.@"return");
+            continue :dispatch try state.advance(self, StepSignal.@"return");
         },
         .@"cancel" => {
             const cancelledSetFrame = if (current.callFrame.evidence) |ev| ev.frame else {
@@ -647,6 +663,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || RunSig
                     evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
                 }
             }
+
+            continue :dispatch try state.advance(self, StepSignal.cancel);
         },
 
         .@"mem_set" => pl.todo(noreturn, "mem_set"),
