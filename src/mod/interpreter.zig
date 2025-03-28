@@ -240,13 +240,18 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
     const current = &state;
 
     dispatch: switch (current.decode(self)) {
+        // No operation; does nothing
         .nop => continue :dispatch try state.step(self),
+        // Triggers a breakpoint in debuggers; does nothing otherwise
         .@"breakpoint" => return StepSignal.breakpoint,
+        // Halts execution at this instruction offset
         .halt => return,
+        // Traps execution of the Rvm.Fiber at this instruction offset Unlike unreachable, this indicates expected behavior; optimizing compilers should not assume it is never reached
         .trap => return error.Unreachable,
+        // Marks a point in the code as unreachable; if executed in Rvm, it is the same as trap Unlike trap, however, this indicates undefined behavior; optimizing compilers should assume it is never reached
         .@"unreachable" => return error.Unreachable,
 
-        .@"push_set" => {
+        .@"push_set" => { // Pushes H onto the stack. The handlers in this set will be first in line for their effects' prompts until a corresponding pop operation
             if (!self.sets.hasSpace(1)) {
                 @branchHint(.cold);
                 return error.Overflow;
@@ -274,7 +279,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             continue :dispatch try state.step(self);
         },
-        .@"pop_set" => {
+        .@"pop_set" => { // Pops the top most Id.of(HandlerSet) from the stack, restoring the previous if present
             if (@intFromBool(self.sets.count() == 0) | @intFromBool(self.sets.top().call != current.callFrame) != 0) {
                 @branchHint(.cold);
                 return error.Underflow;
@@ -293,7 +298,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             continue :dispatch try state.step(self);
         },
 
-        .@"br" => {
+        .@"br" => { // Applies a signed integer offset I to the instruction pointer
             const offset: core.InstructionOffset = @bitCast(current.instruction.data.br.I);
             std.debug.assert(offset != 0);
 
@@ -305,7 +310,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             continue :dispatch try state.step(self);
         },
-        .@"br_if" => {
+        .@"br_if" => { // Applies a signed integer offset I to the instruction pointer, if the value stored in R is non-zero
             const offset: core.InstructionOffset = @bitCast(current.instruction.data.br.I);
             std.debug.assert(offset != 0);
 
@@ -322,7 +327,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             continue :dispatch try state.step(self);
         },
 
-        .@"call" => {
+        .@"call" => { // Calls the function in Ry using A, placing the result in Rx
             const registerIdX = current.instruction.data.call.Rx;
             const registerIdY = current.instruction.data.call.Ry;
             const abi = current.instruction.data.call.A;
@@ -416,7 +421,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             continue :dispatch try state.step(self);
         },
-        .@"call_c" => {
+        .@"call_c" => { // Calls the function at F using A, placing the result in R
             const registerId = current.instruction.data.call_c.R;
             const functionId = current.instruction.data.call_c.F.cast(anyopaque);
             const abi = current.instruction.data.call_c.A;
@@ -509,7 +514,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             continue :dispatch try state.step(self);
         },
 
-        .@"prompt" => {
+        .@"prompt" => { // Calls the effect handler designated by E using A, placing the result in R
             const registerId = current.instruction.data.prompt.R;
             const abi = current.instruction.data.prompt.A;
             const promptId = current.instruction.data.prompt.E;
@@ -618,7 +623,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
         },
 
 
-        .@"return" => {
+        .@"return" => { // Returns flow control to the caller of current function, yielding R to the caller
             const registerId = current.instruction.data.@"return".R;
             const retVal: u64 = current.callFrame.vregs[registerId.getIndex()];
 
@@ -634,7 +639,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             continue :dispatch try state.advance(self, StepSignal.@"return");
         },
-        .@"cancel" => {
+        .@"cancel" => { // Returns flow control to the offset associated with the current effect handler's Id.of(HandlerSet), yielding R as the cancellation value
             const cancelledSetFrame = if (current.callFrame.evidence) |ev| ev.frame else {
                 @branchHint(.cold);
                 return error.MissingEvidence;
@@ -667,33 +672,349 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             continue :dispatch try state.advance(self, StepSignal.cancel);
         },
 
-        .@"mem_set" => pl.todo(noreturn, "mem_set"),
-        .@"mem_set_a" => pl.todo(noreturn, "mem_set_a"),
-        .@"mem_set_b" => pl.todo(noreturn, "mem_set_b"),
-        .@"mem_copy" => pl.todo(noreturn, "mem_copy"),
-        .@"mem_copy_a" => pl.todo(noreturn, "mem_copy_a"),
-        .@"mem_copy_b" => pl.todo(noreturn, "mem_copy_b"),
-        .@"mem_swap" => pl.todo(noreturn, "mem_swap"),
-        .@"mem_swap_c" => pl.todo(noreturn, "mem_swap_c"),
-        .@"addr_l" => pl.todo(noreturn, "addr_l"),
-        .@"addr_u" => pl.todo(noreturn, "addr_u"),
-        .@"addr_g" => pl.todo(noreturn, "addr_g"),
-        .@"addr_f" => pl.todo(noreturn, "addr_f"),
-        .@"addr_b" => pl.todo(noreturn, "addr_b"),
-        .@"addr_x" => pl.todo(noreturn, "addr_x"),
-        .@"addr_c" => pl.todo(noreturn, "addr_c"),
-        .@"load8" => pl.todo(noreturn, "load8"),
-        .@"load16" => pl.todo(noreturn, "load16"),
-        .@"load32" => pl.todo(noreturn, "load32"),
-        .@"load64" => pl.todo(noreturn, "load64"),
-        .@"store8" => pl.todo(noreturn, "store8"),
-        .@"store16" => pl.todo(noreturn, "store16"),
-        .@"store32" => pl.todo(noreturn, "store32"),
-        .@"store64" => pl.todo(noreturn, "store64"),
-        .@"store8c" => pl.todo(noreturn, "store8c"),
-        .@"store16c" => pl.todo(noreturn, "store16c"),
-        .@"store32c" => pl.todo(noreturn, "store32c"),
-        .@"store64c" => pl.todo(noreturn, "store64c"),
+
+        // TODO: bounds check memory access
+        .@"mem_set" => { // Each byte, starting from the address in Rx, up to an offset of Rz, is set to the least significant byte of Ry
+            const registerIdX = current.instruction.data.mem_set.Rx;
+            const registerIdY = current.instruction.data.mem_set.Ry;
+            const registerIdZ = current.instruction.data.mem_set.Rz;
+
+            const dest: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdX.getIndex()]);
+            const src: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const size: u64 = current.callFrame.vregs[registerIdZ.getIndex()];
+
+            @memset(dest[0..size], src);
+
+            continue :dispatch try state.step(self);
+        },
+        .@"mem_set_a" => { // Each byte, starting from the address in Rx, up to an offset of I, is set to Ry
+            const registerIdX = current.instruction.data.mem_set_a.Rx;
+            const registerIdY = current.instruction.data.mem_set_a.Ry;
+            const size: u32 = current.instruction.data.mem_set_a.I;
+
+            const dest: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdX.getIndex()]);
+            const src: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            @memset(dest[0..size], src);
+
+            continue :dispatch try state.step(self);
+        },
+        .@"mem_set_b" => { // Each byte, starting from the address in Rx, up to an offset of Ry, is set to I
+            const registerIdX = current.instruction.data.mem_set_b.Rx;
+            const registerIdY = current.instruction.data.mem_set_b.Ry;
+            const src: u8 = current.instruction.data.mem_set_b.I;
+
+            const dest: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdX.getIndex()]);
+            const size: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+
+            @memset(dest[0..size], src);
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"mem_copy" => { // Each byte, starting from the address in Ry, up to an offset of Rz, is copied to the same offset of the address in Rx
+            const registerIdX = current.instruction.data.mem_copy.Rx;
+            const registerIdY = current.instruction.data.mem_copy.Ry;
+            const registerIdZ = current.instruction.data.mem_copy.Rz;
+
+            const dest: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdX.getIndex()]);
+            const src: [*]const u8 = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
+            const size: u64 = current.callFrame.vregs[registerIdZ.getIndex()];
+
+            @memcpy(dest[0..size], src[0..size]);
+
+            continue :dispatch try state.step(self);
+        },
+        .@"mem_copy_a" => { // Each byte, starting from the address in Ry, up to an offset of I, is copied to the same offset from the address in Rx
+            const registerIdX = current.instruction.data.mem_copy_a.Rx;
+            const registerIdY = current.instruction.data.mem_copy_a.Ry;
+            const size: u32 = current.instruction.data.mem_copy_a.I;
+
+            const dest: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdX.getIndex()]);
+            const src: [*]const u8 = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            @memcpy(dest[0..size], src[0..size]);
+
+            continue :dispatch try state.step(self);
+        },
+        .@"mem_copy_b" => { // Each byte, starting from the address of C, up to an offset of Ry, is copied to the same offset from the address in Rx
+            const registerIdX = current.instruction.data.mem_copy_b.Rx;
+            const registerIdY = current.instruction.data.mem_copy_b.Ry;
+            const constantId = current.instruction.data.mem_copy_b.C;
+
+            const constant: []const u8 = current.function.header.get(constantId).asSlice();
+
+            const dest: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdX.getIndex()]);
+            const size: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+
+            std.debug.assert(size <= constant.len);
+
+            @memcpy(dest[0..size], constant[0..size]);
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"mem_swap" => { // Each byte, starting from the addresses in Rx and Ry, up to an offset of Rz, are swapped with each-other
+            const registerIdX = current.instruction.data.mem_swap.Rx;
+            const registerIdY = current.instruction.data.mem_swap.Ry;
+            const registerIdZ = current.instruction.data.mem_swap.Rz;
+
+            const dest: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdX.getIndex()]);
+            const src: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
+            const size: u64 = current.callFrame.vregs[registerIdZ.getIndex()];
+
+            // TODO: more efficient swap implementation
+            for (src[0..size], dest[0..size]) |*srcByte, *destByte| {
+                const tmp = srcByte.*;
+                srcByte.* = destByte.*;
+                destByte.* = tmp;
+            }
+
+            continue :dispatch try state.step(self);
+        },
+        .@"mem_swap_c" => { // Each byte, starting from the addresses in Rx and Ry, up to an offset of I, are swapped with each-other
+            const registerIdX = current.instruction.data.mem_swap_c.Rx;
+            const registerIdY = current.instruction.data.mem_swap_c.Ry;
+            const size: u32 = current.instruction.data.mem_swap_c.I;
+
+            const dest: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdX.getIndex()]);
+            const src: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            // TODO: more efficient swap implementation
+            for (src[0..size], dest[0..size]) |*srcByte, *destByte| {
+                const tmp = srcByte.*;
+                srcByte.* = destByte.*;
+                destByte.* = tmp;
+            }
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"addr_l" => { // Get the address of a signed integer frame-relative operand stack offset I, placing it in R.
+            const registerId = current.instruction.data.addr_l.R;
+            const offset: i32 = @bitCast(current.instruction.data.addr_l.I);
+
+            const addr = pl.offsetPointer(current.stackFrame.ptr, offset);
+
+            std.debug.assert(@intFromPtr(addr) >= @intFromPtr(self.data.base) and @intFromPtr(addr) <= @intFromPtr(self.data.limit));
+
+            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(addr);
+
+            continue :dispatch try state.step(self);
+        },
+        .@"addr_u" => { // Get the address of U, placing it in R
+            const upvalueId = current.instruction.data.addr_u.U;
+            const registerId = current.instruction.data.addr_u.R;
+
+            pl.todo(noreturn, .{ "upvalue binding", upvalueId, registerId });
+        },
+        .@"addr_g" => { // Get the address of G, placing it in R
+            const globalId = current.instruction.data.addr_g.G;
+            const registerId = current.instruction.data.addr_g.R;
+
+            const global: *const core.Global = current.function.header.get(globalId);
+
+            current.callFrame.vregs[registerId.getIndex()] = global.ptr;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"addr_f" => { // Get the address of F, placing it in R
+            const functionId = current.instruction.data.addr_f.F;
+            const registerId = current.instruction.data.addr_f.R;
+
+            const function: *const core.Function = current.function.header.get(functionId);
+
+            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(function);
+
+            continue :dispatch try state.step(self);
+        },
+        .@"addr_b" => { // Get the address of B, placing it in R
+            const builtinId = current.instruction.data.addr_b.B;
+            const registerId = current.instruction.data.addr_b.R;
+
+            const builtin: *const core.BuiltinAddress = current.function.header.get(builtinId);
+
+            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(builtin.asPointer());
+
+            continue :dispatch try state.step(self);
+        },
+        .@"addr_x" => { // Get the address of X, placing it in R
+            const foreignId = current.instruction.data.addr_x.X;
+            const registerId = current.instruction.data.addr_x.R;
+
+            const foreign: core.ForeignAddress = current.function.header.get(foreignId).*;
+
+            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(foreign);
+
+            continue :dispatch try state.step(self);
+        },
+        .@"addr_c" => { // Get the address of C, placing it in R
+            const constantId = current.instruction.data.addr_c.C;
+            const registerId = current.instruction.data.addr_c.R;
+
+            const constant: *const core.Constant = current.function.header.get(constantId);
+
+            current.callFrame.vregs[registerId.getIndex()] = constant.ptr;
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"load8" => { // Loads an 8-bit value from memory at the address in Ry offset by I, placing the result in Rx
+            const Rx = current.instruction.data.load8.Rx;
+            const Ry = current.instruction.data.load8.Ry;
+            const offset: i32 = @bitCast(current.instruction.data.load8.I);
+
+            const srcBase: [*]const u8 = @ptrFromInt(current.callFrame.vregs[Ry.getIndex()]);
+            const src = pl.offsetPointer(srcBase, offset);
+
+            current.callFrame.vregs[Rx.getIndex()] = src[0];
+
+            continue :dispatch try state.step(self);
+        },
+        .@"load16" => { // Loads a 16-bit value from memory at the address in Ry offset by I, placing the result in Rx
+            const Rx = current.instruction.data.load16.Rx;
+            const Ry = current.instruction.data.load16.Ry;
+            const offset: i32 = @bitCast(current.instruction.data.load16.I);
+
+            const srcBase: [*]const u16 = @ptrFromInt(current.callFrame.vregs[Ry.getIndex()]);
+            const src = pl.offsetPointer(srcBase, offset);
+
+            current.callFrame.vregs[Rx.getIndex()] = src[0];
+
+            continue :dispatch try state.step(self);
+        },
+        .@"load32" => { // Loads a 32-bit value from memory at the address in Ry offset by I, placing the result in Rx
+            const Rx = current.instruction.data.load32.Rx;
+            const Ry = current.instruction.data.load32.Ry;
+            const offset: i32 = @bitCast(current.instruction.data.load32.I);
+
+            const srcBase: [*]const u32 = @ptrFromInt(current.callFrame.vregs[Ry.getIndex()]);
+            const src = pl.offsetPointer(srcBase, offset);
+
+            current.callFrame.vregs[Rx.getIndex()] = src[0];
+
+            continue :dispatch try state.step(self);
+
+        },
+        .@"load64" => { // Loads a 64-bit value from memory at the address in Ry offset by I, placing the result in Rx
+            const Rx = current.instruction.data.load64.Rx;
+            const Ry = current.instruction.data.load64.Ry;
+            const offset: i32 = @bitCast(current.instruction.data.load64.I);
+
+            const srcBase: [*]const u64 = @ptrFromInt(current.callFrame.vregs[Ry.getIndex()]);
+            const src = pl.offsetPointer(srcBase, offset);
+
+            current.callFrame.vregs[Rx.getIndex()] = src[0];
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"store8" => { // Stores an 8-bit value from Ry to memory at the address in Rx offset by I
+            const Rx = current.instruction.data.store8.Rx;
+            const Ry = current.instruction.data.store8.Ry;
+            const offset: i32 = @bitCast(current.instruction.data.store8.I);
+
+            const destBase: [*]u8 = @ptrFromInt(current.callFrame.vregs[Rx.getIndex()]);
+            const dest = pl.offsetPointer(destBase, offset);
+
+            dest[0] = @truncate(current.callFrame.vregs[Ry.getIndex()]);
+
+            continue :dispatch try state.step(self);
+        },
+        .@"store16" => { // Stores a 16-bit value from Ry to memory at the address in Rx offset by I
+            const Rx = current.instruction.data.store16.Rx;
+            const Ry = current.instruction.data.store16.Ry;
+            const offset: i32 = @bitCast(current.instruction.data.store16.I);
+
+            const destBase: [*]u16 = @ptrFromInt(current.callFrame.vregs[Rx.getIndex()]);
+            const dest = pl.offsetPointer(destBase, offset);
+
+            dest[0] = @truncate(current.callFrame.vregs[Ry.getIndex()]);
+
+            continue :dispatch try state.step(self);
+        },
+        .@"store32" => { // Stores a 32-bit value from Ry to memory at the address in Rx offset by I
+            const Rx = current.instruction.data.store32.Rx;
+            const Ry = current.instruction.data.store32.Ry;
+            const offset: i32 = @bitCast(current.instruction.data.store32.I);
+
+            const destBase: [*]u32 = @ptrFromInt(current.callFrame.vregs[Rx.getIndex()]);
+            const dest = pl.offsetPointer(destBase, offset);
+
+            dest[0] = @truncate(current.callFrame.vregs[Ry.getIndex()]);
+
+            continue :dispatch try state.step(self);
+        },
+        .@"store64" => { // Stores a 64-bit value from Ry to memory at the address in Rx offset by I
+            const Rx = current.instruction.data.store64.Rx;
+            const Ry = current.instruction.data.store64.Ry;
+            const offset: i32 = @bitCast(current.instruction.data.store64.I);
+
+            const destBase: [*]u64 = @ptrFromInt(current.callFrame.vregs[Rx.getIndex()]);
+            const dest = pl.offsetPointer(destBase, offset);
+
+            dest[0] = @truncate(current.callFrame.vregs[Ry.getIndex()]);
+
+            continue :dispatch try state.step(self);
+        },
+        .@"store8c" => { // Stores an 8-bit value (Ix) to memory at the address in R offset by Iy
+            const registerId = current.instruction.data.store8c.R;
+            const constant: u8 = current.instruction.data.store8c.Ix;
+            const offset: i32 = @bitCast(current.instruction.data.store8c.Iy);
+
+            const destBase: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerId.getIndex()]);
+            const dest = pl.offsetPointer(destBase, offset);
+
+            dest[0] = constant;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"store16c" => { // Stores a 16-bit value (Ix) to memory at the address in R offset by Iy
+            const registerId = current.instruction.data.store16c.R;
+
+            const immBits: u64 = current.callFrame.ip[0];
+            current.callFrame.ip += 1;
+
+            const bits: u16 = @truncate(immBits);
+            const offset: i32 = @bitCast(@as(u32, @truncate(immBits >> 16)));
+
+            const destBase: [*]u16 = @ptrFromInt(current.callFrame.vregs[registerId.getIndex()]);
+            const dest = pl.offsetPointer(destBase, offset);
+
+            dest[0] = bits;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"store32c" => { // Stores a 32-bit value (Ix) to memory at the address in R offset by Iy
+            const registerId = current.instruction.data.store32c.R;
+
+            const immBits: u64 = current.callFrame.ip[0];
+            current.callFrame.ip += 1;
+
+            const bits: u32 = @truncate(immBits);
+            const offset: i32 = @bitCast(@as(u32, @truncate(immBits >> 32)));
+
+            const destBase: [*]u32 = @ptrFromInt(current.callFrame.vregs[registerId.getIndex()]);
+            const dest = pl.offsetPointer(destBase, offset);
+
+            dest[0] = bits;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"store64c" => { // Stores a 64-bit value (Iy) to memory at the address in R offset by Ix
+            const registerId = current.instruction.data.store64c.R;
+            const offset: i32 = @bitCast(current.instruction.data.store64c.Ix);
+
+            const bits: u64 = current.callFrame.ip[0];
+            current.callFrame.ip += 1;
+
+            const destBase: [*]u64 = @ptrFromInt(current.callFrame.vregs[registerId.getIndex()]);
+            const dest = pl.offsetPointer(destBase, offset);
+
+            dest[0] = bits;
+
+            continue :dispatch try state.step(self);
+        },
 
         .@"bit_swap8" => pl.todo(noreturn, "bit_swap8"),
         .@"bit_swap16" => pl.todo(noreturn, "bit_swap16"),

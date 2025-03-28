@@ -556,7 +556,7 @@ pub const CATEGORIES: []const Category = &.{
             .mnemonic("addr",
                 "Get addresses from special values.",
                 &.{
-                    .basic(.suffix("l"), "Get the address of a signed integer frame-relative operand stack offset {1}, placing it in {0}.\n\nAn operand stack offset of 1 is equivalent to 8 bytes down from the base of the stack frame", &.{.register, .constant}),
+                    .basic(.suffix("l"), "Get the address of a signed integer frame-relative operand stack offset {1}, placing it in {0}.\n\nAn operand stack offset of 1 is equivalent to 8 bytes down from the base of the stack frame", &.{.register, .int}),
                     .basic(.suffix("u"), "Get the address of {1}, placing it in {0}", &.{ .register, .upvalue }),
                     .basic(.suffix("g"), "Get the address of {1}, placing it in {0}", &.{ .register, .global }),
                     .basic(.suffix("f"), "Get the address of {1}, placing it in {0}", &.{ .register, .function }),
@@ -569,10 +569,10 @@ pub const CATEGORIES: []const Category = &.{
             .mnemonic("load",
                 "Loads a value from memory",
                 &.{
-                    .basic(.suffix("8"), "Loads an 8-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("16"), "Loads a 16-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("32"), "Loads a 32-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .constant }),
-                    .basic(.suffix("64"), "Loads a 64-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .constant }),
+                    .basic(.suffix("8"), "Loads an 8-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .int }),
+                    .basic(.suffix("16"), "Loads a 16-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .int }),
+                    .basic(.suffix("32"), "Loads a 32-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .int }),
+                    .basic(.suffix("64"), "Loads a 64-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .int }),
                 },
             ),
             .mnemonic("store",

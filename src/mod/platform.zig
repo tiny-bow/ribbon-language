@@ -322,6 +322,7 @@ pub fn alignDelta(address: anytype, alignment: anytype) AlignOutput(@TypeOf(alig
 /// Applies an offset to a pointer
 /// * preserves pointer attributes
 /// * offset may be a signed or unsigned integer; it is bitcast before addition
+/// * offset must be multiplied by pointee-size before calling this function
 pub fn offsetPointer(ptr: anytype, offset: anytype) @TypeOf(ptr) {
     const addr = integerFromUnknownAddressType(ptr);
     const off = integerFromUnknownAddressType(offset);
