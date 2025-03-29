@@ -5294,38 +5294,326 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             continue :dispatch try state.step(self);
         },
 
-        .@"s_ext8_16" => pl.todo(noreturn, "s_ext8_16"),
-        .@"s_ext8_32" => pl.todo(noreturn, "s_ext8_32"),
-        .@"s_ext8_64" => pl.todo(noreturn, "s_ext8_64"),
-        .@"s_ext16_32" => pl.todo(noreturn, "s_ext16_32"),
-        .@"s_ext16_64" => pl.todo(noreturn, "s_ext16_64"),
-        .@"s_ext32_64" => pl.todo(noreturn, "s_ext32_64"),
+        .@"s_ext8_16" => { // sign extension from 8-bit to 16-bit
+            const registerIdX = current.instruction.data.s_ext8_16.Rx;
+            const registerIdY = current.instruction.data.s_ext8_16.Ry;
 
-        .@"f32_to_u8" => pl.todo(noreturn, "f32_to_u8"),
-        .@"f32_to_u16" => pl.todo(noreturn, "f32_to_u16"),
-        .@"f32_to_u32" => pl.todo(noreturn, "f32_to_u32"),
-        .@"f32_to_u64" => pl.todo(noreturn, "f32_to_u64"),
-        .@"f32_to_s8" => pl.todo(noreturn, "f32_to_s8"),
-        .@"f32_to_s16" => pl.todo(noreturn, "f32_to_s16"),
-        .@"f32_to_s32" => pl.todo(noreturn, "f32_to_s32"),
-        .@"f32_to_s64" => pl.todo(noreturn, "f32_to_s64"),
-        .@"u8_to_f32" => pl.todo(noreturn, "u8_to_f32"),
-        .@"u16_to_f32" => pl.todo(noreturn, "u16_to_f32"),
-        .@"u32_to_f32" => pl.todo(noreturn, "u32_to_f32"),
-        .@"u64_to_f32" => pl.todo(noreturn, "u64_to_f32"),
-        .@"s8_to_f32" => pl.todo(noreturn, "s8_to_f32"),
-        .@"s16_to_f32" => pl.todo(noreturn, "s16_to_f32"),
-        .@"s32_to_f32" => pl.todo(noreturn, "s32_to_f32"),
-        .@"s64_to_f32" => pl.todo(noreturn, "s64_to_f32"),
-        .@"u8_to_f64" => pl.todo(noreturn, "u8_to_f64"),
-        .@"u16_to_f64" => pl.todo(noreturn, "u16_to_f64"),
-        .@"u32_to_f64" => pl.todo(noreturn, "u32_to_f64"),
-        .@"u64_to_f64" => pl.todo(noreturn, "u64_to_f64"),
-        .@"s8_to_f64" => pl.todo(noreturn, "s8_to_f64"),
-        .@"s16_to_f64" => pl.todo(noreturn, "s16_to_f64"),
-        .@"s32_to_f64" => pl.todo(noreturn, "s32_to_f64"),
-        .@"s64_to_f64" => pl.todo(noreturn, "s64_to_f64"),
-        .@"f32_to_f64" => pl.todo(noreturn, "f32_to_f64"),
-        .@"f64_to_f32" => pl.todo(noreturn, "f64_to_f32"),
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(@as(i16, @intCast(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_ext8_32" => { // sign extension from 8-bit to 32-bit
+            const registerIdX = current.instruction.data.s_ext8_32.Rx;
+            const registerIdY = current.instruction.data.s_ext8_32.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(i32, @intCast(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_ext8_64" => { // sign extension from 8-bit to 64-bit
+            const registerIdX = current.instruction.data.s_ext8_64.Rx;
+            const registerIdY = current.instruction.data.s_ext8_64.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(i64, @bitCast(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_ext16_32" => { // sign extension from 16-bit to 32-bit
+            const registerIdX = current.instruction.data.s_ext16_32.Rx;
+            const registerIdY = current.instruction.data.s_ext16_32.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(i32, @intCast(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_ext16_64" => { // sign extension from 16-bit to 64-bit
+            const registerIdX = current.instruction.data.s_ext16_64.Rx;
+            const registerIdY = current.instruction.data.s_ext16_64.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(i64, @intCast(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_ext32_64" => { // sign extension from 32-bit to 64-bit
+            const registerIdX = current.instruction.data.s_ext32_64.Rx;
+            const registerIdY = current.instruction.data.s_ext32_64.Ry;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(i64, @intCast(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"f32_to_u8" => { // convert 32-bit float to 8-bit unsigned int
+            const registerIdX = current.instruction.data.f32_to_u8.Rx;
+            const registerIdY = current.instruction.data.f32_to_u8.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @intFromFloat(bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f32_to_u16" => { // convert 32-bit float to 16-bit unsigned int
+            const registerIdX = current.instruction.data.f32_to_u16.Rx;
+            const registerIdY = current.instruction.data.f32_to_u16.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @intFromFloat(bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f32_to_u32" => { // convert 32-bit float to 32-bit unsigned int
+            const registerIdX = current.instruction.data.f32_to_u32.Rx;
+            const registerIdY = current.instruction.data.f32_to_u32.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @intFromFloat(bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f32_to_u64" => { // convert 32-bit float to 64-bit unsigned int
+            const registerIdX = current.instruction.data.f32_to_u64.Rx;
+            const registerIdY = current.instruction.data.f32_to_u64.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @intFromFloat(bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f32_to_s8" => { // convert 32-bit float to 8-bit signed int
+            const registerIdX = current.instruction.data.f32_to_s8.Rx;
+            const registerIdY = current.instruction.data.f32_to_s8.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(i8, @intFromFloat(bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f32_to_s16" => { // convert 32-bit float to 16-bit signed int
+            const registerIdX = current.instruction.data.f32_to_s16.Rx;
+            const registerIdY = current.instruction.data.f32_to_s16.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(i16, @intFromFloat(bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f32_to_s32" => { // convert 32-bit float to 32-bit signed int
+            const registerIdX = current.instruction.data.f32_to_s32.Rx;
+            const registerIdY = current.instruction.data.f32_to_s32.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(i32, @intFromFloat(bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f32_to_s64" => { // convert 32-bit float to 64-bit signed int
+            const registerIdX = current.instruction.data.f32_to_s64.Rx;
+            const registerIdY = current.instruction.data.f32_to_s64.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(i64, @intFromFloat(bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u8_to_f32" => { // convert 8-bit unsigned int to 32-bit float
+            const registerIdX = current.instruction.data.u8_to_f32.Rx;
+            const registerIdY = current.instruction.data.u8_to_f32.Ry;
+
+            const bitsY: u8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(f32, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u16_to_f32" => { // convert 16-bit unsigned int to 32-bit float
+            const registerIdX = current.instruction.data.u16_to_f32.Rx;
+            const registerIdY = current.instruction.data.u16_to_f32.Ry;
+
+            const bitsY: u16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(f32, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u32_to_f32" => { // convert 32-bit unsigned int to 32-bit float
+            const registerIdX = current.instruction.data.u32_to_f32.Rx;
+            const registerIdY = current.instruction.data.u32_to_f32.Ry;
+
+            const bitsY: u32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(f32, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u64_to_f32" => { // convert 64-bit unsigned int to 32-bit float
+            const registerIdX = current.instruction.data.u64_to_f32.Rx;
+            const registerIdY = current.instruction.data.u64_to_f32.Ry;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(f32, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s8_to_f32" => { // convert 8-bit signed int to 32-bit float
+            const registerIdX = current.instruction.data.s8_to_f32.Rx;
+            const registerIdY = current.instruction.data.s8_to_f32.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(f32, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s16_to_f32" => { // convert 16-bit signed int to 32-bit float
+            const registerIdX = current.instruction.data.s16_to_f32.Rx;
+            const registerIdY = current.instruction.data.s16_to_f32.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(f32, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s32_to_f32" => { // convert 32-bit signed int to 32-bit float
+            const registerIdX = current.instruction.data.s32_to_f32.Rx;
+            const registerIdY = current.instruction.data.s32_to_f32.Ry;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(f32, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s64_to_f32" => { // convert 64-bit signed int to 32-bit float
+            const registerIdX = current.instruction.data.s64_to_f32.Rx;
+            const registerIdY = current.instruction.data.s64_to_f32.Ry;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(f32, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u8_to_f64" => { // convert 8-bit unsigned int to 64-bit float
+            const registerIdX = current.instruction.data.u8_to_f64.Rx;
+            const registerIdY = current.instruction.data.u8_to_f64.Ry;
+
+            const bitsY: u8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(f64, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u16_to_f64" => { // convert 16-bit unsigned int to 64-bit float
+            const registerIdX = current.instruction.data.u16_to_f64.Rx;
+            const registerIdY = current.instruction.data.u16_to_f64.Ry;
+
+            const bitsY: u16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(f64, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u32_to_f64" => { // convert 32-bit unsigned int to 64-bit float
+            const registerIdX = current.instruction.data.u32_to_f64.Rx;
+            const registerIdY = current.instruction.data.u32_to_f64.Ry;
+
+            const bitsY: u32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(f64, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u64_to_f64" => { // convert 64-bit unsigned int to 64-bit float
+            const registerIdX = current.instruction.data.u64_to_f64.Rx;
+            const registerIdY = current.instruction.data.u64_to_f64.Ry;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(f64, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s8_to_f64" => { // convert 8-bit signed int to 64-bit float
+            const registerIdX = current.instruction.data.s8_to_f64.Rx;
+            const registerIdY = current.instruction.data.s8_to_f64.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(f64, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s16_to_f64" => { // convert 16-bit signed int to 64-bit float
+            const registerIdX = current.instruction.data.s16_to_f64.Rx;
+            const registerIdY = current.instruction.data.s16_to_f64.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(f64, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s32_to_f64" => { // convert 32-bit signed int to 64-bit float
+            const registerIdX = current.instruction.data.s32_to_f64.Rx;
+            const registerIdY = current.instruction.data.s32_to_f64.Ry;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(f64, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s64_to_f64" => { // convert 64-bit signed int to 64-bit float
+            const registerIdX = current.instruction.data.s64_to_f64.Rx;
+            const registerIdY = current.instruction.data.s64_to_f64.Ry;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(f64, @floatFromInt(bitsY))));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f32_to_f64" => { // convert 32-bit float to 64-bit float
+            const registerIdX = current.instruction.data.f32_to_f64.Rx;
+            const registerIdY = current.instruction.data.f32_to_f64.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(f64, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f64_to_f32" => { // convert 64-bit float to 32-bit float
+            const registerIdX = current.instruction.data.f64_to_f32.Rx;
+            const registerIdY = current.instruction.data.f64_to_f32.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(f32, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
     }
 }
