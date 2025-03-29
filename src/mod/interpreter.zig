@@ -10,6 +10,7 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
+/// Invokes either a `core.BuiltinFunction` or `core.BuiltinAddress` on the provided fiber, returning the result.
 pub fn invokeBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: anytype, arguments: []const core.RegisterBits) core.Error!BuiltinResult {
     const T = @TypeOf(fun);
     // Because the allocated builtin is a packed structure with the pointer at the start, we can just truncate it.
@@ -126,53 +127,64 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
 }
 
 /// Passed to `eval`, indicates how to handle breakpoints in the interpreter loop.
-pub const BreakpointMode = enum {
-    /// Stop at breakpoints, and return to the caller.
-    breakpoints_halt,
+pub const BreakpointMode = enum(u1) {
     /// Skip breakpoints and continue until halt.
     skip_breakpoints,
+    /// Stop at breakpoints, and return to the caller.
+    breakpoints_halt,
+};
+
+/// Signals that can be returned by the `eval` function in `breakpoints_halt` mode
+pub const EvalSignal = enum(i64) {
+    /// Halt instruction reached.
+    halt = -1,
+    /// Breakpoint hit, execution paused.
+    breakpoint = -2,
 };
 
 /// Run the interpreter loop until `halt`; and optionally stop at breakpoints.
-pub fn eval(self: core.Fiber, comptime mode: BreakpointMode) core.Error!void {
+pub fn eval(self: core.Fiber, comptime mode: BreakpointMode) core.Error!if (mode == .breakpoints_halt) EvalSignal else void {
     while (true) {
         run(true, self.header) catch |signalOrError| {
             if (comptime mode == .breakpoints_halt) {
                 switch (signalOrError) {
-                    LoopSignal.breakpoint => break,
+                    LoopSignalErr.breakpoint => return .breakpoint,
                     else => |e| return e,
                 }
             } else {
                 switch (signalOrError) {
-                    LoopSignal.breakpoint => continue,
+                    LoopSignalErr.breakpoint => continue,
                     else => |e| return e,
                 }
             }
         };
 
-        break;
+        return if (comptime mode == .breakpoints_halt) .halt else {};
     }
 }
 
 
 
 /// Signals that can be returned by the `step` function
-pub const Signal = enum(i64) {
+pub const StepSignal = enum(i64) {
+    /// Nominal function return.
     @"return" = 0,
+    /// Effect handler set context cancellation.
     cancel = 1,
-
+    /// Halt instruction reached.
     halt = -1,
+    /// Breakpoint hit, execution paused.
     breakpoint = -2,
 };
 
 /// Run the interpreter loop for a single instruction.
-pub fn step(self: core.Fiber) core.Error!?Signal {
+pub fn step(self: core.Fiber) core.Error!?StepSignal {
     run(false, self.header) catch |signalOrError| {
         switch (signalOrError) {
-            StepSignal.@"return" => return .@"return",
-            StepSignal.cancel => return .cancel,
-            StepSignal.breakpoint => return .breakpoint,
-            StepSignal.step => return null,
+            StepSignalErr.@"return" => return .@"return",
+            StepSignalErr.cancel => return .cancel,
+            StepSignalErr.breakpoint => return .breakpoint,
+            StepSignalErr.step => return null,
             inline else => |e| return e,
         }
     };
@@ -180,19 +192,19 @@ pub fn step(self: core.Fiber) core.Error!?Signal {
     return .halt;
 }
 
-const StepSignal = error {
+const StepSignalErr = error {
     step,
     breakpoint,
     @"return",
     cancel,
 };
 
-const LoopSignal = error {
+const LoopSignalErr = error {
     breakpoint,
 };
 
 fn SignalSubset(comptime isLoop: bool) type {
-    return if (isLoop) LoopSignal else StepSignal;
+    return if (isLoop) LoopSignalErr else StepSignalErr;
 }
 
 fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || SignalSubset(isLoop))!void {
@@ -222,7 +234,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             return st.instruction.code;
         }
 
-        fn advance(st: *@This(), header: *core.mem.FiberHeader, comptime signal: anyerror) SignalSubset(isLoop)!Instruction.OpCode {
+        fn advance(st: *@This(), header: *core.mem.FiberHeader, comptime signal: StepSignalErr) SignalSubset(isLoop)!Instruction.OpCode {
             if (comptime isLoop) {
                 return st.decode(header);
             } else {
@@ -243,7 +255,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
         // No operation; does nothing
         .nop => continue :dispatch try state.step(self),
         // Triggers a breakpoint in debuggers; does nothing otherwise
-        .@"breakpoint" => return StepSignal.breakpoint,
+        .@"breakpoint" => return StepSignalErr.breakpoint,
         // Halts execution at this instruction offset
         .halt => return,
         // Traps execution of the Rvm.Fiber at this instruction offset Unlike unreachable, this indicates expected behavior; optimizing compilers should not assume it is never reached
@@ -637,7 +649,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             newRegisters[current.callFrame.output.getIndex()] = retVal;
 
-            continue :dispatch try state.advance(self, StepSignal.@"return");
+            continue :dispatch try state.advance(self, StepSignalErr.@"return");
         },
         .@"cancel" => { // Returns flow control to the offset associated with the current effect handler's Id.of(HandlerSet), yielding R as the cancellation value
             const cancelledSetFrame = if (current.callFrame.evidence) |ev| ev.frame else {
@@ -669,7 +681,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
                 }
             }
 
-            continue :dispatch try state.advance(self, StepSignal.cancel);
+            continue :dispatch try state.advance(self, StepSignalErr.cancel);
         },
 
 
@@ -4201,7 +4213,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsY / bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(@divTrunc(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4213,7 +4225,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsY / bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(@divTrunc(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4225,7 +4237,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY / bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@divTrunc(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4237,7 +4249,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
             const bitsZ: i64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY / bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@divTrunc(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4248,7 +4260,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.s_div8a.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsZ / bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(@divTrunc(bitsZ, bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4259,7 +4271,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.instruction.data.s_div16a.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsZ / bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(@divTrunc(bitsZ, bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4270,7 +4282,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.instruction.data.s_div32a.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsZ / bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@divTrunc(bitsZ, bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4282,7 +4294,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsZ: i64 = @bitCast(current.callFrame.ip[0]);
             current.callFrame.ip += 1;
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsZ / bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@divTrunc(bitsZ, bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4293,7 +4305,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.s_div8b.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsY / bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(@divTrunc(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4304,7 +4316,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.instruction.data.s_div16b.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsY / bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(@divTrunc(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4315,7 +4327,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.instruction.data.s_div32b.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY / bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@divTrunc(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4327,7 +4339,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsZ: i64 = @bitCast(current.callFrame.ip[0]);
             current.callFrame.ip += 1;
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY / bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@divTrunc(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4478,7 +4490,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsY % bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4490,7 +4502,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsY % bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4502,7 +4514,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY % bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4514,7 +4526,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
             const bitsZ: i64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY % bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4525,7 +4537,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.s_rem8a.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsZ % bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(@rem(bitsZ, bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4536,7 +4548,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.instruction.data.s_rem16a.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsZ % bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(@rem(bitsZ, bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4547,7 +4559,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.instruction.data.s_rem32a.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsZ % bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsZ, bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4559,7 +4571,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsZ: i64 = @bitCast(current.callFrame.ip[0]);
             current.callFrame.ip += 1;
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsZ % bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsZ, bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4570,7 +4582,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.s_rem8b.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsY % bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4581,7 +4593,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.instruction.data.s_rem16b.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsY % bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4592,7 +4604,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.instruction.data.s_rem32b.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY % bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4604,7 +4616,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsZ: i64 = @bitCast(current.callFrame.ip[0]);
             current.callFrame.ip += 1;
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY % bitsZ));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -4617,7 +4629,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(std.math.powi(u8, bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(std.math.powi(i8, bitsY, bitsZ) catch unreachable));
 
             continue :dispatch try state.step(self);
         },
@@ -4664,7 +4676,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.i_pow8a.I)));
             const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(std.math.powi(u8, bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(std.math.powi(i8, bitsY, bitsZ) catch unreachable));
 
             continue :dispatch try state.step(self);
         },
@@ -4694,7 +4706,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const registerIdX = current.instruction.data.i_pow64a.Rx;
             const registerIdY = current.instruction.data.i_pow64a.Ry;
 
-            const bitsY: i64 = @bitCast(current.instruction.data.i_pow64a.I);
+            const bitsY: i64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
             const bitsZ: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
             current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.powi(i64, bitsY, bitsZ) catch unreachable));
@@ -4708,7 +4721,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.i_pow8b.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(std.math.powi(u8, bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(std.math.powi(i8, bitsY, bitsZ) catch unreachable));
 
             continue :dispatch try state.step(self);
         },
@@ -4752,7 +4765,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const registerIdX = current.instruction.data.f_neg32.Rx;
             const registerIdY = current.instruction.data.f_neg32.Ry;
 
-            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
             current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(-bitsY));
 
@@ -4773,9 +4786,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const registerIdX = current.instruction.data.f_abs32.Rx;
             const registerIdY = current.instruction.data.f_abs32.Ry;
 
-            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.abs(f32, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@abs(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4785,7 +4798,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.abs(f64, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@abs(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4794,9 +4807,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const registerIdX = current.instruction.data.f_sqrt32.Rx;
             const registerIdY = current.instruction.data.f_sqrt32.Ry;
 
-            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.sqrt(f32, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.sqrt(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4806,7 +4819,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.sqrt(f64, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.sqrt(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4815,9 +4828,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const registerIdX = current.instruction.data.f_floor32.Rx;
             const registerIdY = current.instruction.data.f_floor32.Ry;
 
-            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.floor(f32, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@floor(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4827,7 +4840,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.floor(f64, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@floor(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4836,9 +4849,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const registerIdX = current.instruction.data.f_ceil32.Rx;
             const registerIdY = current.instruction.data.f_ceil32.Ry;
 
-            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.ceil(f32, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@ceil(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4848,7 +4861,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.ceil(f64, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@ceil(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4857,9 +4870,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const registerIdX = current.instruction.data.f_round32.Rx;
             const registerIdY = current.instruction.data.f_round32.Ry;
 
-            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.round(f32, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@round(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4869,7 +4882,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.round(f64, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@round(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4878,9 +4891,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const registerIdX = current.instruction.data.f_trunc32.Rx;
             const registerIdY = current.instruction.data.f_trunc32.Ry;
 
-            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.trunc(f32, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@trunc(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4890,7 +4903,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.trunc(f64, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@trunc(bitsY)));
 
             continue :dispatch try state.step(self);
         },
@@ -4899,7 +4912,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const registerIdX = current.instruction.data.f_man32.Rx;
             const registerIdY = current.instruction.data.f_man32.Ry;
 
-            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsY: u32 = @truncate(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
             const MAN_SIZE = comptime std.math.floatMantissaBits(f32);
 
@@ -5161,7 +5174,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5172,7 +5185,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_rem32a.I)));
             const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5183,7 +5196,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_rem32b.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5195,7 +5208,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
             const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5207,7 +5220,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             current.callFrame.ip += 1;
             const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5219,7 +5232,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsZ: f64 = @bitCast(current.callFrame.ip[0]);
             current.callFrame.ip += 1;
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5231,7 +5244,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.pow(f32, bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.pow(f32, bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5242,7 +5255,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_pow32a.I)));
             const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.pow(f32, bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.pow(f32, bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5253,7 +5266,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
             const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_pow32b.I)));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.pow(f32, bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.pow(f32, bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5265,7 +5278,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
             const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.pow(f64, bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.pow(f64, bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5277,7 +5290,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             current.callFrame.ip += 1;
             const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.pow(f64, bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.pow(f64, bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5289,7 +5302,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const bitsZ: f64 = @bitCast(current.callFrame.ip[0]);
             current.callFrame.ip += 1;
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.pow(f64, bitsY, bitsZ) catch unreachable));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.pow(f64, bitsY, bitsZ)));
 
             continue :dispatch try state.step(self);
         },
@@ -5320,7 +5333,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(i64, @bitCast(bitsY))));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(i64, @intCast(bitsY))));
 
             continue :dispatch try state.step(self);
         },
@@ -5401,7 +5414,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(i8, @intFromFloat(bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(@as(i8, @intFromFloat(bitsY))));
 
             continue :dispatch try state.step(self);
         },
@@ -5411,7 +5424,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(i16, @intFromFloat(bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(@as(i16, @intFromFloat(bitsY))));
 
             continue :dispatch try state.step(self);
         },
@@ -5421,7 +5434,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(i32, @intFromFloat(bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(i32, @intFromFloat(bitsY))));
 
             continue :dispatch try state.step(self);
         },
@@ -5431,7 +5444,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(i64, @intFromFloat(bitsY));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(i64, @intFromFloat(bitsY))));
 
             continue :dispatch try state.step(self);
         },
@@ -5601,7 +5614,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(f64, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@as(f64, @floatCast(bitsY))));
 
             continue :dispatch try state.step(self);
         },
@@ -5611,7 +5624,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(f32, bitsY)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@as(f32, @floatCast(bitsY))));
 
             continue :dispatch try state.step(self);
         },

@@ -71,6 +71,7 @@
         "ofmt",
         "orelse",
         "Pointee",
+        "powi",
         "prng",
         "realpath",
         "rema",
