@@ -3646,102 +3646,1106 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
         },
 
 
-        .@"s_neg8" => pl.todo(noreturn, "s_neg8"),
-        .@"s_neg16" => pl.todo(noreturn, "s_neg16"),
-        .@"s_neg32" => pl.todo(noreturn, "s_neg32"),
-        .@"s_neg64" => pl.todo(noreturn, "s_neg64"),
-        .@"s_abs8" => pl.todo(noreturn, "s_abs8"),
-        .@"s_abs16" => pl.todo(noreturn, "s_abs16"),
-        .@"s_abs32" => pl.todo(noreturn, "s_abs32"),
-        .@"s_abs64" => pl.todo(noreturn, "s_abs64"),
-        .@"i_add8" => pl.todo(noreturn, "i_add8"),
-        .@"i_add16" => pl.todo(noreturn, "i_add16"),
-        .@"i_add32" => pl.todo(noreturn, "i_add32"),
-        .@"i_add64" => pl.todo(noreturn, "i_add64"),
-        .@"i_add8c" => pl.todo(noreturn, "i_add8c"),
-        .@"i_add16c" => pl.todo(noreturn, "i_add16c"),
-        .@"i_add32c" => pl.todo(noreturn, "i_add32c"),
-        .@"i_add64c" => pl.todo(noreturn, "i_add64c"),
-        .@"i_sub8" => pl.todo(noreturn, "i_sub8"),
-        .@"i_sub16" => pl.todo(noreturn, "i_sub16"),
-        .@"i_sub32" => pl.todo(noreturn, "i_sub32"),
-        .@"i_sub64" => pl.todo(noreturn, "i_sub64"),
-        .@"i_sub8a" => pl.todo(noreturn, "i_sub8a"),
-        .@"i_sub16a" => pl.todo(noreturn, "i_sub16a"),
-        .@"i_sub32a" => pl.todo(noreturn, "i_sub32a"),
-        .@"i_sub64a" => pl.todo(noreturn, "i_sub64a"),
-        .@"i_sub8b" => pl.todo(noreturn, "i_sub8b"),
-        .@"i_sub16b" => pl.todo(noreturn, "i_sub16b"),
-        .@"i_sub32b" => pl.todo(noreturn, "i_sub32b"),
-        .@"i_sub64b" => pl.todo(noreturn, "i_sub64b"),
-        .@"i_mul8" => pl.todo(noreturn, "i_mul8"),
-        .@"i_mul16" => pl.todo(noreturn, "i_mul16"),
-        .@"i_mul32" => pl.todo(noreturn, "i_mul32"),
-        .@"i_mul64" => pl.todo(noreturn, "i_mul64"),
-        .@"i_mul8c" => pl.todo(noreturn, "i_mul8c"),
-        .@"i_mul16c" => pl.todo(noreturn, "i_mul16c"),
-        .@"i_mul32c" => pl.todo(noreturn, "i_mul32c"),
-        .@"i_mul64c" => pl.todo(noreturn, "i_mul64c"),
-        .@"u_i_div8" => pl.todo(noreturn, "u_i_div8"),
-        .@"u_i_div16" => pl.todo(noreturn, "u_i_div16"),
-        .@"u_i_div32" => pl.todo(noreturn, "u_i_div32"),
-        .@"u_i_div64" => pl.todo(noreturn, "u_i_div64"),
-        .@"u_i_div8a" => pl.todo(noreturn, "u_i_div8a"),
-        .@"u_i_div16a" => pl.todo(noreturn, "u_i_div16a"),
-        .@"u_i_div32a" => pl.todo(noreturn, "u_i_div32a"),
-        .@"u_i_div64a" => pl.todo(noreturn, "u_i_div64a"),
-        .@"u_i_div8b" => pl.todo(noreturn, "u_i_div8b"),
-        .@"u_i_div16b" => pl.todo(noreturn, "u_i_div16b"),
-        .@"u_i_div32b" => pl.todo(noreturn, "u_i_div32b"),
-        .@"u_i_div64b" => pl.todo(noreturn, "u_i_div64b"),
-        .@"s_i_div8" => pl.todo(noreturn, "s_i_div8"),
-        .@"s_i_div16" => pl.todo(noreturn, "s_i_div16"),
-        .@"s_i_div32" => pl.todo(noreturn, "s_i_div32"),
-        .@"s_i_div64" => pl.todo(noreturn, "s_i_div64"),
-        .@"s_i_div8a" => pl.todo(noreturn, "s_i_div8a"),
-        .@"s_i_div16a" => pl.todo(noreturn, "s_i_div16a"),
-        .@"s_i_div32a" => pl.todo(noreturn, "s_i_div32a"),
-        .@"s_i_div64a" => pl.todo(noreturn, "s_i_div64a"),
-        .@"s_i_div8b" => pl.todo(noreturn, "s_i_div8b"),
-        .@"s_i_div16b" => pl.todo(noreturn, "s_i_div16b"),
-        .@"s_i_div32b" => pl.todo(noreturn, "s_i_div32b"),
-        .@"s_i_div64b" => pl.todo(noreturn, "s_i_div64b"),
-        .@"u_i_rem8" => pl.todo(noreturn, "u_i_rem8"),
-        .@"u_i_rem16" => pl.todo(noreturn, "u_i_rem16"),
-        .@"u_i_rem32" => pl.todo(noreturn, "u_i_rem32"),
-        .@"u_i_rem64" => pl.todo(noreturn, "u_i_rem64"),
-        .@"u_i_rem8a" => pl.todo(noreturn, "u_i_rem8a"),
-        .@"u_i_rem16a" => pl.todo(noreturn, "u_i_rem16a"),
-        .@"u_i_rem32a" => pl.todo(noreturn, "u_i_rem32a"),
-        .@"u_i_rem64a" => pl.todo(noreturn, "u_i_rem64a"),
-        .@"u_i_rem8b" => pl.todo(noreturn, "u_i_rem8b"),
-        .@"u_i_rem16b" => pl.todo(noreturn, "u_i_rem16b"),
-        .@"u_i_rem32b" => pl.todo(noreturn, "u_i_rem32b"),
-        .@"u_i_rem64b" => pl.todo(noreturn, "u_i_rem64b"),
-        .@"s_i_rem8" => pl.todo(noreturn, "s_i_rem8"),
-        .@"s_i_rem16" => pl.todo(noreturn, "s_i_rem16"),
-        .@"s_i_rem32" => pl.todo(noreturn, "s_i_rem32"),
-        .@"s_i_rem64" => pl.todo(noreturn, "s_i_rem64"),
-        .@"s_i_rem8a" => pl.todo(noreturn, "s_i_rem8a"),
-        .@"s_i_rem16a" => pl.todo(noreturn, "s_i_rem16a"),
-        .@"s_i_rem32a" => pl.todo(noreturn, "s_i_rem32a"),
-        .@"s_i_rem64a" => pl.todo(noreturn, "s_i_rem64a"),
-        .@"s_i_rem8b" => pl.todo(noreturn, "s_i_rem8b"),
-        .@"s_i_rem16b" => pl.todo(noreturn, "s_i_rem16b"),
-        .@"s_i_rem32b" => pl.todo(noreturn, "s_i_rem32b"),
-        .@"s_i_rem64b" => pl.todo(noreturn, "s_i_rem64b"),
-        .@"i_pow8" => pl.todo(noreturn, "i_pow8"),
-        .@"i_pow16" => pl.todo(noreturn, "i_pow16"),
-        .@"i_pow32" => pl.todo(noreturn, "i_pow32"),
-        .@"i_pow64" => pl.todo(noreturn, "i_pow64"),
-        .@"i_pow8a" => pl.todo(noreturn, "i_pow8a"),
-        .@"i_pow16a" => pl.todo(noreturn, "i_pow16a"),
-        .@"i_pow32a" => pl.todo(noreturn, "i_pow32a"),
-        .@"i_pow64a" => pl.todo(noreturn, "i_pow64a"),
-        .@"i_pow8b" => pl.todo(noreturn, "i_pow8b"),
-        .@"i_pow16b" => pl.todo(noreturn, "i_pow16b"),
-        .@"i_pow32b" => pl.todo(noreturn, "i_pow32b"),
-        .@"i_pow64b" => pl.todo(noreturn, "i_pow64b"),
+        .@"s_neg8" => { // 8-bit signed integer Rx = -Ry
+            const registerIdX = current.instruction.data.s_neg8.Rx;
+            const registerIdY = current.instruction.data.s_neg8.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(-bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_neg16" => { // 16-bit signed integer Rx = -Ry
+            const registerIdX = current.instruction.data.s_neg16.Rx;
+            const registerIdY = current.instruction.data.s_neg16.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(-bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_neg32" => { // 32-bit signed integer Rx = -Ry
+            const registerIdX = current.instruction.data.s_neg32.Rx;
+            const registerIdY = current.instruction.data.s_neg32.Ry;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(-bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_neg64" => { // 64-bit signed integer Rx = -Ry
+            const registerIdX = current.instruction.data.s_neg64.Rx;
+            const registerIdY = current.instruction.data.s_neg64.Ry;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(-bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"s_abs8" => { // 8-bit signed integer Rx = |Ry|
+            const registerIdX = current.instruction.data.s_abs8.Rx;
+            const registerIdY = current.instruction.data.s_abs8.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(@abs(bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_abs16" => { // 16-bit signed integer Rx = |Ry|
+            const registerIdX = current.instruction.data.s_abs16.Rx;
+            const registerIdY = current.instruction.data.s_abs16.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(@abs(bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_abs32" => { // 32-bit signed integer Rx = |Ry|
+            const registerIdX = current.instruction.data.s_abs32.Rx;
+            const registerIdY = current.instruction.data.s_abs32.Ry;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@abs(bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_abs64" => { // 64-bit signed integer Rx = |Ry|
+            const registerIdX = current.instruction.data.s_abs64.Rx;
+            const registerIdY = current.instruction.data.s_abs64.Ry;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@abs(bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"i_add8" => { // 8-bit sign-agnostic integer Rx = Ry + Rz
+            const registerIdX = current.instruction.data.i_add8.Rx;
+            const registerIdY = current.instruction.data.i_add8.Ry;
+            const registerIdZ = current.instruction.data.i_add8.Rz;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY + bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_add16" => { // 16-bit sign-agnostic integer Rx = Ry + Rz
+            const registerIdX = current.instruction.data.i_add16.Rx;
+            const registerIdY = current.instruction.data.i_add16.Ry;
+            const registerIdZ = current.instruction.data.i_add16.Rz;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY + bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_add32" => { // 32-bit sign-agnostic integer Rx = Ry + Rz
+            const registerIdX = current.instruction.data.i_add32.Rx;
+            const registerIdY = current.instruction.data.i_add32.Ry;
+            const registerIdZ = current.instruction.data.i_add32.Rz;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY + bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_add64" => { // 64-bit sign-agnostic integer Rx = Ry + Rz
+            const registerIdX = current.instruction.data.i_add64.Rx;
+            const registerIdY = current.instruction.data.i_add64.Ry;
+            const registerIdZ = current.instruction.data.i_add64.Rz;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.vregs[registerIdZ.getIndex()];
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY + bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_add8c" => { // 8-bit sign-agnostic integer Rx = I + Ry
+            const registerIdX = current.instruction.data.i_add8c.Rx;
+            const registerIdY = current.instruction.data.i_add8c.Ry;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.instruction.data.i_add8c.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ + bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_add16c" => { // 16-bit sign-agnostic integer Rx = I + Ry
+            const registerIdX = current.instruction.data.i_add16c.Rx;
+            const registerIdY = current.instruction.data.i_add16c.Ry;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.instruction.data.i_add16c.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ + bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_add32c" => { // 32-bit sign-agnostic integer Rx = I + Ry
+            const registerIdX = current.instruction.data.i_add32c.Rx;
+            const registerIdY = current.instruction.data.i_add32c.Ry;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.instruction.data.i_add32c.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ + bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_add64c" => { // 64-bit sign-agnostic integer Rx = I + Ry
+            const registerIdX = current.instruction.data.i_add64c.Rx;
+            const registerIdY = current.instruction.data.i_add64c.Ry;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.ip[0];
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ + bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"i_sub8" => { // 8-bit sign-agnostic integer Rx = Ry - Rz
+            const registerIdX = current.instruction.data.i_sub8.Rx;
+            const registerIdY = current.instruction.data.i_sub8.Ry;
+            const registerIdZ = current.instruction.data.i_sub8.Rz;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY - bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_sub16" => { // 16-bit sign-agnostic integer Rx = Ry - Rz
+            const registerIdX = current.instruction.data.i_sub16.Rx;
+            const registerIdY = current.instruction.data.i_sub16.Ry;
+            const registerIdZ = current.instruction.data.i_sub16.Rz;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY - bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_sub32" => { // 32-bit sign-agnostic integer Rx = Ry - Rz
+            const registerIdX = current.instruction.data.i_sub32.Rx;
+            const registerIdY = current.instruction.data.i_sub32.Ry;
+            const registerIdZ = current.instruction.data.i_sub32.Rz;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY - bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_sub64" => { // 64-bit sign-agnostic integer Rx = Ry - Rz
+            const registerIdX = current.instruction.data.i_sub64.Rx;
+            const registerIdY = current.instruction.data.i_sub64.Ry;
+            const registerIdZ = current.instruction.data.i_sub64.Rz;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.vregs[registerIdZ.getIndex()];
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY - bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_sub8a" => { // 8-bit sign-agnostic integer Rx = I - Ry
+            const registerIdX = current.instruction.data.i_sub8a.Rx;
+            const registerIdY = current.instruction.data.i_sub8a.Ry;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.instruction.data.i_sub8a.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ - bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_sub16a" => { // 16-bit sign-agnostic integer Rx = I - Ry
+            const registerIdX = current.instruction.data.i_sub16a.Rx;
+            const registerIdY = current.instruction.data.i_sub16a.Ry;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.instruction.data.i_sub16a.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ - bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_sub32a" => { // 32-bit sign-agnostic integer Rx = I - Ry
+            const registerIdX = current.instruction.data.i_sub32a.Rx;
+            const registerIdY = current.instruction.data.i_sub32a.Ry;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.instruction.data.i_sub32a.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ - bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_sub64a" => { // 64-bit sign-agnostic integer Rx = I - Ry
+            const registerIdX = current.instruction.data.i_sub64a.Rx;
+            const registerIdY = current.instruction.data.i_sub64a.Ry;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.ip[0];
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ - bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_sub8b" => { // 8-bit sign-agnostic integer Rx = Ry - I
+            const registerIdX = current.instruction.data.i_sub8b.Rx;
+            const registerIdY = current.instruction.data.i_sub8b.Ry;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.instruction.data.i_sub8b.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY - bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_sub16b" => { // 16-bit sign-agnostic integer Rx = Ry - I
+            const registerIdX = current.instruction.data.i_sub16b.Rx;
+            const registerIdY = current.instruction.data.i_sub16b.Ry;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.instruction.data.i_sub16b.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY - bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_sub32b" => { // 32-bit sign-agnostic integer Rx = Ry - I
+            const registerIdX = current.instruction.data.i_sub32b.Rx;
+            const registerIdY = current.instruction.data.i_sub32b.Ry;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.instruction.data.i_sub32b.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY - bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_sub64b" => { // 64-bit sign-agnostic integer Rx = Ry - I
+            const registerIdX = current.instruction.data.i_sub64b.Rx;
+            const registerIdY = current.instruction.data.i_sub64b.Ry;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.ip[0];
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY - bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"i_mul8" => { // 8-bit sign-agnostic integer Rx = Ry * Rz
+            const registerIdX = current.instruction.data.i_mul8.Rx;
+            const registerIdY = current.instruction.data.i_mul8.Ry;
+            const registerIdZ = current.instruction.data.i_mul8.Rz;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY * bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_mul16" => { // 16-bit sign-agnostic integer Rx = Ry * Rz
+            const registerIdX = current.instruction.data.i_mul16.Rx;
+            const registerIdY = current.instruction.data.i_mul16.Ry;
+            const registerIdZ = current.instruction.data.i_mul16.Rz;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY * bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_mul32" => { // 32-bit sign-agnostic integer Rx = Ry * Rz
+            const registerIdX = current.instruction.data.i_mul32.Rx;
+            const registerIdY = current.instruction.data.i_mul32.Ry;
+            const registerIdZ = current.instruction.data.i_mul32.Rz;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY * bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_mul64" => { // 64-bit sign-agnostic integer Rx = Ry * Rz
+            const registerIdX = current.instruction.data.i_mul64.Rx;
+            const registerIdY = current.instruction.data.i_mul64.Ry;
+            const registerIdZ = current.instruction.data.i_mul64.Rz;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.vregs[registerIdZ.getIndex()];
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY * bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_mul8c" => { // 8-bit sign-agnostic integer Rx = I * Ry
+            const registerIdX = current.instruction.data.i_mul8c.Rx;
+            const registerIdY = current.instruction.data.i_mul8c.Ry;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.instruction.data.i_mul8c.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ * bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_mul16c" => { // 16-bit sign-agnostic integer Rx = I * Ry
+            const registerIdX = current.instruction.data.i_mul16c.Rx;
+            const registerIdY = current.instruction.data.i_mul16c.Ry;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.instruction.data.i_mul16c.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ * bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_mul32c" => { // 32-bit sign-agnostic integer Rx = I * Ry
+            const registerIdX = current.instruction.data.i_mul32c.Rx;
+            const registerIdY = current.instruction.data.i_mul32c.Ry;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.instruction.data.i_mul32c.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ * bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_mul64c" => { // 64-bit sign-agnostic integer Rx = I * Ry
+            const registerIdX = current.instruction.data.i_mul64c.Rx;
+            const registerIdY = current.instruction.data.i_mul64c.Ry;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.ip[0];
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ * bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"u_div8" => { // 8-bit unsigned integer Rx = Ry / Rz
+            const registerIdX = current.instruction.data.u_div8.Rx;
+            const registerIdY = current.instruction.data.u_div8.Ry;
+            const registerIdZ = current.instruction.data.u_div8.Rz;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY / bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_div16" => { // 16-bit unsigned integer Rx = Ry / Rz
+            const registerIdX = current.instruction.data.u_div16.Rx;
+            const registerIdY = current.instruction.data.u_div16.Ry;
+            const registerIdZ = current.instruction.data.u_div16.Rz;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY / bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_div32" => { // 32-bit unsigned integer Rx = Ry / Rz
+            const registerIdX = current.instruction.data.u_div32.Rx;
+            const registerIdY = current.instruction.data.u_div32.Ry;
+            const registerIdZ = current.instruction.data.u_div32.Rz;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY / bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_div64" => { // 64-bit unsigned integer Rx = Ry / Rz
+            const registerIdX = current.instruction.data.u_div64.Rx;
+            const registerIdY = current.instruction.data.u_div64.Ry;
+            const registerIdZ = current.instruction.data.u_div64.Rz;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.vregs[registerIdZ.getIndex()];
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY / bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_div8a" => { // 8-bit unsigned integer Rx = I / Ry
+            const registerIdX = current.instruction.data.u_div8a.Rx;
+            const registerIdY = current.instruction.data.u_div8a.Ry;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.instruction.data.u_div8a.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ / bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_div16a" => { // 16-bit unsigned integer Rx = I / Ry
+            const registerIdX = current.instruction.data.u_div16a.Rx;
+            const registerIdY = current.instruction.data.u_div16a.Ry;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.instruction.data.u_div16a.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ / bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_div32a" => { // 32-bit unsigned integer Rx = I / Ry
+            const registerIdX = current.instruction.data.u_div32a.Rx;
+            const registerIdY = current.instruction.data.u_div32a.Ry;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.instruction.data.u_div32a.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ / bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_div64a" => { // 64-bit unsigned integer Rx = I / Ry
+            const registerIdX = current.instruction.data.u_div64a.Rx;
+            const registerIdY = current.instruction.data.u_div64a.Ry;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.ip[0];
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ / bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_div8b" => { // 8-bit unsigned integer Rx = Ry / I
+            const registerIdX = current.instruction.data.u_div8b.Rx;
+            const registerIdY = current.instruction.data.u_div8b.Ry;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.instruction.data.u_div8b.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY / bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_div16b" => { // 16-bit unsigned integer Rx = Ry / I
+            const registerIdX = current.instruction.data.u_div16b.Rx;
+            const registerIdY = current.instruction.data.u_div16b.Ry;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.instruction.data.u_div16b.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY / bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_div32b" => { // 32-bit unsigned integer Rx = Ry / I
+            const registerIdX = current.instruction.data.u_div32b.Rx;
+            const registerIdY = current.instruction.data.u_div32b.Ry;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.instruction.data.u_div32b.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY / bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_div64b" => { // 64-bit unsigned integer Rx = Ry / I
+            const registerIdX = current.instruction.data.u_div64b.Rx;
+            const registerIdY = current.instruction.data.u_div64b.Ry;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.ip[0];
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY / bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div8" => { // 8-bit signed integer Rx = Ry / Rz
+            const registerIdX = current.instruction.data.s_div8.Rx;
+            const registerIdY = current.instruction.data.s_div8.Ry;
+            const registerIdZ = current.instruction.data.s_div8.Rz;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div16" => { // 16-bit signed integer Rx = Ry / Rz
+            const registerIdX = current.instruction.data.s_div16.Rx;
+            const registerIdY = current.instruction.data.s_div16.Ry;
+            const registerIdZ = current.instruction.data.s_div16.Rz;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div32" => { // 32-bit signed integer Rx = Ry / Rz
+            const registerIdX = current.instruction.data.s_div32.Rx;
+            const registerIdY = current.instruction.data.s_div32.Ry;
+            const registerIdZ = current.instruction.data.s_div32.Rz;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div64" => { // 64-bit signed integer Rx = Ry / Rz
+            const registerIdX = current.instruction.data.s_div64.Rx;
+            const registerIdY = current.instruction.data.s_div64.Ry;
+            const registerIdZ = current.instruction.data.s_div64.Rz;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: i64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div8a" => { // 8-bit signed integer Rx = I / Ry
+            const registerIdX = current.instruction.data.s_div8a.Rx;
+            const registerIdY = current.instruction.data.s_div8a.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.s_div8a.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsZ / bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div16a" => { // 16-bit signed integer Rx = I / Ry
+            const registerIdX = current.instruction.data.s_div16a.Rx;
+            const registerIdY = current.instruction.data.s_div16a.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.instruction.data.s_div16a.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsZ / bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div32a" => { // 32-bit signed integer Rx = I / Ry
+            const registerIdX = current.instruction.data.s_div32a.Rx;
+            const registerIdY = current.instruction.data.s_div32a.Ry;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.instruction.data.s_div32a.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsZ / bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div64a" => { // 64-bit signed integer Rx = I / Ry
+            const registerIdX = current.instruction.data.s_div64a.Rx;
+            const registerIdY = current.instruction.data.s_div64a.Ry;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: i64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsZ / bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div8b" => { // 8-bit signed integer Rx = Ry / I
+            const registerIdX = current.instruction.data.s_div8b.Rx;
+            const registerIdY = current.instruction.data.s_div8b.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.s_div8b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div16b" => { // 16-bit signed integer Rx = Ry / I
+            const registerIdX = current.instruction.data.s_div16b.Rx;
+            const registerIdY = current.instruction.data.s_div16b.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.instruction.data.s_div16b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div32b" => { // 32-bit signed integer Rx = Ry / I
+            const registerIdX = current.instruction.data.s_div32b.Rx;
+            const registerIdY = current.instruction.data.s_div32b.Ry;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.instruction.data.s_div32b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_div64b" => { // 64-bit signed integer Rx = Ry / I
+            const registerIdX = current.instruction.data.s_div64b.Rx;
+            const registerIdY = current.instruction.data.s_div64b.Ry;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: i64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"u_rem8" => { // 8-bit unsigned integer Rx = Ry % Rz
+            const registerIdX = current.instruction.data.u_rem8.Rx;
+            const registerIdY = current.instruction.data.u_rem8.Ry;
+            const registerIdZ = current.instruction.data.u_rem8.Rz;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY % bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_rem16" => { // 16-bit unsigned integer Rx = Ry % Rz
+            const registerIdX = current.instruction.data.u_rem16.Rx;
+            const registerIdY = current.instruction.data.u_rem16.Ry;
+            const registerIdZ = current.instruction.data.u_rem16.Rz;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY % bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_rem32" => { // 32-bit unsigned integer Rx = Ry % Rz
+            const registerIdX = current.instruction.data.u_rem32.Rx;
+            const registerIdY = current.instruction.data.u_rem32.Ry;
+            const registerIdZ = current.instruction.data.u_rem32.Rz;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY % bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_rem64" => { // 64-bit unsigned integer Rx = Ry % Rz
+            const registerIdX = current.instruction.data.u_rem64.Rx;
+            const registerIdY = current.instruction.data.u_rem64.Ry;
+            const registerIdZ = current.instruction.data.u_rem64.Rz;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.vregs[registerIdZ.getIndex()];
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY % bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_rem8a" => { // 8-bit unsigned integer Rx = I % Ry
+            const registerIdX = current.instruction.data.u_rem8a.Rx;
+            const registerIdY = current.instruction.data.u_rem8a.Ry;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.instruction.data.u_rem8a.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ % bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_rem16a" => { // 16-bit unsigned integer Rx = I % Ry
+            const registerIdX = current.instruction.data.u_rem16a.Rx;
+            const registerIdY = current.instruction.data.u_rem16a.Ry;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.instruction.data.u_rem16a.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ % bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_rem32a" => { // 32-bit unsigned integer Rx = I % Ry
+            const registerIdX = current.instruction.data.u_rem32a.Rx;
+            const registerIdY = current.instruction.data.u_rem32a.Ry;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.instruction.data.u_rem32a.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ % bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_rem64a" => { // 64-bit unsigned integer Rx = I % Ry
+            const registerIdX = current.instruction.data.u_rem64a.Rx;
+            const registerIdY = current.instruction.data.u_rem64a.Ry;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.ip[0];
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsZ % bitsY;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_rem8b" => { // 8-bit unsigned integer Rx = Ry % I
+            const registerIdX = current.instruction.data.u_rem8b.Rx;
+            const registerIdY = current.instruction.data.u_rem8b.Ry;
+
+            const bitsY: u8 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u8 = @truncate(current.instruction.data.u_rem8b.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY % bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_rem16b" => { // 16-bit unsigned integer Rx = Ry % I
+            const registerIdX = current.instruction.data.u_rem16b.Rx;
+            const registerIdY = current.instruction.data.u_rem16b.Ry;
+
+            const bitsY: u16 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u16 = @truncate(current.instruction.data.u_rem16b.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY % bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_rem32b" => { // 32-bit unsigned integer Rx = Ry % I
+            const registerIdX = current.instruction.data.u_rem32b.Rx;
+            const registerIdY = current.instruction.data.u_rem32b.Ry;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: u32 = @truncate(current.instruction.data.u_rem32b.I);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY % bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"u_rem64b" => { // 64-bit unsigned integer Rx = Ry % I
+            const registerIdX = current.instruction.data.u_rem64b.Rx;
+            const registerIdY = current.instruction.data.u_rem64b.Ry;
+
+            const bitsY: u64 = current.callFrame.vregs[registerIdY.getIndex()];
+            const bitsZ: u64 = current.callFrame.ip[0];
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = bitsY % bitsZ;
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem8" => { // 8-bit signed integer Rx = Ry % Rz
+            const registerIdX = current.instruction.data.s_rem8.Rx;
+            const registerIdY = current.instruction.data.s_rem8.Ry;
+            const registerIdZ = current.instruction.data.s_rem8.Rz;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsY % bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem16" => { // 16-bit signed integer Rx = Ry % Rz
+            const registerIdX = current.instruction.data.s_rem16.Rx;
+            const registerIdY = current.instruction.data.s_rem16.Ry;
+            const registerIdZ = current.instruction.data.s_rem16.Rz;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsY % bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem32" => { // 32-bit signed integer Rx = Ry % Rz
+            const registerIdX = current.instruction.data.s_rem32.Rx;
+            const registerIdY = current.instruction.data.s_rem32.Ry;
+            const registerIdZ = current.instruction.data.s_rem32.Rz;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY % bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem64" => { // 64-bit signed integer Rx = Ry % Rz
+            const registerIdX = current.instruction.data.s_rem64.Rx;
+            const registerIdY = current.instruction.data.s_rem64.Ry;
+            const registerIdZ = current.instruction.data.s_rem64.Rz;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: i64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY % bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem8a" => { // 8-bit signed integer Rx = I % Ry
+            const registerIdX = current.instruction.data.s_rem8a.Rx;
+            const registerIdY = current.instruction.data.s_rem8a.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.s_rem8a.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsZ % bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem16a" => { // 16-bit signed integer Rx = I % Ry
+            const registerIdX = current.instruction.data.s_rem16a.Rx;
+            const registerIdY = current.instruction.data.s_rem16a.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.instruction.data.s_rem16a.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsZ % bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem32a" => { // 32-bit signed integer Rx = I % Ry
+            const registerIdX = current.instruction.data.s_rem32a.Rx;
+            const registerIdY = current.instruction.data.s_rem32a.Ry;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.instruction.data.s_rem32a.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsZ % bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem64a" => { // 64-bit signed integer Rx = I % Ry
+            const registerIdX = current.instruction.data.s_rem64a.Rx;
+            const registerIdY = current.instruction.data.s_rem64a.Ry;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: i64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsZ % bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem8b" => { // 8-bit signed integer Rx = Ry % I
+            const registerIdX = current.instruction.data.s_rem8b.Rx;
+            const registerIdY = current.instruction.data.s_rem8b.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.s_rem8b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(bitsY % bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem16b" => { // 16-bit signed integer Rx = Ry % I
+            const registerIdX = current.instruction.data.s_rem16b.Rx;
+            const registerIdY = current.instruction.data.s_rem16b.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.instruction.data.s_rem16b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(bitsY % bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem32b" => { // 32-bit signed integer Rx = Ry % I
+            const registerIdX = current.instruction.data.s_rem32b.Rx;
+            const registerIdY = current.instruction.data.s_rem32b.Ry;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.instruction.data.s_rem32b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY % bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"s_rem64b" => { // 64-bit signed integer Rx = Ry % I
+            const registerIdX = current.instruction.data.s_rem64b.Rx;
+            const registerIdY = current.instruction.data.s_rem64b.Ry;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: i64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY % bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"i_pow8" => { // 8-bit integer Rx = Ry ** Rz
+            const registerIdX = current.instruction.data.i_pow8.Rx;
+            const registerIdY = current.instruction.data.i_pow8.Ry;
+            const registerIdZ = current.instruction.data.i_pow8.Rz;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(std.math.powi(u8, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_pow16" => { // 16-bit integer Rx = Ry ** Rz
+            const registerIdX = current.instruction.data.i_pow16.Rx;
+            const registerIdY = current.instruction.data.i_pow16.Ry;
+            const registerIdZ = current.instruction.data.i_pow16.Rz;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(std.math.powi(i16, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_pow32" => { // 32-bit integer Rx = Ry ** Rz
+            const registerIdX = current.instruction.data.i_pow32.Rx;
+            const registerIdY = current.instruction.data.i_pow32.Ry;
+            const registerIdZ = current.instruction.data.i_pow32.Rz;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.powi(i32, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_pow64" => { // 64-bit integer Rx = Ry ** Rz
+            const registerIdX = current.instruction.data.i_pow64.Rx;
+            const registerIdY = current.instruction.data.i_pow64.Ry;
+            const registerIdZ = current.instruction.data.i_pow64.Rz;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: i64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.powi(i64, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_pow8a" => { // 8-bit integer Rx = I ** Ry
+            const registerIdX = current.instruction.data.i_pow8a.Rx;
+            const registerIdY = current.instruction.data.i_pow8a.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.i_pow8a.I)));
+            const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(std.math.powi(u8, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_pow16a" => { // 16-bit integer Rx = I ** Ry
+            const registerIdX = current.instruction.data.i_pow16a.Rx;
+            const registerIdY = current.instruction.data.i_pow16a.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.instruction.data.i_pow16a.I)));
+            const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(std.math.powi(i16, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_pow32a" => { // 32-bit integer Rx = I ** Ry
+            const registerIdX = current.instruction.data.i_pow32a.Rx;
+            const registerIdY = current.instruction.data.i_pow32a.Ry;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.instruction.data.i_pow32a.I)));
+            const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.powi(i32, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_pow64a" => { // 64-bit integer Rx = I ** Ry
+            const registerIdX = current.instruction.data.i_pow64a.Rx;
+            const registerIdY = current.instruction.data.i_pow64a.Ry;
+
+            const bitsY: i64 = @bitCast(current.instruction.data.i_pow64a.I);
+            const bitsZ: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.powi(i64, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_pow8b" => { // 8-bit integer Rx = Ry ** I
+            const registerIdX = current.instruction.data.i_pow8b.Rx;
+            const registerIdY = current.instruction.data.i_pow8b.Ry;
+
+            const bitsY: i8 = @bitCast(@as(u8, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i8 = @bitCast(@as(u8, @truncate(current.instruction.data.i_pow8b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u8, @bitCast(std.math.powi(u8, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_pow16b" => { // 16-bit integer Rx = Ry ** I
+            const registerIdX = current.instruction.data.i_pow16b.Rx;
+            const registerIdY = current.instruction.data.i_pow16b.Ry;
+
+            const bitsY: i16 = @bitCast(@as(u16, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i16 = @bitCast(@as(u16, @truncate(current.instruction.data.i_pow16b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u16, @bitCast(std.math.powi(i16, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_pow32b" => { // 32-bit integer Rx = Ry ** I
+            const registerIdX = current.instruction.data.i_pow32b.Rx;
+            const registerIdY = current.instruction.data.i_pow32b.Ry;
+
+            const bitsY: i32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: i32 = @bitCast(@as(u32, @truncate(current.instruction.data.i_pow32b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.powi(i32, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"i_pow64b" => { // 64-bit integer Rx = Ry ** I
+            const registerIdX = current.instruction.data.i_pow64b.Rx;
+            const registerIdY = current.instruction.data.i_pow64b.Ry;
+
+            const bitsY: i64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: i64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.powi(i64, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
 
         .@"f_neg32" => pl.todo(noreturn, "f_neg32"),
         .@"f_neg64" => pl.todo(noreturn, "f_neg64"),

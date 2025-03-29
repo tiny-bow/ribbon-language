@@ -73,6 +73,8 @@
         "Pointee",
         "prng",
         "realpath",
+        "rema",
+        "remb",
         "Repr",
         "rodata",
         "rshift",
