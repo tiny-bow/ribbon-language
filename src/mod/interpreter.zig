@@ -4747,56 +4747,552 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             continue :dispatch try state.step(self);
         },
 
-        .@"f_neg32" => pl.todo(noreturn, "f_neg32"),
-        .@"f_neg64" => pl.todo(noreturn, "f_neg64"),
-        .@"f_abs32" => pl.todo(noreturn, "f_abs32"),
-        .@"f_abs64" => pl.todo(noreturn, "f_abs64"),
-        .@"f_sqrt32" => pl.todo(noreturn, "f_sqrt32"),
-        .@"f_sqrt64" => pl.todo(noreturn, "f_sqrt64"),
-        .@"f_floor32" => pl.todo(noreturn, "f_floor32"),
-        .@"f_floor64" => pl.todo(noreturn, "f_floor64"),
-        .@"f_ceil32" => pl.todo(noreturn, "f_ceil32"),
-        .@"f_ceil64" => pl.todo(noreturn, "f_ceil64"),
-        .@"f_round32" => pl.todo(noreturn, "f_round32"),
-        .@"f_round64" => pl.todo(noreturn, "f_round64"),
-        .@"f_trunc32" => pl.todo(noreturn, "f_trunc32"),
-        .@"f_trunc64" => pl.todo(noreturn, "f_trunc64"),
-        .@"f_man32" => pl.todo(noreturn, "f_man32"),
+
+        .@"f_neg32" => { // 32-bit floating point Rx = -Ry
+            const registerIdX = current.instruction.data.f_neg32.Rx;
+            const registerIdY = current.instruction.data.f_neg32.Ry;
+
+            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(-bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_neg64" => { // 64-bit floating point Rx = -Ry
+            const registerIdX = current.instruction.data.f_neg64.Rx;
+            const registerIdY = current.instruction.data.f_neg64.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(-bitsY));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"f_abs32" => { // 32-bit floating point Rx = |Ry|
+            const registerIdX = current.instruction.data.f_abs32.Rx;
+            const registerIdY = current.instruction.data.f_abs32.Ry;
+
+            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.abs(f32, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_abs64" => { // 64-bit floating point Rx = |Ry|
+            const registerIdX = current.instruction.data.f_abs64.Rx;
+            const registerIdY = current.instruction.data.f_abs64.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.abs(f64, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"f_sqrt32" => { // 32-bit floating point Rx = sqrt(Ry)
+            const registerIdX = current.instruction.data.f_sqrt32.Rx;
+            const registerIdY = current.instruction.data.f_sqrt32.Ry;
+
+            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.sqrt(f32, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_sqrt64" => { // 64-bit floating point Rx = sqrt(Ry)
+            const registerIdX = current.instruction.data.f_sqrt64.Rx;
+            const registerIdY = current.instruction.data.f_sqrt64.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.sqrt(f64, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"f_floor32" => { // 32-bit floating point Rx = floor(Ry)
+            const registerIdX = current.instruction.data.f_floor32.Rx;
+            const registerIdY = current.instruction.data.f_floor32.Ry;
+
+            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.floor(f32, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_floor64" => { // 64-bit floating point Rx = floor(Ry)
+            const registerIdX = current.instruction.data.f_floor64.Rx;
+            const registerIdY = current.instruction.data.f_floor64.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.floor(f64, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"f_ceil32" => { // 32-bit floating point Rx = ceil(Ry)
+            const registerIdX = current.instruction.data.f_ceil32.Rx;
+            const registerIdY = current.instruction.data.f_ceil32.Ry;
+
+            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.ceil(f32, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_ceil64" => { // 64-bit floating point Rx = ceil(Ry)
+            const registerIdX = current.instruction.data.f_ceil64.Rx;
+            const registerIdY = current.instruction.data.f_ceil64.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.ceil(f64, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"f_round32" => { // 32-bit floating point Rx = round(Ry)
+            const registerIdX = current.instruction.data.f_round32.Rx;
+            const registerIdY = current.instruction.data.f_round32.Ry;
+
+            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.round(f32, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_round64" => { // 64-bit floating point Rx = round(Ry)
+            const registerIdX = current.instruction.data.f_round64.Rx;
+            const registerIdY = current.instruction.data.f_round64.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.round(f64, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"f_trunc32" => { // 32-bit floating point Rx = trunc(Ry)
+            const registerIdX = current.instruction.data.f_trunc32.Rx;
+            const registerIdY = current.instruction.data.f_trunc32.Ry;
+
+            const bitsY: f32 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.trunc(f32, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_trunc64" => { // 64-bit floating point Rx = trunc(Ry)
+            const registerIdX = current.instruction.data.f_trunc64.Rx;
+            const registerIdY = current.instruction.data.f_trunc64.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.trunc(f64, bitsY)));
+
+            continue :dispatch try state.step(self);
+        },
+
+        .@"f_man32" => { // extract the mantissa part of a 32-bit float Rx = mantissa(Ry)
+            const registerIdX = current.instruction.data.f_man32.Rx;
+            const registerIdY = current.instruction.data.f_man32.Ry;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            const MAN_SIZE = comptime std.math.floatMantissaBits(f32);
+
+            pl.todo(noreturn, .{ "mantissa extraction", registerIdX, bitsY, MAN_SIZE });
+        },
         .@"f_man64" => pl.todo(noreturn, "f_man64"),
-        .@"f_frac32" => pl.todo(noreturn, "f_frac32"),
+
+        .@"f_frac32" => { // extract the fractional part of a 32-bit float Rx = fraction(Ry)
+            const registerIdX = current.instruction.data.f_man32.Rx;
+            const registerIdY = current.instruction.data.f_man32.Ry;
+
+            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            const FRAC_SIZE = comptime std.math.floatFractionalBits(f32);
+
+            pl.todo(noreturn, .{ "fraction extraction", registerIdX, bitsY, FRAC_SIZE });
+        },
         .@"f_frac64" => pl.todo(noreturn, "f_frac64"),
-        .@"f_add32" => pl.todo(noreturn, "f_add32"),
-        .@"f_add32c" => pl.todo(noreturn, "f_add32c"),
-        .@"f_add64" => pl.todo(noreturn, "f_add64"),
-        .@"f_add64c" => pl.todo(noreturn, "f_add64c"),
-        .@"f_sub32" => pl.todo(noreturn, "f_sub32"),
-        .@"f_sub32a" => pl.todo(noreturn, "f_sub32a"),
-        .@"f_sub32b" => pl.todo(noreturn, "f_sub32b"),
-        .@"f_sub64" => pl.todo(noreturn, "f_sub64"),
-        .@"f_sub64a" => pl.todo(noreturn, "f_sub64a"),
-        .@"f_sub64b" => pl.todo(noreturn, "f_sub64b"),
-        .@"f_mul32" => pl.todo(noreturn, "f_mul32"),
-        .@"f_mul32c" => pl.todo(noreturn, "f_mul32c"),
-        .@"f_mul64" => pl.todo(noreturn, "f_mul64"),
-        .@"f_mul64c" => pl.todo(noreturn, "f_mul64c"),
-        .@"f_div32" => pl.todo(noreturn, "f_div32"),
-        .@"f_div32a" => pl.todo(noreturn, "f_div32a"),
-        .@"f_div32b" => pl.todo(noreturn, "f_div32b"),
-        .@"f_div64" => pl.todo(noreturn, "f_div64"),
-        .@"f_div64a" => pl.todo(noreturn, "f_div64a"),
-        .@"f_div64b" => pl.todo(noreturn, "f_div64b"),
-        .@"f_rem32" => pl.todo(noreturn, "f_rem32"),
-        .@"f_rem32a" => pl.todo(noreturn, "f_rem32a"),
-        .@"f_rem32b" => pl.todo(noreturn, "f_rem32b"),
-        .@"f_rem64" => pl.todo(noreturn, "f_rem64"),
-        .@"f_rem64a" => pl.todo(noreturn, "f_rem64a"),
-        .@"f_rem64b" => pl.todo(noreturn, "f_rem64b"),
-        .@"f_pow32" => pl.todo(noreturn, "f_pow32"),
-        .@"f_pow32a" => pl.todo(noreturn, "f_pow32a"),
-        .@"f_pow32b" => pl.todo(noreturn, "f_pow32b"),
-        .@"f_pow64" => pl.todo(noreturn, "f_pow64"),
-        .@"f_pow64a" => pl.todo(noreturn, "f_pow64a"),
-        .@"f_pow64b" => pl.todo(noreturn, "f_pow64b"),
+
+        .@"f_add32" => { // 32-bit floating point Rx = Ry + Rz
+            const registerIdX = current.instruction.data.f_add32.Rx;
+            const registerIdY = current.instruction.data.f_add32.Ry;
+            const registerIdZ = current.instruction.data.f_add32.Rz;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY + bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_add32c" => { // 32-bit floating point Rx = Ry + I
+            const registerIdX = current.instruction.data.f_add32c.Rx;
+            const registerIdY = current.instruction.data.f_add32c.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_add32c.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY + bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_add64" => { // 64-bit floating point Rx = Ry + Rz
+            const registerIdX = current.instruction.data.f_add64.Rx;
+            const registerIdY = current.instruction.data.f_add64.Ry;
+            const registerIdZ = current.instruction.data.f_add64.Rz;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY + bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_add64c" => { // 64-bit floating point Rx = Ry + I
+            const registerIdX = current.instruction.data.f_add64c.Rx;
+            const registerIdY = current.instruction.data.f_add64c.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY + bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_sub32" => { // 32-bit floating point Rx = Ry - Rz
+            const registerIdX = current.instruction.data.f_sub32.Rx;
+            const registerIdY = current.instruction.data.f_sub32.Ry;
+            const registerIdZ = current.instruction.data.f_sub32.Rz;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY - bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_sub32a" => { // 32-bit floating point Rx = I - Ry
+            const registerIdX = current.instruction.data.f_sub32a.Rx;
+            const registerIdY = current.instruction.data.f_sub32a.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_sub32a.I)));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY - bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_sub32b" => { // 32-bit floating point Rx = Ry - I
+            const registerIdX = current.instruction.data.f_sub32b.Rx;
+            const registerIdY = current.instruction.data.f_sub32b.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_sub32b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY - bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_sub64" => { // 64-bit floating point Rx = Ry - Rz
+            const registerIdX = current.instruction.data.f_sub64.Rx;
+            const registerIdY = current.instruction.data.f_sub64.Ry;
+            const registerIdZ = current.instruction.data.f_sub64.Rz;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY - bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_sub64a" => { // 64-bit floating point Rx = I - Ry
+            const registerIdX = current.instruction.data.f_sub64a.Rx;
+            const registerIdY = current.instruction.data.f_sub64a.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+            const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY - bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_sub64b" => { // 64-bit floating point Rx = Ry - I
+            const registerIdX = current.instruction.data.f_sub64b.Rx;
+            const registerIdY = current.instruction.data.f_sub64b.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY - bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_mul32" => { // 32-bit floating point Rx = Ry * Rz
+            const registerIdX = current.instruction.data.f_mul32.Rx;
+            const registerIdY = current.instruction.data.f_mul32.Ry;
+            const registerIdZ = current.instruction.data.f_mul32.Rz;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY * bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_mul32c" => { // 32-bit floating point Rx = Ry * I
+            const registerIdX = current.instruction.data.f_mul32c.Rx;
+            const registerIdY = current.instruction.data.f_mul32c.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_mul32c.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY * bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_mul64" => { // 64-bit floating point Rx = Ry * Rz
+            const registerIdX = current.instruction.data.f_mul64.Rx;
+            const registerIdY = current.instruction.data.f_mul64.Ry;
+            const registerIdZ = current.instruction.data.f_mul64.Rz;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY * bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_mul64c" => { // 64-bit floating point Rx = Ry * I
+            const registerIdX = current.instruction.data.f_mul64c.Rx;
+            const registerIdY = current.instruction.data.f_mul64c.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY * bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_div32" => { // 32-bit floating point Rx = Ry / Rz
+            const registerIdX = current.instruction.data.f_div32.Rx;
+            const registerIdY = current.instruction.data.f_div32.Ry;
+            const registerIdZ = current.instruction.data.f_div32.Rz;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_div32a" => { // 32-bit floating point Rx = I / Ry
+            const registerIdX = current.instruction.data.f_div32a.Rx;
+            const registerIdY = current.instruction.data.f_div32a.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_div32a.I)));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_div32b" => { // 32-bit floating point Rx = Ry / I
+            const registerIdX = current.instruction.data.f_div32b.Rx;
+            const registerIdY = current.instruction.data.f_div32b.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_div32b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_div64" => { // 64-bit floating point Rx = Ry / Rz
+            const registerIdX = current.instruction.data.f_div64.Rx;
+            const registerIdY = current.instruction.data.f_div64.Ry;
+            const registerIdZ = current.instruction.data.f_div64.Rz;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_div64a" => { // 64-bit floating point Rx = I / Ry
+            const registerIdX = current.instruction.data.f_div64a.Rx;
+            const registerIdY = current.instruction.data.f_div64a.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+            const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_div64b" => { // 64-bit floating point Rx = Ry / I
+            const registerIdX = current.instruction.data.f_div64b.Rx;
+            const registerIdY = current.instruction.data.f_div64b.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(bitsY / bitsZ));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_rem32" => { // 32-bit floating point Rx = Ry % Rz
+            const registerIdX = current.instruction.data.f_rem32.Rx;
+            const registerIdY = current.instruction.data.f_rem32.Ry;
+            const registerIdZ = current.instruction.data.f_rem32.Rz;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_rem32a" => { // 32-bit floating point Rx = I % Ry
+            const registerIdX = current.instruction.data.f_rem32a.Rx;
+            const registerIdY = current.instruction.data.f_rem32a.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_rem32a.I)));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_rem32b" => { // 32-bit floating point Rx = Ry % I
+            const registerIdX = current.instruction.data.f_rem32b.Rx;
+            const registerIdY = current.instruction.data.f_rem32b.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_rem32b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_rem64" => { // 64-bit floating point Rx = Ry % Rz
+            const registerIdX = current.instruction.data.f_rem64.Rx;
+            const registerIdY = current.instruction.data.f_rem64.Ry;
+            const registerIdZ = current.instruction.data.f_rem64.Rz;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_rem64a" => { // 64-bit floating point Rx = I % Ry
+            const registerIdX = current.instruction.data.f_rem64a.Rx;
+            const registerIdY = current.instruction.data.f_rem64a.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+            const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_rem64b" => { // 64-bit floating point Rx = Ry % I
+            const registerIdX = current.instruction.data.f_rem64b.Rx;
+            const registerIdY = current.instruction.data.f_rem64b.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(@rem(bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_pow32" => { // 32-bit floating point Rx = Ry ** Rz
+            const registerIdX = current.instruction.data.f_pow32.Rx;
+            const registerIdY = current.instruction.data.f_pow32.Ry;
+            const registerIdZ = current.instruction.data.f_pow32.Rz;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdZ.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.pow(f32, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_pow32a" => { // 32-bit floating point Rx = I ** Ry
+            const registerIdX = current.instruction.data.f_pow32a.Rx;
+            const registerIdY = current.instruction.data.f_pow32a.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_pow32a.I)));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.pow(f32, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_pow32b" => { // 32-bit floating point Rx = Ry ** I
+            const registerIdX = current.instruction.data.f_pow32b.Rx;
+            const registerIdY = current.instruction.data.f_pow32b.Ry;
+
+            const bitsY: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const bitsZ: f32 = @bitCast(@as(u32, @truncate(current.instruction.data.f_pow32b.I)));
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(std.math.pow(f32, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_pow64" => { // 64-bit floating point Rx = Ry ** Rz
+            const registerIdX = current.instruction.data.f_pow64.Rx;
+            const registerIdY = current.instruction.data.f_pow64.Ry;
+            const registerIdZ = current.instruction.data.f_pow64.Rz;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdZ.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.pow(f64, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_pow64a" => { // 64-bit floating point Rx = I ** Ry
+            const registerIdX = current.instruction.data.f_pow64a.Rx;
+            const registerIdY = current.instruction.data.f_pow64a.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+            const bitsZ: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.pow(f64, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_pow64b" => { // 64-bit floating point Rx = Ry ** I
+            const registerIdX = current.instruction.data.f_pow64b.Rx;
+            const registerIdY = current.instruction.data.f_pow64b.Ry;
+
+            const bitsY: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+            const bitsZ: f64 = @bitCast(current.callFrame.ip[0]);
+            current.callFrame.ip += 1;
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(std.math.pow(f64, bitsY, bitsZ) catch unreachable));
+
+            continue :dispatch try state.step(self);
+        },
 
         .@"s_ext8_16" => pl.todo(noreturn, "s_ext8_16"),
         .@"s_ext8_32" => pl.todo(noreturn, "s_ext8_32"),
