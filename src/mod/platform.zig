@@ -379,12 +379,12 @@ pub fn kilobytesFromBytes(bytes: anytype) FloatOrDouble(@TypeOf(bytes)) {
 
 /// Converts bytes to megabytes.
 pub fn megabytesFromBytes(bytes: anytype) FloatOrDouble(@TypeOf(bytes)) {
-    return kilobytesFromBytes(bytes) / 1024.0;
+    return @as(FloatOrDouble(@TypeOf(bytes)), @floatCast(kilobytesFromBytes(bytes))) / 1024.0;
 }
 
 /// Converts bytes to gigabytes.
 pub fn gigabytesFromBytes(bytes: anytype) FloatOrDouble(@TypeOf(bytes)) {
-    return megabytesFromBytes(bytes) / 1024.0;
+    return @as(FloatOrDouble(@TypeOf(bytes)), @floatCast(megabytesFromBytes(bytes))) / 1024.0;
 }
 
 /// Drops values from the haystack up to and optionally including the first occurrence of the needle.

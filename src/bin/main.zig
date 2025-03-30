@@ -7,7 +7,7 @@ const ribbon = @import("ribbon");
 const log = std.log.scoped(.main);
 
 pub const std_options = std.Options{
-    .log_level = .info,
+    .log_level = .debug,
 };
 
 
@@ -35,7 +35,8 @@ fn test_bytecode_builder() !void {
 
     const entry = try b.createBlock();
 
-    try entry.instr(.i_add64, .{ .Rx = .r7, .Ry = .r32, .Rz = .r254 });
+    try entry.instr(.i_add64, .{ .Rx = .r7, .Ry = .r0, .Rz = .r1 });
+    try entry.instr(.@"return", .{ .R = .r7 });
 
     var encoder = ribbon.bytecode.Encoder { .writer = try ribbon.bytecode.Writer.init() };
     defer encoder.writer.deinit();
@@ -45,9 +46,23 @@ fn test_bytecode_builder() !void {
     const mem = try encoder.finalize();
     defer std.posix.munmap(mem);
 
+    const instr: []const ribbon.core.InstructionBits = @ptrCast(mem);
+
     const stdout = std.io.getStdOut();
 
     try ribbon.bytecode.disas(mem, stdout.writer());
+
+    const fiber = try ribbon.core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const function = ribbon.core.Function {
+        .header = undefined,
+        .extents = .{ .base = instr.ptr, .upper = instr.ptr + instr.len },
+        .stack_size = 0,
+    };
+
+    const result = try ribbon.interpreter.invokeBytecode(fiber, &function, &.{ 3, 2 });
+    try std.testing.expectEqual(5, result);
 }
 
 fn test_rir() !void {

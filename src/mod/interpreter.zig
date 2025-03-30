@@ -1,10 +1,12 @@
 //! Provides interfaces for running code on a `core.Fiber`.
 const interpreter = @This();
 
+const std = @import("std");
+const log = std.log.scoped(.interpreter);
+
 const core = @import("core");
 const Instruction = @import("Instruction");
 const pl = @import("platform");
-const std = @import("std");
 
 test {
     std.testing.refAllDeclsRecursive(@This());
@@ -83,10 +85,36 @@ pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *co
     };
 }
 
+// Create a minimal valid header for our wrapper function
+const EMPTY_HEADER = core.Header{};
+
+threadlocal var WRAPPER_INSTRUCTION_BUFFER: [8] core.InstructionBits = undefined;
+threadlocal var WRAPPER_FUNCTION: core.Function = undefined;
+threadlocal var WRAPPER_INIT = false;
+
+fn getOrInitWrapper() *const core.Function  {
+    if (WRAPPER_INIT) {
+        return &WRAPPER_FUNCTION;
+    }
+
+    WRAPPER_FUNCTION = core.Function {
+        .header = &EMPTY_HEADER,
+        .extents = .{
+            .base = @as(core.InstructionAddr, @ptrCast(&WRAPPER_INSTRUCTION_BUFFER)),
+            .upper = @as(core.InstructionAddr, @ptrCast(&WRAPPER_INSTRUCTION_BUFFER)) + 4,
+        },
+        .stack_size = 0,
+    };
+
+    @as(*Instruction.OpCode, @ptrCast(@constCast(WRAPPER_FUNCTION.extents.base))).* = Instruction.OpCode.halt;
+
+    WRAPPER_INIT = true;
+
+    return &WRAPPER_FUNCTION;
+}
+
 /// Invokes a `core.Function` on the provided fiber, returning the result.
 pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []const u64) core.Error!u64 {
-    const HALT: core.InstructionAddr = &.{ 0x02 }; // TODO: switch on endian?
-
     if (!self.header.calls.hasSpace(2)) {
         return error.Overflow;
     }
@@ -94,36 +122,52 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
     const newRegisters = self.header.registers.allocSlice(2);
     @memcpy(newRegisters[1][0..arguments.len], arguments);
 
-    self.header.calls.pushSlice(&.{
-        core.CallFrame {
-            .function = undefined,
-            .evidence = null,
-            .data = self.header.data.top_ptr,
-            .set_frame = self.header.sets.top(),
-            .vregs = &newRegisters[0],
-            .ip = HALT,
-            .output = .scratch,
-        },
-        core.CallFrame {
-            .function = @ptrCast(fun),
-            .evidence = null,
-            .data = self.header.data.top_ptr,
-            .set_frame = self.header.sets.top(),
-            .vregs = &newRegisters[1],
-            .ip = fun.extents.base,
-            .output = .native_ret,
-        },
+    log.debug("invoking bytecode function {x} with extents {x} to {x}", .{
+        @intFromPtr(fun),
+        @intFromPtr(fun.extents.base),
+        @intFromPtr(fun.extents.upper),
     });
+
+    const wrapper = getOrInitWrapper();
+
+    log.debug("wrapper function is at {x} with extents {x} to {x}", .{
+        @intFromPtr(wrapper),
+        @intFromPtr(wrapper.extents.base),
+        @intFromPtr(wrapper.extents.upper),
+    });
+
+    const @"top-1" = self.header.calls.create(core.CallFrame {
+        .function = wrapper,
+        .evidence = null,
+        .data = self.header.data.top_ptr,
+        .set_frame = self.header.sets.top(),
+        .vregs = &newRegisters[0],
+        .ip = wrapper.extents.base,
+        .output = .scratch,
+    });
+
+    const top = self.header.calls.create(core.CallFrame {
+        .function = @ptrCast(fun),
+        .evidence = null,
+        .data = self.header.data.top_ptr,
+        .set_frame = self.header.sets.top(),
+        .vregs = &newRegisters[1],
+        .ip = fun.extents.base,
+        .output = .native_ret,
+    });
+
+    log.debug("top   {x}: {x} {x} {x}", .{ @intFromPtr(top), @intFromPtr(top.function), @intFromPtr(@as(*const core.Function, @ptrCast(@alignCast(top.function))).extents.base), @intFromPtr(@as(*const core.Function, @ptrCast(@alignCast(top.function))).extents.upper) });
+    log.debug("top-1 {x}: {x} {x} {x}", .{ @intFromPtr(@"top-1"), @intFromPtr(@"top-1".function), @intFromPtr(@as(*const core.Function, @ptrCast(@alignCast(@"top-1".function))).extents.base), @intFromPtr(@as(*const core.Function, @ptrCast(@alignCast(@"top-1".function))).extents.upper) });
 
     try eval(self, .skip_breakpoints);
 
     // second frame will have already been popped by the interpreter,
     // so we only pop 1 each here.
     self.header.calls.pop();
-    const registers = self.header.registers.popMultiPtr(1);
 
-    // we need to reach into the second register frame
-    return registers[1][comptime core.Register.native_ret.getIndex()];
+    const registers = self.header.registers.popPtr();
+
+    return registers[comptime core.Register.native_ret.getIndex()];
 }
 
 /// Passed to `eval`, indicates how to handle breakpoints in the interpreter loop.
@@ -208,6 +252,8 @@ fn SignalSubset(comptime isLoop: bool) type {
 }
 
 fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || SignalSubset(isLoop))!void {
+    log.debug("begin {s}", .{ if (isLoop) "loop" else "step" });
+
     const State = struct {
         callFrame: *core.CallFrame,
         function: *const core.Function,
@@ -219,6 +265,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             st.callFrame = header.calls.top();
             std.debug.assert(@intFromPtr(st.callFrame) >= @intFromPtr(header.calls.base));
 
+            log.debug("active function for decode is at {x}", .{ @intFromPtr(st.callFrame.function) });
             st.function = @ptrCast(@alignCast(st.callFrame.function));
 
             std.debug.assert(st.function.extents.boundsCheck(st.callFrame.ip));
@@ -228,8 +275,6 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             st.callFrame.ip += 1;
 
             st.stackFrame = st.callFrame.data[0..st.function.stack_size];
-            std.debug.assert(@intFromPtr(st.stackFrame.ptr) >= @intFromPtr(header.data.base));
-            std.debug.assert(@intFromPtr(st.stackFrame.ptr + st.stackFrame.len) <= @intFromPtr(header.data.limit));
 
             return st.instruction.code;
         }

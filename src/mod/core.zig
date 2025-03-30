@@ -277,6 +277,13 @@ pub const Extents = packed struct(u128) {
 
     /// Returns whether an instruction address is within the bounds of this code section.
     pub fn boundsCheck(self: Extents, addr: InstructionAddr) bool {
+        log.debug("bounds check {x}:({x} to {x}) {} {}", .{
+            @intFromPtr(addr),
+            @intFromPtr(self.base),
+            @intFromPtr(self.upper),
+            @intFromPtr(addr) >= @intFromPtr(self.base),
+            @intFromPtr(addr) < @intFromPtr(self.upper),
+        });
         return (@intFromPtr(addr) >= @intFromPtr(self.base)) and (@intFromPtr(addr) < @intFromPtr(self.upper));
     }
 };
@@ -287,19 +294,19 @@ pub const Extents = packed struct(u128) {
 /// ownership varies.
 pub const AddressTable = extern struct {
     /// Constant value bindings section.
-    constants: Id.Buffer(*const Constant, .constant),
+    constants: Id.Buffer(*const Constant, .constant) = .{},
     /// Global value bindings section.
-    globals: Id.Buffer(*const Global, .constant),
+    globals: Id.Buffer(*const Global, .constant) = .{},
     /// Function value bindings section.
-    functions: Id.Buffer(*const Function, .constant),
+    functions: Id.Buffer(*const Function, .constant) = .{},
     /// Builtin function value bindings section.
-    builtin_addresses: Id.Buffer(*const BuiltinAddress, .constant),
+    builtin_addresses: Id.Buffer(*const BuiltinAddress, .constant) = .{},
     /// C ABI value bindings section.
-    foreign_addresses: Id.Buffer(*const ForeignAddress, .constant),
+    foreign_addresses: Id.Buffer(*const ForeignAddress, .constant) = .{},
     /// Effect handler set bindings section.
-    handler_sets: Id.Buffer(*const HandlerSet, .constant),
+    handler_sets: Id.Buffer(*const HandlerSet, .constant) = .{},
     /// Effect identity bindings section.
-    effects: Id.Buffer(*const Effect, .constant),
+    effects: Id.Buffer(*const Effect, .constant) = .{},
 
     /// Get a pointer to a `Constant` from its `id`.
     /// * Does not perform any validation outside of debug mode
@@ -405,9 +412,9 @@ pub const AddressTable = extern struct {
 /// `*` Within Ribbon's compiler, not Zig's
 pub const SymbolTable = packed struct(u128) {
     /// This symbol table's keys.
-    keys: Id.Buffer(SymbolTable.Key, .constant),
+    keys: Id.Buffer(SymbolTable.Key, .constant) = .{},
     /// This symbol table's values.
-    values: Id.Buffer(SymbolTable.Value, .constant),
+    values: Id.Buffer(SymbolTable.Value, .constant) = .{},
 
     /// One half of a key/value pair used for address resolution in a `SymbolTable`.
     ///
@@ -451,17 +458,15 @@ pub const SymbolTable = packed struct(u128) {
 
 /// Metadata for a Ribbon program.
 pub const Header = extern struct {
-    /// Instructions section base and upper address.
-    extents: Extents,
     /// The total size of the program.
-    size: u64,
+    size: u64 = @sizeOf(Header),
     /// Address table used by instructions this header owns.
-    addresses: AddressTable,
+    addresses: AddressTable = .{},
     /// Symbol bindings for the address table; what this program calls different addresses.
     ///
     /// Not necessarily a complete listing for all bindings;
     /// only what it wants to be known externally.
-    symbols: SymbolTable,
+    symbols: SymbolTable = .{},
 
     /// Get an address from an ID.
     /// * Does not perform any validation outside of debug mode
@@ -687,7 +692,8 @@ pub const mem = comptime_memorySize: {
         /// The evidence buffer - stores bindings to currently accessible effect handlers by effect id + linked lists via Evidence
         evidence: [pl.MAX_EFFECT_TYPES]?*Evidence,
         /// The cause of a trap, if any was known. Pointee-type depends on the trap.
-        trap: ?*const anyopaque, // TODO: error handling function that covers this variance
+        /// * TODO: error handling function that covers this variance
+        trap: ?*const anyopaque,
     };
 
     const FIELDS = std.meta.fieldNames(FIBER_HEADER);
@@ -697,17 +703,20 @@ pub const mem = comptime_memorySize: {
     var offsets: [FIELDS.len]comptime_int = undefined;
     var total = @sizeOf(FIBER_HEADER);
 
-    for (FIELDS, 0..) |fieldName, i| {
-        const T = @FieldType(FIBER_HEADER, fieldName);
+    var k = 0;
+    var fieldNames: [FIELDS.len][:0]const u8 = undefined;
 
-        const alignment, const size = if (pl.canHaveDecls(T)) .{ T.mem.ALIGNMENT, T.mem.SIZE } else .{ @alignOf(T), @sizeOf(T) };
+    for (FIELDS) |fieldName| {
+        const S = @FieldType(FIBER_HEADER, fieldName);
+
+        const alignment, const size = if (pl.canHaveDecls(S)) .{ S.mem.ALIGNMENT, S.mem.SIZE } else continue;
 
         if (alignment != REQUIRED_ALIGNMENT) {
             @compileError(std.fmt.comptimePrint(
                 \\[Fiber.mem] - field "{s}" (of type `{s}`) in `FiberHeader` has incorrect alignment for its memory block;
                 \\              it is {d} but it should be == {}"
                 \\
-                , .{fieldName, @typeName(T), alignment, REQUIRED_ALIGNMENT}));
+                , .{fieldName, @typeName(S), alignment, REQUIRED_ALIGNMENT}));
         }
 
         // ensure that we haven't screwed this up somehow
@@ -716,12 +725,46 @@ pub const mem = comptime_memorySize: {
         // not necessary: we've already ensured that the alignment is correct
         // total += pl.alignDelta(total, REQUIRED_ALIGNMENT);
 
-        offsets[i] = total;
+        fieldNames[k] = fieldName;
+        offsets[k] = total;
+        k += 1;
 
         total += size;
     }
 
     std.debug.assert(pl.alignDelta(total, REQUIRED_ALIGNMENT) == 0);
+
+    const finalOffsets = final_offsets: {
+        var out: [k]comptime_int = undefined;
+        @memcpy(&out, offsets[0..k]);
+        break :final_offsets out;
+    };
+
+    const finalFieldNames = final_field_names: {
+        var out: [k][:0]const u8 = undefined;
+        @memcpy(&out, fieldNames[0..k]);
+        break :final_field_names out;
+    };
+
+    const DATA_FIELDS = data_fields: {
+        var finalFields: [k]std.builtin.Type.EnumField = undefined;
+
+        for (finalFieldNames, 0..) |fieldName, i| {
+            finalFields[i] = std.builtin.Type.EnumField {
+                .name = fieldName,
+                .value = i,
+            };
+        }
+
+        break :data_fields @Type(std.builtin.Type {
+            .@"enum" = .{
+                .tag_type = u8,
+                .fields = &finalFields,
+                .decls = &.{},
+                .is_exhaustive = true,
+            }
+        });
+    };
 
     break :comptime_memorySize struct {
         /// After initializing a `Fiber`, its memory has the following layout:
@@ -746,17 +789,19 @@ pub const mem = comptime_memorySize: {
         pub const SIZE = total;
 
         /// The offsets of each section within the fiber's `memory`.
-        pub const OFFSETS = offsets;
+        pub const OFFSETS = finalOffsets;
 
         /// Byte block type representing a full `Fiber`, with its `mem.FiberHeader` and stacks' memory blocks.
         pub const FiberBuffer: type = extern struct {
             bytes: [SIZE] u8 align(REQUIRED_ALIGNMENT),
         };
 
+        pub const DataFields = DATA_FIELDS;
+
         /// Get the offset of a field within the fiber's `memory`.
         /// * this function is comptime
-        pub fn getOffset(fieldName: []const u8) comptime_int {
-            comptime return OFFSETS[std.meta.fieldIndex(FiberHeader, fieldName) orelse @compileError("No field " ++ fieldName ++ " in Rvm.FiberHeader")];
+        pub fn getOffset(comptime fieldName: []const u8) comptime_int {
+            comptime return OFFSETS[@intFromEnum(@field(DataFields, fieldName))];
         }
     };
 };
@@ -766,6 +811,16 @@ comptime {
 
     if (mb > 5.0) {
         @compileError(std.fmt.comptimePrint("Fiber total size is {d:.2}mb", .{mb}));
+    }
+
+    for (mem.OFFSETS, 0..) |o1, i| {
+        for (mem.OFFSETS, 0..) |o2, j| {
+            if (i == j) continue;
+
+            if (o1 == o2) {
+                @compileError(std.fmt.comptimePrint("Fiber memory offset {d} collides with {d}", .{i, j}));
+            }
+        }
     }
 }
 
@@ -786,7 +841,7 @@ pub const Fiber = extern struct {
     pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!Fiber {
         const buf = try allocator.allocAdvancedWithRetAddr(u8, mem.ALIGNMENT, mem.SIZE, @returnAddress());
 
-        log.debug("allocated address range {x} to {x} for {s}\n", .{@intFromPtr(buf.ptr), @intFromPtr(buf.ptr) + buf.len, @typeName(Fiber)});
+        log.debug("allocated address range {x} to {x} for {s}", .{@intFromPtr(buf.ptr), @intFromPtr(buf.ptr) + buf.len, @typeName(Fiber)});
 
         const header: *mem.FiberHeader = @ptrCast(buf.ptr);
 

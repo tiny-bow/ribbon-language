@@ -37,7 +37,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         /// Initializes a stack from a memory pointer.
         pub fn init(memory: [*]align(mem.ALIGNMENT) u8) Self {
             const ptr: [*]T = @ptrCast(memory);
-            log.debug("initializing {s} stack at {d} to {d}\n", .{ @typeName(T), @intFromPtr(ptr), @intFromPtr(ptr + STACK_SIZE) });
+            log.debug("initializing {s} stack at {d} to {d}", .{ @typeName(T), @intFromPtr(ptr), @intFromPtr(ptr + STACK_SIZE) });
             return Self {
                 .top_ptr = ptr - 1,
                 .base = ptr,
@@ -66,10 +66,12 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Creates room for `n` values on the stack, returning a slice of their location.
+        /// * slice is a view into the stack's memory, the last element of the slice is the top of the stack
         /// * does not test if the stack has space for the values
         pub fn allocSlice(self: *Self, n: usize) []T {
+            const out = self.top_ptr[1..n + 1];
             self.increment(n);
-            return self.top_ptr[0..n];
+            return out;
         }
 
         /// Pushes a value onto the stack.
@@ -80,6 +82,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Copies a slice onto the stack.
+        /// * slice is mem-copied in order; the last element of the slice will be the new top of the stack
         /// * does not test if the stack has space for the values
         pub fn pushSlice(self: *Self, src: []const T) void {
             const dst = self.allocSlice(src.len);
@@ -87,6 +90,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Copies a slice onto the stack and returns the new stack version of it.
+        /// * slice is mem-copied in order; the last element of the slice will be the new top of the stack
         /// * does not test if the stack has space for the values
         pub fn createSlice(self: *Self, src: []const T) []T {
             const newSlice = self.allocSlice(src.len);

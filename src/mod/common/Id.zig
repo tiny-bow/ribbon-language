@@ -72,8 +72,8 @@ pub fn Buffer(comptime T: type, comptime MUT: pl.Mutability) type {
     return packed struct {
         const Self = @This();
 
-        len: u16,
-        ptr: u48,
+        len: u16 = 0,
+        ptr: u48 = 0,
 
         pub const PointerType = MUT.MultiPointerType(T);
         pub const SliceType = MUT.SliceType(T);
