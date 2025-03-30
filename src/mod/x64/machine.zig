@@ -116,7 +116,7 @@ pub const Builder = struct {
     }
 
     /// Builds a return instruction for a function.
-    pub fn ret(self: *Builder, operand: ?Operand) Error!void {
+    pub fn @"return"(self: *Builder, operand: ?Operand) Error!void {
         if (operand) |op| {
             switch (op) {
                 .immediate => |im| try self.encoder.imm(im),

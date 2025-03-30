@@ -17,7 +17,7 @@ pub fn invokeBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: anytype, 
     const T = @TypeOf(fun);
     // Because the allocated builtin is a packed structure with the pointer at the start, we can just truncate it.
     // To handle both cases, we cast to the bitsize of the input first and then truncate to the output.
-    return invokeStaticBuiltin(self, evidence, @ptrFromInt(@as(u64, @truncate(@as(std.meta(.unsigned, @bitSizeOf(T)), @bitCast(fun))))), arguments);
+    return invokeStaticBuiltin(self, evidence, @ptrFromInt(@as(u64, @truncate(@as(std.meta.Int(.unsigned, @bitSizeOf(T)), @bitCast(fun))))), arguments);
 }
 
 /// Invokes a `core.AllocatedBuiltinFunction` on the provided fiber, returning the result.
@@ -85,32 +85,35 @@ pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *co
     };
 }
 
-// Create a minimal valid header for our wrapper function
-const EMPTY_HEADER = core.Header{};
-
-threadlocal var WRAPPER_INSTRUCTION_BUFFER: [8] core.InstructionBits = undefined;
-threadlocal var WRAPPER_FUNCTION: core.Function = undefined;
-threadlocal var WRAPPER_INIT = false;
 
 fn getOrInitWrapper() *const core.Function  {
-    if (WRAPPER_INIT) {
-        return &WRAPPER_FUNCTION;
-    }
-
-    WRAPPER_FUNCTION = core.Function {
-        .header = &EMPTY_HEADER,
-        .extents = .{
-            .base = @as(core.InstructionAddr, @ptrCast(&WRAPPER_INSTRUCTION_BUFFER)),
-            .upper = @as(core.InstructionAddr, @ptrCast(&WRAPPER_INSTRUCTION_BUFFER)) + 4,
-        },
-        .stack_size = 0,
+    const static = struct {
+        threadlocal var WRAPPER_INSTRUCTION_BUFFER = [_]core.InstructionBits { 0x0002 };
+        threadlocal var WRAPPER_FUNCTION: core.Function = undefined;
+        threadlocal var WRAPPER_INIT = false;
     };
 
-    @as(*Instruction.OpCode, @ptrCast(@constCast(WRAPPER_FUNCTION.extents.base))).* = Instruction.OpCode.halt;
+    if (static.WRAPPER_INIT) {
+        @branchHint(.likely);
+        return &static.WRAPPER_FUNCTION;
+    } else {
+        @branchHint(.cold);
 
-    WRAPPER_INIT = true;
+        const buffer = @as(core.InstructionAddr, @ptrCast(&static.WRAPPER_INSTRUCTION_BUFFER));
 
-    return &WRAPPER_FUNCTION;
+        static.WRAPPER_FUNCTION = core.Function {
+            .header = core.EMPTY_HEADER,
+            .extents = .{
+                .base = buffer,
+                .upper = buffer + @sizeOf(@TypeOf(static.WRAPPER_INSTRUCTION_BUFFER)),
+            },
+            .stack_size = 0,
+        };
+
+        static.WRAPPER_INIT = true;
+
+        return &static.WRAPPER_FUNCTION;
+    }
 }
 
 /// Invokes a `core.Function` on the provided fiber, returning the result.
@@ -130,13 +133,7 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
 
     const wrapper = getOrInitWrapper();
 
-    log.debug("wrapper function is at {x} with extents {x} to {x}", .{
-        @intFromPtr(wrapper),
-        @intFromPtr(wrapper.extents.base),
-        @intFromPtr(wrapper.extents.upper),
-    });
-
-    const @"top-1" = self.header.calls.create(core.CallFrame {
+    self.header.calls.push(core.CallFrame {
         .function = wrapper,
         .evidence = null,
         .data = self.header.data.top_ptr,
@@ -146,7 +143,7 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
         .output = .scratch,
     });
 
-    const top = self.header.calls.create(core.CallFrame {
+    self.header.calls.push(core.CallFrame {
         .function = @ptrCast(fun),
         .evidence = null,
         .data = self.header.data.top_ptr,
@@ -156,13 +153,9 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
         .output = .native_ret,
     });
 
-    log.debug("top   {x}: {x} {x} {x}", .{ @intFromPtr(top), @intFromPtr(top.function), @intFromPtr(@as(*const core.Function, @ptrCast(@alignCast(top.function))).extents.base), @intFromPtr(@as(*const core.Function, @ptrCast(@alignCast(top.function))).extents.upper) });
-    log.debug("top-1 {x}: {x} {x} {x}", .{ @intFromPtr(@"top-1"), @intFromPtr(@"top-1".function), @intFromPtr(@as(*const core.Function, @ptrCast(@alignCast(@"top-1".function))).extents.base), @intFromPtr(@as(*const core.Function, @ptrCast(@alignCast(@"top-1".function))).extents.upper) });
-
     try eval(self, .skip_breakpoints);
 
-    // second frame will have already been popped by the interpreter,
-    // so we only pop 1 each here.
+    // second frame will have already been popped by the interpreter
     self.header.calls.pop();
 
     const registers = self.header.registers.popPtr();

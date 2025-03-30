@@ -362,6 +362,7 @@ pub fn build(b: *std.Build) !void {
     ribbon_mod.addImport("Buffer", Buffer_mod);
     ribbon_mod.addImport("bytecode", bytecode_mod);
     ribbon_mod.addImport("common", common_mod);
+    ribbon_mod.addImport("machine", machine_mod);
     ribbon_mod.addImport("core", core_mod);
     ribbon_mod.addImport("interpreter", interpreter_mod);
     ribbon_mod.addImport("ir", ir_mod);

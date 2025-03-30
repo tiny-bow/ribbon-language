@@ -74,6 +74,8 @@ pub const Effect = enum(std.math.IntFittingRange(0, pl.MAX_EFFECT_TYPES)) {
         return @intFromEnum(self);
     }
 };
+/// A minimal valid header for core.Function
+pub const EMPTY_HEADER: *const Header = &Header{};
 
 /// A Ribbon function definition.
 pub const Function = extern struct {
@@ -656,6 +658,11 @@ pub const AllocatedBuiltinFunction = extern struct {
     /// `munmap` all pages of a native function, freeing the memory.
     pub fn deinit(self: AllocatedBuiltinFunction) void {
         std.posix.munmap(@alignCast(self.ptr[0..pl.alignTo(self.len, pl.PAGE_SIZE)]));
+    }
+
+    /// Get the function's machine code as a slice.
+    pub fn toSlice(self: AllocatedBuiltinFunction) []const align(pl.PAGE_SIZE) u8 {
+        return self.ptr[0..self.len];
     }
 };
 
