@@ -25,7 +25,8 @@ pub fn invokeAllocatedBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: 
     return invokeStaticBuiltin(self, evidence, @ptrCast(fun.ptr), arguments);
 }
 
-/// The indicates the kind of control flow yield being performed by a builtin function.
+/// Result of `invokeBuiltin` depends on the kind of control flow yield being performed by a builtin function;
+/// this tagged union discriminates between the two.
 pub const BuiltinResult = union(enum) {
     /// Nominal return value.
     /// May or may not be initialized depending on function signature.
@@ -813,12 +814,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const src: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
             const size: u64 = current.callFrame.vregs[registerIdZ.getIndex()];
 
-            // TODO: more efficient swap implementation
-            for (src[0..size], dest[0..size]) |*srcByte, *destByte| {
-                const tmp = srcByte.*;
-                srcByte.* = destByte.*;
-                destByte.* = tmp;
-            }
+            pl.swap(dest, src, size);
 
             continue :dispatch try state.step(self);
         },
@@ -830,12 +826,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const dest: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdX.getIndex()]);
             const src: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            // TODO: more efficient swap implementation
-            for (src[0..size], dest[0..size]) |*srcByte, *destByte| {
-                const tmp = srcByte.*;
-                srcByte.* = destByte.*;
-                destByte.* = tmp;
-            }
+            pl.swap(dest, src, size);
 
             continue :dispatch try state.step(self);
         },
@@ -4946,29 +4937,47 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             continue :dispatch try state.step(self);
         },
 
-        .@"f_man32" => { // extract the mantissa part of a 32-bit float Rx = mantissa(Ry)
-            const registerIdX = current.instruction.data.f_man32.Rx;
-            const registerIdY = current.instruction.data.f_man32.Ry;
+        .@"f_whole32" => { // extract the whole number part of a 32-bit float Rx = whole(Ry)
+            const registerIdX = current.instruction.data.f_whole32.Rx;
+            const registerIdY = current.instruction.data.f_whole32.Ry;
 
-            const bitsY: u32 = @truncate(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+            const num: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            const MAN_SIZE = comptime std.math.floatMantissaBits(f32);
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(pl.whole(num)));
 
-            pl.todo(noreturn, .{ "mantissa extraction", registerIdX, bitsY, MAN_SIZE });
+            continue :dispatch try state.step(self);
         },
-        .@"f_man64" => pl.todo(noreturn, "f_man64"),
+        .@"f_whole64" => { // extract the whole number part of a 64-bit float Rx = whole(Ry)
+            const registerIdX = current.instruction.data.f_whole64.Rx;
+            const registerIdY = current.instruction.data.f_whole64.Ry;
 
-        .@"f_frac32" => { // extract the fractional part of a 32-bit float Rx = fraction(Ry)
-            const registerIdX = current.instruction.data.f_man32.Rx;
-            const registerIdY = current.instruction.data.f_man32.Ry;
+            const num: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            const bitsY: u32 = @truncate(current.callFrame.vregs[registerIdY.getIndex()]);
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(pl.whole(num)));
 
-            const FRAC_SIZE = comptime std.math.floatFractionalBits(f32);
-
-            pl.todo(noreturn, .{ "fraction extraction", registerIdX, bitsY, FRAC_SIZE });
+            continue :dispatch try state.step(self);
         },
-        .@"f_frac64" => pl.todo(noreturn, "f_frac64"),
+
+        .@"f_frac32" => { // extract the fractional part of a 32-bit float Rx = frac(Ry)
+            const registerIdX = current.instruction.data.f_frac32.Rx;
+            const registerIdY = current.instruction.data.f_frac32.Ry;
+
+            const num: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
+
+            current .callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(pl.frac(num)));
+
+            continue :dispatch try state.step(self);
+        },
+        .@"f_frac64" => { // extract the fractional part of a 64-bit float Rx = frac(Ry)
+            const registerIdX = current.instruction.data.f_frac64.Rx;
+            const registerIdY = current.instruction.data.f_frac64.Ry;
+
+            const num: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
+
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(pl.frac(num)));
+
+            continue :dispatch try state.step(self);
+        },
 
         .@"f_add32" => { // 32-bit floating point Rx = Ry + Rz
             const registerIdX = current.instruction.data.f_add32.Rx;

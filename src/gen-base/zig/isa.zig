@@ -1155,56 +1155,56 @@ pub const CATEGORIES: []const Category = &.{
             .mnemonic("f_sqrt",
                 "Performs a square root operation on the provided value",
                 &.{
-                    .basic(.suffix("32"), "32-bit {0} = *sqrt* {1}", &.{ .register, .register }),
-                    .basic(.suffix("64"), "64-bit {0} = *sqrt* {1}", &.{ .register, .register }),
+                    .basic(.suffix("32"), "32-bit {0} = sqrt({1})", &.{ .register, .register }),
+                    .basic(.suffix("64"), "64-bit {0} = sqrt({1})", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_floor",
                 "Performs a flooring operation on the provided value",
                 &.{
-                    .basic(.suffix("32"), "32-bit {0} = *floor* {1}", &.{ .register, .register }),
-                    .basic(.suffix("64"), "64-bit {0} = *floor* {1}", &.{ .register, .register }),
+                    .basic(.suffix("32"), "32-bit {0} = floor({1})", &.{ .register, .register }),
+                    .basic(.suffix("64"), "64-bit {0} = floor({1})", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_ceil",
                 "Performs a ceiling operation on the provided value",
                 &.{
-                    .basic(.suffix("32"), "32-bit {0} = *ceiling* {1}", &.{ .register, .register }),
-                    .basic(.suffix("64"), "64-bit {0} = *ceiling* {1}", &.{ .register, .register }),
+                    .basic(.suffix("32"), "32-bit {0} = ceil({1})", &.{ .register, .register }),
+                    .basic(.suffix("64"), "64-bit {0} = ceil({1})", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_round",
                 "Performs a rounding operation on the provided value",
                 &.{
-                    .basic(.suffix("32"), "32-bit {0} = *round* {1}", &.{ .register, .register }),
-                    .basic(.suffix("64"), "64-bit {0} = *round* {1}", &.{ .register, .register }),
+                    .basic(.suffix("32"), "32-bit {0} = round({1})", &.{ .register, .register }),
+                    .basic(.suffix("64"), "64-bit {0} = round({1})", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_trunc",
                 "Performs a truncation operation on the provided value",
                 &.{
-                    .basic(.suffix("32"), "32-bit {0} = *truncate* {1}", &.{ .register, .register }),
-                    .basic(.suffix("64"), "64-bit {0} = *truncate* {1}", &.{ .register, .register }),
+                    .basic(.suffix("32"), "32-bit {0} = truncate({1})", &.{ .register, .register }),
+                    .basic(.suffix("64"), "64-bit {0} = truncate({1})", &.{ .register, .register }),
                 },
             ),
 
-            .mnemonic("f_man",
-                "Extracts the mantissa part of the provided value",
+            .mnemonic("f_whole",
+                "Extracts the whole number part of the provided value",
                 &.{
-                    .basic(.suffix("32"), "32-bit {0} = *man* {1}", &.{ .register, .register }),
-                    .basic(.suffix("64"), "64-bit {0} = *man* {1}", &.{ .register, .register }),
+                    .basic(.suffix("32"), "32-bit {0} = whole({1})", &.{ .register, .register }),
+                    .basic(.suffix("64"), "64-bit {0} = whole({1})", &.{ .register, .register }),
                 },
             ),
 
             .mnemonic("f_frac",
                 "Extracts the fractional part of the provided value",
                 &.{
-                    .basic(.suffix("32"), "32-bit {0} = *frac* {1}", &.{ .register, .register }),
-                    .basic(.suffix("64"), "64-bit {0} = *frac* {1}", &.{ .register, .register }),
+                    .basic(.suffix("32"), "32-bit {0} = frac({1})", &.{ .register, .register }),
+                    .basic(.suffix("64"), "64-bit {0} = frac({1})", &.{ .register, .register }),
                 },
             ),
 

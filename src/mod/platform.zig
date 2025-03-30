@@ -387,6 +387,95 @@ pub fn gigabytesFromBytes(bytes: anytype) FloatOrDouble(@TypeOf(bytes)) {
     return @as(FloatOrDouble(@TypeOf(bytes)), @floatCast(megabytesFromBytes(bytes))) / 1024.0;
 }
 
+/// Extract the whole number part of a floating point value.
+pub fn whole(value: anytype) @TypeOf(value) {
+    comptime std.debug.assert(@typeInfo(@TypeOf(value)) == .float);
+
+    const Bits = std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(value)));
+    // Convert float to its IEEE754 32-bit representation.
+    const bits: Bits = @bitCast(value);
+    // Extract the exponent (bits 23-30) and remove the bias.
+    const exp: Bits = ((bits >> 23) & 0xFF) - 127;
+
+    // If x is less than 1, then the integer part is zero.
+    if (exp < 0) return 0.0;
+
+    // If the exponent is 23 or greater, all the fraction bits contribute
+    // to the integer part (or x is too large), so there is no fractional part.
+    if (exp >= 23) return value;
+
+    // Create a mask that zeros out the fractional bits that represent the integer part.
+    // The lower (23 - exp) bits are the fraction portion.
+    const mask = ~((@as(Bits, 1) << @intCast((@as(Bits, 23) - exp) - @as(Bits, 1))));
+
+    // Clear the fractional bits from the bit representation.
+    const intBits = bits & mask;
+
+    // Convert back to float.
+    return @bitCast(intBits);
+}
+
+/// Extract the fractional part of a floating point value.
+pub fn frac(value: anytype) @TypeOf(value) {
+    comptime std.debug.assert(@typeInfo(@TypeOf(value)) == .float);
+
+    return value - whole(value);
+}
+
+/// efficient memory swap implementation
+pub fn swap(a: [*]u8, b: [*]u8, n: usize) void {
+    const wordSize = @sizeOf(usize);
+    var pa = a;
+    var pb = b;
+    var remaining = n;
+
+    // If both pointers have the same alignment offset,
+    // we can swap word-sized blocks.
+    if (@intFromPtr(pa) % wordSize == @intFromPtr(pb) % wordSize) {
+        // Swap initial misaligned bytes until both pointers are aligned.
+        const offset = @intFromPtr(pa) % wordSize;
+        if (offset != 0) {
+            var bytesToAlign = wordSize - offset;
+            if (bytesToAlign > remaining) {
+                bytesToAlign = remaining;
+            }
+            var i: usize = 0;
+            while (i < bytesToAlign) : (i += 1) {
+                const tmp = pa[i];
+                pa[i] = pb[i];
+                pb[i] = tmp;
+            }
+            pa += bytesToAlign;
+            pb += bytesToAlign;
+            remaining -= bytesToAlign;
+        }
+
+        // Swap full word-sized blocks.
+        const wordCount = remaining / wordSize;
+        var i: usize = 0;
+        while (i < wordCount) : (i += 1) {
+            // Calculate pointers to word-sized elements.
+            const p_word_a: *usize = @ptrCast(@alignCast(pa + i * wordSize));
+            const p_word_b: *usize = @ptrCast(@alignCast(pb + i * wordSize));
+            const tmp = p_word_a.*;
+            p_word_a.* = p_word_b.*;
+            p_word_b.* = tmp;
+        }
+        const bytesSwapped = wordCount * wordSize;
+        pa += bytesSwapped;
+        pb += bytesSwapped;
+        remaining -= bytesSwapped;
+    }
+
+    // Swap any remaining bytes.
+    var j: usize = 0;
+    while (j < remaining) : (j += 1) {
+        const tmp = pa[j];
+        pa[j] = pb[j];
+        pb[j] = tmp;
+    }
+}
+
 /// Drops values from the haystack up to and optionally including the first occurrence of the needle.
 /// If the needle is the empty string, or is otherwise unable to be found, the haystack is returned unchanged.
 pub fn trimBeforeSub(haystack: anytype, needle: anytype, needleMode: enum { include_needle, drop_needle }) @TypeOf(haystack) {
