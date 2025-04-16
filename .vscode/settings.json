@@ -73,6 +73,7 @@
         "Pointee",
         "powi",
         "prng",
+        "punc",
         "realpath",
         "rema",
         "remb",

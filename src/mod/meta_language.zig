@@ -14,24 +14,27 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-const BufferPosition = u64;
+pub const BufferPosition = u64;
 
-const VisualPosition = packed struct {
+pub const VisualPosition = packed struct {
     line: u32 = 1,
     column: u32 = 1,
 };
 
-const Location = packed struct {
+pub const Location = packed struct {
     buffer: BufferPosition = 0,
     visual: VisualPosition = .{},
+    pub fn format(self: *const Location, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{}:{} ({})", .{ self.visual.line, self.visual.column, self.buffer });
+    }
 };
 
-const Token = struct {
+pub const Token = struct {
     location: Location,
     data: TokenData,
 };
 
-const TokenData = union(enum) {
+pub const TokenData = union(enum) {
     /// \n * `n` new lines with `i`* relative indentation change.
     ///
     /// * provided in text-format-agnostic "levels";
@@ -45,6 +48,31 @@ const TokenData = union(enum) {
     /// a sequence of characters that do not fit the above categories,
     /// and contain no control characters or whitespace.
     sequence: []const u8,
+
+
+    pub fn format(self: *const TokenData, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self.*) {
+            .linebreak => |lb| {
+                if (lb.i > 0) {
+                    try writer.print("b⟨⇓{}⇒{}⟩", .{ lb.n, lb.i });
+                } else if (lb.i < 0) {
+                    try writer.print("b⟨⇓{}⇐{}⟩", .{ lb.n, -lb.i });
+                } else {
+                    try writer.print("b⟨⇓{}⟩", .{ lb.n });
+                }
+            },
+            .special => |s| {
+                if (s.escaped) {
+                    try writer.print("p⟨\\{u}⟩", .{ s.punctuation.toChar() });
+                } else {
+                    try writer.print("p⟨{u}⟩", .{ s.punctuation.toChar() });
+                }
+            },
+            .sequence => |seq| {
+                try writer.print("s⟨{s}⟩", .{ seq });
+            },
+        }
+    }
 };
 
 /// While we are trying to allow as much syntactic flexibility as we can, we must consider some
@@ -53,7 +81,7 @@ const TokenData = union(enum) {
 ///
 /// Additionally, we need to distinguish whether some of these characters
 /// are proceeded by the `\` character.
-const Special = packed struct {
+pub const Special = packed struct {
     /// Whether or not the special punctuation character is escaped with a backslash.
     escaped: bool,
     /// The special punctuation character.
@@ -64,7 +92,7 @@ const Special = packed struct {
 /// ```
 /// " ' ` . , ; {} () [] \\ #
 /// ```
-const Punctuation = enum(pl.Char) {
+pub const Punctuation = enum(pl.Char) {
     /// `(`
     paren_l = '(',
     /// `)`
@@ -123,7 +151,7 @@ const Punctuation = enum(pl.Char) {
     }
 };
 
-const Lexer = struct {
+pub const Lexer = struct {
     allocator: std.mem.Allocator,
     source: []const u8,
     indentation: pl.ArrayList(u32),
@@ -131,6 +159,7 @@ const Lexer = struct {
     lookahead: ?pl.Char,
 
     pub const Error = error {
+        OutOfMemory,
         BadEncoding,
         UnexpectedEof,
         UnexpectedInput,
@@ -141,7 +170,7 @@ const Lexer = struct {
         attrOffset: VisualPosition = .{},
     };
 
-    pub fn init(allocator: std.mem.Allocator, source: []const u8, settings: Settings) error{OutOfMemory}!Lexer {
+    pub fn init(allocator: std.mem.Allocator, settings: Settings, source: []const u8) error{OutOfMemory}!Lexer {
         var indentation: pl.ArrayList(u32) = .empty;
 
         try indentation.append(allocator, settings.startingIndent);
@@ -175,9 +204,11 @@ const Lexer = struct {
 
         const len = std.unicode.utf8ByteSequenceLength(ch) catch return error.BadEncoding;
 
-        const out = std.unicode.utf8Decode(self.source[self.location.buffer..len]) catch return error.BadEncoding;
+        const out = std.unicode.utf8Decode(self.source[self.location.buffer..self.location.buffer + len]) catch return error.BadEncoding;
 
         self.lookahead = out;
+
+        log.info("peekChar: {u} (0x{x:0>2})", .{ out, out });
 
         return out;
     }
@@ -186,44 +217,46 @@ const Lexer = struct {
         const ch = try self.peekChar() orelse return null;
 
         if (ch == '\n') {
-            self.line += 1;
-            self.column = 1;
-        } else if (!std.ascii.isControl(@truncate(ch))) {
-            self.column += 1;
+            self.location.visual.line += 1;
+            self.location.visual.column = 1;
+        } else if (!std.ascii.isControl(@intCast(ch))) {
+            self.location.visual.column += 1;
         }
 
-        self.buffer += std.unicode.utf8CodepointSequenceLength(ch) catch unreachable;
+        self.location.buffer += std.unicode.utf8CodepointSequenceLength(ch) catch unreachable;
         self.lookahead = null;
 
         return ch;
     }
 
     pub fn advanceChar(self: *Lexer) Lexer.Error!void {
-        _ = try self.nextChar() orelse return error.UnexpectedEof;
+        _ = try self.nextChar();
     }
 
     pub fn currentIndentation(self: *const Lexer) u32 {
-        std.debug.assert(self.indentation.len > 0);
+        std.debug.assert(self.indentation.items.len > 0);
         return self.indentation.items[self.indentation.items.len - 1];
     }
 
     pub fn next(self: *Lexer) Lexer.Error!?Token {
         var start = self.location;
-        const ch = try self.nextChar() orelse return null;
 
-        const data = char_switch: switch (ch) {
+        const data = char_switch: switch (try self.nextChar() orelse return null) {
             '\n' => {
+                log.info("processing line break", .{});
+
                 var n: u32 = 0;
 
                 line_loop: while(try self.peekChar()) |pk| {
                     if (pk == '\n') {
                         n += 1;
-                    } else if (!std.ascii.isWhitespace(pk)) {
+                    } else if (!std.ascii.isWhitespace(@intCast(pk))) { // FIXME: unicode identification
                         break :line_loop;
                     }
 
-                    try self.advance();
+                    try self.advanceChar();
                 } else {
+                    log.info("stream ends with new line", .{});
                     break :char_switch TokenData { .linebreak = .{ .n = 1, .i = 0 } };
                 }
 
@@ -236,9 +269,11 @@ const Lexer = struct {
                 std.debug.assert(oldLen > 0);
 
                 if (newIndent > currentIndent) {
+                    log.info("increasing indentation to {}", .{ newIndent });
+
                     try self.indentation.append(self.allocator, newIndent);
 
-                    break :char_switch Token { .linebreak = .{ .n = n, .i = 1 } };
+                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = 1 } };
                 } else if (newIndent < currentIndent) {
                     // we need to traverse back down the indentation stack until we find the right level
                     var newIndentIndex = self.indentation.items.len - 1;
@@ -255,9 +290,15 @@ const Lexer = struct {
                         newIndentIndex -= 1;
                     }
 
+                    log.info("decreasing indentation to {}", .{ newIndent });
+
                     self.indentation.shrinkRetainingCapacity(newIndentIndex + 1);
 
                     break :char_switch TokenData { .linebreak = .{ .n = n, .i = -@as(i32, @intCast(oldLen - self.indentation.items.len)) } };
+                } else {
+                    log.info("same indentation level {}", .{ newIndent });
+
+                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = 0 } };
                 }
             },
             '\\' => {
@@ -265,51 +306,65 @@ const Lexer = struct {
                     if (Punctuation.castChar(pk)) |esc| {
                         try self.advanceChar();
 
+                        log.info("escaped punctuation", .{});
+
                         break :char_switch TokenData { .special = .{ .punctuation = esc, .escaped = true } };
                     }
                 }
 
-                break :char_switch TokenData { .special = .{ .punctuation = .fromChar(ch), .escaped = false } };
+                log.info("unescaped backslash character", .{});
+
+                break :char_switch TokenData { .special = .{ .punctuation = .fromChar('\\'), .escaped = false } };
             },
-            else => {
-                if (std.ascii.isWhitespace(ch)) {
+            else => |x| {
+                if (std.ascii.isWhitespace(@intCast(x))) {
+                    log.info("skipping whitespace {u} (0x{x:0>2})", .{x, x});
+
                     start = self.location;
-                    continue :char_switch try self.nextChar();
+
+                    continue :char_switch try self.nextChar() orelse {
+                        return null;
+                    };
                 }
 
-                if (std.ascii.isControl(ch)) {
+                if (std.ascii.isControl(@intCast(x))) {
+                    log.err("unexpected control character {u} (0x{x:0>2})", .{x, x});
                     return error.UnexpectedInput;
                 }
 
-                if (Punctuation.castChar(ch)) |p| {
+                if (Punctuation.castChar(@intCast(x))) |p| {
+                    log.info("punctuation {u} (0x{x:0>2})", .{p.toChar(), p.toChar()});
                     try self.advanceChar();
 
                     break :char_switch TokenData { .special = .{ .punctuation = p, .escaped = false } };
                 }
 
+                log.info("processing sequence", .{});
+
                 symbol_loop: while (try self.peekChar()) |pk| {
-                    if (std.ascii.isWhitespace(pk)
-                    or std.ascii.isControl(pk)
-                    or Punctuation.includesChar(pk)) {
+                    if (std.ascii.isWhitespace(@intCast(pk))
+                    or std.ascii.isControl(@intCast(pk))
+                    or Punctuation.includesChar(@intCast(pk))) {
+                        log.info("ending sequence at {u} (0x{x:0>2})", .{pk, pk});
                         break :symbol_loop;
                     }
 
                     try self.advanceChar();
                 }
 
-                // we do not need to check for valid utf8 here because the char iterator methods
-                // already do that for us
-
                 const end = self.location;
 
                 const len = end.buffer - start.buffer;
 
-                // This can happen if e.g. the file is all whitespace
                 if (len == 0) {
-                    return error.UnexpectedEof;
+                    return null;
                 }
 
-                break :char_switch TokenData { .sequence = self.source[start.buffer..end.buffer] };
+                const seq = self.source[start.buffer..end.buffer];
+
+                log.info("sequence {s}", .{seq});
+
+                break :char_switch TokenData { .sequence = seq };
             }
         };
 
