@@ -21,6 +21,12 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
+/// The root of a Ribbon IR unit.
+///
+/// The IR unit is a collection of types, constants, foreign addresses, effects, and modules;
+/// each of which can reference each other.
+///
+/// This is the main entry point for creating and managing IR structures.
 pub const Builder = struct {
     /// The allocator that all memory used by ir structures is sourced from.
     /// * The builder is allocator-agnostic and any allocator can be used here,
@@ -58,7 +64,7 @@ pub const Builder = struct {
     ///
     /// This is not necessary to call if the allocator provided to the `Builder` is a `std.heap.Arena` or similar.
     pub fn deinit(ptr: *const Builder) void {
-        const self = @constCast(ptr);
+        const self: *Builder = @constCast(ptr);
 
         const allocator = self.allocator;
         defer allocator.destroy(self);
@@ -108,7 +114,7 @@ pub const Builder = struct {
     ///
     /// The `Name` that is returned will be owned by this IR unit.
     pub fn internName(ptr: *const Builder, value: []const u8) error{OutOfMemory}!*const Name {
-        const self = @constCast(ptr);
+        const self: *Builder = @constCast(ptr);
 
         return (try self.names.intern(self.allocator, null, &Name{
             .root = self,
@@ -125,7 +131,7 @@ pub const Builder = struct {
     ///
     /// The `Type` that is returned will be owned by this IR unit.
     pub fn internType(ptr: *const Builder, name: ?*const Name, info: TypeInfo) error{OutOfMemory}!*const Type {
-        const self = @constCast(ptr);
+        const self: *Builder = @constCast(ptr);
 
         return (try self.types.intern(self.allocator, null, &Type{
             .root = self,
@@ -143,7 +149,7 @@ pub const Builder = struct {
     ///
     /// The `Constant` that is returned will be owned by this IR unit.
     pub fn internConstant(ptr: *const Builder, name: ?*const Name, data: ConstantData) error{OutOfMemory}!*const Constant {
-        const self = @constCast(ptr);
+        const self: *Builder = @constCast(ptr);
 
         return (try self.constants.intern(self.allocator, null, &Constant{
             .root = self,
@@ -165,7 +171,7 @@ pub const Builder = struct {
     ///
     /// The `ForeignAddress` that is returned will be owned by this IR unit.
     pub fn createForeignAddress(ptr: *const Builder, name: *const Name, typeIr: *const Type) error{DuplicateForeignAddress, OutOfMemory}!*const ForeignAddress {
-        const self = @constCast(ptr);
+        const self: *Builder = @constCast(ptr);
 
         var it = self.foreign_addresses.keyIterator();
         while (it.next()) |foreignAddressPtr| {
@@ -197,14 +203,14 @@ pub const Builder = struct {
     /// Otherwise a new `Effect` will be allocated.
     ///
     /// The `Effect` that is returned will be owned by this IR unit.
-    pub fn createEffect(ptr: *const Builder, name: *const Name, handlerSignature: *const Type) error{DuplicateEffect, OutOfMemory}!*const Effect {
-        const self = @constCast(ptr);
+    pub fn createEffect(ptr: *const Builder, name: *const Name, handlerSignatures: []*const Type) error{DuplicateEffect, OutOfMemory}!*const Effect {
+        const self: *Builder = @constCast(ptr);
 
         var it = self.effects.keyIterator();
         while (it.next()) |effectPtr| {
             const effectIr = effectPtr.*;
             if (name == effectIr.name) {
-                if (effectIr.handler_signature == handlerSignature) {
+                if (std.mem.eql(*const Type, handlerSignatures, effectIr.handler_signatures)) {
                     return effectIr;
                 } else {
                     return error.DuplicateEffect;
@@ -212,7 +218,7 @@ pub const Builder = struct {
             }
         }
 
-        const out = try Effect.init(self, @enumFromInt(self.effects.count()), name, handlerSignature);
+        const out = try Effect.init(self, @enumFromInt(self.effects.count()), name, try self.allocator.dupe(*const Type, handlerSignatures));
 
         try self.effects.put(self.allocator, out, {});
 
@@ -225,7 +231,7 @@ pub const Builder = struct {
     ///
     /// The `Module` that is returned will be owned by this IR unit.
     pub fn createModule(ptr: *const Builder, name: *const Name) error{DuplicateModuleName, OutOfMemory}!*Module {
-        const self = @constCast(ptr);
+        const self: *Builder = @constCast(ptr);
 
         var it = self.modules.keyIterator();
         while (it.next()) |modulePtr| {
@@ -440,7 +446,7 @@ pub const ForeignAddress = struct {
     }
 
     fn deinit(ptr: *const ForeignAddress) void {
-        const self = @constCast(ptr);
+        const self: *ForeignAddress = @constCast(ptr);
 
         const allocator = self.root.allocator;
         defer allocator.destroy(self);
@@ -461,23 +467,23 @@ pub const Effect = struct {
     /// This is required because effect unification is done via symbol name.
     name: *const Name,
     /// A generic type giving the shape of effect handler function that is compatible this effect.
-    handler_signature: *const Type,
+    handler_signatures: []*const Type,
 
-    fn init(root: *const Builder, id: Id.of(Effect), name: *const Name, handlerSignature: *const Type) error{OutOfMemory}!*Effect {
+    fn init(root: *const Builder, id: Id.of(Effect), name: *const Name, handlerSignatures: []*const Type) error{OutOfMemory}!*Effect {
         const self = try root.allocator.create(Effect);
 
         self.* = .{
             .root = root,
             .id = id,
             .name = name,
-            .handler_signature = handlerSignature,
+            .handler_signatures = handlerSignatures,
         };
 
         return self;
     }
 
     fn deinit(ptr: *const Effect) void {
-        const self = @constCast(ptr);
+        const self: *Effect = @constCast(ptr);
 
         const allocator = self.root.allocator;
         defer allocator.destroy(self);
@@ -695,7 +701,7 @@ pub const TypeInfo = union(enum) {
     /// A field in struct type information
     pub const StructField = struct {
         /// The type of the field.
-        type: *ir.Type,
+        type: *const ir.Type,
         /// The debug name of the field, if it has one.
         name: ?*const Name,
 
@@ -713,7 +719,7 @@ pub const TypeInfo = union(enum) {
         /// The constant value that serves as a tag identifying this field as the active one in the union.
         discriminator: *Constant,
         /// The type of the field.
-        type: *ir.Type,
+        type: *const ir.Type,
         /// The debug name of the field, if it has one.
         name: ?*const Name,
 
@@ -733,13 +739,13 @@ pub const TypeInfo = union(enum) {
         /// The effect handler never returns or cancels.
         divergent: void,
         /// The effect handler never cancels its caller; it always returns a value.
-        always_returns: *ir.Type,
+        always_returns: *const ir.Type,
         /// The effect handler always cancels its caller; it never returns a value.
-        always_cancels: *ir.Type,
+        always_cancels: *const ir.Type,
         /// The effect handler may cancel its caller, or it may return a value.
         conditional: struct {
-            on_cancel: *ir.Type,
-            on_return: *ir.Type,
+            on_cancel: *const ir.Type,
+            on_return: *const ir.Type,
         },
 
         fn hash(self: *const TypeInfo.Cancel, hasher: anytype) void {
@@ -910,11 +916,11 @@ pub const TypeInfo = union(enum) {
     /// Represents the type of a pointer to a value of another type.
     pub const Pointer = struct {
         /// The type of the value that this pointer type points to.
-        element: *ir.Type,
+        element: *const ir.Type,
         /// The type of the allocator that will be used to allocate the pointed-to value, if it is known.
         /// Pointers to foreign values will usually have a null allocator, representing the fact
         /// that the program compiled by the IR unit does not manage the memory.
-        allocator: ?*ir.Type,
+        allocator: ?*const ir.Type,
         /// The alignment override, if it has one, for the value at the pointer's address.
         /// When null, the natural alignment of the value is used.
         alignment_override: ?pl.IntegerBitSize,
@@ -980,11 +986,11 @@ pub const TypeInfo = union(enum) {
     /// ie a wide pointer containing an address and a length.
     pub const Slice = struct {
         /// The type of the values that this slice type points to.
-        element: *ir.Type,
+        element: *const ir.Type,
         /// The type of the allocator that will be used to allocate the pointed-to buffer, if it is known.
         /// Slices of foreign values will usually have a null allocator, representing the fact
         /// that the program compiled by the IR unit does not manage the memory.
-        allocator: ?*ir.Type,
+        allocator: ?*const ir.Type,
         /// The alignment override, if it has one, for the values at the slice's address.
         /// When null, the natural alignment of the value is used.
         alignment_override: ?pl.Alignment,
@@ -1050,14 +1056,14 @@ pub const TypeInfo = union(enum) {
     /// (such as null, in the case of c-style strings).
     pub const Sentinel = struct {
         /// The type of the values that this sentinel type points to.
-        element: *ir.Type,
+        element: *const ir.Type,
         /// The constant representing the sentinel value that terminates all buffers of this type.
         /// e.g., for c strings, this is a single null byte.
         sentinel: *ir.Constant,
         /// The type of the allocator that will be used to allocate the pointed-to buffer, if it is known.
         /// Buffers of foreign values will usually have a null allocator, representing the fact
         /// that the program compiled by the IR unit does not manage the memory.
-        allocator: ?*ir.Type,
+        allocator: ?*const ir.Type,
         /// The alignment override, if it has one, for the values at the buffers's address.
         /// When null, the natural alignment of the value is used.
         alignment_override: ?pl.Alignment,
@@ -1122,7 +1128,7 @@ pub const TypeInfo = union(enum) {
     /// Represents the type of an array of values of another type
     pub const Array = struct {
         /// The type of the values that this array type contains
-        element: *ir.Type,
+        element: *const ir.Type,
         /// The number of elements in the array
         length: u64,
 
@@ -1153,11 +1159,11 @@ pub const TypeInfo = union(enum) {
     /// + Has no possible side effect: use `null` for the effect type.
     pub const Function = struct {
         /// The type of the input parameter.
-        input: *ir.Type,
+        input: *const ir.Type,
         /// The type of the return value.
-        output: *ir.Type,
+        output: *const ir.Type,
         /// The type of the side effect that can be performed by this function, if any.
-        effect: ?*ir.Type,
+        effect: ?*const ir.Type,
 
         fn hash(self: *const TypeInfo.Function, hasher: anytype) void {
             hasher.update(std.mem.asBytes(&self.input));
@@ -1201,7 +1207,7 @@ pub const TypeInfo = union(enum) {
 
     /// Represents the type of a foreign address, a pointer to an external function or data.
     pub const ForeignAddress = struct {
-        signature: *ir.Type,
+        signature: *const ir.Type,
 
         fn hash(self: *const TypeInfo.ForeignAddress, hasher: anytype) void {
             hasher.update(std.mem.asBytes(&self.signature));
@@ -1219,7 +1225,7 @@ pub const TypeInfo = union(enum) {
     /// Represents the type of a side effect that can be performed by a function.
     pub const Effect = struct {
         /// The effect's specific information.
-        effect: *ir.Effect,
+        effect: *const ir.Effect,
 
         fn hash(self: *const TypeInfo.Effect, hasher: anytype) void {
             hasher.update(std.mem.asBytes(&self.effect));
@@ -1237,9 +1243,9 @@ pub const TypeInfo = union(enum) {
     /// Represents the type of a function that can handle a side effect.
     pub const Handler = struct {
         /// The type of the side effect that this handler can process.
-        target: *ir.Type,
+        target: *const ir.Type,
         /// The type of the input parameter.
-        input: *ir.Type,
+        input: *const ir.Type,
         /// The manner in which the handler may end its computation,
         /// including return and cancellation types if applicable.
         cancel: Cancel,
@@ -1250,7 +1256,7 @@ pub const TypeInfo = union(enum) {
         /// * Re-contextualize the same effect, into a new version of itself.
         /// * Split an effect into multiple effects, or
         /// (using a full handler set, ie a product of handlers) combine multiple effects into one.
-        effect: ?*ir.Type,
+        effect: ?*const ir.Type,
 
         fn hash(self: *const TypeInfo.Handler, hasher: anytype) void {
             hasher.update(std.mem.asBytes(&self.target));
@@ -1319,7 +1325,7 @@ pub const TypeInfo = union(enum) {
         /// or the alignment of the backing integer if `layout_method` is `.bit_pack`
         alignment_override: ?pl.Alignment,
         /// The fields of the struct, in machine order.
-        fields: []TypeInfo.StructField,
+        fields: []const TypeInfo.StructField,
 
         fn clone(self: *const TypeInfo.Struct, allocator: std.mem.Allocator) error{OutOfMemory}!TypeInfo.Struct {
             return TypeInfo.Struct{
@@ -1406,7 +1412,7 @@ pub const TypeInfo = union(enum) {
         /// The type of the compile-time constants that are used to identify the active field in the union.
         /// All fields in the union must have a discriminator that is of this type.
         /// Must be an integer type.
-        discriminator: *ir.Type,
+        discriminator: *const ir.Type,
         /// The layout method to use for this union.
         layout_method: TypeInfo.LayoutMethod,
         /// The alignment override of the union, if it has one.
@@ -1415,7 +1421,7 @@ pub const TypeInfo = union(enum) {
         /// or the alignment of the backing integer if `layout_method` is `.bit_pack`
         alignment_override: ?pl.Alignment,
         /// The fields of the union, in order.
-        fields: []TypeInfo.UnionField,
+        fields: []const TypeInfo.UnionField,
 
         fn clone(self: *const TypeInfo.Union, allocator: std.mem.Allocator) error{OutOfMemory}!TypeInfo.Union {
             return TypeInfo.Union{
@@ -1499,19 +1505,19 @@ pub const TypeInfo = union(enum) {
     };
 
     /// Represents the type of a user-defined product data structure, with fields of various types.
-    /// Unlike `Struct`, fields here do not have names, and are simply multiplied together;
+    /// Unlike `Struct`, fields here do not have names, and are simply carried together;
     /// Additionally, `Product` does not offer layout control.
     /// This is meant to represent simple product types like multiple return, but not complex structures.
     pub const Product = struct {
         /// The kind of the types inside this product type.
         kind: TypeInfo.Kind,
-        /// The types that are multiplied together to form this product type.
-        types: []*ir.Type,
+        /// The types that are carried together to form this product type.
+        types: []*const ir.Type,
 
         fn clone(self: *const TypeInfo.Product, allocator: std.mem.Allocator) error{OutOfMemory}!TypeInfo.Product {
             return TypeInfo.Product{
                 .kind = self.kind,
-                .types = try allocator.dupe(*ir.Type, self.types),
+                .types = try allocator.dupe(*const ir.Type, self.types),
             };
         }
 
@@ -1560,12 +1566,12 @@ pub const TypeInfo = union(enum) {
         /// The kind of the types inside this sum type.
         kind: TypeInfo.Kind,
         /// The types that are added together to form this sum type.
-        types: []*ir.Type,
+        types: []*const ir.Type,
 
         fn clone(self: *const TypeInfo.Sum, allocator: std.mem.Allocator) error{OutOfMemory}!TypeInfo.Sum {
             return TypeInfo.Sum{
                 .kind = self.kind,
-                .types = try allocator.dupe(*ir.Type, self.types),
+                .types = try allocator.dupe(*const ir.Type, self.types),
             };
         }
 
@@ -1618,9 +1624,9 @@ pub const Module = struct {
     /// The name of this module, for symbol resolution purposes.
     name: *const Name,
     /// The global variables defined in this module.
-    globals: Id.Set(*Global, 80) = .{},
+    globals: Id.Set(*const Global, 80) = .{},
     /// The functions defined in this module.
-    functions: Id.Set(*Function, 80) = .{},
+    functions: Id.Set(*const Function, 80) = .{},
 
     fn init(root: *const Builder, id: Id.of(Module), name: *const Name) error{OutOfMemory}!*Module {
         const self = try root.allocator.create(Module);
@@ -1635,7 +1641,7 @@ pub const Module = struct {
     }
 
     fn deinit(ptr: *const Module) void {
-        const self = @constCast(ptr);
+        const self: *Module = @constCast(ptr);
 
         const allocator = self.root.allocator;
         defer allocator.destroy(self);
@@ -1705,18 +1711,18 @@ pub const Global = struct {
     /// The IR unit that owns this global.
     root: *const Builder,
     /// The module that this global variable belongs to.
-    module: *Module,
+    module: *const Module,
     /// The unique identifier of this global variable.
     id: Id.of(Global),
     /// The name of this global variable, for symbol resolution purposes.
     name: *const Name,
     /// The type of this global variable.
-    type: *ir.Type,
+    type: *const ir.Type,
     /// The initial value of this global variable, if any.
     /// Must be of the same type, if present.
     initial_value: ?*Constant,
 
-    fn init(root: *const Builder, module: *Module, id: Id.of(Global), name: *const Name, typeIr: *ir.Type) error{OutOfMemory}!*Global {
+    fn init(root: *const Builder, module: *Module, id: Id.of(Global), name: *const Name, typeIr: *const ir.Type) error{OutOfMemory}!*Global {
         const self = try root.allocator.create(Global);
 
         self.* = .{
@@ -1750,7 +1756,9 @@ pub const Function = struct {
     /// The IR unit that owns this function.
     root: *const Builder,
     /// The module that this function belongs to.
-    module: *Module,
+    module: *const Module,
+    /// The handler set that this function belongs to, if any.
+    handler_set: ?*const HandlerSet,
     /// The unique identifier of this function.
     id: Id.of(Function),
     /// The name of this function, for symbol resolution purposes.
@@ -1758,14 +1766,17 @@ pub const Function = struct {
     /// The type of this function.
     type: *const Type,
     /// The basic blocks that make up this function.
-    blocks: Id.Set(*Block, 80) = .{},
+    blocks: Id.Set(*const Block, 80) = .{},
+    /// The effect handler sets used in this function.
+    handler_sets: Id.Set(*const HandlerSet, 80) = .{},
 
-    fn init(root: *const Builder, module: *Module, id: Id.of(Function), name: *const Name, typeIr: *const Type) error{OutOfMemory}!*Function {
+    fn init(root: *const Builder, module: *const Module, handlerSet: ?*const HandlerSet, id: Id.of(Function), name: *const Name, typeIr: *const Type) error{OutOfMemory}!*Function {
         const self = try root.allocator.create(Function);
 
         self.* = .{
             .root = root,
             .module = module,
+            .handler_set = handlerSet,
             .id = id,
             .name = name,
             .type = typeIr,
@@ -1774,7 +1785,9 @@ pub const Function = struct {
         return self;
     }
 
-    fn deinit(self: *Function) void {
+    fn deinit(ptr: *const Function) void {
+        const self: *Function = @constCast(ptr);
+
         const allocator = self.root.allocator;
         defer allocator.destroy(self);
     }
@@ -1804,16 +1817,212 @@ pub const Function = struct {
     }
 };
 
+pub const HandlerSet = struct {
+    root: *const Builder,
+    function: *const Function,
+    id: Id.of(HandlerSet),
+    handlers: Id.Set(*const Handler, 80),
+};
+
+pub const Handler = struct {
+    id: Id.of(Handler),
+    function: *const Function,
+};
+
 // TODO
 pub const Block = struct {
     /// The IR unit that owns this block.
     root: *const Builder,
     /// The function that this block belongs to.
-    function: *Function,
-    /// The unique identifier of this block.
+    function: *const Function,
+    /// The (function-level-)unique identifier of this block.
     id: Id.of(Block),
     /// The name of this block, if desired for debugging purposes.
     name: ?*const Name,
 
+    /// The blocks that proceed this block in control flow.
+    // predecessors: Id.Set(*const Block, 80) = .{},
+    // /// The blocks that follow this block in control flow.
+    // successors: Id.Set(*const Block, 80) = .{},
+    /// The type of this block.
+    instructions: pl.ArrayList(*const Instruction),
+};
 
+
+const Value = enum (u64) {_};
+
+
+pub const Instruction = union(enum) {
+    /// No operation.
+    nop: void,
+    /// Indicates a breakpoint should be emitted in the output;
+    /// ignored by optimizers.
+    breakpoint: void,
+    /// Indicates an undesirable state. Terminates its block.
+    /// Cannot be assumed truly unreachable, by optimizations.
+    trap: void,
+    /// Indicates an impossible state. Terminates its block.
+    /// Can be assumed truly unreachable, by optimizations.
+    @"unreachable": void,
+    /// Pushes an effect handler set.
+    push_set: Instruction.PushSet,
+    /// Pops an effect handler set.
+    pop_set: void,
+    /// A standard function call.
+    call: Instruction.Invoke,
+    /// An effect handler prompt.
+    prompt: Instruction.Invoke,
+    /// Return flow control from a function or handler. Terminates its block.
+    @"return": Instruction.Yield,
+    /// Cancel the effect block of the current handler. Terminates its block.
+    cancel: Instruction.Yield,
+    /// Create a local variable.
+    create_local: Instruction.CreateLocal,
+    /// Set the value of a local variable.
+    set_local: Instruction.SetLocal,
+    /// Get the value of a local variable.
+    get_local: Instruction.GetLocal,
+    /// Perform a comparison operation.
+    comparison: Instruction.Comparison,
+    /// Perform a bitwise operation.
+    bitwise: Instruction.Bitwise,
+    /// Perform an arithmetic operation.
+    arithmetic: Instruction.Arithmetic,
+    /// Convert between values of different types.
+    cast: Instruction.Cast,
+
+    pub const PushSet = struct {
+        /// The function-local id of the effect handler set to push.
+        id: Id.of(HandlerSet),
+    };
+
+    pub const Invoke = struct {
+        /// The id of the item to invoke.
+        id: Id.of(anyopaque),
+        /// Arguments to provide to the item invoked.
+        args: []const Value,
+    };
+
+    pub const Yield = struct {
+        /// The item to yield, if any.
+        value: ?Value,
+    };
+
+    pub const CreateLocal = struct {
+        /// The type of the local variable to create.
+        type: *const ir.Type,
+        /// The id of the local variable. Must be (function-locally) unique.
+        id: Id.of(Value),
+    };
+
+    pub const SetLocal = struct {
+        /// The id of the local variable to set.
+        id: Id.of(Value),
+        /// The value to set the local variable to.
+        value: Value,
+    };
+
+    pub const GetLocal = struct {
+        /// The id of the local variable to get.
+        id: Id.of(Value),
+    };
+
+    pub const Comparison = struct {
+        /// The type of the comparison operation.
+        op: Kind,
+        /// The left-hand side of the comparison.
+        lhs: Value,
+        /// The right-hand side of the comparison.
+        rhs: Value,
+
+        pub const Kind = enum {
+            /// Equality comparison.
+            eq,
+            /// Inequality comparison.
+            ne,
+            /// Less than comparison.
+            lt,
+            /// Less than or equal to comparison.
+            le,
+            /// Greater than comparison.
+            gt,
+            /// Greater than or equal to comparison.
+            ge,
+        };
+    };
+
+    pub const Bitwise = struct {
+        /// The type of the bitwise operation.
+        op: Kind,
+        /// The left-hand side of the bitwise operation.
+        lhs: Value,
+        /// The right-hand side of the bitwise operation.
+        /// * `undefined` for `.not`
+        rhs: Value,
+
+        pub const Kind = enum {
+            /// Bitwise AND operation.
+            @"and",
+            /// Bitwise OR operation.
+            @"or",
+            /// Bitwise XOR operation.
+            xor,
+            /// Bitwise NOT operation.
+            not,
+        };
+    };
+
+    pub const Arithmetic = struct {
+        /// The type of the arithmetic operation.
+        op: Kind,
+        /// The left-hand side of the arithmetic operation.
+        lhs: Value,
+        /// The right-hand side of the arithmetic operation.
+        ///
+        /// * `undefined` for some `op`s.
+        rhs: Value,
+
+        pub const Kind = enum {
+            /// Addition operation.
+            add,
+            /// Subtraction operation.
+            sub,
+            /// Multiplication operation.
+            mul,
+            /// Division operation.
+            div,
+            /// Modulus operation.
+            mod,
+            /// Exponentiation operation.
+            pow,
+            /// Floor operation.
+            floor,
+            /// Ceiling operation.
+            ceil,
+            /// Truncation operation.
+            trunc,
+            /// Negation operation.
+            neg,
+            /// Absolute value operation.
+            abs,
+            /// Square root operation.
+            sqrt,
+        };
+    };
+
+    pub const Cast = struct {
+        /// The type of the cast operation.
+        kind: Kind,
+        /// The type to cast to.
+        to: *const ir.Type,
+        /// The value to cast.
+        value: Value,
+
+        pub const Kind = enum {
+            /// Convert a value to (approximately) the same value in another representation.
+            convert,
+            /// Convert bits to a different type, changing the meaning without changing the bits.
+            bitcast,
+        };
+    };
 };
