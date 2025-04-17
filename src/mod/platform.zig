@@ -232,7 +232,7 @@ pub fn UniqueReprArraySet(comptime T: type, comptime RETAIN_HASH: bool) type {
 /// Provides a 32-bit hash context for types with unique representation. See `std.meta.hasUniqueRepresentation`.
 pub fn UniqueReprHashContext32(comptime T: type) type {
     if (comptime !std.meta.hasUniqueRepresentation(T)) {
-        @compileError("IdentityHashContext32: type `" ++ @typeName(T) ++ "` must have unique representation");
+        @compileError("UniqueReprHashContext32: type `" ++ @typeName(T) ++ "` must have unique representation");
     }
     return struct {
         pub fn eql(_: @This(), a: T, b: T) bool {
@@ -248,7 +248,7 @@ pub fn UniqueReprHashContext32(comptime T: type) type {
 /// Provides a 64-bit hash context for types with unique representation. See `std.meta.hasUniqueRepresentation`.
 pub fn UniqueReprHashContext64(comptime T: type) type {
     if (comptime !std.meta.hasUniqueRepresentation(T)) {
-        @compileError("IdentityHashContext64: type `" ++ @typeName(T) ++ "` must have unique representation");
+        @compileError("UniqueReprHashContext64: type `" ++ @typeName(T) ++ "` must have unique representation");
     }
     return struct {
         pub fn eql(_: @This(), a: T, b: T) bool {
