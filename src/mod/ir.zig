@@ -44,6 +44,96 @@ pub const Builder = struct {
     effects: EffectSet = .empty,
     /// All of the IR modules that can reference each other within this IR unit.
     modules: ModuleSet = .empty,
+    /// Static data created at `init`.
+    builtin: struct {
+        /// Builtin names.
+        names: struct {
+            /// The name of the entry point of functions.
+            entry: *const Name,
+
+            /// The name of the nil type.
+            nil: *const Name,
+            /// The name of the opaque type.
+            @"opaque": *const Name,
+            /// The name of the noreturn type.
+            noreturn: *const Name,
+
+            /// The name of the type of types.
+            type: *const Name,
+            /// The name of the type of blocks.
+            block: *const Name,
+            /// The name of the type of modules.
+            module: *const Name,
+
+            /// The name of the type of boolean values.
+            bool: *const Name,
+
+            /// The name of the type of 8-bit signed integers.
+            i8: *const Name,
+            /// The name of the type of 16-bit signed integers.
+            i16: *const Name,
+            /// The name of the type of 32-bit signed integers.
+            i32: *const Name,
+            /// The name of the type of 64-bit signed integers.
+            i64: *const Name,
+
+            /// The name of the type of 8-bit unsigned integers.
+            u8: *const Name,
+            /// The name of the type of 16-bit unsigned integers.
+            u16: *const Name,
+            /// The name of the type of 32-bit unsigned integers.
+            u32: *const Name,
+            /// The name of the type of 64-bit unsigned integers.
+            u64: *const Name,
+
+            /// The name of the type of 32-bit floating point values.
+            f32: *const Name,
+            /// The name of the type of 64-bit floating point values.
+            f64: *const Name,
+        },
+        /// Builtin types.
+        types: struct {
+            /// The type of `nil` values, ie void, unit etc.
+            nil: *const Type,
+            /// The type of opaque values, data without a known structure.
+            @"opaque": *const Type,
+            /// The type of the result of functions that don't actually return.
+            noreturn: *const Type,
+
+            /// The type of a type.
+            type: *const Type,
+            /// The type of an IR basic block.
+            block: *const Type,
+            /// The type of an IR module.
+            module: *const Type,
+
+            /// The type of boolean values, true or false.
+            bool: *const Type,
+
+            /// 8-bit signed integer type.
+            i8: *const Type,
+            /// 16-bit signed integer type.
+            i16: *const Type,
+            /// 32-bit signed integer type.
+            i32: *const Type,
+            /// 64-bit signed integer type.
+            i64: *const Type,
+
+            /// 8-bit unsigned integer type.
+            u8: *const Type,
+            /// 16-bit unsigned integer type.
+            u16: *const Type,
+            /// 32-bit unsigned integer type.
+            u32: *const Type,
+            /// 64-bit unsigned integer type.
+            u64: *const Type,
+
+            /// 32-bit floating point type.
+            f32: *const Type,
+            /// 64-bit floating point type.
+            f64: *const Type,
+        },
+    } = undefined,
 
     /// Initialize a new IR unit.
     ///
@@ -56,6 +146,16 @@ pub const Builder = struct {
         self.* = .{
             .allocator = allocator,
         };
+
+        self.builtin.names.entry = try self.internName("entry");
+
+        inline for (comptime std.meta.fieldNames(@TypeOf(self.builtin.types))) |builtinTypeName| {
+            const nameIr = try self.internName(builtinTypeName);
+            const typeIr = try self.internType(nameIr, @field(BUILTIN_TYPE_INFO, builtinTypeName));
+
+            @field(self.builtin.names, builtinTypeName) = nameIr;
+            @field(self.builtin.types, builtinTypeName) = typeIr;
+        }
 
         return self;
     }
@@ -523,6 +623,26 @@ pub const Type = struct {
     }
 };
 
+pub const BUILTIN_TYPE_INFO = .{
+    .nil = TypeInfo.nil,
+    .@"opaque" = TypeInfo.@"opaque",
+    .noreturn = TypeInfo.noreturn,
+    .type = TypeInfo.type,
+    .block = TypeInfo.block,
+    .module = TypeInfo.module,
+    .bool = TypeInfo.bool,
+    .i8 = TypeInfo.integerOf(8, .signed),
+    .i16 = TypeInfo.integerOf(16, .signed),
+    .i32 = TypeInfo.integerOf(32, .signed),
+    .i64 = TypeInfo.integerOf(64, .signed),
+    .u8 = TypeInfo.integerOf(8, .unsigned),
+    .u16 = TypeInfo.integerOf(16, .unsigned),
+    .u32 = TypeInfo.integerOf(32, .unsigned),
+    .u64 = TypeInfo.integerOf(64, .unsigned),
+    .f32 = TypeInfo.floatOf(.single),
+    .f64 = TypeInfo.floatOf(.double),
+};
+
 /// A sum type that represents all possible types usable in an IR,
 /// as well as a namespace for data structures that are specific to each variant
 ///
@@ -536,14 +656,14 @@ pub const TypeInfo = union(enum) {
     @"opaque": void,
     /// The type of the result of functions that don't actually return.
     noreturn: void,
-    /// The type of boolean values, true or false.
-    bool: void,
     /// The type of a type.
     type: void,
     /// The type of an IR basic block.
     block: void,
     /// The type of an IR module.
     module: void,
+    /// The type of boolean values, true or false.
+    bool: void,
 
     // the following variants have no allocations //
 
@@ -684,6 +804,69 @@ pub const TypeInfo = union(enum) {
             .type => .type,
             .block => .block,
             .module => .module,
+        };
+    }
+
+    /// Create integer type info.
+    pub fn integerOf(bitSize: pl.IntegerBitSize, signedness: pl.Signedness) TypeInfo {
+        return .{
+            .integer = .{
+                .bit_size = bitSize,
+                .signedness = signedness,
+            },
+        };
+    }
+
+    /// Create floating point type info.
+    pub fn floatOf(precision: FloatPrecision) TypeInfo {
+        return .{
+            .float = .{
+                .precision = precision,
+            },
+        };
+    }
+
+    /// Create pointer type info.
+    pub fn pointerOf(element: *const ir.Type, allocator: ?*const ir.Type, alignmentOverride: ?pl.IntegerBitSize) TypeInfo {
+        return .{
+            .pointer = .{
+                .element = element,
+                .allocator = allocator,
+                .alignment_override = alignmentOverride,
+            },
+        };
+    }
+
+    /// Create slice type info.
+    pub fn sliceOf(element: *const ir.Type, allocator: ?*const ir.Type, alignmentOverride: ?pl.IntegerBitSize) TypeInfo {
+        return .{
+            .slice = .{
+                .element = element,
+                .allocator = allocator,
+                .alignment_override = alignmentOverride,
+            },
+        };
+    }
+
+    /// Create sentinel-terminated pointer type info.
+    pub fn sentinelOf(element: *const ir.Type, sentinel: *const ir.Constant, allocator: ?*const ir.Type, alignmentOverride: ?pl.IntegerBitSize) TypeInfo {
+        return .{
+            .sentinel = .{
+                .element = element,
+                .sentinel = sentinel,
+                .allocator = allocator,
+                .alignment_override = alignmentOverride,
+            },
+        };
+    }
+
+    /// Create array type info.
+    pub fn arrayOf(element: *const ir.Type, length: TypeInfo.ArrayLength) TypeInfo {
+        return .{
+            .array = .{
+                .element = element,
+                .length = length,
+            },
         };
     }
 
@@ -1059,7 +1242,7 @@ pub const TypeInfo = union(enum) {
         element: *const ir.Type,
         /// The constant representing the sentinel value that terminates all buffers of this type.
         /// e.g., for c strings, this is a single null byte.
-        sentinel: *ir.Constant,
+        sentinel: *const ir.Constant,
         /// The type of the allocator that will be used to allocate the pointed-to buffer, if it is known.
         /// Buffers of foreign values will usually have a null allocator, representing the fact
         /// that the program compiled by the IR unit does not manage the memory.
@@ -1125,12 +1308,15 @@ pub const TypeInfo = union(enum) {
         }
     };
 
+    /// Represents the length of an array type.
+    pub const ArrayLength = u64;
+
     /// Represents the type of an array of values of another type
     pub const Array = struct {
         /// The type of the values that this array type contains
         element: *const ir.Type,
         /// The number of elements in the array
-        length: u64,
+        length: TypeInfo.ArrayLength,
 
         fn hash(self: *const TypeInfo.Array, hasher: anytype) void {
             hasher.update(std.mem.asBytes(&self.element));
@@ -1750,7 +1936,7 @@ pub const Global = struct {
     }
 };
 
-/// The representation of functions in the IR.
+/// An intermediate representation of functions.
 /// Functions are defined in modules and must be given a name for symbol resolution purposes.
 pub const Function = struct {
     /// The IR unit that owns this function.
@@ -1758,28 +1944,56 @@ pub const Function = struct {
     /// The module that this function belongs to.
     module: *const Module,
     /// The handler set that this function belongs to, if any.
-    handler_set: ?*const HandlerSet,
+    parent_set: ?*const HandlerSet,
     /// The unique identifier of this function.
     id: Id.of(Function),
     /// The name of this function, for symbol resolution purposes.
     name: *const Name,
     /// The type of this function.
     type: *const Type,
-    /// The basic blocks that make up this function.
-    blocks: Id.Set(*const Block, 80) = .{},
     /// The effect handler sets used in this function.
     handler_sets: Id.Set(*const HandlerSet, 80) = .{},
+    /// Arena allocator owning all `Instruction`s referenced by this function.
+    arena: std.heap.ArenaAllocator,
+    /// The first instruction in the function.
+    entry: *Instruction,
+    /// Increments with each call of `instr`, used to assign unique ids to every instruction.
+    fresh: Id.of(Instruction) = .fromInt(1),
 
-    fn init(root: *const Builder, module: *const Module, handlerSet: ?*const HandlerSet, id: Id.of(Function), name: *const Name, typeIr: *const Type) error{OutOfMemory}!*Function {
+    fn init(
+        root: *const Builder,
+        module: *const Module,
+        parentSet: ?*const HandlerSet,
+        id: Id.of(Function),
+        name: *const Name,
+        typeIr: *const Type,
+    ) error{OutOfMemory}!*Function {
         const self = try root.allocator.create(Function);
+
+        var arena = std.heap.ArenaAllocator.init(root.allocator); // TODO: TypedArena providing slot reuse
+
+        const entry = arena.allocator().create(Instruction);
+
+        entry.* = Instruction {
+            .root = root,
+            .function = self,
+            .id = .fromInt(0),
+            .name = root.builtin.names.entry,
+            .type = root.builtin.types.noreturn,
+            .operation = .@"unreachable",
+            .inputs = &.{},
+            .outputs = &.{},
+        };
 
         self.* = .{
             .root = root,
             .module = module,
-            .handler_set = handlerSet,
+            .parent_set = parentSet,
             .id = id,
             .name = name,
             .type = typeIr,
+            .arena = arena,
+            .entry = entry,
         };
 
         return self;
@@ -1790,239 +2004,182 @@ pub const Function = struct {
 
         const allocator = self.root.allocator;
         defer allocator.destroy(self);
+
+        self.handler_sets.deinit(allocator);
+        self.arena.deinit();
     }
 
     pub fn onFormat(self: *const Function, formatter: anytype) !void {
-        try formatter.print("function({} :: {})", .{self.name, self.type});
+        pl.todo(noreturn, .{self, formatter});
+    }
 
-        if (self.blocks.count() == 0) {
-            return formatter.writeAll("{}");
-        }
+    /// Creates a new default-initialized `Instruction` in this function.
+    /// The instruction is allocated in an arena owned by the function,
+    /// no memory management is necessary for the caller.
+    pub fn instr(ptr: *const Function, name: ?*const Name) error{OutOfMemory}!*Instruction {
+        const self: *Function = @constCast(ptr);
+        const out = try self.arena.allocator().create(Instruction);
 
-        var blockIt = self.blocks.keyIterator();
+        out.* = Instruction {
+            .root = self.root,
+            .function = self,
+            .id = self.fresh,
+            .name = name,
+            .type = self.root.builtin.types.noreturn,
+            .operation = .@"unreachable",
+            .inputs = &.{},
+            .outputs = &.{},
+        };
 
-        const firstPtr = blockIt.next().?;
+        self.fresh = .fromInt(self.fresh.toInt() + 1);
 
-        try formatter.fmt(firstPtr.*);
-
-        try formatter.beginBlock(.Structure);
-
-        while (blockIt.next()) |blockPtr| {
-            try formatter.endLine(false);
-
-            try formatter.fmt(blockPtr.*);
-        }
-
-        try formatter.endBlock();
+        return out;
     }
 };
 
+/// Intermediate representation of effect handler sets.
+/// Handler sets are collections of simple bindings from effect ids to functions that can be used to process those effects.
 pub const HandlerSet = struct {
+    /// The IR unit that owns this handler set.
     root: *const Builder,
+    /// The function that this handler set belongs to.
     function: *const Function,
+    /// The unique identifier of this handler set.
     id: Id.of(HandlerSet),
+    /// The handlers that this handler set contains.
     handlers: Id.Set(*const Handler, 80),
 };
 
+/// A binding from an effect to a function handling that effect, within a `HandlerSet`.
 pub const Handler = struct {
-    id: Id.of(Handler),
-    function: *const Function,
-};
-
-// TODO
-pub const Block = struct {
-    /// The IR unit that owns this block.
+    /// The IR unit that owns this handler.
     root: *const Builder,
-    /// The function that this block belongs to.
+    /// The set that this handler belongs to.
+    handler_set: *const HandlerSet,
+    /// The unique identifier of this handler.
+    id: Id.of(Handler),
+    /// The effect that this handler can process.
+    effect: *const Effect,
+    /// The function implementing the effect handling.
     function: *const Function,
-    /// The (function-level-)unique identifier of this block.
-    id: Id.of(Block),
-    /// The name of this block, if desired for debugging purposes.
-    name: ?*const Name,
-
-    /// The blocks that proceed this block in control flow.
-    // predecessors: Id.Set(*const Block, 80) = .{},
-    // /// The blocks that follow this block in control flow.
-    // successors: Id.Set(*const Block, 80) = .{},
-    /// The type of this block.
-    instructions: pl.ArrayList(*const Instruction),
 };
 
+/// Intermediate representation of instructions in sea of nodes style;
+/// created and managed by `Function`s.
+pub const Instruction = struct {
+    /// The IR unit that owns this instruction.
+    root: *const Builder,
+    /// The function that this instruction belongs to.
+    function: *const Function,
+    /// The unique identifier of this instruction.
+    id: Id.of(Instruction),
+    /// The name of this instruction, if any, for debugging purposes.
+    name: ?*const Name,
+    /// The type of the value that this instruction produces.
+    type: *const ir.Type,
+    /// The kind of operation being performed by this instruction.
+    operation: Operation,
+    /// The instructions or constants providing values/control used by this instruction; in the order they are used.
+    inputs: []Input,
+    /// The instructions who use this instruction's output, be it data or control flow.
+    outputs: []*Instruction,
+};
 
-const Value = enum (u64) {_};
+/// The inputs to an ir `Instruction`.
+/// Inputs can be either constants or other instructions.
+pub const Input = union(enum) {
+    /// Receive a constant value.
+    constant: *const Constant,
+    /// Receive the output of another instruction.
+    variable: *Instruction,
+};
 
-
-pub const Instruction = union(enum) {
+/// Designates which kind of operation, be it data manipulation or control flow, is performed by an ir `Instruction`.
+pub const Operation = enum {
     /// No operation.
-    nop: void,
-    /// Indicates a breakpoint should be emitted in the output;
-    /// ignored by optimizers.
-    breakpoint: void,
-    /// Indicates an undesirable state. Terminates its block.
-    /// Cannot be assumed truly unreachable, by optimizations.
-    trap: void,
-    /// Indicates an impossible state. Terminates its block.
-    /// Can be assumed truly unreachable, by optimizations.
-    @"unreachable": void,
+    nop,
+    /// Indicates a breakpoint should be emitted in the output; skipped by optimizers.
+    breakpoint,
+    /// Indicates an undefined state; all uses may be discarded by optimizers.
+    @"unreachable",
+    /// Indicates a defined but undesirable state that should halt execution.
+    trap,
+    /// Return flow control from a function or handler.
+    @"return",
+    /// Cancel the effect block of the current handler.
+    cancel,
+    /// Jump to the output instruction.
+    unconditional_branch,
+    /// Jump to the output instruction, if the input is non-zero.
+    conditional_branch,
+    /// A unification point for virtual registers from predecessor blocks.
+    phi,
     /// Pushes an effect handler set.
-    push_set: Instruction.PushSet,
+    push_set,
     /// Pops an effect handler set.
-    pop_set: void,
+    pop_set,
     /// A standard function call.
-    call: Instruction.Invoke,
+    call,
     /// An effect handler prompt.
-    prompt: Instruction.Invoke,
-    /// Return flow control from a function or handler. Terminates its block.
-    @"return": Instruction.Yield,
-    /// Cancel the effect block of the current handler. Terminates its block.
-    cancel: Instruction.Yield,
+    prompt,
     /// Create a local variable.
-    create_local: Instruction.CreateLocal,
+    new_local,
     /// Set the value of a local variable.
-    set_local: Instruction.SetLocal,
+    set_local,
     /// Get the value of a local variable.
-    get_local: Instruction.GetLocal,
-    /// Perform a comparison operation.
-    comparison: Instruction.Comparison,
-    /// Perform a bitwise operation.
-    bitwise: Instruction.Bitwise,
-    /// Perform an arithmetic operation.
-    arithmetic: Instruction.Arithmetic,
-    /// Convert between values of different types.
-    cast: Instruction.Cast,
-
-    pub const PushSet = struct {
-        /// The function-local id of the effect handler set to push.
-        id: Id.of(HandlerSet),
-    };
-
-    pub const Invoke = struct {
-        /// The id of the item to invoke.
-        id: Id.of(anyopaque),
-        /// Arguments to provide to the item invoked.
-        args: []const Value,
-    };
-
-    pub const Yield = struct {
-        /// The item to yield, if any.
-        value: ?Value,
-    };
-
-    pub const CreateLocal = struct {
-        /// The type of the local variable to create.
-        type: *const ir.Type,
-        /// The id of the local variable. Must be (function-locally) unique.
-        id: Id.of(Value),
-    };
-
-    pub const SetLocal = struct {
-        /// The id of the local variable to set.
-        id: Id.of(Value),
-        /// The value to set the local variable to.
-        value: Value,
-    };
-
-    pub const GetLocal = struct {
-        /// The id of the local variable to get.
-        id: Id.of(Value),
-    };
-
-    pub const Comparison = struct {
-        /// The type of the comparison operation.
-        op: Kind,
-        /// The left-hand side of the comparison.
-        lhs: Value,
-        /// The right-hand side of the comparison.
-        rhs: Value,
-
-        pub const Kind = enum {
-            /// Equality comparison.
-            eq,
-            /// Inequality comparison.
-            ne,
-            /// Less than comparison.
-            lt,
-            /// Less than or equal to comparison.
-            le,
-            /// Greater than comparison.
-            gt,
-            /// Greater than or equal to comparison.
-            ge,
-        };
-    };
-
-    pub const Bitwise = struct {
-        /// The type of the bitwise operation.
-        op: Kind,
-        /// The left-hand side of the bitwise operation.
-        lhs: Value,
-        /// The right-hand side of the bitwise operation.
-        /// * `undefined` for `.not`
-        rhs: Value,
-
-        pub const Kind = enum {
-            /// Bitwise AND operation.
-            @"and",
-            /// Bitwise OR operation.
-            @"or",
-            /// Bitwise XOR operation.
-            xor,
-            /// Bitwise NOT operation.
-            not,
-        };
-    };
-
-    pub const Arithmetic = struct {
-        /// The type of the arithmetic operation.
-        op: Kind,
-        /// The left-hand side of the arithmetic operation.
-        lhs: Value,
-        /// The right-hand side of the arithmetic operation.
-        ///
-        /// * `undefined` for some `op`s.
-        rhs: Value,
-
-        pub const Kind = enum {
-            /// Addition operation.
-            add,
-            /// Subtraction operation.
-            sub,
-            /// Multiplication operation.
-            mul,
-            /// Division operation.
-            div,
-            /// Modulus operation.
-            mod,
-            /// Exponentiation operation.
-            pow,
-            /// Floor operation.
-            floor,
-            /// Ceiling operation.
-            ceil,
-            /// Truncation operation.
-            trunc,
-            /// Negation operation.
-            neg,
-            /// Absolute value operation.
-            abs,
-            /// Square root operation.
-            sqrt,
-        };
-    };
-
-    pub const Cast = struct {
-        /// The type of the cast operation.
-        kind: Kind,
-        /// The type to cast to.
-        to: *const ir.Type,
-        /// The value to cast.
-        value: Value,
-
-        pub const Kind = enum {
-            /// Convert a value to (approximately) the same value in another representation.
-            convert,
-            /// Convert bits to a different type, changing the meaning without changing the bits.
-            bitcast,
-        };
-    };
+    get_local,
+    /// Equality comparison.
+    eq,
+    /// Inequality comparison.
+    ne,
+    /// Less than comparison.
+    lt,
+    /// Less than or equal to comparison.
+    le,
+    /// Greater than comparison.
+    gt,
+    /// Greater than or equal to comparison.
+    ge,
+    /// Bitwise AND operation.
+    bit_and,
+    /// Bitwise OR operation.
+    bit_or,
+    /// Bitwise XOR operation.
+    bit_xor,
+    /// Bitwise left shift operation.
+    bit_lshift,
+    /// Logical right shift operation.
+    bit_rshift_l,
+    /// Arithmetic right shift operation.
+    bit_rshift_a,
+    /// Bitwise NOT operation.
+    bit_not,
+    /// Addition operation.
+    add,
+    /// Subtraction operation.
+    sub,
+    /// Multiplication operation.
+    mul,
+    /// Division operation.
+    div,
+    /// Modulus operation.
+    mod,
+    /// Exponentiation operation.
+    pow,
+    /// Floor operation.
+    floor,
+    /// Ceiling operation.
+    ceil,
+    /// Truncation operation.
+    trunc,
+    /// Negation operation.
+    neg,
+    /// Absolute value operation.
+    abs,
+    /// Square root operation.
+    sqrt,
+    /// Convert a value to (approximately) the same value in another representation.
+    convert,
+    /// Convert bits to a different type, changing the meaning without changing the bits.
+    bitcast,
 };
