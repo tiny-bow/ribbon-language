@@ -16,10 +16,9 @@ pub fn main() !void {
 
     log.info("Running tests ...", .{});
 
-    // try test_rir();
-    // try test_interpreter();
-    // try test_jit();
-
+    try test_rir();
+    try test_interpreter();
+    try test_jit();
     try test_lexer();
 
     log.info("... All tests passed!", .{});
@@ -170,33 +169,42 @@ fn test_lexer() !void {
     const allocator = gpa.allocator();
 
     var lexer = try ribbon.meta_language.Lexer.init(allocator, .{},
-        \\test [1, 2, 3]
+        \\test
+        \\  [
+        \\      1,
+        \\      2,
+        \\      3
+        \\  ]
+        \\
     );
 
     defer lexer.deinit();
 
     const expect = [_]ribbon.meta_language.TokenData {
         .{ .sequence = "test" },
+        .{ .linebreak = .{ .n = 1, .i = 1 } },
         .{ .special = .{ .escaped = false, .punctuation = ribbon.meta_language.Punctuation.fromChar('[') } },
+        .{ .linebreak = .{ .n = 1, .i = 1 } },
         .{ .sequence = "1" },
         .{ .special = .{ .escaped = false, .punctuation = ribbon.meta_language.Punctuation.fromChar(',') } },
+        .{ .linebreak = .{ .n = 1, .i = 0 } },
         .{ .sequence = "2" },
         .{ .special = .{ .escaped = false, .punctuation = ribbon.meta_language.Punctuation.fromChar(',') } },
-        .{ .sequence = "3" },
-        .{ .special = .{ .escaped = false, .punctuation = ribbon.meta_language.Punctuation.fromChar(']') } },
         .{ .linebreak = .{ .n = 1, .i = 0 } },
+        .{ .sequence = "3" },
+        .{ .linebreak = .{ .n = 1, .i = -1 } },
+        .{ .special = .{ .escaped = false, .punctuation = ribbon.meta_language.Punctuation.fromChar(']') } },
+        .{ .linebreak = .{ .n = 1, .i = -1 } },
     };
-
-
 
     for (expect) |e| {
         const it = lexer.next() catch |err| {
-            std.debug.print("{}: {s}\n", .{ lexer.location, @errorName(err) });
+            log.err("{}: {s}\n", .{ lexer.location, @errorName(err) });
             return err;
         };
 
         if (it) |tok| {
-            std.debug.print("{} to {}: {} (expecting {})\n", .{ tok.location, lexer.location, tok.data, e });
+            log.debug("{} to {}: {} (expecting {})\n", .{ tok.location, lexer.location, tok.data, e });
 
             switch (e) {
                 .sequence => |s| {
@@ -216,7 +224,8 @@ fn test_lexer() !void {
                 },
             }
         } else {
-            std.debug.print("EOF {}\n", .{ lexer.location });
+            log.err("unexpected EOF {}; expected {}\n", .{ lexer.location, e });
+            return error.UnexpectedEof;
         }
     }
 

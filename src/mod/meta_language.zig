@@ -163,6 +163,7 @@ pub const Lexer = struct {
         BadEncoding,
         UnexpectedEof,
         UnexpectedInput,
+        UnexpectedIndent,
     };
 
     pub const Settings = struct {
@@ -174,6 +175,8 @@ pub const Lexer = struct {
         var indentation: pl.ArrayList(u32) = .empty;
 
         try indentation.append(allocator, settings.startingIndent);
+
+        log.debug("Lexing string ⟨{s}⟩", .{source});
 
         return Lexer{
             .allocator = allocator,
@@ -208,7 +211,7 @@ pub const Lexer = struct {
 
         self.lookahead = out;
 
-        log.info("peekChar: {u} (0x{x:0>2})", .{ out, out });
+        log.debug("peekChar: {u} (0x{x:0>2})", .{ out, out });
 
         return out;
     }
@@ -243,9 +246,9 @@ pub const Lexer = struct {
 
         const data = char_switch: switch (try self.nextChar() orelse return null) {
             '\n' => {
-                log.info("processing line break", .{});
+                log.debug("processing line break", .{});
 
-                var n: u32 = 0;
+                var n: u32 = 1;
 
                 line_loop: while(try self.peekChar()) |pk| {
                     if (pk == '\n') {
@@ -255,48 +258,46 @@ pub const Lexer = struct {
                     }
 
                     try self.advanceChar();
-                } else {
-                    log.info("stream ends with new line", .{});
-                    break :char_switch TokenData { .linebreak = .{ .n = 1, .i = 0 } };
                 }
 
                 // we can compare the current column with the previous indentation level
                 // to determine if we are increasing or decreasing indentation
-                const currentIndent = self.currentIndentation();
-                const newIndent = self.location.visual.column;
+                const oldIndent = self.currentIndentation();
+                const newIndent = self.location.visual.column - 1;
 
                 const oldLen = self.indentation.items.len;
                 std.debug.assert(oldLen > 0);
 
-                if (newIndent > currentIndent) {
-                    log.info("increasing indentation to {}", .{ newIndent });
+                if (newIndent > oldIndent) {
+                    log.debug("increasing indentation to {} ({})", .{ oldLen, newIndent });
 
                     try self.indentation.append(self.allocator, newIndent);
 
                     break :char_switch TokenData { .linebreak = .{ .n = n, .i = 1 } };
-                } else if (newIndent < currentIndent) {
+                } else if (newIndent < oldIndent) {
                     // we need to traverse back down the indentation stack until we find the right level
                     var newIndentIndex = self.indentation.items.len - 1;
                     while (true) {
                         const indent = self.indentation.items[newIndentIndex];
+                        log.debug("checking vs indentation level {} ({})", .{ newIndentIndex, indent });
 
                         if (indent == newIndent) break;
 
-                        if (indent < newIndent or newIndentIndex == 0) {
-                            log.err("Unmatched indentation level {}", .{ indent });
-                            return error.UnexpectedInput;
+                        if (indent < newIndent) {
+                            log.err("unmatched indentation level {}", .{ newIndent });
+                            return error.UnexpectedIndent;
                         }
 
                         newIndentIndex -= 1;
                     }
 
-                    log.info("decreasing indentation to {}", .{ newIndent });
+                    log.debug("decreasing indentation to {} ({})", .{ newIndentIndex, newIndent });
 
                     self.indentation.shrinkRetainingCapacity(newIndentIndex + 1);
 
                     break :char_switch TokenData { .linebreak = .{ .n = n, .i = -@as(i32, @intCast(oldLen - self.indentation.items.len)) } };
                 } else {
-                    log.info("same indentation level {}", .{ newIndent });
+                    log.debug("same indentation level {} ({})", .{ self.indentation.items.len - 1, n });
 
                     break :char_switch TokenData { .linebreak = .{ .n = n, .i = 0 } };
                 }
@@ -306,19 +307,19 @@ pub const Lexer = struct {
                     if (Punctuation.castChar(pk)) |esc| {
                         try self.advanceChar();
 
-                        log.info("escaped punctuation", .{});
+                        log.debug("escaped punctuation", .{});
 
                         break :char_switch TokenData { .special = .{ .punctuation = esc, .escaped = true } };
                     }
                 }
 
-                log.info("unescaped backslash character", .{});
+                log.debug("unescaped backslash character", .{});
 
                 break :char_switch TokenData { .special = .{ .punctuation = .fromChar('\\'), .escaped = false } };
             },
             else => |x| {
                 if (std.ascii.isWhitespace(@intCast(x))) {
-                    log.info("skipping whitespace {u} (0x{x:0>2})", .{x, x});
+                    log.debug("skipping whitespace {u} (0x{x:0>2})", .{x, x});
 
                     start = self.location;
 
@@ -333,19 +334,18 @@ pub const Lexer = struct {
                 }
 
                 if (Punctuation.castChar(@intCast(x))) |p| {
-                    log.info("punctuation {u} (0x{x:0>2})", .{p.toChar(), p.toChar()});
-                    try self.advanceChar();
+                    log.debug("punctuation {u} (0x{x:0>2})", .{p.toChar(), p.toChar()});
 
                     break :char_switch TokenData { .special = .{ .punctuation = p, .escaped = false } };
                 }
 
-                log.info("processing sequence", .{});
+                log.debug("processing sequence", .{});
 
                 symbol_loop: while (try self.peekChar()) |pk| {
                     if (std.ascii.isWhitespace(@intCast(pk))
                     or std.ascii.isControl(@intCast(pk))
                     or Punctuation.includesChar(@intCast(pk))) {
-                        log.info("ending sequence at {u} (0x{x:0>2})", .{pk, pk});
+                        log.debug("ending sequence at {u} (0x{x:0>2})", .{pk, pk});
                         break :symbol_loop;
                     }
 
@@ -362,7 +362,7 @@ pub const Lexer = struct {
 
                 const seq = self.source[start.buffer..end.buffer];
 
-                log.info("sequence {s}", .{seq});
+                log.debug("sequence {s}", .{seq});
 
                 break :char_switch TokenData { .sequence = seq };
             }
