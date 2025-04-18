@@ -2097,8 +2097,8 @@ pub const Instruction = struct {
                 if (self.inputs.len == 0) return error.InvalidInstruction
                 else (try (try self.inputs[0].getType()).info.coerceFunction()).output,
             .new_local =>
-                if (self.inputs.len == 0 or self.inputs[0] != .type) return error.InvalidInstruction
-                else try self.root.internType(null, TypeInfo.localOf(self.inputs[0].type)),
+                if (self.inputs.len == 0 or self.inputs[0].tag != .type) return error.InvalidInstruction
+                else try self.root.internType(null, TypeInfo.localOf(self.inputs[0].forcePtr(Type))),
             .set_local => self.root.builtin.types.nil,
             .get_local =>
                 if (self.inputs.len == 0) return error.InvalidInstruction
@@ -2116,8 +2116,8 @@ pub const Instruction = struct {
                 if (self.inputs.len == 0) return error.InvalidInstruction
                 else try self.inputs[0].getType(),
             inline .convert, .bitcast =>
-                if (self.inputs.len == 0 or self.inputs[0] != .type) return error.InvalidInstruction
-                else self.inputs[0].type,
+                if (self.inputs.len == 0 or self.inputs[0].tag != .type) return error.InvalidInstruction
+                else self.inputs[0].forcePtr(Type),
         };
 
         self.type_cache = typeIr;
@@ -2128,21 +2128,60 @@ pub const Instruction = struct {
 
 /// The inputs to an ir `Instruction`.
 /// Inputs can be either constants or other instructions.
-pub const Input = union(enum) { // FIXME: need to use pointer tagging so the arithmetic in init works
-    /// Receive a type.
-    type: *const Type,
-    /// Receive a constant value.
-    constant: *const Constant,
-    /// Receive the output of another instruction.
-    variable: *const Instruction,
+pub const Input = packed struct {
+    tag: Tag,
+    ptr: u48,
 
     /// Get the type of an input.
-    pub fn getType(self: *const Input) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const Type {
-        return switch (self.*) {
-            .type => |x| x.root.builtin.types.type,
-            .constant => |x| x.data.type,
-            .variable => |x| try x.getType(),
+    pub fn getType(self: Input) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const Type {
+        return switch (self.tag) {
+            .type => @as(*const Type, @ptrFromInt(self.ptr)).root.builtin.types.type,
+            .constant => @as(*const Constant, @ptrFromInt(self.ptr)).data.type,
+            .variable => try @as(*const Instruction, @ptrFromInt(self.ptr)).getType(),
         };
+    }
+
+    pub const Tag = enum(u16) {
+        /// Receives a type.
+        type,
+        /// Receives a constant value.
+        constant,
+        /// Receives the output of another instruction.
+        variable,
+
+        pub fn fromType(comptime T: type) Tag {
+            comptime return switch (T) {
+                *const Type => .type,
+                *const Constant => .constant,
+                *const Instruction => .variable,
+                else => @compileError(@typeName(T) ++ " is not a valid Input type"),
+            };
+        }
+    };
+
+    pub fn fromPtr(ptr: anytype) Input {
+        const tag = comptime Tag.fromType(@TypeOf(ptr));
+
+        return Input {
+            .tag = tag,
+            .ptr = @intFromPtr(ptr),
+        };
+    }
+
+    pub fn toPtr(self: Input, comptime T: type) ?*const T {
+        const tag = comptime Tag.fromType(*const T);
+
+        if (self.tag != tag) return null;
+
+        return @ptrFromInt(self.ptr);
+    }
+
+    pub fn forcePtr(self: Input, comptime T: type) *const T {
+        const tag = comptime Tag.fromType(*const T);
+
+        std.debug.assert(self.tag == tag);
+
+        return @ptrFromInt(self.ptr);
     }
 };
 
