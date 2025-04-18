@@ -108,8 +108,6 @@ pub const Builder = struct {
 
             /// The type of a type.
             type: *const Type,
-            /// The type of a local variable reference.
-            local: *const Type = undefined, // FIXME: local type info
             /// The type of an IR basic block.
             block: *const Type,
             /// The type of an IR module.
@@ -163,12 +161,6 @@ pub const Builder = struct {
 
         inline for (comptime std.meta.fieldNames(@TypeOf(self.builtin.types))) |builtinTypeName| {
             const nameIr = try self.internName(builtinTypeName);
-
-            if (comptime !@hasDecl(@TypeOf(BUILTIN_TYPE_INFO), builtinTypeName)) {
-                @compileLog("IR: missing builtin type " ++ builtinTypeName);
-                continue;
-            }
-
             const typeIr = try self.internType(nameIr, @field(BUILTIN_TYPE_INFO, builtinTypeName));
 
             @field(self.builtin.names, builtinTypeName) = nameIr;
@@ -185,29 +177,9 @@ pub const Builder = struct {
         const allocator = self.allocator;
         defer allocator.destroy(self);
 
-        var nameIt = self.names.keyIterator();
-        while (nameIt.next()) |namePtr| {
-            Name.deinit(namePtr.*);
-        }
-
-        var constantIt = self.constants.keyIterator();
-        while (constantIt.next()) |constantPtr| {
-            Constant.deinit(constantPtr.*);
-        }
-
-        var foreignAddressIt = self.foreign_addresses.keyIterator();
-        while (foreignAddressIt.next()) |foreignPtr| {
-            ForeignAddress.deinit(foreignPtr.*);
-        }
-
         var effectIt = self.effects.keyIterator();
         while (effectIt.next()) |effectPtr| {
             Effect.deinit(effectPtr.*);
-        }
-
-        var typeIt = self.types.keyIterator();
-        while (typeIt.next()) |typePtr| {
-            Type.deinit(typePtr.*);
         }
 
         var moduleIt = self.modules.keyIterator();
@@ -215,18 +187,28 @@ pub const Builder = struct {
             Module.deinit(modulePtr.*);
         }
 
+        var foreignAddressIt = self.foreign_addresses.keyIterator();
+        while (foreignAddressIt.next()) |foreignAddressPtr| {
+            ForeignAddress.deinit(foreignAddressPtr.*);
+        }
+
+        self.name_arena.deinit();
+        self.type_arena.deinit();
+        self.constant_arena.deinit();
+
         self.names.deinit(self.allocator);
         self.constants.deinit(self.allocator);
+        self.types.deinit(self.allocator);
+
         self.foreign_addresses.deinit(self.allocator);
         self.effects.deinit(self.allocator);
-        self.types.deinit(self.allocator);
         self.modules.deinit(self.allocator);
     }
 
     /// Get a `Name` from a string value.
     ///
     /// If the string has already been interned, the existing `Name` will be returned;
-    /// Otherwise a new `Name` will be allocated.
+    /// otherwise a new `Name` will be allocated.
     ///
     /// The `Name` that is returned will be owned by this IR unit.
     pub fn internName(ptr: *const Builder, value: []const u8) error{OutOfMemory}!*const Name {
@@ -434,15 +416,6 @@ pub const Name = struct {
     /// A 64-bit hash of the text value of this name.
     hash: u64,
 
-    fn deinit(ptr: *const Name) void {
-        const self: *Name = @constCast(ptr);
-
-        const allocator = self.root.allocator;
-        defer allocator.destroy(self);
-
-        allocator.free(self.value);
-    }
-
     pub fn onFormat(self: *const Name, formatter: anytype) !void {
         try formatter.writeAll(self.value);
     }
@@ -461,15 +434,6 @@ pub const Constant = struct {
     data: ConstantData,
     /// A 64-bit hash of the data of this constant.
     hash: u64,
-
-    fn deinit(ptr: *const Constant) void {
-        const self: *Constant = @constCast(ptr);
-
-        const allocator = self.root.allocator;
-        defer allocator.destroy(self);
-
-        self.data.deinit(allocator);
-    }
 
     pub fn onFormat(self: *const Constant, formatter: anytype) !void {
         try formatter.writeAll("constant(");
@@ -624,15 +588,6 @@ pub const Type = struct {
     /// A 64-bit hash of the type information of this type.
     hash: u64,
 
-    fn deinit(ptr: *const Type) void {
-        const self: *Type = @constCast(ptr);
-
-        const allocator = self.root.allocator;
-        defer allocator.destroy(self);
-
-        self.info.deinit(allocator);
-    }
-
     /// Get the `Kind` of the type described by this type information.
     pub fn getKind(self: *const Type) TypeInfo.Kind {
         return self.info.getKind();
@@ -640,23 +595,23 @@ pub const Type = struct {
 };
 
 pub const BUILTIN_TYPE_INFO = .{
-    .nil = TypeInfo.nil,
     .@"opaque" = TypeInfo.@"opaque",
-    .noreturn = TypeInfo.noreturn,
-    .type = TypeInfo.type,
-    .block = TypeInfo.block,
-    .module = TypeInfo.module,
+    .noreturn  = TypeInfo.noreturn,
+    .type      = TypeInfo.type,
+    .block     = TypeInfo.block,
+    .module    = TypeInfo.module,
+    .nil  = TypeInfo.nil,
     .bool = TypeInfo.bool,
-    .i8 = TypeInfo.integerOf(8, .signed),
-    .i16 = TypeInfo.integerOf(16, .signed),
-    .i32 = TypeInfo.integerOf(32, .signed),
-    .i64 = TypeInfo.integerOf(64, .signed),
-    .u8 = TypeInfo.integerOf(8, .unsigned),
-    .u16 = TypeInfo.integerOf(16, .unsigned),
-    .u32 = TypeInfo.integerOf(32, .unsigned),
-    .u64 = TypeInfo.integerOf(64, .unsigned),
-    .f32 = TypeInfo.floatOf(.single),
-    .f64 = TypeInfo.floatOf(.double),
+    .i8   = TypeInfo.integerOf(8,  .signed),
+    .i16  = TypeInfo.integerOf(16, .signed),
+    .i32  = TypeInfo.integerOf(32, .signed),
+    .i64  = TypeInfo.integerOf(64, .signed),
+    .u8   = TypeInfo.integerOf(8,  .unsigned),
+    .u16  = TypeInfo.integerOf(16, .unsigned),
+    .u32  = TypeInfo.integerOf(32, .unsigned),
+    .u64  = TypeInfo.integerOf(64, .unsigned),
+    .f32  = TypeInfo.floatOf(.single),
+    .f64  = TypeInfo.floatOf(.double),
 };
 
 /// A sum type that represents all possible types usable in an IR,
@@ -674,7 +629,7 @@ pub const TypeInfo = union(enum) {
     noreturn: void,
     /// The type of a type.
     type: void,
-    /// The type of an IR basic block.
+    /// The type of an IR effect handler block token.
     block: void,
     /// The type of an IR module.
     module: void,
@@ -685,6 +640,8 @@ pub const TypeInfo = union(enum) {
 
     /// A placeholder for an actual type, of a specific kind.
     @"var": TypeInfo.Var,
+    /// A wrapper for a local variable's type.
+    local: TypeInfo.Local,
     /// The type of integer values, signed or unsigned, arbitrary bit size.
     integer: TypeInfo.Integer,
     /// The type of floating point values, with choice of precision.
@@ -770,6 +727,7 @@ pub const TypeInfo = union(enum) {
             .nil, .@"opaque", .noreturn, .bool, .type, .block, .module => true,
 
             .@"var" => |*x| x.eql(&other.@"var"),
+            .local => |*x| x.eql(&other.local),
             .integer => |*x| x.eql(&other.integer),
             .float => |*x| x.eql(&other.float),
             .pointer => |*x| x.eql(&other.pointer),
@@ -820,6 +778,7 @@ pub const TypeInfo = union(enum) {
             .type => .type,
             .block => .block,
             .module => .module,
+            .local => .local,
         };
     }
 
@@ -886,13 +845,41 @@ pub const TypeInfo = union(enum) {
         };
     }
 
+    /// Create local type info.
+    pub fn localOf(element: *const ir.Type) TypeInfo {
+        return .{
+            .local = .{
+                .element = element,
+            },
+        };
+    }
+
+    /// Extract function type information from a variety of types, such as foreign addresses and effect handlers.
+    /// * Returns `error.TypeMismatch` if the type does not lead to a function type with a single pointer of indirection.
     pub fn coerceFunction(self: *const TypeInfo) error{TypeMismatch}!*const TypeInfo.Function {
         return switch (self.*) {
-            .foreign_address => |x| try x.signature.info.coerceFunction(),
             .function => |*x| x,
-            .handler => |x| try x.signature.info.coerceFunction(),
-            else => {
-                log.err("TypeInfo.coerceFunction: got {}", .{self.*});
+            .foreign_address => |*x|
+                switch (x.element.info) {
+                    .function => |*f| f,
+                    .handler => |*h|
+                        if (h.signature.info == .function) &h.signature.info.function
+                        else return error.TypeMismatch,
+                    else => return error.TypeMismatch,
+                },
+            .handler => |*x|
+                switch (x.signature.info) {
+                    .function => |*f| f,
+                    .foreign_address => |*f|
+                        if (f.element.info == .function) &f.element.info.function
+                        else return error.TypeMismatch,
+                    else => return error.TypeMismatch,
+                },
+            .pointer => |*x|
+                if (x.element.info == .function) &x.element.info.function
+                else return error.TypeMismatch,
+            else => |x| {
+                log.err("TypeInfo.coerceFunction: got {}", .{x});
                 return error.TypeMismatch;
             },
         };
@@ -1023,12 +1010,15 @@ pub const TypeInfo = union(enum) {
         /// in the event a type is referenced as a value, it will have the type `Type`, which is of this kind.
         /// Size is known, can be used for comparisons.
         type,
-        /// in the event a block is referenced as a value, it will have the type `Block`, which is of this kind.
+        /// in the event an effect handler block is referenced as a value, it will have the type `Block`, which is of this kind.
         /// Size is known, can be used for comparisons.
         block,
         /// in the event a module is referenced as a value, it will have the type `Module`, which is of this kind.
         /// Size is known, can be used for comparisons.
         module,
+        /// in the event a local variable is referenced as a value, it will have the type `Local`, which is of this kind.
+        /// Size is known, can be used for comparisons.
+        local,
     };
 
     /// A placeholder for an actual type, of a specific kind.
@@ -1049,6 +1039,24 @@ pub const TypeInfo = union(enum) {
 
         fn onFormat(self: *const TypeInfo.Var, formatter: anytype) !void {
             try formatter.print("any({})", .{self.kind});
+        }
+    };
+
+    /// A wrapper for a local variable's type.
+    pub const Local = struct {
+        /// The type of value that local variables of this type contain.
+        element: *const ir.Type,
+
+        fn hash(self: *const TypeInfo.Local, hasher: anytype) void {
+            hasher.update(std.mem.asBytes(&self.element));
+        }
+
+        fn eql(self: *const TypeInfo.Local, other: *const TypeInfo.Local) bool {
+            return self.element == other.element;
+        }
+
+        fn onFormat(self: *const TypeInfo.Local, formatter: anytype) !void {
+            try formatter.print("local({})", .{self.element});
         }
     };
 
@@ -1395,18 +1403,18 @@ pub const TypeInfo = union(enum) {
 
     /// Represents the type of a foreign address, a pointer to an external function or data.
     pub const ForeignAddress = struct {
-        signature: *const ir.Type,
+        element: *const ir.Type,
 
         fn hash(self: *const TypeInfo.ForeignAddress, hasher: anytype) void {
-            hasher.update(std.mem.asBytes(&self.signature));
+            hasher.update(std.mem.asBytes(&self.element));
         }
 
         fn eql(self: *const TypeInfo.ForeignAddress, other: *const TypeInfo.ForeignAddress) bool {
-            return self.signature == other.signature;
+            return self.element == other.element;
         }
 
         fn onFormat(self: *const TypeInfo.ForeignAddress, formatter: anytype) !void {
-            try formatter.print("foreign({})", .{self.signature});
+            try formatter.print("foreign({})", .{self.element});
         }
     };
 
@@ -2061,7 +2069,7 @@ pub const Instruction = struct {
         return self;
     }
 
-    pub fn getType(ptr: *const Instruction) error{InvalidInstruction, TypeMismatch}!*const ir.Type {
+    pub fn getType(ptr: *const Instruction) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const ir.Type {
         const self: *Instruction = @constCast(ptr);
 
         if (self.type_cache) |typeIr| {
@@ -2088,19 +2096,27 @@ pub const Instruction = struct {
             .prompt =>
                 if (self.inputs.len == 0) return error.InvalidInstruction
                 else (try (try self.inputs[0].getType()).info.coerceFunction()).output,
-            .new_local => self.root.builtin.types.local,
+            .new_local =>
+                if (self.inputs.len == 0 or self.inputs[0] != .type) return error.InvalidInstruction
+                else try self.root.internType(null, TypeInfo.localOf(self.inputs[0].type)),
             .set_local => self.root.builtin.types.nil,
             .get_local =>
                 if (self.inputs.len == 0) return error.InvalidInstruction
+                else checkLocal: {
+                    const info = (try self.inputs[0].getType()).info;
+                    if (info != .local) return error.InvalidInstruction;
+                    break :checkLocal info.local.element;
+                },
+            inline .eq, .ne, .le, .lt, .ge, .gt =>
+                self.root.builtin.types.bool,
+            inline .bit_and, .bit_or, .bit_xor, .bit_not, .bit_lshift, .bit_rshift_a, .bit_rshift_l =>
+                if (self.inputs.len == 0) return error.InvalidInstruction
                 else try self.inputs[0].getType(),
-            inline .eq, .ne, .le, .lt, .ge, .gt => self.root.builtin.types.bool,
-            inline .bit_and, .bit_or, .bit_xor, .bit_not, .bit_lshift, .bit_rshift_a, .bit_rshift_l => self.root.builtin.types.i32, // FIXME: should be size of input
             inline .add, .sub, .mul, .div, .mod, .pow, .floor, .ceil, .trunc, .abs, .neg, .sqrt =>
                 if (self.inputs.len == 0) return error.InvalidInstruction
                 else try self.inputs[0].getType(),
-
             inline .convert, .bitcast =>
-                if (self.inputs.len == 0) return error.InvalidInstruction
+                if (self.inputs.len == 0 or self.inputs[0] != .type) return error.InvalidInstruction
                 else self.inputs[0].type,
         };
 
@@ -2121,7 +2137,7 @@ pub const Input = union(enum) { // FIXME: need to use pointer tagging so the ari
     variable: *const Instruction,
 
     /// Get the type of an input.
-    pub fn getType(self: *const Input) error{InvalidInstruction, TypeMismatch}!*const Type {
+    pub fn getType(self: *const Input) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const Type {
         return switch (self.*) {
             .type => |x| x.root.builtin.types.type,
             .constant => |x| x.data.type,
