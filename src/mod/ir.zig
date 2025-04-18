@@ -2040,16 +2040,18 @@ pub const Instruction = struct {
     id: Id.of(Instruction),
     /// The name of this instruction, if any, for debugging purposes.
     name: ?*const Name = null,
-    /// Cache of type of the value that this instruction produces; access with `getType`.
-    type_cache: ?*const ir.Type = null,
     /// The kind of operation being performed by this instruction.
     operation: Operation = .@"unreachable",
-    /// The instructions or constants providing values/control used by this instruction; in the order they are used.
-    inputs: []Input,
+    /// The instructions or constants providing types/values/control used by this instruction; in the order they are used.
+    inputs: []const Input,
     /// The instructions who use this instruction's output, be it data or control flow.
-    outputs: []*const Instruction,
+    outputs: []const *const Instruction,
+    /// The cache for the type of this instruction; use `getType` to access.
+    type_cache: ?*const Type = null,
 
-    pub const MAX_EDGES = 128;
+    /// The maximum number of edges total, both in or out, for an instruction.
+    pub const MAX_EDGES = 128; // TODO: i have no idea if this is a reasonable number; do some testing when we have realistic irs to work with
+    /// The maximum number of edges per direction, in or out, for an instruction.
     pub const MAX_EDGES_PER_SIDE = @divExact(MAX_EDGES, 2);
 
     fn init(function: *Function, id: Id.of(Instruction), name: ?*const Name) error{OutOfMemory}!*const Instruction {
@@ -2069,14 +2071,112 @@ pub const Instruction = struct {
         return self;
     }
 
-    pub fn getType(ptr: *const Instruction) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const ir.Type {
+    /// Sets the operation of this instruction to the provided value.
+    /// * This invalidates the type cache of this instruction.
+    pub fn setOperation(ptr: *const Instruction, operation: Operation) void {
+        const self: *Instruction = @constCast(ptr);
+        self.operation = operation;
+        self.type_cache = null;
+    }
+
+    /// The provided inputs are copied over the existing inputs.
+    /// * This invalidates the type cache of this instruction.
+    pub fn setInputs(ptr: *const Instruction, inputs: []const Input) error{TooManyEdges}!void {
         const self: *Instruction = @constCast(ptr);
 
-        if (self.type_cache) |typeIr| {
-            return typeIr;
+        if (inputs.len > MAX_EDGES_PER_SIDE) {
+            return error.TooManyEdges;
         }
 
-        const typeIr = switch(self.operation) {
+        for (self.inputs) |oldInput| {
+            oldInput.removeOutput(self);
+        }
+
+        self.inputs = @as([*]const Input, @ptrCast(self.inputs.ptr))[0..inputs.len];
+
+        @memcpy(@constCast(self.inputs), inputs);
+
+        for (self.inputs) |newInput| {
+            try newInput.addOutput(self);
+        }
+
+        self.type_cache = null;
+    }
+
+    /// Create a new instruction with this one as its first input.
+    pub fn andThen(self: *const Instruction, name: ?*const Name) !*const Instruction {
+        if (self.outputs.len >= MAX_EDGES_PER_SIDE) {
+            return error.TooManyEdges;
+        }
+
+        const instr = try self.function.instr(name);
+
+        try instr.setInputs(&.{.fromPtr(self)});
+
+        return instr;
+    }
+
+    fn addOutput(ptr: *const Instruction, output: *const Instruction) error{TooManyEdges}!void {
+        const self: *Instruction = @constCast(ptr);
+
+        if (self.outputs.len >= MAX_EDGES_PER_SIDE) {
+            return error.TooManyEdges;
+        }
+
+        @constCast(self.outputs.ptr)[self.outputs.len] = output;
+        self.outputs = self.outputs.ptr[0..self.outputs.len + 1];
+    }
+
+    fn removeOutput(ptr: *const Instruction, output: *const Instruction) void {
+        const self: *Instruction = @constCast(ptr);
+
+        for (self.outputs, 0..) |out, i| {
+            if (out == output) {
+                if (i + 1 < self.outputs.len) {
+                    @memcpy(@constCast(self.outputs[i..self.outputs.len - 1]), self.outputs[i + 1..self.outputs.len]);
+                }
+
+                self.outputs = self.outputs.ptr[0..self.outputs.len - 1];
+
+                return;
+            }
+        }
+
+        unreachable;
+    }
+
+    /// Checks if the type cache is empty, or any input `isDirty`.
+    pub fn isDirty(self: *const Instruction) bool {
+        return self.type_cache == null or self.hasDirtyInputs();
+    }
+
+    /// Simply loops over inputs and checks if any of them `isDirty`.
+    pub fn hasDirtyInputs(self: *const Instruction) bool {
+        for (self.inputs) |input| {
+            if (input.isDirty()) return true;
+        }
+
+        return false;
+    }
+
+    /// Returns the cached type if it is valid; does not recompute. See also `getType`.
+    pub fn getCachedType(ptr: *const Instruction) ?*const Type {
+        const self: *Instruction = @constCast(ptr);
+
+        if (self.type_cache) |typeCache| {
+            if (!self.hasDirtyInputs()) {
+                return typeCache;
+            } else {
+                self.type_cache = null;
+            }
+        }
+
+        return null;
+    }
+
+    /// Un-memoized version of `getType`.
+    pub fn computeType(self: *const Instruction) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const ir.Type {
+        return switch(self.operation) {
             .nop => self.root.builtin.types.nil,
             .breakpoint => self.root.builtin.types.nil,
             .@"unreachable" => self.root.builtin.types.noreturn,
@@ -2086,22 +2186,22 @@ pub const Instruction = struct {
             .unconditional_branch => self.root.builtin.types.noreturn,
             .conditional_branch => self.root.builtin.types.noreturn,
             .phi =>
-                if (self.inputs.len == 0) self.root.builtin.types.nil
+                if (self.inputs.len == 0) error.InvalidInstruction
                 else try self.inputs[0].getType(),
             .push_set => self.root.builtin.types.nil,
             .pop_set => self.root.builtin.types.nil,
             .call =>
-                if (self.inputs.len == 0) return error.InvalidInstruction
+                if (self.inputs.len == 0) error.InvalidInstruction
                 else (try (try self.inputs[0].getType()).info.coerceFunction()).output,
             .prompt =>
-                if (self.inputs.len == 0) return error.InvalidInstruction
+                if (self.inputs.len == 0) error.InvalidInstruction
                 else (try (try self.inputs[0].getType()).info.coerceFunction()).output,
             .new_local =>
-                if (self.inputs.len == 0 or self.inputs[0].tag != .type) return error.InvalidInstruction
+                if (self.inputs.len == 0 or self.inputs[0].tag != .type) error.InvalidInstruction
                 else try self.root.internType(null, TypeInfo.localOf(self.inputs[0].forcePtr(Type))),
             .set_local => self.root.builtin.types.nil,
             .get_local =>
-                if (self.inputs.len == 0) return error.InvalidInstruction
+                if (self.inputs.len == 0) error.InvalidInstruction
                 else checkLocal: {
                     const info = (try self.inputs[0].getType()).info;
                     if (info != .local) return error.InvalidInstruction;
@@ -2110,64 +2210,104 @@ pub const Instruction = struct {
             inline .eq, .ne, .le, .lt, .ge, .gt =>
                 self.root.builtin.types.bool,
             inline .bit_and, .bit_or, .bit_xor, .bit_not, .bit_lshift, .bit_rshift_a, .bit_rshift_l =>
-                if (self.inputs.len == 0) return error.InvalidInstruction
+                if (self.inputs.len == 0) error.InvalidInstruction
                 else try self.inputs[0].getType(),
             inline .add, .sub, .mul, .div, .mod, .pow, .floor, .ceil, .trunc, .abs, .neg, .sqrt =>
-                if (self.inputs.len == 0) return error.InvalidInstruction
+                if (self.inputs.len == 0) error.InvalidInstruction
                 else try self.inputs[0].getType(),
             inline .convert, .bitcast =>
-                if (self.inputs.len == 0 or self.inputs[0].tag != .type) return error.InvalidInstruction
+                if (self.inputs.len == 0 or self.inputs[0].tag != .type) error.InvalidInstruction
                 else self.inputs[0].forcePtr(Type),
         };
+    }
 
-        self.type_cache = typeIr;
+    /// Provides memoized computation of the type of an instruction. See also `cachedType`, `computeType`.
+    pub fn getType(ptr: *const Instruction) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const ir.Type {
+        const self: *Instruction = @constCast(ptr);
 
-        return typeIr;
+        if (self.getCachedType()) |cachedType| {
+            return cachedType;
+        }
+
+        const out = try self.computeType();
+
+        self.type_cache = out;
+
+        return out;
     }
 };
 
 /// The inputs to an ir `Instruction`.
 /// Inputs can be either constants or other instructions.
 pub const Input = packed struct {
+    /// The kind of value carried by this input.
     tag: Tag,
+    /// The address of the value carried by this input.
     ptr: u48,
+
+    /// Determine if the owner of this Input needs to recalculate its type.
+    pub fn isDirty(self: Input) bool {
+        return switch (self.tag) {
+            inline .type, .constant => false,
+            .instruction => @as(*const Instruction, @ptrFromInt(self.ptr)).isDirty(),
+        };
+    }
 
     /// Get the type of an input.
     pub fn getType(self: Input) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const Type {
         return switch (self.tag) {
             .type => @as(*const Type, @ptrFromInt(self.ptr)).root.builtin.types.type,
             .constant => @as(*const Constant, @ptrFromInt(self.ptr)).data.type,
-            .variable => try @as(*const Instruction, @ptrFromInt(self.ptr)).getType(),
+            .instruction => try @as(*const Instruction, @ptrFromInt(self.ptr)).getType(),
         };
     }
 
+    fn addOutput(self: Input, owner: *const Instruction) error{TooManyEdges}!void {
+        if (self.toPtr(Instruction)) |instr| {
+            try instr.addOutput(owner);
+        }
+    }
+
+    fn removeOutput(self: Input, owner: *const Instruction) void {
+        if (self.toPtr(Instruction)) |instr| {
+            instr.removeOutput(owner);
+        }
+    }
+
+    /// Marker for which kind of value is carried by an `Input`.
     pub const Tag = enum(u16) {
         /// Receives a type.
         type,
         /// Receives a constant value.
         constant,
         /// Receives the output of another instruction.
-        variable,
+        instruction,
 
+        /// Creates a new `Tag` from any type that is a valid input.
         pub fn fromType(comptime T: type) Tag {
             comptime return switch (T) {
                 *const Type => .type,
                 *const Constant => .constant,
-                *const Instruction => .variable,
+                *const Instruction => .instruction,
                 else => @compileError(@typeName(T) ++ " is not a valid Input type"),
             };
         }
     };
 
+    /// Creates a new `Input` from a pointer to any type that is a valid input.
+    /// The type of the pointer is used to determine the `Tag` of the input.
+    /// The pointer must be a valid pointer to the type.
     pub fn fromPtr(ptr: anytype) Input {
         const tag = comptime Tag.fromType(@TypeOf(ptr));
 
         return Input {
             .tag = tag,
-            .ptr = @intFromPtr(ptr),
+            .ptr = @intCast(@intFromPtr(ptr)),
         };
     }
 
+    /// Create a typed pointer from an Input.
+    /// The type of the parameter must match the tag of the Input, or else null is returned; see also `forcePtr`.
     pub fn toPtr(self: Input, comptime T: type) ?*const T {
         const tag = comptime Tag.fromType(*const T);
 
@@ -2176,6 +2316,8 @@ pub const Input = packed struct {
         return @ptrFromInt(self.ptr);
     }
 
+    /// Create a typed pointer from an Input.
+    /// Only checks that the tag matches the type in debug mode; see also `toPtr`.
     pub fn forcePtr(self: Input, comptime T: type) *const T {
         const tag = comptime Tag.fromType(*const T);
 
