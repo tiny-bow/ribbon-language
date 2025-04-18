@@ -45,6 +45,13 @@ pub fn of(comptime T: type) type {
             return @enumFromInt(i + 1);
         }
 
+        /// Takes a copy of an `Id`, performings a mutating increment on itself, and returns the copy.
+        pub fn next(self: *Self) Self {
+            const old = self.*;
+            self.* = @enumFromInt(@intFromEnum(old) + 1);
+            return old;
+        }
+
         /// Convert an `Id` to an optional of itself.
         /// This is useful for `orelse` clauses on the null status of the id.
         pub fn maybe(self: Self) ?Self {

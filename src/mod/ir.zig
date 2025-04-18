@@ -32,6 +32,12 @@ pub const Builder = struct {
     /// * The builder is allocator-agnostic and any allocator can be used here,
     /// though resulting usage patterns may differ slightly. See `deinit`.
     allocator: std.mem.Allocator,
+    /// Arena allocator used for names.
+    name_arena: std.heap.ArenaAllocator,
+    /// Arena allocator used for types.
+    type_arena: std.heap.ArenaAllocator,
+    /// Arena allocator used for constants.
+    constant_arena: std.heap.ArenaAllocator,
     /// Names in the IR are interned in this hash set.
     names: NameSet = .empty,
     /// Types used in the IR are interned in this hash set.
@@ -102,6 +108,8 @@ pub const Builder = struct {
 
             /// The type of a type.
             type: *const Type,
+            /// The type of a local variable reference.
+            local: *const Type = undefined, // FIXME: local type info
             /// The type of an IR basic block.
             block: *const Type,
             /// The type of an IR module.
@@ -133,11 +141,11 @@ pub const Builder = struct {
             /// 64-bit floating point type.
             f64: *const Type,
         },
-    } = undefined,
+    },
 
     /// Initialize a new IR unit.
     ///
-    /// * `allocator`-agnostic, but see `deinit`
+    /// * `allocator`-agnostic
     /// * result `Builder` root ir node will own all ir memory allocated with the provided allocator;
     /// it can all be freed at once with `deinit`
     pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!*const Builder {
@@ -145,12 +153,22 @@ pub const Builder = struct {
 
         self.* = .{
             .allocator = allocator,
+            .name_arena = std.heap.ArenaAllocator.init(allocator),
+            .type_arena = std.heap.ArenaAllocator.init(allocator),
+            .constant_arena = std.heap.ArenaAllocator.init(allocator),
+            .builtin = undefined,
         };
 
         self.builtin.names.entry = try self.internName("entry");
 
         inline for (comptime std.meta.fieldNames(@TypeOf(self.builtin.types))) |builtinTypeName| {
             const nameIr = try self.internName(builtinTypeName);
+
+            if (comptime !@hasDecl(@TypeOf(BUILTIN_TYPE_INFO), builtinTypeName)) {
+                @compileLog("IR: missing builtin type " ++ builtinTypeName);
+                continue;
+            }
+
             const typeIr = try self.internType(nameIr, @field(BUILTIN_TYPE_INFO, builtinTypeName));
 
             @field(self.builtin.names, builtinTypeName) = nameIr;
@@ -161,8 +179,6 @@ pub const Builder = struct {
     }
 
     /// De-initialize the IR unit, freeing all allocated memory.
-    ///
-    /// This is not necessary to call if the allocator provided to the `Builder` is a `std.heap.Arena` or similar.
     pub fn deinit(ptr: *const Builder) void {
         const self: *Builder = @constCast(ptr);
 
@@ -216,7 +232,7 @@ pub const Builder = struct {
     pub fn internName(ptr: *const Builder, value: []const u8) error{OutOfMemory}!*const Name {
         const self: *Builder = @constCast(ptr);
 
-        return (try self.names.intern(self.allocator, null, &Name{
+        return (try self.names.intern(self.allocator, self.name_arena.allocator(), &Name{
             .root = self,
             .id = @enumFromInt(self.names.count()),
             .value = value,
@@ -233,7 +249,7 @@ pub const Builder = struct {
     pub fn internType(ptr: *const Builder, name: ?*const Name, info: TypeInfo) error{OutOfMemory}!*const Type {
         const self: *Builder = @constCast(ptr);
 
-        return (try self.types.intern(self.allocator, null, &Type{
+        return (try self.types.intern(self.allocator, self.type_arena.allocator(), &Type{
             .root = self,
             .id = @enumFromInt(self.types.count()),
             .name = name,
@@ -251,7 +267,7 @@ pub const Builder = struct {
     pub fn internConstant(ptr: *const Builder, name: ?*const Name, data: ConstantData) error{OutOfMemory}!*const Constant {
         const self: *Builder = @constCast(ptr);
 
-        return (try self.constants.intern(self.allocator, null, &Constant{
+        return (try self.constants.intern(self.allocator, self.constant_arena.allocator(), &Constant{
             .root = self,
             .id = @enumFromInt(self.constants.count()),
             .name = name,
@@ -870,6 +886,18 @@ pub const TypeInfo = union(enum) {
         };
     }
 
+    pub fn coerceFunction(self: *const TypeInfo) error{TypeMismatch}!*const TypeInfo.Function {
+        return switch (self.*) {
+            .foreign_address => |x| try x.signature.info.coerceFunction(),
+            .function => |*x| x,
+            .handler => |x| try x.signature.info.coerceFunction(),
+            else => {
+                log.err("TypeInfo.coerceFunction: got {}", .{self.*});
+                return error.TypeMismatch;
+            },
+        };
+    }
+
     /// The discriminant type for type info variants.
     pub const Tag: type = std.meta.Tag(TypeInfo);
 
@@ -918,42 +946,15 @@ pub const TypeInfo = union(enum) {
     };
 
     /// Describes the manner in which an effect handler may end its computation.
-    pub const Cancel = union(enum) {
+    pub const Cancel = enum {
         /// The effect handler never returns or cancels.
-        divergent: void,
+        divergent,
         /// The effect handler never cancels its caller; it always returns a value.
-        always_returns: *const ir.Type,
+        always_returns,
         /// The effect handler always cancels its caller; it never returns a value.
-        always_cancels: *const ir.Type,
+        always_cancels,
         /// The effect handler may cancel its caller, or it may return a value.
-        conditional: struct {
-            on_cancel: *const ir.Type,
-            on_return: *const ir.Type,
-        },
-
-        fn hash(self: *const TypeInfo.Cancel, hasher: anytype) void {
-            hasher.update(@tagName(self.*));
-
-            switch (self.*) {
-                .divergent => hasher.update("div"),
-                .always_returns, .always_cancels => |ty| hasher.update(std.mem.asBytes(ty)),
-                .conditional => |*cond| {
-                    hasher.update(std.mem.asBytes(&cond.on_cancel));
-                    hasher.update(std.mem.asBytes(&cond.on_return));
-                },
-            }
-        }
-
-        fn eql(self: *const TypeInfo.Cancel, other: *const TypeInfo.Cancel) bool {
-            if (@as(std.meta.Tag(Cancel), self.*) != @as(std.meta.Tag(Cancel), other.*)) return false;
-
-            return switch (self.*) {
-                .divergent => true,
-                .always_returns => |ty| ty == other.always_returns,
-                .always_cancels => |ty| ty == other.always_cancels,
-                .conditional => |*cond| cond.on_cancel == other.conditional.on_cancel and cond.on_return == other.conditional.on_return,
-            };
-        }
+        conditional,
     };
 
     /// Represents the precision of a floating point type.
@@ -1337,6 +1338,7 @@ pub const TypeInfo = union(enum) {
     /// and may optionally have a single side effect type.
     ///
     /// To represent a function:
+    /// + Has no parameters: use `Nil` for the input type.
     /// + With multiple parameters: use `Product` for the input type.
     /// + With multiple return values: use `Product` for the output type.
     /// + That does not return: use `NoReturn` for the output type.
@@ -1430,52 +1432,21 @@ pub const TypeInfo = union(enum) {
     pub const Handler = struct {
         /// The type of the side effect that this handler can process.
         target: *const ir.Type,
-        /// The type of the input parameter.
-        input: *const ir.Type,
-        /// The manner in which the handler may end its computation,
-        /// including return and cancellation types if applicable.
+        /// The cancellation style of this handler.
         cancel: Cancel,
-        /// The type of an additional side effect, if any, that would be incurred by invoking this handler.
-        ///
-        /// For example, an effect handler could:
-        /// * Translate one effect into another.
-        /// * Re-contextualize the same effect, into a new version of itself.
-        /// * Split an effect into multiple effects, or
-        /// (using a full handler set, ie a product of handlers) combine multiple effects into one.
-        effect: ?*const ir.Type,
+        /// The function signature of this handler.
+        signature: *const ir.Type,
 
         fn hash(self: *const TypeInfo.Handler, hasher: anytype) void {
             hasher.update(std.mem.asBytes(&self.target));
-
-            hasher.update(std.mem.asBytes(&self.input));
-
-            self.cancel.hash(hasher);
-
-            if (self.effect) |e| {
-                hasher.update(std.mem.asBytes(&e));
-            } else {
-                hasher.update("null");
-            }
+            hasher.update(std.mem.asBytes(&self.cancel));
+            hasher.update(std.mem.asBytes(&self.signature));
         }
 
         fn eql(self: *const TypeInfo.Handler, other: *const TypeInfo.Handler) bool {
-            if (self.target != other.target) return false;
-
-            if (self.input != other.input) return false;
-
-            if (!self.cancel.eql(&other.cancel)) return false;
-
-            if (self.effect) |e1| {
-                if (other.effect) |e2| {
-                    if (e1 != e2) return false;
-                } else {
-                    return false;
-                }
-            } else if (other.effect != null) {
-                return false;
-            }
-
-            return true;
+            return self.target == other.target
+               and self.cancel == other.cancel
+               and self.signature == other.signature;
         }
 
         fn onFormat(self: *const TypeInfo.Handler, formatter: anytype) !void {
@@ -1956,7 +1927,7 @@ pub const Function = struct {
     /// Arena allocator owning all `Instruction`s referenced by this function.
     arena: std.heap.ArenaAllocator,
     /// The first instruction in the function.
-    entry: *Instruction,
+    entry: *const Instruction,
     /// Increments with each call of `instr`, used to assign unique ids to every instruction.
     fresh: Id.of(Instruction) = .fromInt(1),
 
@@ -2015,25 +1986,11 @@ pub const Function = struct {
 
     /// Creates a new default-initialized `Instruction` in this function.
     /// The instruction is allocated in an arena owned by the function,
-    /// no memory management is necessary for the caller.
-    pub fn instr(ptr: *const Function, name: ?*const Name) error{OutOfMemory}!*Instruction {
+    /// no memory management is necessary on behalf of the caller.
+    pub fn instr(ptr: *const Function, name: ?*const Name) error{OutOfMemory}!*const Instruction {
         const self: *Function = @constCast(ptr);
-        const out = try self.arena.allocator().create(Instruction);
 
-        out.* = Instruction {
-            .root = self.root,
-            .function = self,
-            .id = self.fresh,
-            .name = name,
-            .type = self.root.builtin.types.noreturn,
-            .operation = .@"unreachable",
-            .inputs = &.{},
-            .outputs = &.{},
-        };
-
-        self.fresh = .fromInt(self.fresh.toInt() + 1);
-
-        return out;
+        return Instruction.init(self, self.fresh.next(), name);
     }
 };
 
@@ -2074,24 +2031,103 @@ pub const Instruction = struct {
     /// The unique identifier of this instruction.
     id: Id.of(Instruction),
     /// The name of this instruction, if any, for debugging purposes.
-    name: ?*const Name,
-    /// The type of the value that this instruction produces.
-    type: *const ir.Type,
+    name: ?*const Name = null,
+    /// Cache of type of the value that this instruction produces; access with `getType`.
+    type_cache: ?*const ir.Type = null,
     /// The kind of operation being performed by this instruction.
-    operation: Operation,
+    operation: Operation = .@"unreachable",
     /// The instructions or constants providing values/control used by this instruction; in the order they are used.
     inputs: []Input,
     /// The instructions who use this instruction's output, be it data or control flow.
-    outputs: []*Instruction,
+    outputs: []*const Instruction,
+
+    pub const MAX_EDGES = 128;
+    pub const MAX_EDGES_PER_SIDE = @divExact(MAX_EDGES, 2);
+
+    fn init(function: *Function, id: Id.of(Instruction), name: ?*const Name) error{OutOfMemory}!*const Instruction {
+        const self = try function.arena.allocator().create(Instruction);
+        const edges = try function.arena.allocator().alloc(*const Instruction, MAX_EDGES);
+
+        self.* = Instruction {
+            .root = function.root,
+            .function = function,
+            .id = id,
+            .name = name,
+            .operation = .@"unreachable",
+            .inputs = @as(*Input, @ptrCast(edges.ptr))[0..0],
+            .outputs = (edges.ptr + MAX_EDGES_PER_SIDE)[0..0],
+        };
+
+        return self;
+    }
+
+    pub fn getType(ptr: *const Instruction) error{InvalidInstruction, TypeMismatch}!*const ir.Type {
+        const self: *Instruction = @constCast(ptr);
+
+        if (self.type_cache) |typeIr| {
+            return typeIr;
+        }
+
+        const typeIr = switch(self.operation) {
+            .nop => self.root.builtin.types.nil,
+            .breakpoint => self.root.builtin.types.nil,
+            .@"unreachable" => self.root.builtin.types.noreturn,
+            .trap => self.root.builtin.types.noreturn,
+            .@"return" => self.root.builtin.types.noreturn,
+            .cancel => self.root.builtin.types.noreturn,
+            .unconditional_branch => self.root.builtin.types.noreturn,
+            .conditional_branch => self.root.builtin.types.noreturn,
+            .phi =>
+                if (self.inputs.len == 0) self.root.builtin.types.nil
+                else try self.inputs[0].getType(),
+            .push_set => self.root.builtin.types.nil,
+            .pop_set => self.root.builtin.types.nil,
+            .call =>
+                if (self.inputs.len == 0) return error.InvalidInstruction
+                else (try (try self.inputs[0].getType()).info.coerceFunction()).output,
+            .prompt =>
+                if (self.inputs.len == 0) return error.InvalidInstruction
+                else (try (try self.inputs[0].getType()).info.coerceFunction()).output,
+            .new_local => self.root.builtin.types.local,
+            .set_local => self.root.builtin.types.nil,
+            .get_local =>
+                if (self.inputs.len == 0) return error.InvalidInstruction
+                else try self.inputs[0].getType(),
+            inline .eq, .ne, .le, .lt, .ge, .gt => self.root.builtin.types.bool,
+            inline .bit_and, .bit_or, .bit_xor, .bit_not, .bit_lshift, .bit_rshift_a, .bit_rshift_l => self.root.builtin.types.i32, // FIXME: should be size of input
+            inline .add, .sub, .mul, .div, .mod, .pow, .floor, .ceil, .trunc, .abs, .neg, .sqrt =>
+                if (self.inputs.len == 0) return error.InvalidInstruction
+                else try self.inputs[0].getType(),
+
+            inline .convert, .bitcast =>
+                if (self.inputs.len == 0) return error.InvalidInstruction
+                else self.inputs[0].type,
+        };
+
+        self.type_cache = typeIr;
+
+        return typeIr;
+    }
 };
 
 /// The inputs to an ir `Instruction`.
 /// Inputs can be either constants or other instructions.
-pub const Input = union(enum) {
+pub const Input = union(enum) { // FIXME: need to use pointer tagging so the arithmetic in init works
+    /// Receive a type.
+    type: *const Type,
     /// Receive a constant value.
     constant: *const Constant,
     /// Receive the output of another instruction.
-    variable: *Instruction,
+    variable: *const Instruction,
+
+    /// Get the type of an input.
+    pub fn getType(self: *const Input) error{InvalidInstruction, TypeMismatch}!*const Type {
+        return switch (self.*) {
+            .type => |x| x.root.builtin.types.type,
+            .constant => |x| x.data.type,
+            .variable => |x| try x.getType(),
+        };
+    }
 };
 
 /// Designates which kind of operation, be it data manipulation or control flow, is performed by an ir `Instruction`.
