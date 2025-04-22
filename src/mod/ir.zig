@@ -2188,7 +2188,7 @@ pub const Instruction = struct {
             .phi =>
                 if (self.inputs.len == 0) error.InvalidInstruction
                 else try self.inputs[0].getType(),
-            .push_set => self.root.builtin.types.nil,
+            .push_set => self.root.builtin.types.block,
             .pop_set => self.root.builtin.types.nil,
             .call =>
                 if (self.inputs.len == 0) error.InvalidInstruction
