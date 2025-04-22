@@ -1,7 +1,7 @@
 <div align="center">
   <img style="height: 18em"
        alt="Ribbon Language Logo"
-       src="https://ribbon-lang.github.io/images/logo_full.svg"
+       src="https://ribbon-lang.com/images/logo_full.svg"
        />
 </div>
 
