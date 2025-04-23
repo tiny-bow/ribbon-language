@@ -235,7 +235,7 @@ pub const Encoder = struct {
     pub fn writeInt(
         self: *Encoder,
         comptime T: type, value: T,
-        comptime _: enum {little}, // allows backward compat with writer code in X64EZ; but only in provably compatible use-cases
+        comptime _: enum {little}, // allows backward compat with writer code in r64; but only in provably compatible use-cases
     ) Encoder.Error!void {
         const bytes = std.mem.asBytes(&value);
         try self.writeAll(bytes);

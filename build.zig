@@ -46,10 +46,10 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const assembler_mod = b.dependency("X64EZ", .{
+    const assembler_mod = b.dependency("r64", .{
         .target = target,
         .optimize = optimize,
-    }).module("X64EZ");
+    }).module("r64");
 
     const Buffer_mod = b.createModule(.{
         .root_source_file = b.path("src/mod/common/Buffer.zig"),

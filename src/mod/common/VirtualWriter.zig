@@ -207,7 +207,7 @@ pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
         pub fn writeInt(
             self: *Self,
             comptime T: type, value: T,
-            comptime _: enum {little}, // allows backward compat with writer code in X64EZ; but only in provably compatible use-cases
+            comptime _: enum {little}, // allows backward compat with writer code in r64; but only in provably compatible use-cases
         ) Error!void {
             // We do not encode abi padding bytes here; only get the bytes that are actually used.
             const bytes = std.mem.asBytes(&value)[0..pl.bytesFromBits(@bitSizeOf(T))];
