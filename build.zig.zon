@@ -21,8 +21,7 @@
     // FIXME: these should be lazy dependencies
     .dependencies = .{
         .X64EZ = .{
-            .url = "git+https://github.com/noxabellus/X64EZ#c06b7de007ae500ecf8dfc59d1e5da76ec0b2938",
-            .hash = "X64EZ-0.1.0-AAAAADzFAwCC6--0svIg0Dhbx-Zln6PK6QNdhchDFfkV",
+            .path = "../X64EZ",
         },
         .nasm = .{
             .url = "git+https://github.com/allyourcodebase/nasm#c153aec97cfe50a4600d9cf3d5f703d58f9ccd56",
