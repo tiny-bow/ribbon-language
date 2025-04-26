@@ -2,7 +2,8 @@ const driver = @This();
 
 const std = @import("std");
 
-const ribbon = @import("ribbon");
+const ribbon = @import("ribbon_language");
+const common = @import("common");
 
 const log = std.log.scoped(.main);
 
@@ -77,7 +78,7 @@ fn test_interpreter() !void {
 
     const allocator = gpa.allocator();
 
-    const b = try ribbon.bytecode.Builder.init(allocator, ribbon.common.Id.of(ribbon.core.Function).fromInt(0));
+    const b = try ribbon.bytecode.Builder.init(allocator, common.Id.of(ribbon.core.Function).fromInt(0));
     defer b.deinit();
 
     const entry = try b.createBlock();
