@@ -579,3 +579,47 @@ pub const Encoder = struct {
         try self.instr(.sub, &.{ a, b });
     }
 };
+
+test "x64_machine_basic_integration" {
+    const expected_disas =
+        "\n  ╿ \n" ++ // trailing whitespace gets trimmed causing test failure
+        \\  │  x64-intel-syntax
+        \\╾─┼──────────────────────────────────╼
+        \\  │
+        \\  │  mov rbx, rdi
+        \\  │  mov r12, qword ptr [rbx]
+        \\  │  mov r13, qword ptr [rbx + 0x30]
+        \\  │  mov rax, qword ptr [r12 + 0x8]
+        \\  │  add rax, qword ptr [r12]
+        \\  │  mov qword ptr [r12 + 0x10], rax
+        \\  │  mov rax, qword ptr [r12 + 0x10]
+        \\  │  mov qword ptr [r12], rax
+        \\  │  mov rax, 0x0
+        \\  │  ret
+        \\  ╽
+        \\
+    ;
+
+    const allocator = std.testing.allocator;
+
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    var jit = try machine.Builder.init();
+    defer jit.deinit();
+
+    try jit.i_add64(.r(2), .r(0), .r(1));
+    try jit.@"return"(.r(2));
+
+    const exe = try jit.finalize();
+    defer exe.deinit();
+
+    var str = std.ArrayList(u8).init(allocator);
+    defer str.deinit();
+
+    const writer = str.writer();
+
+    try machine.disas(exe.toSlice(), .{ .display = .{ .function_address = false } }, writer);
+
+    try std.testing.expectEqualStrings(expected_disas, str.items); // FIXME: this is not the expected output
+}

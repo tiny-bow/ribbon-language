@@ -7,6 +7,8 @@ const log = std.log.scoped(.interpreter);
 const core = @import("core");
 const Instruction = @import("Instruction");
 const pl = @import("platform");
+const common = @import("common");
+const bytecode = @import("bytecode");
 
 test {
     std.testing.refAllDeclsRecursive(@This());
@@ -5677,3 +5679,45 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
         },
     }
 }
+
+
+// FIXME: this test causes zig to hang; run as a function it is fine?
+// test "interpreter_basic_integration" {
+//     std.debug.print("interpreter_basic_integration\n", .{});
+//     const allocator = std.testing.allocator;
+
+//     const b = try bytecode.Builder.init(allocator, common.Id.of(core.Function).fromInt(0));
+//     defer b.deinit();
+
+//     const entry = try b.createBlock();
+
+//     try entry.instr(.i_add64, .{ .Rx = .r7, .Ry = .r0, .Rz = .r1 });
+//     try entry.instr(.@"return", .{ .R = .r7 });
+
+//     var encoder = bytecode.Encoder { .writer = try bytecode.Writer.init() };
+//     defer encoder.writer.deinit();
+
+//     try b.encode(&encoder);
+
+//     const mem = try encoder.finalize();
+//     defer std.posix.munmap(mem);
+
+//     const instr: []const core.InstructionBits = @ptrCast(mem);
+
+//     const stdout = std.io.getStdOut();
+
+//     try bytecode.disas(mem, stdout.writer());
+
+//     const fiber = try core.Fiber.init(allocator);
+//     defer fiber.deinit(allocator);
+
+//     const function = core.Function {
+//         .header = undefined,
+//         .extents = .{ .base = instr.ptr, .upper = instr.ptr + instr.len },
+//         .stack_size = 0,
+//     };
+
+//     const result = try interpreter.invokeBytecode(fiber, &function, &.{ 3, 2 });
+//     log.info("{} + {} = {}", .{ 3, 2, result });
+//     try std.testing.expectEqual(5, result);
+// }

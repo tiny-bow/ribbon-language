@@ -2416,3 +2416,49 @@ pub const Operation = enum {
     /// Convert bits to a different type, changing the meaning without changing the bits.
     bitcast,
 };
+
+
+
+test "ir_basic_integration" {
+    const allocator = std.testing.allocator;
+
+    const instance = try ir.Builder.init(allocator);
+    defer instance.deinit();
+
+    const foo = try instance.internName("foo");
+    const bar = try instance.internName("bar");
+    const foo2 = try instance.internName("foo");
+
+    try std.testing.expectEqual(foo, foo2);
+    try std.testing.expect(foo != bar);
+
+    log.debug("foo: {} bar: {}", .{ foo, bar });
+
+    const i64Name = try instance.internName("i64");
+
+    log.debug("i64Name: {}", .{ i64Name });
+
+    const i64Type = try instance.internType(i64Name, ir.TypeInfo {
+        .integer = .{ .bit_size = 64, .signedness = .signed },
+    });
+
+    log.debug("I64: {}", .{ i64Type });
+
+
+    const aData = ir.ConstantData {
+        .type = i64Type,
+        .bytes = std.mem.asBytes(&@as(i64, -23)),
+    };
+
+    const bData = ir.ConstantData {
+        .type = i64Type,
+        .bytes = std.mem.asBytes(&@as(i64, 42)),
+    };
+
+    const a = try instance.internConstant(try instance.internName("a"), aData);
+    const b = try instance.internConstant(try instance.internName("b"), bData);
+    const a2 = try instance.internConstant(try instance.internName("a2"), aData);
+
+    try std.testing.expectEqual(a, a2);
+    try std.testing.expect(a != b);
+}

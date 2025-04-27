@@ -374,3 +374,71 @@ pub const Lexer = struct {
         };
     }
 };
+
+
+test "lexer_basic_integration" {
+    const allocator = std.testing.allocator;
+
+    var lexer = try Lexer.init(allocator, .{},
+        \\test
+        \\  [
+        \\      1,
+        \\      2,
+        \\      3
+        \\  ]
+        \\
+    );
+
+    defer lexer.deinit();
+
+    const expect = [_]TokenData {
+        .{ .sequence = "test" },
+        .{ .linebreak = .{ .n = 1, .i = 1 } },
+        .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar('[') } },
+        .{ .linebreak = .{ .n = 1, .i = 1 } },
+        .{ .sequence = "1" },
+        .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(',') } },
+        .{ .linebreak = .{ .n = 1, .i = 0 } },
+        .{ .sequence = "2" },
+        .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(',') } },
+        .{ .linebreak = .{ .n = 1, .i = 0 } },
+        .{ .sequence = "3" },
+        .{ .linebreak = .{ .n = 1, .i = -1 } },
+        .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(']') } },
+        .{ .linebreak = .{ .n = 1, .i = -1 } },
+    };
+
+    for (expect) |e| {
+        const it = lexer.next() catch |err| {
+            log.err("{}: {s}\n", .{ lexer.location, @errorName(err) });
+            return err;
+        };
+
+        if (it) |tok| {
+            log.debug("{} to {}: {} (expecting {})\n", .{ tok.location, lexer.location, tok.data, e });
+
+            switch (e) {
+                .sequence => |s| {
+                    try std.testing.expectEqual(.sequence, @as(std.meta.Tag(TokenData), tok.data));
+                    try std.testing.expectEqualSlices(u8, s, tok.data.sequence);
+                },
+
+                .special => |p| {
+                    try std.testing.expectEqual(.special, @as(std.meta.Tag(TokenData), tok.data));
+                    try std.testing.expectEqual(p, tok.data.special);
+                },
+
+                .linebreak => |l| {
+                    try std.testing.expectEqual(.linebreak, @as(std.meta.Tag(TokenData), tok.data));
+                    try std.testing.expectEqual(l.n, tok.data.linebreak.n);
+                    try std.testing.expectEqual(l.i, tok.data.linebreak.i);
+                },
+            }
+        } else {
+            log.err("unexpected EOF {}; expected {}\n", .{ lexer.location, e });
+            return error.UnexpectedEof;
+        }
+    }
+
+    try std.testing.expectEqual(lexer.source.len, lexer.location.buffer);
+}
