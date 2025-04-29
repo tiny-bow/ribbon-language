@@ -21,6 +21,101 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
+
+/// The builtin types and constants that are used in the IR.
+/// This is a static data structure that is created at `init` and used throughout the IR.
+pub const Builtin = struct {
+    /// Builtin names.
+    names: struct {
+        /// The name of the entry point of functions.
+        entry: *const Name,
+        /// The name of the end point of functions.
+        end: *const Name,
+
+        /// The name of the nil type.
+        nil: *const Name,
+        /// The name of the opaque type.
+        @"opaque": *const Name,
+        /// The name of the noreturn type.
+        noreturn: *const Name,
+
+        /// The name of the type of types.
+        type: *const Name,
+        /// The name of the type of blocks.
+        block: *const Name,
+        /// The name of the type of modules.
+        module: *const Name,
+
+        /// The name of the type of boolean values.
+        bool: *const Name,
+
+        /// The name of the type of 8-bit signed integers.
+        i8: *const Name,
+        /// The name of the type of 16-bit signed integers.
+        i16: *const Name,
+        /// The name of the type of 32-bit signed integers.
+        i32: *const Name,
+        /// The name of the type of 64-bit signed integers.
+        i64: *const Name,
+
+        /// The name of the type of 8-bit unsigned integers.
+        u8: *const Name,
+        /// The name of the type of 16-bit unsigned integers.
+        u16: *const Name,
+        /// The name of the type of 32-bit unsigned integers.
+        u32: *const Name,
+        /// The name of the type of 64-bit unsigned integers.
+        u64: *const Name,
+
+        /// The name of the type of 32-bit floating point values.
+        f32: *const Name,
+        /// The name of the type of 64-bit floating point values.
+        f64: *const Name,
+    },
+    /// Builtin types.
+    types: struct {
+        /// The type of `nil` values, ie void, unit etc.
+        nil: *const Type,
+        /// The type of opaque values, data without a known structure.
+        @"opaque": *const Type,
+        /// The type of the result of functions that don't actually return.
+        noreturn: *const Type,
+
+        /// The type of a type.
+        type: *const Type,
+        /// The type of an IR basic block.
+        block: *const Type,
+        /// The type of an IR module.
+        module: *const Type,
+
+        /// The type of boolean values, true or false.
+        bool: *const Type,
+
+        /// 8-bit signed integer type.
+        i8: *const Type,
+        /// 16-bit signed integer type.
+        i16: *const Type,
+        /// 32-bit signed integer type.
+        i32: *const Type,
+        /// 64-bit signed integer type.
+        i64: *const Type,
+
+        /// 8-bit unsigned integer type.
+        u8: *const Type,
+        /// 16-bit unsigned integer type.
+        u16: *const Type,
+        /// 32-bit unsigned integer type.
+        u32: *const Type,
+        /// 64-bit unsigned integer type.
+        u64: *const Type,
+
+        /// 32-bit floating point type.
+        f32: *const Type,
+        /// 64-bit floating point type.
+        f64: *const Type,
+    },
+};
+
 /// The root of a Ribbon IR unit.
 ///
 /// The IR unit is a collection of types, constants, foreign addresses, effects, and modules;
@@ -51,95 +146,7 @@ pub const Builder = struct {
     /// All of the IR modules that can reference each other within this IR unit.
     modules: ModuleSet = .empty,
     /// Static data created at `init`.
-    builtin: struct {
-        /// Builtin names.
-        names: struct {
-            /// The name of the entry point of functions.
-            entry: *const Name,
-
-            /// The name of the nil type.
-            nil: *const Name,
-            /// The name of the opaque type.
-            @"opaque": *const Name,
-            /// The name of the noreturn type.
-            noreturn: *const Name,
-
-            /// The name of the type of types.
-            type: *const Name,
-            /// The name of the type of blocks.
-            block: *const Name,
-            /// The name of the type of modules.
-            module: *const Name,
-
-            /// The name of the type of boolean values.
-            bool: *const Name,
-
-            /// The name of the type of 8-bit signed integers.
-            i8: *const Name,
-            /// The name of the type of 16-bit signed integers.
-            i16: *const Name,
-            /// The name of the type of 32-bit signed integers.
-            i32: *const Name,
-            /// The name of the type of 64-bit signed integers.
-            i64: *const Name,
-
-            /// The name of the type of 8-bit unsigned integers.
-            u8: *const Name,
-            /// The name of the type of 16-bit unsigned integers.
-            u16: *const Name,
-            /// The name of the type of 32-bit unsigned integers.
-            u32: *const Name,
-            /// The name of the type of 64-bit unsigned integers.
-            u64: *const Name,
-
-            /// The name of the type of 32-bit floating point values.
-            f32: *const Name,
-            /// The name of the type of 64-bit floating point values.
-            f64: *const Name,
-        },
-        /// Builtin types.
-        types: struct {
-            /// The type of `nil` values, ie void, unit etc.
-            nil: *const Type,
-            /// The type of opaque values, data without a known structure.
-            @"opaque": *const Type,
-            /// The type of the result of functions that don't actually return.
-            noreturn: *const Type,
-
-            /// The type of a type.
-            type: *const Type,
-            /// The type of an IR basic block.
-            block: *const Type,
-            /// The type of an IR module.
-            module: *const Type,
-
-            /// The type of boolean values, true or false.
-            bool: *const Type,
-
-            /// 8-bit signed integer type.
-            i8: *const Type,
-            /// 16-bit signed integer type.
-            i16: *const Type,
-            /// 32-bit signed integer type.
-            i32: *const Type,
-            /// 64-bit signed integer type.
-            i64: *const Type,
-
-            /// 8-bit unsigned integer type.
-            u8: *const Type,
-            /// 16-bit unsigned integer type.
-            u16: *const Type,
-            /// 32-bit unsigned integer type.
-            u32: *const Type,
-            /// 64-bit unsigned integer type.
-            u64: *const Type,
-
-            /// 32-bit floating point type.
-            f32: *const Type,
-            /// 64-bit floating point type.
-            f64: *const Type,
-        },
-    },
+    builtin: Builtin,
 
     /// Initialize a new IR unit.
     ///
@@ -160,10 +167,9 @@ pub const Builder = struct {
         self.builtin.names.entry = try self.internName("entry");
 
         inline for (comptime std.meta.fieldNames(@TypeOf(self.builtin.types))) |builtinTypeName| {
-            const nameIr = try self.internName(builtinTypeName);
-            const typeIr = try self.internType(nameIr, @field(BUILTIN_TYPE_INFO, builtinTypeName));
+            const typeIr = try self.internType(builtinTypeName, @field(BUILTIN_TYPE_INFO, builtinTypeName));
 
-            @field(self.builtin.names, builtinTypeName) = nameIr;
+            @field(self.builtin.names, builtinTypeName) = typeIr.name.?;
             @field(self.builtin.types, builtinTypeName) = typeIr;
         }
 
@@ -228,8 +234,10 @@ pub const Builder = struct {
     /// Otherwise a new `Type` will be allocated.
     ///
     /// The `Type` that is returned will be owned by this IR unit.
-    pub fn internType(ptr: *const Builder, name: ?*const Name, info: TypeInfo) error{OutOfMemory}!*const Type {
+    pub fn internType(ptr: *const Builder, nameString: ?[]const u8, info: TypeInfo) error{OutOfMemory}!*const Type {
         const self: *Builder = @constCast(ptr);
+
+        const name = if (nameString) |ns| try self.internName(ns) else null;
 
         return (try self.types.intern(self.allocator, self.type_arena.allocator(), &Type{
             .root = self,
@@ -246,8 +254,10 @@ pub const Builder = struct {
     /// Otherwise a new `Constant` will be allocated.
     ///
     /// The `Constant` that is returned will be owned by this IR unit.
-    pub fn internConstant(ptr: *const Builder, name: ?*const Name, data: ConstantData) error{OutOfMemory}!*const Constant {
+    pub fn internConstant(ptr: *const Builder, nameString: ?[]const u8, data: ConstantData) error{OutOfMemory}!*const Constant {
         const self: *Builder = @constCast(ptr);
+
+        const name = if (nameString) |ns| try self.internName(ns) else null;
 
         return (try self.constants.intern(self.allocator, self.constant_arena.allocator(), &Constant{
             .root = self,
@@ -268,8 +278,10 @@ pub const Builder = struct {
     /// Otherwise a new `ForeignAddress` will be allocated.
     ///
     /// The `ForeignAddress` that is returned will be owned by this IR unit.
-    pub fn createForeignAddress(ptr: *const Builder, name: *const Name, typeIr: *const Type) error{DuplicateForeignAddress, OutOfMemory}!*const ForeignAddress {
+    pub fn createForeignAddress(ptr: *const Builder, nameString: []const u8, typeIr: *const Type) error{DuplicateForeignAddress, OutOfMemory}!*const ForeignAddress {
         const self: *Builder = @constCast(ptr);
+
+        const name = try self.internName(nameString);
 
         var it = self.foreign_addresses.keyIterator();
         while (it.next()) |foreignAddressPtr| {
@@ -301,8 +313,10 @@ pub const Builder = struct {
     /// Otherwise a new `Effect` will be allocated.
     ///
     /// The `Effect` that is returned will be owned by this IR unit.
-    pub fn createEffect(ptr: *const Builder, name: *const Name, handlerSignatures: []*const Type) error{DuplicateEffect, OutOfMemory}!*const Effect {
+    pub fn createEffect(ptr: *const Builder, nameString: []const u8, handlerSignatures: []*const Type) error{DuplicateEffect, OutOfMemory}!*const Effect {
         const self: *Builder = @constCast(ptr);
+
+        const name = try self.internName(nameString);
 
         var it = self.effects.keyIterator();
         while (it.next()) |effectPtr| {
@@ -1345,7 +1359,7 @@ pub const TypeInfo = union(enum) {
     /// In Rir, functions always have a single parameter type, a single return value type,
     /// and may optionally have a single side effect type.
     ///
-    /// To represent a function:
+    /// To represent a function which:
     /// + Has no parameters: use `Nil` for the input type.
     /// + With multiple parameters: use `Product` for the input type.
     /// + With multiple return values: use `Product` for the output type.
@@ -1792,6 +1806,10 @@ pub const Module = struct {
     globals: Id.Set(*const Global, 80) = .{},
     /// The functions defined in this module.
     functions: Id.Set(*const Function, 80) = .{},
+    /// Fresh id generator
+    fresh_global_id: Id.of(Global) = .fromInt(1),
+    /// Fresh id generator
+    fresh_function_id: Id.of(Function) = .fromInt(1),
 
     fn init(root: *const Builder, id: Id.of(Module), name: *const Name) error{OutOfMemory}!*Module {
         const self = try root.allocator.create(Module);
@@ -1823,6 +1841,46 @@ pub const Module = struct {
 
         self.globals.deinit(self.root.allocator);
         self.functions.deinit(self.root.allocator);
+    }
+
+    pub fn createGlobal(
+        ptr: *const Module,
+        nameString: []const u8,
+        typeIr: *const Type,
+        initialValue: ?*const Constant,
+    ) !*const Global {
+        const self: *Module = @constCast(ptr);
+        // TODO: collision check
+        const id = self.fresh_global_id.next();
+        const name = try self.root.internName(nameString);
+
+        const global = try Global.init(self.root, self, id, name, typeIr);
+
+        if (initialValue) |value| {
+            global.initial_value = value;
+        }
+
+        try self.globals.put(self.root.allocator, global, {});
+
+        return global;
+    }
+
+    pub fn createFunction(
+        ptr: *const Module,
+        parentSet: ?*const HandlerSet,
+        nameString: []const u8,
+        typeIr: *const Type,
+    ) !*const Function {
+        const self: *Module = @constCast(ptr);
+        // TODO: collision check
+        const id = self.fresh_function_id.next();
+        const name = try self.root.internName(nameString);
+        // TODO: would be good to insert some debug sanity checks here like that the parentSet is in the same module
+        const function = try Function.init(self.root, self, parentSet, id, name, typeIr);
+
+        try self.functions.put(self.root.allocator, function, {});
+
+        return function;
     }
 
     pub fn onFormat(self: *const Module, formatter: anytype) !void {
@@ -1885,7 +1943,7 @@ pub const Global = struct {
     type: *const ir.Type,
     /// The initial value of this global variable, if any.
     /// Must be of the same type, if present.
-    initial_value: ?*Constant,
+    initial_value: ?*const Constant = null,
 
     fn init(root: *const Builder, module: *Module, id: Id.of(Global), name: *const Name, typeIr: *const ir.Type) error{OutOfMemory}!*Global {
         const self = try root.allocator.create(Global);
@@ -1934,10 +1992,17 @@ pub const Function = struct {
     handler_sets: Id.Set(*const HandlerSet, 80) = .{},
     /// Arena allocator owning all `Instruction`s referenced by this function.
     arena: std.heap.ArenaAllocator,
-    /// The first instruction in the function.
-    entry: *const Instruction,
-    /// Increments with each call of `instr`, used to assign unique ids to every instruction.
-    fresh: Id.of(Instruction) = .fromInt(1),
+    /// The first instruction in the function; all paths must begin here by the time we construct the graph.
+    begin: *const Instruction,
+    /// The last instruction in the function; all paths must end here by the time we construct the graph.
+    end: *const Instruction,
+
+    /// All instruction relations for the function are stored here in the form of use->def edges.
+    edges: EdgeMap = .empty,
+
+    const EdgeMap = pl.UniqueReprMap(*const Instruction, EdgeList, 80);
+    // Not a set because we can do for example `add x x`
+    const EdgeList = pl.ArrayList(UseDef);
 
     fn init(
         root: *const Builder,
@@ -1949,20 +2014,7 @@ pub const Function = struct {
     ) error{OutOfMemory}!*Function {
         const self = try root.allocator.create(Function);
 
-        var arena = std.heap.ArenaAllocator.init(root.allocator); // TODO: TypedArena providing slot reuse
-
-        const entry = arena.allocator().create(Instruction);
-
-        entry.* = Instruction {
-            .root = root,
-            .function = self,
-            .id = .fromInt(0),
-            .name = root.builtin.names.entry,
-            .type = root.builtin.types.noreturn,
-            .operation = .@"unreachable",
-            .inputs = &.{},
-            .outputs = &.{},
-        };
+        var arena = std.heap.ArenaAllocator.init(root.allocator);
 
         self.* = .{
             .root = root,
@@ -1972,10 +2024,146 @@ pub const Function = struct {
             .name = name,
             .type = typeIr,
             .arena = arena,
-            .entry = entry,
+            .begin = try arena.allocator().create(Instruction),
+            .end = try arena.allocator().create(Instruction),
+        };
+
+        try self.edges.ensureTotalCapacity(root.allocator, 1024);
+
+        @constCast(self.begin).* = Instruction {
+            .function = self,
+            .name = root.builtin.names.entry,
+            .type_cache = root.builtin.types.nil,
+            .operation = .begin,
+        };
+
+        @constCast(self.end).* = Instruction {
+            .function = self,
+            .name = root.builtin.names.end,
+            .type_cache = root.builtin.types.nil,
+            .operation = .join,
+        };
+
+        self.appendUseDef(self.end, .fromPtr(self.begin)) catch |err| {
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => unreachable,
+            }
         };
 
         return self;
+    }
+
+    fn getOrCreateEdgeList(
+        ptr: *const Function,
+        use: *const Instruction,
+    ) error{OutOfMemory}!*EdgeList {
+        const self: *Function = @constCast(ptr);
+
+        const getOrPut = try self.edges.getOrPut(self.root.allocator, use);
+        if (!getOrPut.found_existing) {
+            getOrPut.value_ptr.* = try EdgeList.initCapacity(self.root.allocator, 128);
+        }
+
+        return getOrPut.value_ptr;
+    }
+
+
+    /// Get a list of edges from `use` to any defs it references.
+    pub fn getUseDefs(
+        ptr: *const Function,
+        use: *const Instruction,
+    ) []const UseDef {
+        return (ptr.getOrCreateEdgeList(use) catch return &.{}).items;
+    }
+
+    /// Adds an edge from `use` to `def`, at the start of the list.
+    /// * This is a directed edge, meaning that `def` becomes a predecessor of `use`.
+    /// * This is an ordered insertion, other edges may be moved.
+    pub fn prependUseDef(
+        ptr: *const Function,
+        use: *const Instruction,
+        def: UseDef,
+    ) error{OutOfMemory, InvalidIndex, InvalidCycle}!void {
+        return ptr.insertUseDef(use, 0, def);
+    }
+
+    /// Adds an edge from `use` to `def`, at the end of the list.
+    /// * This is a directed edge, meaning that `def` becomes a predecessor of `use`.
+    pub fn appendUseDef(
+        ptr: *const Function,
+        use: *const Instruction,
+        def: UseDef,
+    ) error{OutOfMemory, InvalidCycle}!void {
+        const self: *Function = @constCast(ptr);
+
+        if (UseDef.fromPtr(use) == def) return error.InvalidCycle;
+
+        const edgeList = try self.getOrCreateEdgeList(use);
+
+        try edgeList.append(self.root.allocator, def);
+    }
+
+    /// Adds an edge from `use` to `def`.
+    /// * This is a directed edge, meaning that `def` becomes a predecessor of `use`.
+    pub fn insertUseDef(
+        ptr: *const Function,
+        use: *const Instruction,
+        index: usize,
+        def: UseDef,
+    ) error{OutOfMemory, InvalidIndex, InvalidCycle}!void {
+        const self: *Function = @constCast(ptr);
+
+        if (UseDef.fromPtr(use) == def) return error.InvalidCycle;
+
+        const edgeList = try self.getOrCreateEdgeList(use);
+
+        if (index <= edgeList.items.len) {
+            try edgeList.insert(self.root.allocator, index, def);
+        } else {
+            return error.InvalidIndex;
+        }
+    }
+
+    /// Replace an edge from `use` at the given index, referencing a new `def`.
+    /// * This is a directed edge, meaning that the old def is no longer a predecessor of `use`, if this is the only edge to it.
+    /// * Returns the replaced edge, if any.
+    pub fn replaceUseDef(
+        ptr: *const Function,
+        use: *const Instruction,
+        index: usize,
+        def: UseDef,
+    ) ?UseDef {
+        const self: *Function = @constCast(ptr);
+
+        if (self.edges.getPtr(use)) |defs| {
+            if (index < defs.items.len) {
+                const old = defs.items[index];
+                defs.items[index] = def;
+                return old;
+            }
+        }
+
+        return null;
+    }
+
+    /// Remove an edge from `use` to a def, by index.
+    /// * This is a directed edge, meaning that the old def is no longer a predecessor of `use`, if this is the only edge to it.
+    /// * This is a no-op if the edge does not exist.
+    /// * This is an ordered removal, other edges may be moved to fill a gap.
+    /// * Returns the removed edge, if any.
+    pub fn removeUseDef(
+        ptr: *const Function,
+        use: *const Instruction,
+        index: usize,
+    ) ?UseDef {
+        const self: *Function = @constCast(ptr);
+
+        if (self.edges.getPtr(use)) |defs| {
+            if (index < defs.items.len) return defs.orderedRemove(index);
+        }
+
+        return null;
     }
 
     fn deinit(ptr: *const Function) void {
@@ -1984,8 +2172,12 @@ pub const Function = struct {
         const allocator = self.root.allocator;
         defer allocator.destroy(self);
 
+        var edges_it = self.edges.valueIterator();
+        while (edges_it.next()) |list| list.deinit(allocator);
+
         self.handler_sets.deinit(allocator);
         self.arena.deinit();
+        self.edges.deinit(allocator);
     }
 
     pub fn onFormat(self: *const Function, formatter: anytype) !void {
@@ -1995,10 +2187,14 @@ pub const Function = struct {
     /// Creates a new default-initialized `Instruction` in this function.
     /// The instruction is allocated in an arena owned by the function,
     /// no memory management is necessary on behalf of the caller.
-    pub fn instr(ptr: *const Function, name: ?*const Name) error{OutOfMemory}!*const Instruction {
+    /// * Note this does not add the instruction to the function; the caller must do that manually
+    /// by attaching to `entry` or one of its descendants.
+    pub fn instr(ptr: *const Function, nameString: ?[]const u8, operation: Operation) error{OutOfMemory}!*const Instruction {
         const self: *Function = @constCast(ptr);
 
-        return Instruction.init(self, self.fresh.next(), name);
+        const name = if (nameString) |ns| try self.root.internName(ns) else null;
+
+        return Instruction.init(self, name, operation);
     }
 };
 
@@ -2032,127 +2228,79 @@ pub const Handler = struct {
 /// Intermediate representation of instructions in sea of nodes style;
 /// created and managed by `Function`s.
 pub const Instruction = struct {
-    /// The IR unit that owns this instruction.
-    root: *const Builder,
     /// The function that this instruction belongs to.
     function: *const Function,
-    /// The unique identifier of this instruction.
-    id: Id.of(Instruction),
     /// The name of this instruction, if any, for debugging purposes.
-    name: ?*const Name = null,
+    name: ?*const Name,
     /// The kind of operation being performed by this instruction.
-    operation: Operation = .@"unreachable",
-    /// The instructions or constants providing types/values/control used by this instruction; in the order they are used.
-    inputs: []const Input,
-    /// The instructions who use this instruction's output, be it data or control flow.
-    outputs: []const *const Instruction,
+    operation: Operation,
     /// The cache for the type of this instruction; use `getType` to access.
-    type_cache: ?*const Type = null,
+    type_cache: ?*const Type,
 
-    /// The maximum number of edges total, both in or out, for an instruction.
-    pub const MAX_EDGES = 128; // TODO: i have no idea if this is a reasonable number; do some testing when we have realistic irs to work with
-    /// The maximum number of edges per direction, in or out, for an instruction.
-    pub const MAX_EDGES_PER_SIDE = @divExact(MAX_EDGES, 2);
-
-    fn init(function: *Function, id: Id.of(Instruction), name: ?*const Name) error{OutOfMemory}!*const Instruction {
+    fn init(function: *Function, name: ?*const Name, operation: Operation) error{OutOfMemory}!*const Instruction {
         const self = try function.arena.allocator().create(Instruction);
-        const edges = try function.arena.allocator().alloc(*const Instruction, MAX_EDGES);
+        errdefer function.arena.allocator().destroy(self);
 
         self.* = Instruction {
-            .root = function.root,
             .function = function,
-            .id = id,
             .name = name,
-            .operation = .@"unreachable",
-            .inputs = @as(*Input, @ptrCast(edges.ptr))[0..0],
-            .outputs = (edges.ptr + MAX_EDGES_PER_SIDE)[0..0],
+            .operation = operation,
+            .type_cache = null,
         };
 
         return self;
     }
 
-    /// Sets the operation of this instruction to the provided value.
-    /// * This invalidates the type cache of this instruction.
-    pub fn setOperation(ptr: *const Instruction, operation: Operation) void {
-        const self: *Instruction = @constCast(ptr);
-        self.operation = operation;
-        self.type_cache = null;
-    }
+    /// Shortcut for chaining `Function.instr` and `Function.useDef`.
+    pub fn andThen(ptr: *const Instruction, nameString: ?[]const u8, operation: Operation) error{OutOfMemory}!*const Instruction {
+        const newInstr = try ptr.function.instr(nameString, operation);
 
-    /// The provided inputs are copied over the existing inputs.
-    /// * This invalidates the type cache of this instruction.
-    pub fn setInputs(ptr: *const Instruction, inputs: []const Input) error{TooManyEdges}!void {
-        const self: *Instruction = @constCast(ptr);
-
-        if (inputs.len > MAX_EDGES_PER_SIDE) {
-            return error.TooManyEdges;
-        }
-
-        for (self.inputs) |oldInput| {
-            oldInput.removeOutput(self);
-        }
-
-        self.inputs = @as([*]const Input, @ptrCast(self.inputs.ptr))[0..inputs.len];
-
-        @memcpy(@constCast(self.inputs), inputs);
-
-        for (self.inputs) |newInput| {
-            try newInput.addOutput(self);
-        }
-
-        self.type_cache = null;
-    }
-
-    /// Create a new instruction with this one as its first input.
-    pub fn andThen(self: *const Instruction, name: ?*const Name) !*const Instruction {
-        if (self.outputs.len >= MAX_EDGES_PER_SIDE) {
-            return error.TooManyEdges;
-        }
-
-        const instr = try self.function.instr(name);
-
-        try instr.setInputs(&.{.fromPtr(self)});
-
-        return instr;
-    }
-
-    fn addOutput(ptr: *const Instruction, output: *const Instruction) error{TooManyEdges}!void {
-        const self: *Instruction = @constCast(ptr);
-
-        if (self.outputs.len >= MAX_EDGES_PER_SIDE) {
-            return error.TooManyEdges;
-        }
-
-        @constCast(self.outputs.ptr)[self.outputs.len] = output;
-        self.outputs = self.outputs.ptr[0..self.outputs.len + 1];
-    }
-
-    fn removeOutput(ptr: *const Instruction, output: *const Instruction) void {
-        const self: *Instruction = @constCast(ptr);
-
-        for (self.outputs, 0..) |out, i| {
-            if (out == output) {
-                if (i + 1 < self.outputs.len) {
-                    @memcpy(@constCast(self.outputs[i..self.outputs.len - 1]), self.outputs[i + 1..self.outputs.len]);
-                }
-
-                self.outputs = self.outputs.ptr[0..self.outputs.len - 1];
-
-                return;
+        ptr.function.appendUseDef(newInstr, .fromPtr(ptr)) catch |err| {
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => unreachable,
             }
-        }
+        };
 
-        unreachable;
+        return newInstr;
+    }
+
+    /// Shortcut for `Function.insertUseDef`.
+    pub fn insertUseDef(ptr: *const Instruction, index: usize, useDef: UseDef) error{OutOfMemory, InvalidCycle, InvalidIndex}!void {
+        return ptr.function.insertUseDef(ptr, index, useDef);
+    }
+
+    /// Shortcut for `Function.appendUseDef`.
+    pub fn appendUseDef(ptr: *const Instruction, input: UseDef) error{OutOfMemory, InvalidCycle}!void {
+        return ptr.function.appendUseDef(ptr, input);
+    }
+
+    /// Shortcut for `Function.replaceUseDef`.
+    pub fn replaceUseDef(ptr: *const Instruction, index: usize, input: UseDef) ?UseDef {
+        return ptr.function.replaceUseDef(ptr, index, input);
+    }
+
+    /// Shortcut for `Function.removeUseDef`.
+    pub fn removeUseDef(ptr: *const Instruction, index: usize) ?UseDef {
+        return ptr.function.removeUseDef(ptr, index);
+    }
+
+    /// Marks this instruction as dirty, so that it will recompute its type the next time `getType` is called.
+    pub fn makeDirty(ptr: *const Instruction) void {
+        const self: *Instruction = @constCast(ptr);
+        self.type_cache = null;
     }
 
     /// Checks if the type cache is empty, or any input `isDirty`.
     pub fn isDirty(self: *const Instruction) bool {
-        return self.type_cache == null or self.hasDirtyInputs();
+        return self.type_cache == null or self.hasDirtyUseDefs();
     }
 
     /// Simply loops over inputs and checks if any of them `isDirty`.
-    pub fn hasDirtyInputs(self: *const Instruction) bool {
-        for (self.inputs) |input| {
+    pub fn hasDirtyUseDefs(self: *const Instruction) bool {
+        const useDefs = self.function.getUseDefs(self);
+
+        for (useDefs) |input| {
             if (input.isDirty()) return true;
         }
 
@@ -2164,7 +2312,7 @@ pub const Instruction = struct {
         const self: *Instruction = @constCast(ptr);
 
         if (self.type_cache) |typeCache| {
-            if (!self.hasDirtyInputs()) {
+            if (!self.hasDirtyUseDefs()) {
                 return typeCache;
             } else {
                 self.type_cache = null;
@@ -2176,48 +2324,52 @@ pub const Instruction = struct {
 
     /// Un-memoized version of `getType`.
     pub fn computeType(self: *const Instruction) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const ir.Type {
+        const useDefs = self.function.getUseDefs(self);
+
         return switch(self.operation) {
-            .nop => self.root.builtin.types.nil,
-            .breakpoint => self.root.builtin.types.nil,
-            .@"unreachable" => self.root.builtin.types.noreturn,
-            .trap => self.root.builtin.types.noreturn,
-            .@"return" => self.root.builtin.types.noreturn,
-            .cancel => self.root.builtin.types.noreturn,
-            .unconditional_branch => self.root.builtin.types.noreturn,
-            .conditional_branch => self.root.builtin.types.noreturn,
+            .nop => self.function.root.builtin.types.nil,
+            .begin => self.function.root.builtin.types.nil,
+            .join => self.function.root.builtin.types.nil,
+            .breakpoint => self.function.root.builtin.types.nil,
+            .@"unreachable" => self.function.root.builtin.types.noreturn,
+            .trap => self.function.root.builtin.types.noreturn,
+            .@"return" => self.function.root.builtin.types.noreturn,
+            .cancel => self.function.root.builtin.types.noreturn,
+            .unconditional_branch => self.function.root.builtin.types.nil,
+            .conditional_branch => self.function.root.builtin.types.nil,
             .phi =>
-                if (self.inputs.len == 0) error.InvalidInstruction
-                else try self.inputs[0].getType(),
-            .push_set => self.root.builtin.types.block,
-            .pop_set => self.root.builtin.types.nil,
+                if (useDefs.len == 0) error.InvalidInstruction
+                else try useDefs[0].getType(),
+            .push_set => self.function.root.builtin.types.block,
+            .pop_set => self.function.root.builtin.types.nil,
             .call =>
-                if (self.inputs.len == 0) error.InvalidInstruction
-                else (try (try self.inputs[0].getType()).info.coerceFunction()).output,
+                if (useDefs.len == 0) error.InvalidInstruction
+                else (try (try useDefs[0].getType()).info.coerceFunction()).output,
             .prompt =>
-                if (self.inputs.len == 0) error.InvalidInstruction
-                else (try (try self.inputs[0].getType()).info.coerceFunction()).output,
+                if (useDefs.len == 0) error.InvalidInstruction
+                else (try (try useDefs[0].getType()).info.coerceFunction()).output,
             .new_local =>
-                if (self.inputs.len == 0 or self.inputs[0].tag != .type) error.InvalidInstruction
-                else try self.root.internType(null, TypeInfo.localOf(self.inputs[0].forcePtr(Type))),
-            .set_local => self.root.builtin.types.nil,
+                if (useDefs.len == 0 or useDefs[0].tag != .type) error.InvalidInstruction
+                else try self.function.root.internType(null, TypeInfo.localOf(useDefs[0].forcePtr(Type))),
+            .set_local => self.function.root.builtin.types.nil,
             .get_local =>
-                if (self.inputs.len == 0) error.InvalidInstruction
+                if (useDefs.len == 0) error.InvalidInstruction
                 else checkLocal: {
-                    const info = (try self.inputs[0].getType()).info;
+                    const info = (try useDefs[0].getType()).info;
                     if (info != .local) return error.InvalidInstruction;
                     break :checkLocal info.local.element;
                 },
             inline .eq, .ne, .le, .lt, .ge, .gt =>
-                self.root.builtin.types.bool,
+                self.function.root.builtin.types.bool,
             inline .bit_and, .bit_or, .bit_xor, .bit_not, .bit_lshift, .bit_rshift_a, .bit_rshift_l =>
-                if (self.inputs.len == 0) error.InvalidInstruction
-                else try self.inputs[0].getType(),
+                if (useDefs.len == 0) error.InvalidInstruction
+                else try useDefs[0].getType(),
             inline .add, .sub, .mul, .div, .mod, .pow, .floor, .ceil, .trunc, .abs, .neg, .sqrt =>
-                if (self.inputs.len == 0) error.InvalidInstruction
-                else try self.inputs[0].getType(),
+                if (useDefs.len == 0) error.InvalidInstruction
+                else try useDefs[0].getType(),
             inline .convert, .bitcast =>
-                if (self.inputs.len == 0 or self.inputs[0].tag != .type) error.InvalidInstruction
-                else self.inputs[0].forcePtr(Type),
+                if (useDefs.len == 0 or useDefs[0].tag != .type) error.InvalidInstruction
+                else useDefs[0].forcePtr(Type),
         };
     }
 
@@ -2238,15 +2390,15 @@ pub const Instruction = struct {
 };
 
 /// The inputs to an ir `Instruction`.
-/// Inputs can be either constants or other instructions.
-pub const Input = packed struct {
+/// Can be either a constant, a type, or another instruction.
+pub const UseDef = packed struct {
     /// The kind of value carried by this input.
     tag: Tag,
     /// The address of the value carried by this input.
     ptr: u48,
 
-    /// Determine if the owner of this Input needs to recalculate its type.
-    pub fn isDirty(self: Input) bool {
+    /// Determine if the owner of this UseDef needs to recalculate its type.
+    pub fn isDirty(self: UseDef) bool {
         return switch (self.tag) {
             inline .type, .constant => false,
             .instruction => @as(*const Instruction, @ptrFromInt(self.ptr)).isDirty(),
@@ -2254,7 +2406,7 @@ pub const Input = packed struct {
     }
 
     /// Get the type of an input.
-    pub fn getType(self: Input) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const Type {
+    pub fn getType(self: UseDef) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const Type {
         return switch (self.tag) {
             .type => @as(*const Type, @ptrFromInt(self.ptr)).root.builtin.types.type,
             .constant => @as(*const Constant, @ptrFromInt(self.ptr)).data.type,
@@ -2262,19 +2414,19 @@ pub const Input = packed struct {
         };
     }
 
-    fn addOutput(self: Input, owner: *const Instruction) error{TooManyEdges}!void {
+    fn addOutput(self: UseDef, owner: *const Instruction) error{TooManyEdges}!void {
         if (self.toPtr(Instruction)) |instr| {
             try instr.addOutput(owner);
         }
     }
 
-    fn removeOutput(self: Input, owner: *const Instruction) void {
+    fn removeOutput(self: UseDef, owner: *const Instruction) void {
         if (self.toPtr(Instruction)) |instr| {
             instr.removeOutput(owner);
         }
     }
 
-    /// Marker for which kind of value is carried by an `Input`.
+    /// Marker for which kind of value is carried by an `UseDef`.
     pub const Tag = enum(u16) {
         /// Receives a type.
         type,
@@ -2286,29 +2438,29 @@ pub const Input = packed struct {
         /// Creates a new `Tag` from any type that is a valid input.
         pub fn fromType(comptime T: type) Tag {
             comptime return switch (T) {
-                *const Type => .type,
-                *const Constant => .constant,
-                *const Instruction => .instruction,
-                else => @compileError(@typeName(T) ++ " is not a valid Input type"),
+                *const Type, *Type => .type,
+                *const Constant, *Constant => .constant,
+                *const Instruction, *Instruction => .instruction,
+                else => @compileError(@typeName(T) ++ " is not a valid UseDef type"),
             };
         }
     };
 
-    /// Creates a new `Input` from a pointer to any type that is a valid input.
+    /// Creates a new `UseDef` from a pointer to any type that is a valid input.
     /// The type of the pointer is used to determine the `Tag` of the input.
     /// The pointer must be a valid pointer to the type.
-    pub fn fromPtr(ptr: anytype) Input {
+    pub fn fromPtr(ptr: anytype) UseDef {
         const tag = comptime Tag.fromType(@TypeOf(ptr));
 
-        return Input {
+        return UseDef {
             .tag = tag,
             .ptr = @intCast(@intFromPtr(ptr)),
         };
     }
 
-    /// Create a typed pointer from an Input.
-    /// The type of the parameter must match the tag of the Input, or else null is returned; see also `forcePtr`.
-    pub fn toPtr(self: Input, comptime T: type) ?*const T {
+    /// Create a typed pointer from an UseDef.
+    /// The type of the parameter must match the tag of the UseDef, or else null is returned; see also `forcePtr`.
+    pub fn toPtr(self: UseDef, comptime T: type) ?*const T {
         const tag = comptime Tag.fromType(*const T);
 
         if (self.tag != tag) return null;
@@ -2316,9 +2468,9 @@ pub const Input = packed struct {
         return @ptrFromInt(self.ptr);
     }
 
-    /// Create a typed pointer from an Input.
+    /// Create a typed pointer from an UseDef.
     /// Only checks that the tag matches the type in debug mode; see also `toPtr`.
-    pub fn forcePtr(self: Input, comptime T: type) *const T {
+    pub fn forcePtr(self: UseDef, comptime T: type) *const T {
         const tag = comptime Tag.fromType(*const T);
 
         std.debug.assert(self.tag == tag);
@@ -2331,6 +2483,10 @@ pub const Input = packed struct {
 pub const Operation = enum {
     /// No operation.
     nop,
+    /// Entry point pseudo-operation.
+    begin,
+    /// Join point pseudo-operation, representing the end of functions etc.
+    join,
     /// Indicates a breakpoint should be emitted in the output; skipped by optimizers.
     breakpoint,
     /// Indicates an undefined state; all uses may be discarded by optimizers.
@@ -2416,49 +2572,3 @@ pub const Operation = enum {
     /// Convert bits to a different type, changing the meaning without changing the bits.
     bitcast,
 };
-
-
-
-test "ir_basic_integration" {
-    const allocator = std.testing.allocator;
-
-    const instance = try ir.Builder.init(allocator);
-    defer instance.deinit();
-
-    const foo = try instance.internName("foo");
-    const bar = try instance.internName("bar");
-    const foo2 = try instance.internName("foo");
-
-    try std.testing.expectEqual(foo, foo2);
-    try std.testing.expect(foo != bar);
-
-    log.debug("foo: {} bar: {}", .{ foo, bar });
-
-    const i64Name = try instance.internName("i64");
-
-    log.debug("i64Name: {}", .{ i64Name });
-
-    const i64Type = try instance.internType(i64Name, ir.TypeInfo {
-        .integer = .{ .bit_size = 64, .signedness = .signed },
-    });
-
-    log.debug("I64: {}", .{ i64Type });
-
-
-    const aData = ir.ConstantData {
-        .type = i64Type,
-        .bytes = std.mem.asBytes(&@as(i64, -23)),
-    };
-
-    const bData = ir.ConstantData {
-        .type = i64Type,
-        .bytes = std.mem.asBytes(&@as(i64, 42)),
-    };
-
-    const a = try instance.internConstant(try instance.internName("a"), aData);
-    const b = try instance.internConstant(try instance.internName("b"), bData);
-    const a2 = try instance.internConstant(try instance.internName("a2"), aData);
-
-    try std.testing.expectEqual(a, a2);
-    try std.testing.expect(a != b);
-}
