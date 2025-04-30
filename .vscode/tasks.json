@@ -53,10 +53,10 @@
             "problemMatcher": "$zig",
         },
         {
-            "label": "unit-tests",
+            "label": "unit-test",
             "detail": "Runs all unit tests in the project",
             "type": "shell",
-            "command": "zig build unit-tests -freference-trace --prominent-compile-errors",
+            "command": "zig build unit-test -freference-trace --prominent-compile-errors",
             "group": {
                 "kind": "build",
                 "isDefault": false
