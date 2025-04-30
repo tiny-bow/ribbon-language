@@ -269,7 +269,9 @@ pub const Lexer0 = struct {
     /// The indentation levels at this point in the source code.
     indentation: [MAX_LEVELS]Level,
     /// The number of indentation levels currently in use.
-    levels: u8 = 0,
+    levels: u8 = 1,
+    level_change_queue: [MAX_LEVELS]Level = [1]Level{0} ** MAX_LEVELS,
+    levels_queued: u8 = 0,
     /// The current location in the source code.
     location: Location,
 
@@ -294,9 +296,7 @@ pub const Lexer0 = struct {
             .source = source,
             .iterator = try .from(.from(source)),
             .indentation = [1]Level{settings.startingIndent} ++ ([1]Level{0} ** (MAX_LEVELS - 1)),
-            .levels = 1,
             .location = Location {
-                .buffer = 0,
                 .visual = settings.attrOffset,
             },
         };
@@ -349,6 +349,20 @@ pub const Lexer0 = struct {
         var start = self.location;
 
         var tag: TokenType = undefined;
+
+        if (self.levels_queued > 0) {
+            log.debug("processing queued indentation level {}", .{self.levels_queued});
+
+            self.levels_queued -= 1;
+
+            return Token{
+                .location = start,
+                .tag = .linebreak,
+                .data = TokenData{
+                    .linebreak = .{ .n = 0, .i = -1 },
+                },
+            };
+        }
 
         const data = char_switch: switch (try self.nextChar() orelse return null) {
             '\n' => {
@@ -404,7 +418,11 @@ pub const Lexer0 = struct {
 
                     self.levels = newIndentIndex + 1;
 
-                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = -@as(i32, @intCast(oldLen - self.levels)) } };
+                    const level_delta = oldLen - self.levels;
+
+                    self.levels_queued = level_delta - 1;
+
+                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = -1 } };
                 } else {
                     log.debug("same indentation level {} ({})", .{ self.levels - 1, n });
 
@@ -494,11 +512,12 @@ pub const Lexer0 = struct {
 test "lexer_basic_integration" {
     var lexer = try lexWithPeek(.{},
         \\test
-        \\  [
-        \\      1,
-        \\      2,
-        \\      3
-        \\  ]
+        \\    foo
+        \\        [
+        \\            1,
+        \\            2,
+        \\            3
+        \\        ]
         \\
     );
 
@@ -509,6 +528,16 @@ test "lexer_basic_integration" {
             .location = undefined,
             .tag = .sequence,
             .data = .{ .sequence = .fromSlice("test") },
+        },
+        .{
+            .location = undefined,
+            .tag = .linebreak,
+            .data = .{ .linebreak = .{ .n = 1, .i = 1 } },
+        },
+        .{
+            .location = undefined,
+            .tag = .sequence,
+            .data = .{ .sequence = .fromSlice("foo") },
         },
         .{
             .location = undefined,
@@ -574,6 +603,11 @@ test "lexer_basic_integration" {
             .location = undefined,
             .tag = .linebreak,
             .data = .{ .linebreak = .{ .n = 1, .i = -1 } },
+        },
+        .{
+            .location = undefined,
+            .tag = .linebreak,
+            .data = .{ .linebreak = .{ .n = 0, .i = -1 } },
         },
     };
 
