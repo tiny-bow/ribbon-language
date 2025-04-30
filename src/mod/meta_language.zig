@@ -16,13 +16,18 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
+/// A position in the source code, in terms of the buffer.
 pub const BufferPosition = u64;
 
+/// A position in the source code, in terms of the line and column.
 pub const VisualPosition = packed struct {
+    /// 1-based line number.
     line: u32 = 1,
+    /// 1-based column number.
     column: u32 = 1,
 };
 
+/// A location in the source code, both buffer-wise and line and column.
 pub const Location = packed struct {
     buffer: BufferPosition = 0,
     visual: VisualPosition = .{},
@@ -31,12 +36,71 @@ pub const Location = packed struct {
     }
 };
 
-pub const Token = struct {
+/// A token produced by the lexer.
+pub const Token = extern struct {
+    /// The original location of the token in the source code.
     location: Location,
+    /// The type of token data contained in this token.
+    tag: TokenType,
+    /// The actual value of the token.
     data: TokenData,
+
+    pub fn hash32(self: *const Token) u32 {
+        var hasher = std.hash.Fnv1a_32.init();
+        hasher.update(std.mem.asBytes(self.tag));
+        hasher.update(std.mem.asBytes(self.data));
+        return hasher.final();
+    }
+
+    pub fn format(self: Token, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self.tag) {
+            .sequence => {
+                const s = self.data.sequence;
+                try writer.print("s⟨{s}⟩", .{ s });
+            },
+            .linebreak => {
+                const lb = self.data.linebreak;
+
+                if (lb.i > 0) {
+                    try writer.print("b⟨⇓{}⇒{}⟩", .{ lb.n, lb.i });
+                } else if (lb.i < 0) {
+                    try writer.print("b⟨⇓{}⇐{}⟩", .{ lb.n, -lb.i });
+                } else {
+                    try writer.print("b⟨⇓{}⟩", .{ lb.n });
+                }
+            },
+            .special => {
+                const p = self.data.special;
+
+                if (p.escaped) {
+                    try writer.print("p⟨\\{u}⟩", .{ p.punctuation.toChar() });
+                } else {
+                    try writer.print("p⟨{u}⟩", .{ p.punctuation.toChar() });
+                }
+            },
+        }
+    }
 };
 
-pub const TokenData = union(enum) {
+/// This is an enumeration of the types of tokens that can be produced by the lexer.
+pub const TokenType = enum (u8) {
+    /// A sequence of characters that do not fit the other categories,
+    /// and contain no control characters or whitespace.
+    sequence = 0,
+    /// \n * `n` new lines with `i`* relative indentation change.
+    ///
+    /// * provided in text-format-agnostic "levels";
+    /// to get actual indentations inspect column of the next token
+    linebreak = 1,
+    /// Special lexical control characters, such as `{`, `\"`, etc.
+    special = 2,
+};
+
+/// This is a packed union of all the possible types of tokens that can be produced by the lexer.
+pub const TokenData = packed union {
+    /// a sequence of characters that do not fit the other categories,
+    /// and contain no control characters or whitespace.
+    sequence: common.Id.Buffer(u8, .constant),
     /// \n * `n` new lines with `i`* relative indentation change.
     ///
     /// * provided in text-format-agnostic "levels";
@@ -47,34 +111,6 @@ pub const TokenData = union(enum) {
     },
     /// Special lexical control characters, such as `{`, `\"`, etc.
     special: Special,
-    /// a sequence of characters that do not fit the above categories,
-    /// and contain no control characters or whitespace.
-    sequence: []const u8,
-
-
-    pub fn format(self: *const TokenData, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        switch (self.*) {
-            .linebreak => |lb| {
-                if (lb.i > 0) {
-                    try writer.print("b⟨⇓{}⇒{}⟩", .{ lb.n, lb.i });
-                } else if (lb.i < 0) {
-                    try writer.print("b⟨⇓{}⇐{}⟩", .{ lb.n, -lb.i });
-                } else {
-                    try writer.print("b⟨⇓{}⟩", .{ lb.n });
-                }
-            },
-            .special => |s| {
-                if (s.escaped) {
-                    try writer.print("p⟨\\{u}⟩", .{ s.punctuation.toChar() });
-                } else {
-                    try writer.print("p⟨{u}⟩", .{ s.punctuation.toChar() });
-                }
-            },
-            .sequence => |seq| {
-                try writer.print("s⟨{s}⟩", .{ seq });
-            },
-        }
-    }
 };
 
 /// While we are trying to allow as much syntactic flexibility as we can, we must consider some
@@ -205,13 +241,29 @@ pub fn lex(
     allocator: std.mem.Allocator,
     settings: Lexer0.Settings,
     source: []const u8,
-) Lexer0.Error!Lexer1 {
+) LexicalError!Lexer1 {
     const lexer = try Lexer0.init(allocator, settings, source);
     return try Lexer1.from(lexer);
 }
 
 /// Lexical analysis abstraction with one token lookahead.
-pub const Lexer1 = common.PeekableIterator(Lexer0, Token, .use_try(Lexer0.Error));
+pub const Lexer1 = common.PeekableIterator(Lexer0, Token, .use_try(LexicalError));
+
+
+/// Errors that can occur in the lexer.
+pub const LexicalError = error {
+    OutOfMemory,
+    /// The lexer encountered bytes that were not valid utf-8.
+    BadEncoding,
+    /// The lexer encountered the end of input while processing a compound token.
+    UnexpectedEof,
+    /// The lexer encountered a utf-valid but unexpected codepoint or combination thereof.
+    UnexpectedInput,
+    /// The lexer encountered an unexpected indentation level;
+    /// * ie an indentation level that un-indents the current level,
+    /// but does not match any existing level.
+    UnexpectedIndent,
+};
 
 /// Basic lexical analysis abstraction, no lookahead.
 pub const Lexer0 = struct {
@@ -226,20 +278,8 @@ pub const Lexer0 = struct {
     /// The current location in the source code.
     location: Location,
 
-    /// Errors that can occur during lexical analysis.
-    pub const Error = error {
-        OutOfMemory,
-        /// The lexer encountered bytes that were not valid utf-8.
-        BadEncoding,
-        /// The lexer encountered the end of input while processing a compound token.
-        UnexpectedEof,
-        /// The lexer encountered a utf-valid but unexpected codepoint or combination thereof.
-        UnexpectedInput,
-        /// The lexer encountered an unexpected indentation level;
-        /// * ie an indentation level that un-indents the current level,
-        /// but does not match any existing level.
-        UnexpectedIndent,
-    };
+    /// Alias for `LexicalError`.
+    pub const Error = LexicalError;
 
     /// Lexical analysis settings.
     pub const Settings = struct {
@@ -323,9 +363,13 @@ pub const Lexer0 = struct {
     pub fn next(self: *Lexer0) Error!?Token {
         var start = self.location;
 
+        var tag: TokenType = undefined;
+
         const data = char_switch: switch (try self.nextChar() orelse return null) {
             '\n' => {
                 log.debug("processing line break", .{});
+
+                tag = .linebreak;
 
                 var n: u32 = 1;
 
@@ -382,6 +426,7 @@ pub const Lexer0 = struct {
                 }
             },
             '\\' => {
+                tag = .special;
                 if (try self.peekChar()) |pk| {
                     if (Punctuation.castChar(pk)) |esc| {
                         try self.advanceChar();
@@ -413,10 +458,14 @@ pub const Lexer0 = struct {
                 }
 
                 if (Punctuation.castChar(@intCast(x))) |p| {
+                    tag = .special;
+
                     log.debug("punctuation {u} (0x{x:0>2})", .{p.toChar(), p.toChar()});
 
                     break :char_switch TokenData { .special = .{ .punctuation = p, .escaped = false } };
                 }
+
+                tag = .sequence;
 
                 log.debug("processing sequence", .{});
 
@@ -443,12 +492,13 @@ pub const Lexer0 = struct {
 
                 log.debug("sequence {s}", .{seq});
 
-                break :char_switch TokenData { .sequence = seq };
+                break :char_switch TokenData { .sequence = .fromSlice(seq) };
             }
         };
 
         return Token {
             .location = start,
+            .tag = tag,
             .data = data,
         };
     }
@@ -470,21 +520,77 @@ test "lexer_basic_integration" {
 
     defer lexer.deinit();
 
-    const expect = [_]TokenData {
-        .{ .sequence = "test" },
-        .{ .linebreak = .{ .n = 1, .i = 1 } },
-        .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar('[') } },
-        .{ .linebreak = .{ .n = 1, .i = 1 } },
-        .{ .sequence = "1" },
-        .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(',') } },
-        .{ .linebreak = .{ .n = 1, .i = 0 } },
-        .{ .sequence = "2" },
-        .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(',') } },
-        .{ .linebreak = .{ .n = 1, .i = 0 } },
-        .{ .sequence = "3" },
-        .{ .linebreak = .{ .n = 1, .i = -1 } },
-        .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(']') } },
-        .{ .linebreak = .{ .n = 1, .i = -1 } },
+    const expect = [_]Token {
+        .{
+            .location = undefined,
+            .tag = .sequence,
+            .data = .{ .sequence = .fromSlice("test") },
+        },
+        .{
+            .location = undefined,
+            .tag = .linebreak,
+            .data = .{ .linebreak = .{ .n = 1, .i = 1 } },
+        },
+        .{
+            .location = undefined,
+            .tag = .special,
+            .data = .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar('[') } },
+        },
+        .{
+            .location = undefined,
+            .tag = .linebreak,
+            .data = .{ .linebreak = .{ .n = 1, .i = 1 } },
+        },
+        .{
+            .location = undefined,
+            .tag = .sequence,
+            .data = .{ .sequence = .fromSlice("1") },
+        },
+        .{
+            .location = undefined,
+            .tag = .special,
+            .data = .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(',') } },
+        },
+        .{
+            .location = undefined,
+            .tag = .linebreak,
+            .data = .{ .linebreak = .{ .n = 1, .i = 0 } },
+        },
+        .{
+            .location = undefined,
+            .tag = .sequence,
+            .data = .{ .sequence = .fromSlice("2") },
+        },
+        .{
+            .location = undefined,
+            .tag = .special,
+            .data = .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(',') } },
+        },
+        .{
+            .location = undefined,
+            .tag = .linebreak,
+            .data = .{ .linebreak = .{ .n = 1, .i = 0 } },
+        },
+        .{
+            .location = undefined,
+            .tag = .sequence,
+            .data = .{ .sequence = .fromSlice("3") },
+        },
+        .{
+            .location = undefined,
+            .tag = .linebreak,
+            .data = .{ .linebreak = .{ .n = 1, .i = -1 } },
+        },
+        .{
+            .location = undefined,
+            .tag = .special,
+            .data = .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(']') } },
+        },
+        .{
+            .location = undefined,
+            .tag = .linebreak,
+            .data = .{ .linebreak = .{ .n = 1, .i = -1 } },
+        },
     };
 
     for (expect) |e| {
@@ -496,18 +602,22 @@ test "lexer_basic_integration" {
         if (it) |tok| {
             log.debug("{} to {}: {} (expecting {})\n", .{ tok.location, lexer.inner.location, tok.data, e });
 
-            switch (e) {
-                .sequence => |s| {
+            try std.testing.expectEqual(e.tag, tok.tag);
+            switch (e.tag) {
+                .sequence => {
+                    const s = e.data.sequence;
                     try std.testing.expectEqual(.sequence, @as(std.meta.Tag(TokenData), tok.data));
-                    try std.testing.expectEqualSlices(u8, s, tok.data.sequence);
+                    try std.testing.expectEqualSlices(u8, s.asSlice(), tok.data.sequence.asSlice());
                 },
 
-                .special => |p| {
+                .special => {
+                    const p = e.data.special;
                     try std.testing.expectEqual(.special, @as(std.meta.Tag(TokenData), tok.data));
                     try std.testing.expectEqual(p, tok.data.special);
                 },
 
-                .linebreak => |l| {
+                .linebreak => {
+                    const l = e.data.linebreak;
                     try std.testing.expectEqual(.linebreak, @as(std.meta.Tag(TokenData), tok.data));
                     try std.testing.expectEqual(l.n, tok.data.linebreak.n);
                     try std.testing.expectEqual(l.i, tok.data.linebreak.i);
@@ -521,3 +631,286 @@ test "lexer_basic_integration" {
 
     try std.testing.expectEqual(lexer.inner.source.len, lexer.inner.location.buffer);
 }
+
+/// Errors that can occur in the parser.
+pub const SyntaxError = error {
+    /// The parser encountered an unexpected token.
+    UnexpectedToken,
+} || LexicalError;
+
+/// Pratt parser.
+pub const Parser = struct {
+    /// The allocator to store parsed expressions in.
+    allocator: std.mem.Allocator,
+    /// The syntax used by this parser.
+    syntax: *Syntax,
+    /// Token stream being parsed.
+    lexer: Lexer1,
+
+    /// Alias for `SyntaxError`.
+    pub const Error = SyntaxError;
+
+    /// Create a new parser.
+    pub fn init(
+        allocator: std.mem.Allocator,
+        syntax: *Syntax,
+        lexer: Lexer1,
+    ) Parser {
+        return Parser{
+            .allocator = allocator,
+            .syntax = syntax,
+            .lexer = lexer,
+        };
+    }
+
+    /// Deinitialize the parser.
+    /// * No effect on output ast or input source.
+    pub fn deinit(self: *Parser) void {
+        self.lexer.deinit();
+    }
+
+
+    /// Run the pratt algorithm at the current offset in the lexer stream.
+    pub fn pratt(
+        self: *Parser,
+        binding_power: i64,
+    ) Error!?Expr {
+        var lexer_save_state = self.lexer;
+        var out: Expr = undefined;
+        var err: SyntaxError = undefined;
+
+        const first_token = try self.lexer.next() orelse return null;
+
+        const nuds = try self.syntax.findNuds(&first_token);
+
+        if (nuds.len == 0) {
+            self.lexer = lexer_save_state;
+            return error.UnexpectedToken;
+        }
+
+        if (nuds[0].binding_power > binding_power) return null;
+
+        var lhs = nuds: for (nuds) |nud| {
+            switch (nud.invoke(.{self, nud.binding_power, first_token, &out, &err})) {
+                .okay => break :nuds out,
+                .panic => return err,
+                .reject => continue :nuds,
+            }
+        } else {
+            return error.UnexpectedToken;
+        };
+
+
+        lexer_save_state = self.lexer;
+
+        while (try self.lexer.next()) |token| {
+            const leds = try self.syntax.findLeds(&token);
+
+            if (leds.len == 0 or leds[0].binding_power > binding_power) {
+                self.lexer = lexer_save_state;
+                return lhs;
+            }
+
+            leds: for (leds) |led|{
+                switch (led.invoke(.{self, lhs, led.binding_power, token, &out, &err})) {
+                    .okay => lhs = out,
+                    .panic => return err,
+                    .reject => continue :leds,
+                }
+            }
+
+            lexer_save_state = self.lexer;
+        }
+
+        return lhs;
+    }
+};
+
+/// Extern signal for parser callbacks.
+pub const ParserSignal = enum(i8) {
+    /// Continue parsing with the result of this pattern.
+    okay = 0,
+    /// Continue parsing with a different pattern, this one did not match.
+    reject = 1,
+    /// Stop parsing.
+    panic = -1,
+};
+
+
+
+pub fn PatternSet(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        const Data = struct {
+            tag: TokenType,
+            data: ?TokenData,
+            binding_power: i16,
+            userdata: ?*anyopaque,
+            callback: *const T,
+        };
+
+        pub const QueryResult = struct {
+            binding_power: i16,
+            userdata: ?*anyopaque,
+            callback: *const T,
+
+            pub fn invoke(
+                self: *const QueryResult,
+                args: anytype,
+            ) ParserSignal {
+                return @call(.auto, self.callback, .{self.userdata} ++ args);
+            }
+        };
+
+        entries: std.MultiArrayList(Data) = .empty,
+        query_cache: pl.ArrayList(QueryResult) = .empty,
+
+        pub const empty = Self { .entries = .empty };
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.entries.deinit(allocator);
+        }
+
+        pub fn bindPattern(
+            self: *Self, allocator: std.mem.Allocator,
+            tag: TokenType, data: ?TokenData, binding_power: i16,
+            userdata: ?*anyopaque, callback: *const T,
+        ) error{OutOfMemory}!void {
+            try self.entries.append(allocator, Data {
+                .tag = tag,
+                .data = data,
+                .binding_power = binding_power,
+                .userdata = userdata,
+                .callback = callback,
+            });
+        }
+
+        /// Find the patterns matching a given token, if any.
+        pub fn findPatterns(
+            self: *const PatternSet(T), allocator: std.mem.Allocator,
+            token: *const Token,
+        ) error{OutOfMemory}![]const QueryResult {
+            const tags = self.entries.items(.tag);
+            const data = self.entries.items(.data);
+            const bps = self.entries.items(.binding_power);
+            const userdata = self.entries.items(.userdata);
+            const callbacks = self.entries.items(.callback);
+
+            @constCast(self).query_cache.clearRetainingCapacity();
+
+            for (tags, 0..) |tag, index| {
+                if (tag != token.tag) continue;
+
+                if (data[index]) |*key_data| {
+                    switch (tag) {
+                        .sequence => {
+                            if (!std.mem.eql(u8, key_data.sequence.asSlice(), token.data.sequence.asSlice())) continue;
+                        },
+                        .linebreak => {
+                            if (key_data.linebreak.n != token.data.linebreak.n
+                            or  key_data.linebreak.i != token.data.linebreak.i) continue;
+                        },
+                        .special => {
+                            if (key_data.special.punctuation != token.data.special.punctuation
+                            or  key_data.special.escaped != token.data.special.escaped) continue;
+                        },
+                    }
+                }
+
+                try @constCast(self).query_cache.append(allocator, .{.binding_power = bps[index], .userdata = userdata[index], .callback = callbacks[index]});
+            }
+
+            std.mem.sort(
+                QueryResult,
+                self.query_cache.items,
+                {},
+                struct {
+                    pub fn query_result_sort(_: void, a: QueryResult, b: QueryResult) bool {
+                        return a.binding_power > b.binding_power;
+                    }
+                }.query_result_sort
+            );
+
+            return self.query_cache.items;
+        }
+    };
+}
+
+
+/// Defines the possible syntax accepted by a Parser.
+pub const Syntax = struct {
+    /// Allocator providing all Syntax memory.
+    allocator: std.mem.Allocator,
+
+    /// Nud patterns for known token types.
+    nuds: PatternSet(Nud) = .empty,
+    /// Led patterns for known token types.
+    leds: PatternSet(Led) = .empty,
+
+    /// Initialize a new, empty syntax.
+    pub fn init(
+        allocator: std.mem.Allocator,
+    ) Syntax {
+        return Syntax{
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *Syntax) void {
+        self.nuds.deinit(self.allocator);
+        self.leds.deinit(self.allocator);
+    }
+
+    pub fn bindNud(
+        self: *Syntax,
+        tag: TokenType,
+        data: ?TokenData,
+        binding_power: i16,
+        userdata: ?*anyopaque,
+        callback: *const Nud,
+    ) error{OutOfMemory}!void {
+        return self.nuds.bindPattern(self.allocator, tag, data, binding_power, userdata, callback);
+    }
+
+    pub fn bindLed(
+        self: *Syntax,
+        tag: TokenType,
+        data: ?TokenData,
+        binding_power: i16,
+        userdata: ?*anyopaque,
+        callback: *const Led,
+    ) error{OutOfMemory}!void {
+        return self.leds.bindPattern(self.allocator, tag, data, binding_power, userdata, callback);
+    }
+
+    /// Find the nuds matching a given token, if any.
+    pub fn findNuds(self: *const Syntax, token: *const Token) error{OutOfMemory}![]const PatternSet(Nud).QueryResult {
+        return self.nuds.findPatterns(self.allocator, token);
+    }
+
+    /// Find the leds matching a given token, if any.
+    pub fn findLeds(self: *const Syntax, token: *const Token) error{OutOfMemory}![]const PatternSet(Led).QueryResult {
+        return self.leds.findPatterns(self.allocator, token);
+    }
+};
+
+/// A nud is a function/closure that takes a parser and a token,
+/// and parses some subset of the source code as a prefix expression.
+pub const Nud = fn (userdata: ?*anyopaque, parser: *Parser, bp: i16, token: Token, out: *Expr, err: *SyntaxError) callconv(.C) ParserSignal;
+
+/// A led is a function/closure that takes a parser and a token, as well as a left hand side expression,
+/// and parses some subset of the source code as an infix or postfix expression.
+pub const Led = fn (userdata: ?*anyopaque, parser: *Parser, lhs: Expr, bp: i16, token: Token, out: *Expr, err: *SyntaxError) callconv(.C) ParserSignal;
+
+/// An abstract syntax tree node yielded by the meta language parser.
+pub const Expr = extern struct {
+    /// The source location where the expression began.
+    location: Location,
+    /// The type of the expression.
+    type: common.Id.of(Expr),
+    /// The token that generated this expression.
+    token: Token,
+    /// Subexpressions of this expression, if any.
+    operands: common.Id.Buffer(Expr, .constant),
+};
