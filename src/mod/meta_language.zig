@@ -45,18 +45,11 @@ pub const Token = extern struct {
     /// The actual value of the token.
     data: TokenData,
 
-    pub fn hash32(self: *const Token) u32 {
-        var hasher = std.hash.Fnv1a_32.init();
-        hasher.update(std.mem.asBytes(self.tag));
-        hasher.update(std.mem.asBytes(self.data));
-        return hasher.final();
-    }
-
     pub fn format(self: Token, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         switch (self.tag) {
             .sequence => {
                 const s = self.data.sequence;
-                try writer.print("s⟨{s}⟩", .{ s });
+                try writer.print("s⟨{s}⟩", .{ s.asSlice() });
             },
             .linebreak => {
                 const lb = self.data.linebreak;
@@ -237,12 +230,11 @@ pub const CodepointIterator = struct {
 };
 
 /// Create a new lexer for a given source, allowing single token lookahead.
-pub fn lex(
-    allocator: std.mem.Allocator,
+pub fn lexWithPeek(
     settings: Lexer0.Settings,
     source: []const u8,
 ) LexicalError!Lexer1 {
-    const lexer = try Lexer0.init(allocator, settings, source);
+    const lexer = try Lexer0.init(settings, source);
     return try Lexer1.from(lexer);
 }
 
@@ -265,16 +257,19 @@ pub const LexicalError = error {
     UnexpectedIndent,
 };
 
+pub const Level = u16;
+pub const MAX_LEVELS = 32;
+
 /// Basic lexical analysis abstraction, no lookahead.
 pub const Lexer0 = struct {
-    /// The allocator used to allocate temporary memory for the lexer.
-    allocator: std.mem.Allocator,
     /// Utf8 source code being lexically analyzed.
     source: []const u8,
     /// Iterator over `source`.
     iterator: common.PeekableIterator(CodepointIterator, pl.Char, .use_try(CodepointIterator.Error)),
-    /// The current location in the source code.
-    indentation: pl.ArrayList(u32),
+    /// The indentation levels at this point in the source code.
+    indentation: [MAX_LEVELS]Level,
+    /// The number of indentation levels currently in use.
+    levels: u8 = 0,
     /// The current location in the source code.
     location: Location,
 
@@ -285,36 +280,26 @@ pub const Lexer0 = struct {
     pub const Settings = struct {
         /// If you are analyzing a subsection of a file that is itself indented,
         /// set this to the indentation level of the surrounding text.
-        startingIndent: u32 = 0,
+        startingIndent: Level = 0,
         /// The offset to apply to the visual position (line and column) of the lexer,
         /// when creating token locations.
         attrOffset: VisualPosition = .{},
     };
 
     /// Initialize a new lexer for a given source.
-    pub fn init(allocator: std.mem.Allocator, settings: Settings, source: []const u8) error{OutOfMemory, BadEncoding}!Lexer0 {
-        var indentation: pl.ArrayList(u32) = .empty;
-
-        try indentation.append(allocator, settings.startingIndent);
-
+    pub fn init(settings: Settings, source: []const u8) error{BadEncoding}!Lexer0 {
         log.debug("Lexing string ⟨{s}⟩", .{source});
 
-        return Lexer0{
-            .allocator = allocator,
+        return Lexer0 {
             .source = source,
             .iterator = try .from(.from(source)),
-            .indentation = indentation,
+            .indentation = [1]Level{settings.startingIndent} ++ ([1]Level{0} ** (MAX_LEVELS - 1)),
+            .levels = 1,
             .location = Location {
                 .buffer = 0,
                 .visual = settings.attrOffset,
             },
         };
-    }
-
-    /// Free all temporary memory allocated by the lexer.
-    /// * No effect on output tokens or input source.
-    pub fn deinit(self: *Lexer0) void {
-        self.indentation.deinit(self.allocator);
     }
 
     /// Determine whether the lexer has processed the last character in the source code.
@@ -355,8 +340,8 @@ pub const Lexer0 = struct {
 
     /// Get the current indentation level.
     pub fn currentIndentation(self: *const Lexer0) u32 {
-        std.debug.assert(self.indentation.items.len > 0);
-        return self.indentation.items[self.indentation.items.len - 1];
+        std.debug.assert(self.levels > 0);
+        return self.indentation[self.levels - 1];
     }
 
     /// Get the next token from the lexer's source code.
@@ -388,20 +373,21 @@ pub const Lexer0 = struct {
                 const oldIndent = self.currentIndentation();
                 const newIndent = self.location.visual.column - 1;
 
-                const oldLen = self.indentation.items.len;
+                const oldLen = self.levels;
                 std.debug.assert(oldLen > 0);
 
                 if (newIndent > oldIndent) {
                     log.debug("increasing indentation to {} ({})", .{ oldLen, newIndent });
 
-                    try self.indentation.append(self.allocator, newIndent);
+                    self.indentation[self.levels] = @intCast(newIndent); // TODO: check for overflow?
+                    self.levels += 1;
 
                     break :char_switch TokenData { .linebreak = .{ .n = n, .i = 1 } };
                 } else if (newIndent < oldIndent) {
                     // we need to traverse back down the indentation stack until we find the right level
-                    var newIndentIndex = self.indentation.items.len - 1;
+                    var newIndentIndex = self.levels - 1;
                     while (true) {
-                        const indent = self.indentation.items[newIndentIndex];
+                        const indent = self.indentation[newIndentIndex];
                         log.debug("checking vs indentation level {} ({})", .{ newIndentIndex, indent });
 
                         if (indent == newIndent) break;
@@ -416,11 +402,11 @@ pub const Lexer0 = struct {
 
                     log.debug("decreasing indentation to {} ({})", .{ newIndentIndex, newIndent });
 
-                    self.indentation.shrinkRetainingCapacity(newIndentIndex + 1);
+                    self.levels = newIndentIndex + 1;
 
-                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = -@as(i32, @intCast(oldLen - self.indentation.items.len)) } };
+                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = -@as(i32, @intCast(oldLen - self.levels)) } };
                 } else {
-                    log.debug("same indentation level {} ({})", .{ self.indentation.items.len - 1, n });
+                    log.debug("same indentation level {} ({})", .{ self.levels - 1, n });
 
                     break :char_switch TokenData { .linebreak = .{ .n = n, .i = 0 } };
                 }
@@ -506,9 +492,7 @@ pub const Lexer0 = struct {
 
 
 test "lexer_basic_integration" {
-    const allocator = std.testing.allocator;
-
-    var lexer = try lex(allocator, .{},
+    var lexer = try lexWithPeek(.{},
         \\test
         \\  [
         \\      1,
@@ -606,19 +590,16 @@ test "lexer_basic_integration" {
             switch (e.tag) {
                 .sequence => {
                     const s = e.data.sequence;
-                    try std.testing.expectEqual(.sequence, @as(std.meta.Tag(TokenData), tok.data));
                     try std.testing.expectEqualSlices(u8, s.asSlice(), tok.data.sequence.asSlice());
                 },
 
                 .special => {
                     const p = e.data.special;
-                    try std.testing.expectEqual(.special, @as(std.meta.Tag(TokenData), tok.data));
                     try std.testing.expectEqual(p, tok.data.special);
                 },
 
                 .linebreak => {
                     const l = e.data.linebreak;
-                    try std.testing.expectEqual(.linebreak, @as(std.meta.Tag(TokenData), tok.data));
                     try std.testing.expectEqual(l.n, tok.data.linebreak.n);
                     try std.testing.expectEqual(l.i, tok.data.linebreak.i);
                 },
@@ -645,7 +626,7 @@ pub const Parser = struct {
     /// The syntax used by this parser.
     syntax: *Syntax,
     /// Token stream being parsed.
-    lexer: Lexer1,
+    lexer: Lexer0,
 
     /// Alias for `SyntaxError`.
     pub const Error = SyntaxError;
@@ -654,7 +635,7 @@ pub const Parser = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         syntax: *Syntax,
-        lexer: Lexer1,
+        lexer: Lexer0,
     ) Parser {
         return Parser{
             .allocator = allocator,
@@ -663,21 +644,16 @@ pub const Parser = struct {
         };
     }
 
-    /// Deinitialize the parser.
-    /// * No effect on output ast or input source.
-    pub fn deinit(self: *Parser) void {
-        self.lexer.deinit();
-    }
-
 
     /// Run the pratt algorithm at the current offset in the lexer stream.
     pub fn pratt(
         self: *Parser,
         binding_power: i64,
     ) Error!?Expr {
-        var lexer_save_state = self.lexer;
         var out: Expr = undefined;
         var err: SyntaxError = undefined;
+
+        var lexer_save_state = self.lexer;
 
         const first_token = try self.lexer.next() orelse return null;
 
@@ -697,9 +673,9 @@ pub const Parser = struct {
                 .reject => continue :nuds,
             }
         } else {
+            self.lexer = lexer_save_state;
             return error.UnexpectedToken;
         };
-
 
         lexer_save_state = self.lexer;
 
@@ -713,10 +689,13 @@ pub const Parser = struct {
 
             leds: for (leds) |led|{
                 switch (led.invoke(.{self, lhs, led.binding_power, token, &out, &err})) {
-                    .okay => lhs = out,
+                    .okay => { lhs = out; break :leds; },
                     .panic => return err,
                     .reject => continue :leds,
                 }
+            } else {
+                self.lexer = lexer_save_state;
+                return lhs;
             }
 
             lexer_save_state = self.lexer;
@@ -867,10 +846,40 @@ pub const Syntax = struct {
         tag: TokenType,
         data: ?TokenData,
         binding_power: i16,
-        userdata: ?*anyopaque,
-        callback: *const Nud,
+        comptime NudDef: type,
     ) error{OutOfMemory}!void {
-        return self.nuds.bindPattern(self.allocator, tag, data, binding_power, userdata, callback);
+        return self.nuds.bindPattern(
+            self.allocator, tag, data, binding_power,
+            if (comptime @hasDecl(NudDef, "userdata")) &@field(NudDef, "userdata")
+            else null,
+            struct {
+                pub fn nud_callback_wrapper(
+                    userdata: ?*anyopaque,
+                    parser: *Parser,
+                    bp: i16,
+                    token: Token,
+                    out: *Expr,
+                    err: *SyntaxError,
+                ) callconv(.c) ParserSignal {
+                    const result =
+                        if (comptime @hasDecl(NudDef, "userdata"))
+                            @call(.auto, NudDef.callback, .{userdata} ++ .{parser, bp, token})
+                        else
+                            @call(.auto, NudDef.callback, .{parser, bp, token});
+
+                    const maybe = result catch |e| {
+                        err.* = e;
+                        return .panic;
+                    };
+
+                    out.* = maybe orelse {
+                        return .reject;
+                    };
+
+                    return .okay;
+                }
+            }.nud_callback_wrapper
+        );
     }
 
     pub fn bindLed(
@@ -878,10 +887,39 @@ pub const Syntax = struct {
         tag: TokenType,
         data: ?TokenData,
         binding_power: i16,
-        userdata: ?*anyopaque,
-        callback: *const Led,
+        comptime LedDef: type,
     ) error{OutOfMemory}!void {
-        return self.leds.bindPattern(self.allocator, tag, data, binding_power, userdata, callback);
+        return self.leds.bindPattern(
+            self.allocator, tag, data, binding_power,
+            if (comptime @hasDecl(LedDef, "userdata")) &@field(LedDef, "userdata")
+            else null,
+            struct {
+                pub fn led_callback_wrapper(
+                    userdata: ?*anyopaque,
+                    parser: *Parser,
+                    lhs: Expr,
+                    bp: i16,
+                    token: Token,
+                    out: *Expr,
+                    err: *SyntaxError,
+                ) callconv(.c) ParserSignal {
+                    const result =
+                        if (comptime @hasDecl(LedDef, "userdata"))
+                            @call(.auto, LedDef.callback, .{userdata} ++ .{parser, lhs, bp, token, out, err})
+                        else
+                            @call(.auto, LedDef.callback, .{parser, lhs, bp, token, out});
+
+                    const maybe = result catch |e| {
+                        err.* = e;
+                        return .panic;
+                    };
+
+                    return maybe orelse {
+                        return .reject;
+                    };
+                }
+            }.led_callback_wrapper
+        );
     }
 
     /// Find the nuds matching a given token, if any.
@@ -903,7 +941,7 @@ pub const Nud = fn (userdata: ?*anyopaque, parser: *Parser, bp: i16, token: Toke
 /// and parses some subset of the source code as an infix or postfix expression.
 pub const Led = fn (userdata: ?*anyopaque, parser: *Parser, lhs: Expr, bp: i16, token: Token, out: *Expr, err: *SyntaxError) callconv(.C) ParserSignal;
 
-/// An abstract syntax tree node yielded by the meta language parser.
+/// A concrete syntax tree node yielded by the meta language parser.
 pub const Expr = extern struct {
     /// The source location where the expression began.
     location: Location,
@@ -914,3 +952,81 @@ pub const Expr = extern struct {
     /// Subexpressions of this expression, if any.
     operands: common.Id.Buffer(Expr, .constant),
 };
+
+/// Builtin types of expressions.
+pub var ExprTypes = gen: {
+    var fresh = common.Id.of(Expr).fromInt(1);
+
+    break :gen .{
+        .Int = fresh.next(),
+        .Identifier = fresh.next(),
+        .IndentedBlock = fresh.next(),
+        .fresh_id = fresh,
+    };
+};
+
+test "parser_basic_integration" {
+
+    const allocator = std.testing.allocator;
+
+    var syntax = Syntax.init(allocator);
+    defer syntax.deinit();
+
+    try syntax.bindNud(.linebreak, null, std.math.minInt(i16), struct {
+        pub fn callback(
+            _: *Parser,
+            _: i16,
+            token: Token,
+        ) SyntaxError!?Expr {
+            return Expr{
+                .location = token.location,
+                .type = ExprTypes.IndentedBlock,
+                .token = token,
+                .operands = .empty,
+            };
+        }
+    });
+
+    try syntax.bindNud(.sequence, null, std.math.minInt(i16), struct {
+        pub fn callback(
+            _: *Parser,
+            _: i16,
+            token: Token,
+        ) SyntaxError!?Expr {
+            const s = token.data.sequence.asSlice();
+
+            const first_char = utils.text.nthCodepoint(0, s) catch unreachable orelse unreachable;
+
+            if (utils.text.isDecimal(first_char) and utils.text.isHexDigitStr(s)) {
+                return Expr{
+                    .location = token.location,
+                    .type = ExprTypes.Int,
+                    .token = token,
+                    .operands = .empty,
+                };
+            } else if (utils.text.isAlphanumericStr(s)) {
+                return Expr{
+                    .location = token.location,
+                    .type = ExprTypes.Identifier,
+                    .token = token,
+                    .operands = .empty,
+                };
+            } else {
+                return null;
+            }
+        }
+    });
+
+    const parser = Parser.init(allocator, &syntax, try Lexer0.init(.{},
+        \\test
+        \\  [
+        \\      1,
+        \\      2,
+        \\      3
+        \\  ]
+        \\
+    ));
+    _ = parser;
+
+
+}
