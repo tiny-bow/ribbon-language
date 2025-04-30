@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) !void {
 
     const platform_mod = platform_dep.module("platform");
     const common_mod = platform_dep.module("common");
+    const utils_mod = platform_dep.module("utils");
     const Id_mod = platform_dep.module("Id");
     const Interner_mod = platform_dep.module("Interner");
     const VirtualWriter_mod = platform_dep.module("VirtualWriter");
@@ -241,6 +242,8 @@ pub fn build(b: *std.Build) !void {
     main_mod.addImport("common", common_mod);
 
     meta_language_mod.addImport("platform", platform_mod);
+    meta_language_mod.addImport("common", common_mod);
+    meta_language_mod.addImport("utils", utils_mod);
 
     ribbon_mod.addImport("core", core_mod);
     ribbon_mod.addImport("abi", abi_mod);

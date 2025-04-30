@@ -9,6 +9,8 @@ const std = @import("std");
 const log = std.log.scoped(.Rml);
 
 const pl = @import("platform");
+const common = @import("common");
+const utils = @import("utils");
 
 test {
     std.testing.refAllDeclsRecursive(@This());
@@ -151,97 +153,174 @@ pub const Punctuation = enum(pl.Char) {
     }
 };
 
-pub const Lexer = struct {
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    indentation: pl.ArrayList(u32),
-    location: Location,
-    lookahead: ?pl.Char,
+/// Basic utf8 scanner.
+pub const CodepointIterator = struct {
+    /// Utf8 encoded bytes to scan.
+    bytes: []const u8,
+    /// Current position in the byte array.
+    i: usize,
 
     pub const Error = error {
-        OutOfMemory,
+        /// The iterator encountered bytes that were not valid utf-8.
         BadEncoding,
+    };
+
+    pub fn totalLength(it: *CodepointIterator) usize {
+        return it.bytes.len;
+    }
+
+    pub fn remainingLength(it: *CodepointIterator) usize {
+        return it.bytes.len - it.i;
+    }
+
+    pub fn from(bytes: []const u8) CodepointIterator {
+        return CodepointIterator{
+            .bytes = bytes,
+            .i = 0,
+        };
+    }
+
+    pub fn isEof(it: *CodepointIterator) bool {
+        return it.i >= it.bytes.len;
+    }
+
+    pub fn nextSlice(it: *CodepointIterator) Error!?[]const u8 {
+        if (it.i >= it.bytes.len) {
+            return null;
+        }
+
+        const cp_len = std.unicode.utf8ByteSequenceLength(it.bytes[it.i]) catch return error.BadEncoding;
+        it.i += cp_len;
+        return it.bytes[it.i - cp_len .. it.i];
+    }
+
+    pub fn next(it: *CodepointIterator) Error!?u21 {
+        const slice = try it.nextSlice() orelse return null;
+        return std.unicode.utf8Decode(slice) catch return error.BadEncoding;
+    }
+};
+
+/// Create a new lexer for a given source, allowing single token lookahead.
+pub fn lex(
+    allocator: std.mem.Allocator,
+    settings: Lexer0.Settings,
+    source: []const u8,
+) Lexer0.Error!Lexer1 {
+    const lexer = try Lexer0.init(allocator, settings, source);
+    return try Lexer1.from(lexer);
+}
+
+/// Lexical analysis abstraction with one token lookahead.
+pub const Lexer1 = common.PeekableIterator(Lexer0, Token, .use_try(Lexer0.Error));
+
+/// Basic lexical analysis abstraction, no lookahead.
+pub const Lexer0 = struct {
+    /// The allocator used to allocate temporary memory for the lexer.
+    allocator: std.mem.Allocator,
+    /// Utf8 source code being lexically analyzed.
+    source: []const u8,
+    /// Iterator over `source`.
+    iterator: common.PeekableIterator(CodepointIterator, pl.Char, .use_try(CodepointIterator.Error)),
+    /// The current location in the source code.
+    indentation: pl.ArrayList(u32),
+    /// The current location in the source code.
+    location: Location,
+
+    /// Errors that can occur during lexical analysis.
+    pub const Error = error {
+        OutOfMemory,
+        /// The lexer encountered bytes that were not valid utf-8.
+        BadEncoding,
+        /// The lexer encountered the end of input while processing a compound token.
         UnexpectedEof,
+        /// The lexer encountered a utf-valid but unexpected codepoint or combination thereof.
         UnexpectedInput,
+        /// The lexer encountered an unexpected indentation level;
+        /// * ie an indentation level that un-indents the current level,
+        /// but does not match any existing level.
         UnexpectedIndent,
     };
 
+    /// Lexical analysis settings.
     pub const Settings = struct {
+        /// If you are analyzing a subsection of a file that is itself indented,
+        /// set this to the indentation level of the surrounding text.
         startingIndent: u32 = 0,
+        /// The offset to apply to the visual position (line and column) of the lexer,
+        /// when creating token locations.
         attrOffset: VisualPosition = .{},
     };
 
-    pub fn init(allocator: std.mem.Allocator, settings: Settings, source: []const u8) error{OutOfMemory}!Lexer {
+    /// Initialize a new lexer for a given source.
+    pub fn init(allocator: std.mem.Allocator, settings: Settings, source: []const u8) error{OutOfMemory, BadEncoding}!Lexer0 {
         var indentation: pl.ArrayList(u32) = .empty;
 
         try indentation.append(allocator, settings.startingIndent);
 
         log.debug("Lexing string ⟨{s}⟩", .{source});
 
-        return Lexer{
+        return Lexer0{
             .allocator = allocator,
             .source = source,
+            .iterator = try .from(.from(source)),
             .indentation = indentation,
             .location = Location {
                 .buffer = 0,
                 .visual = settings.attrOffset,
             },
-            .lookahead = null,
         };
     }
 
-    pub fn deinit(self: *Lexer) void {
+    /// Free all temporary memory allocated by the lexer.
+    /// * No effect on output tokens or input source.
+    pub fn deinit(self: *Lexer0) void {
         self.indentation.deinit(self.allocator);
     }
 
-    pub fn peekChar(self: *Lexer) Lexer.Error!?pl.Char {
-        if (self.lookahead) |ch| {
-            return ch;
-        }
-
-        if (self.location.buffer >= self.source.len) {
-            return null;
-        }
-
-        const ch = self.source[self.location.buffer];
-
-        const len = std.unicode.utf8ByteSequenceLength(ch) catch return error.BadEncoding;
-
-        const out = std.unicode.utf8Decode(self.source[self.location.buffer..self.location.buffer + len]) catch return error.BadEncoding;
-
-        self.lookahead = out;
-
-        log.debug("peekChar: {u} (0x{x:0>2})", .{ out, out });
-
-        return out;
+    /// Determine whether the lexer has processed the last character in the source code.
+    pub fn isEof(self: *const Lexer0) bool {
+        return self.iterator.isEof();
     }
 
-    pub fn nextChar(self: *Lexer) Lexer.Error!?pl.Char {
-        const ch = try self.peekChar() orelse return null;
+    /// Get the next character in the source code without consuming it.
+    /// * Returns null if the end of the source code is reached.
+    pub fn peekChar(self: *Lexer0) Error!?pl.Char {
+        return self.iterator.peek();
+    }
+
+    /// Get the current character in the source code and consume it.
+    /// * Updates lexer source location
+    /// * Returns null if the end of the source code is reached.
+    pub fn nextChar(self: *Lexer0) Error!?pl.Char {
+        const ch = try self.iterator.next() orelse return null;
 
         if (ch == '\n') {
             self.location.visual.line += 1;
             self.location.visual.column = 1;
-        } else if (!std.ascii.isControl(@intCast(ch))) {
+        } else if (!utils.text.isControl(ch)) {
             self.location.visual.column += 1;
         }
 
         self.location.buffer += std.unicode.utf8CodepointSequenceLength(ch) catch unreachable;
-        self.lookahead = null;
 
         return ch;
     }
 
-    pub fn advanceChar(self: *Lexer) Lexer.Error!void {
+    /// Consume the current character in the source code.
+    /// * Updates lexer source location
+    /// * No-op if the end of the source code is reached.
+    pub fn advanceChar(self: *Lexer0) Error!void {
         _ = try self.nextChar();
     }
 
-    pub fn currentIndentation(self: *const Lexer) u32 {
+    /// Get the current indentation level.
+    pub fn currentIndentation(self: *const Lexer0) u32 {
         std.debug.assert(self.indentation.items.len > 0);
         return self.indentation.items[self.indentation.items.len - 1];
     }
 
-    pub fn next(self: *Lexer) Lexer.Error!?Token {
+    /// Get the next token from the lexer's source code.
+    pub fn next(self: *Lexer0) Error!?Token {
         var start = self.location;
 
         const data = char_switch: switch (try self.nextChar() orelse return null) {
@@ -253,7 +332,7 @@ pub const Lexer = struct {
                 line_loop: while(try self.peekChar()) |pk| {
                     if (pk == '\n') {
                         n += 1;
-                    } else if (!std.ascii.isWhitespace(@intCast(pk))) { // FIXME: unicode identification
+                    } else if (!utils.text.isSpace(pk)) {
                         break :line_loop;
                     }
 
@@ -318,7 +397,7 @@ pub const Lexer = struct {
                 break :char_switch TokenData { .special = .{ .punctuation = .fromChar('\\'), .escaped = false } };
             },
             else => |x| {
-                if (std.ascii.isWhitespace(@intCast(x))) {
+                if (utils.text.isSpace(@intCast(x))) {
                     log.debug("skipping whitespace {u} (0x{x:0>2})", .{x, x});
 
                     start = self.location;
@@ -328,7 +407,7 @@ pub const Lexer = struct {
                     };
                 }
 
-                if (std.ascii.isControl(@intCast(x))) {
+                if (utils.text.isControl(@intCast(x))) {
                     log.err("unexpected control character {u} (0x{x:0>2})", .{x, x});
                     return error.UnexpectedInput;
                 }
@@ -342,8 +421,8 @@ pub const Lexer = struct {
                 log.debug("processing sequence", .{});
 
                 symbol_loop: while (try self.peekChar()) |pk| {
-                    if (std.ascii.isWhitespace(@intCast(pk))
-                    or std.ascii.isControl(@intCast(pk))
+                    if (utils.text.isSpace(@intCast(pk))
+                    or utils.text.isControl(@intCast(pk))
                     or Punctuation.includesChar(@intCast(pk))) {
                         log.debug("ending sequence at {u} (0x{x:0>2})", .{pk, pk});
                         break :symbol_loop;
@@ -379,7 +458,7 @@ pub const Lexer = struct {
 test "lexer_basic_integration" {
     const allocator = std.testing.allocator;
 
-    var lexer = try Lexer.init(allocator, .{},
+    var lexer = try lex(allocator, .{},
         \\test
         \\  [
         \\      1,
@@ -410,12 +489,12 @@ test "lexer_basic_integration" {
 
     for (expect) |e| {
         const it = lexer.next() catch |err| {
-            log.err("{}: {s}\n", .{ lexer.location, @errorName(err) });
+            log.err("{}: {s}\n", .{ lexer.inner.location, @errorName(err) });
             return err;
         };
 
         if (it) |tok| {
-            log.debug("{} to {}: {} (expecting {})\n", .{ tok.location, lexer.location, tok.data, e });
+            log.debug("{} to {}: {} (expecting {})\n", .{ tok.location, lexer.inner.location, tok.data, e });
 
             switch (e) {
                 .sequence => |s| {
@@ -435,10 +514,10 @@ test "lexer_basic_integration" {
                 },
             }
         } else {
-            log.err("unexpected EOF {}; expected {}\n", .{ lexer.location, e });
+            log.err("unexpected EOF {}; expected {}\n", .{ lexer.inner.location, e });
             return error.UnexpectedEof;
         }
     }
 
-    try std.testing.expectEqual(lexer.source.len, lexer.location.buffer);
+    try std.testing.expectEqual(lexer.inner.source.len, lexer.inner.location.buffer);
 }
