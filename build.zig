@@ -110,6 +110,12 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const basic_analysis_mod = b.createModule(.{
+        .root_source_file = b.path("src/mod/basic_analysis.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
 
 
     const ribbon_mod = b.addModule("ribbon_language", .{
@@ -254,6 +260,7 @@ pub fn build(b: *std.Build) !void {
     ribbon_mod.addImport("ir", ir_mod);
     ribbon_mod.addImport("machine", machine_mod);
     ribbon_mod.addImport("meta_language", meta_language_mod);
+    ribbon_mod.addImport("basic_analysis", basic_analysis_mod);
 
 
 
