@@ -239,7 +239,9 @@ pub fn build(b: *std.Build) !void {
     machine_mod.addImport("VirtualWriter", VirtualWriter_mod);
 
     main_mod.addImport("ribbon_language", ribbon_mod);
+    main_mod.addImport("platform", platform_mod);
     main_mod.addImport("common", common_mod);
+    main_mod.addImport("utils", utils_mod);
 
     meta_language_mod.addImport("platform", platform_mod);
     meta_language_mod.addImport("common", common_mod);
