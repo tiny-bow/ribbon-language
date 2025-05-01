@@ -11,5 +11,22 @@ pub const std_options = std.Options{
 };
 
 pub fn main() !void {
-    log.err("driver nyi", .{});
+    log.debug("parsed rml expr: {?}", .{
+        ribbon.meta_language.getCst(
+            std.heap.page_allocator, .{},
+            \\foo
+            \\   1
+            \\   2
+            \\   3
+            \\   bar
+            \\     4
+            \\     5
+            \\   baz
+            \\     6
+            \\     7
+        ) catch |err| {
+            log.debug("Error: {}", .{err});
+            return err;
+        }
+    });
 }

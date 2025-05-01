@@ -1,4 +1,4 @@
-const analysis = @import("../basic_analysis.zig");
+const analysis = @import("../analysis.zig");
 const std = @import("std");
 const log = std.log.scoped(.lexical_analysis);
 const pl = @import("platform");
@@ -174,8 +174,6 @@ pub fn lexWithPeek(
 /// Errors that can occur in the lexer.
 pub const LexicalError = error {
     OutOfMemory,
-    /// The lexer encountered bytes that were not valid utf-8.
-    BadEncoding,
     /// The lexer encountered the end of input while processing a compound token.
     UnexpectedEof,
     /// The lexer encountered a utf-valid but unexpected codepoint or combination thereof.
@@ -184,7 +182,7 @@ pub const LexicalError = error {
     /// * ie an indentation level that un-indents the current level,
     /// but does not match any existing level.
     UnexpectedIndent,
-};
+} || analysis.EncodingError;
 
 pub const Level = u16;
 pub const MAX_LEVELS = 32;
@@ -293,7 +291,27 @@ pub const Lexer0 = struct {
             };
         }
 
-        const data = char_switch: switch (try self.nextChar() orelse return null) {
+        const ch = try self.nextChar() orelse {
+            if (self.levels > 1) {
+                log.debug("processing 1st ch EOF with {} indentation levels", .{self.levels});
+
+                self.levels_queued = self.levels - 1;
+
+                return Token{
+                    .location = start,
+                    .tag = .linebreak,
+                    .data = TokenData{
+                        .linebreak = .{ .n = 0, .i = .unindent },
+                    },
+                };
+            } else {
+                log.debug("processing 1st ch EOF with no indentation levels", .{});
+
+                return null;
+            }
+        };
+
+        const data = char_switch: switch (ch) {
             '\n' => {
                 log.debug("processing line break", .{});
 
@@ -381,7 +399,23 @@ pub const Lexer0 = struct {
                     start = self.location;
 
                     continue :char_switch try self.nextChar() orelse {
-                        return null;
+                        if (self.levels > 1) {
+                            log.debug("processing nth ch EOF with {} indentation levels", .{self.levels});
+
+                            self.levels_queued = self.levels - 2;
+
+                            return Token{
+                                .location = start,
+                                .tag = .linebreak,
+                                .data = TokenData{
+                                    .linebreak = .{ .n = 0, .i = .unindent },
+                                },
+                            };
+                        } else {
+                            log.debug("processing nth ch EOF with no indentation levels", .{});
+
+                            return null;
+                        }
                     };
                 }
 
@@ -595,4 +629,6 @@ test "lexer_basic_integration" {
     }
 
     try std.testing.expectEqual(lexer.inner.source.len, lexer.inner.location.buffer);
+
+    std.debug.print("lexical analysis test passed\n", .{});
 }

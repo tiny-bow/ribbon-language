@@ -1,6 +1,6 @@
 const std = @import("std");
 const log = std.log.scoped(.syntactic_analysis);
-const analysis = @import("../basic_analysis.zig");
+const analysis = @import("../analysis.zig");
 const pl = @import("platform");
 const common = @import("common");
 const utils = @import("utils");
@@ -14,18 +14,18 @@ pub const SyntaxError = error {
 
 
 /// A concrete syntax tree node yielded by the meta language parser.
-pub const Expr = extern struct {
+pub const SyntaxTree = extern struct {
     /// The source location where the expression began.
     location: analysis.Location,
     /// The type of the expression.
-    type: common.Id.of(Expr),
+    type: common.Id.of(SyntaxTree),
     /// The token that generated this expression.
     token: analysis.Token,
     /// Subexpressions of this expression, if any.
-    operands: common.Id.Buffer(Expr, .constant),
+    operands: common.Id.Buffer(SyntaxTree, .constant),
 
     /// Deinitialize the sub-tree of this expression and free all memory allocated for it.
-    pub fn deinit(self: *Expr, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *SyntaxTree, allocator: std.mem.Allocator) void {
         const xs = @constCast(self.operands.asSlice());
         for (xs) |*x| x.deinit(allocator);
         if (xs.len != 0) {
@@ -35,42 +35,13 @@ pub const Expr = extern struct {
     }
 
     /// `std.fmt` impl
-    pub fn format(self: *const Expr, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        switch (self.type) {
-            ExprTypes.Int => {
-                try writer.print("Int({s})", .{self.token.data.sequence.asSlice()});
-            },
-            ExprTypes.Identifier => {
-                try writer.print("Identifier({s})", .{self.token.data.sequence.asSlice()});
-            },
-            ExprTypes.IndentedBlock => {
-                try writer.print("IndentedBlock({any})", .{self.operands.asSlice()});
-            },
-            ExprTypes.Stmts => {
-                try writer.print("Stmts({any})", .{self.operands.asSlice()});
-            },
-            ExprTypes.Qed => {
-                try writer.print("Qed", .{});
-            },
-            else => {
-                try writer.print("[{}]({}, {any})", .{@intFromEnum(self.type), self.token, self.operands.asSlice()});
-            }
+    pub fn format(self: *const SyntaxTree, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        if (self.operands.len == 0) {
+            try writer.print("﴾{}, {}﴿", .{@intFromEnum(self.type), self.token});
+        } else {
+            try writer.print("﴾{}, {}, {any}﴿", .{@intFromEnum(self.type), self.token, self.operands.asSlice()});
         }
     }
-};
-
-/// Builtin types of expressions.
-pub var ExprTypes = gen: {
-    var fresh = common.Id.of(Expr).fromInt(1);
-
-    break :gen .{
-        .Int = fresh.next(),
-        .Identifier = fresh.next(),
-        .IndentedBlock = fresh.next(),
-        .Stmts = fresh.next(),
-        .Qed = fresh.next(),
-        .fresh_id = fresh,
-    };
 };
 
 /// Extern signal for parser callbacks.
@@ -227,6 +198,32 @@ pub const TokenPattern = union(analysis.TokenType) {
     }
 };
 
+fn FunctionType(comptime Args: type, comptime Ret: type, comptime calling_conv: std.builtin.CallingConvention) type {
+    comptime {
+        const args = std.meta.fields(Args);
+
+        var params = [1]std.builtin.Type.Fn.Param{.{
+            .type = undefined,
+            .is_generic = false,
+            .is_noalias = false,
+        }} ** args.len;
+
+        for (args, 0..) |arg, i| {
+            params[i].type = arg.type;
+        }
+
+        return @Type(std.builtin.Type {
+            .@"fn" = .{
+                .calling_convention = calling_conv,
+                .return_type = Ret,
+                .is_generic = false,
+                .is_var_args = false,
+                .params = &params
+            },
+        });
+    }
+}
+
 pub fn PatternSet(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -241,7 +238,8 @@ pub fn PatternSet(comptime T: type) type {
                 self: *const QueryResult,
                 args: anytype,
             ) ParserSignal {
-                return @call(.auto, self.callback, .{self.userdata} ++ args);
+                const closure_args = .{self.userdata} ++ args;
+                return @call(.auto, @as(*const FunctionType(@TypeOf(closure_args), ParserSignal, .C), @ptrCast(self.callback)), closure_args);
             }
         };
 
@@ -303,9 +301,9 @@ pub const Syntax = struct {
     allocator: std.mem.Allocator,
 
     /// Nud patterns for known token types.
-    nuds: PatternSet(NudCallback) = .empty,
+    nuds: PatternSet(NudCallbackMarker) = .empty,
     /// Led patterns for known token types.
-    leds: PatternSet(LedCallback) = .empty,
+    leds: PatternSet(LedCallbackMarker) = .empty,
 
     /// Initialize a new, empty syntax.
     pub fn init(
@@ -336,19 +334,30 @@ pub const Syntax = struct {
     }
 
     /// Find the nuds matching a given token, if any.
-    pub fn findNuds(self: *const Syntax, token: *const analysis.Token) error{OutOfMemory}![]const PatternSet(NudCallback).QueryResult {
+    pub fn findNuds(self: *const Syntax, token: *const analysis.Token) error{OutOfMemory}![]const PatternSet(NudCallbackMarker).QueryResult {
         return self.nuds.findPatterns(self.allocator, token);
     }
 
     /// Find the leds matching a given token, if any.
-    pub fn findLeds(self: *const Syntax, token: *const analysis.Token) error{OutOfMemory}![]const PatternSet(LedCallback).QueryResult {
+    pub fn findLeds(self: *const Syntax, token: *const analysis.Token) error{OutOfMemory}![]const PatternSet(LedCallbackMarker).QueryResult {
         return self.leds.findPatterns(self.allocator, token);
+    }
+
+    /// Parse a source string using this syntax.
+    pub fn createParser(
+        self: *const Syntax,
+        allocator: std.mem.Allocator,
+        lexer_settings: analysis.LexerSettings,
+        source: []const u8,
+    ) SyntaxError!Parser {
+        const lexer = try analysis.Lexer0.init(lexer_settings, source);
+        return Parser.init(allocator, self, lexer);
     }
 };
 
-pub const NudCallback = fn (userdata: ?*anyopaque, parser: *Parser, bp: i16, token: analysis.Token, out: *Expr, err: *SyntaxError) callconv(.C) ParserSignal;
+const NudCallbackMarker = fn () callconv(.C) void;
 
-pub const LedCallback = fn (userdata: ?*anyopaque, parser: *Parser, lhs: Expr, bp: i16, token: analysis.Token, out: *Expr, err: *SyntaxError) callconv(.C) ParserSignal;
+const LedCallbackMarker = fn () callconv(.C) void;
 
 pub fn Pattern(comptime T: type) type {
     return struct {
@@ -367,11 +376,11 @@ pub fn Pattern(comptime T: type) type {
 
 /// A nud is a function/closure that takes a parser and a token,
 /// and parses some subset of the source code as a prefix expression.
-pub const Nud = Pattern(NudCallback);
+pub const Nud = Pattern(NudCallbackMarker);
 
 /// A led is a function/closure that takes a parser and a token, as well as a left hand side expression,
 /// and parses some subset of the source code as an infix or postfix expression.
-pub const Led = Pattern(LedCallback);
+pub const Led = Pattern(LedCallbackMarker);
 
 /// Expected inputs:
 /// * `..., null, fn (*Parser, i16, Token) SyntaxError!?Expr`
@@ -385,7 +394,7 @@ pub fn createNud(name: []const u8, binding_power: i16, token: PatternModifier(To
         .token = token,
         .binding_power = binding_power,
         .userdata = if (comptime uInfo == .null) null else @ptrCast(userdata),
-        .callback = wrapNativeNudCallback(if (comptime uInfo == .null) void else Userdata, callback),
+        .callback = wrapNudCallback(if (comptime uInfo == .null) void else Userdata, callback),
     };
 }
 
@@ -401,7 +410,7 @@ pub fn createLed(name: []const u8, binding_power: i16, token: PatternModifier(To
         .token = token,
         .binding_power = binding_power,
         .userdata = if (comptime uInfo == .null) null else @ptrCast(userdata),
-        .callback = wrapNativeLedCallback(if (comptime uInfo == .null) void else Userdata, callback),
+        .callback = wrapLedCallback(if (comptime uInfo == .null) void else Userdata, callback),
     };
 }
 
@@ -409,14 +418,14 @@ pub fn createLed(name: []const u8, binding_power: i16, token: PatternModifier(To
 /// * `void, fn (*Parser, i16, Token) SyntaxError!?Expr`
 /// * `T, fn (*T, *Parser, i16, Token) SyntaxError!?Expr`
 /// * `_, *const fn ..`
-pub fn wrapNativeNudCallback(comptime Userdata: type, callback: anytype) NudCallback {
-    return struct {
+pub fn wrapNudCallback(comptime Userdata: type, callback: anytype) *const NudCallbackMarker {
+    return @ptrCast(&struct {
         pub fn nud_callback_wrapper(
             userdata: ?*anyopaque,
             parser: *Parser,
             bp: i16,
             token: analysis.Token,
-            out: *Expr,
+            out: *SyntaxTree,
             err: *SyntaxError,
         ) callconv(.c) ParserSignal {
             const result =
@@ -436,22 +445,22 @@ pub fn wrapNativeNudCallback(comptime Userdata: type, callback: anytype) NudCall
 
             return .okay;
         }
-    }.nud_callback_wrapper;
+    }.nud_callback_wrapper);
 }
 
 /// Expected inputs:
 /// * `void, fn (*Parser, Expr, i16, Token) SyntaxError!?Expr`
 /// * `T, fn (*T, *Parser, Expr, i16, Token) SyntaxError!?Expr`
 /// * `_, *const fn ..`
-pub fn wrapNativeLedCallback(comptime Userdata: type, callback: anytype) LedCallback {
-    return struct {
+pub fn wrapLedCallback(comptime Userdata: type, callback: anytype) *const LedCallbackMarker {
+    return @ptrCast(&struct {
         pub fn led_callback_wrapper(
             userdata: ?*anyopaque,
             parser: *Parser,
-            lhs: Expr,
+            lhs: SyntaxTree,
             bp: i16,
             token: analysis.Token,
-            out: *Expr,
+            out: *SyntaxTree,
             err: *SyntaxError,
         ) callconv(.c) ParserSignal {
             const result =
@@ -471,7 +480,7 @@ pub fn wrapNativeLedCallback(comptime Userdata: type, callback: anytype) LedCall
 
             return .okay;
         }
-    }.led_callback_wrapper;
+    }.led_callback_wrapper);
 }
 
 /// Pratt parser.
@@ -479,7 +488,7 @@ pub const Parser = struct {
     /// The allocator to store parsed expressions in.
     allocator: std.mem.Allocator,
     /// The syntax used by this parser.
-    syntax: *Syntax,
+    syntax: *const Syntax,
     /// Token stream being parsed.
     lexer: analysis.Lexer0,
 
@@ -489,7 +498,7 @@ pub const Parser = struct {
     /// Create a new parser.
     pub fn init(
         allocator: std.mem.Allocator,
-        syntax: *Syntax,
+        syntax: *const Syntax,
         lexer: analysis.Lexer0,
     ) Parser {
         return Parser{
@@ -499,13 +508,16 @@ pub const Parser = struct {
         };
     }
 
+    pub fn isEof(self: *Parser) bool {
+        return self.lexer.isEof();
+    }
 
     /// Run the pratt algorithm at the current offset in the lexer stream.
     pub fn pratt(
         self: *Parser,
-        binding_power: i64,
-    ) Error!?Expr {
-        var out: Expr = undefined;
+        binding_power: i16,
+    ) Error!?SyntaxTree {
+        var out: SyntaxTree = undefined;
         var err: SyntaxError = undefined;
 
         var lexer_save_state = self.lexer;
@@ -515,10 +527,12 @@ pub const Parser = struct {
 
         const nuds = try self.syntax.findNuds(&first_token);
 
+        log.debug("pratt: found {} nuds", .{nuds.len});
+
         if (nuds.len == 0) {
             log.debug("pratt: unexpected token {}, no valid nuds found", .{first_token});
             self.lexer = lexer_save_state;
-            return error.UnexpectedToken;
+            return null;
         }
 
         var lhs = nuds: for (nuds) |nud| {
@@ -546,6 +560,8 @@ pub const Parser = struct {
                     continue :nuds;
                 },
             }
+
+            lexer_save_state = self.lexer;
         } else {
             self.lexer = lexer_save_state;
             log.debug("pratt: unexpected token {}, no accepting nud found", .{first_token});
@@ -555,9 +571,11 @@ pub const Parser = struct {
         lexer_save_state = self.lexer;
 
         while (try self.lexer.next()) |curr_token| {
-            log.debug("infix token {}", .{curr_token});
+            log.debug("pratt: infix token {}", .{curr_token});
 
             const leds = try self.syntax.findLeds(&curr_token);
+
+            log.debug("pratt: found {} leds", .{leds.len});
 
             if (leds.len == 0) {
                 log.debug("pratt: unexpected token {}, no valid leds found", .{curr_token});
@@ -605,149 +623,3 @@ pub const Parser = struct {
         return lhs;
     }
 };
-
-pub const basic_leaf_node_nud = createNud(
-    "builtin_leaf",
-    std.math.minInt(i16),
-    .{ .standard = .{ .sequence = .any } },
-    null, struct {
-        pub fn basic_leaf_node_callback(
-            _: *Parser,
-            _: i16,
-            token: analysis.Token,
-        ) SyntaxError!?Expr {
-            const s = token.data.sequence.asSlice();
-
-            const first_char = utils.text.nthCodepoint(0, s) catch unreachable orelse unreachable;
-
-            if (utils.text.isDecimal(first_char) and utils.text.isHexDigitStr(s)) {
-                return Expr{
-                    .location = token.location,
-                    .type = ExprTypes.Int,
-                    .token = token,
-                    .operands = .empty,
-                };
-            } else if (utils.text.isAlphanumericStr(s)) {
-                return Expr{
-                    .location = token.location,
-                    .type = ExprTypes.Identifier,
-                    .token = token,
-                    .operands = .empty,
-                };
-            } else {
-                return null;
-            }
-        }
-    }.basic_leaf_node_callback,
-);
-
-pub const whitespace_significance_led = createLed(
-    "builtin_space_sig",
-    std.math.maxInt(i16),
-    .{ .standard = .{ .linebreak = .any } },
-    null, struct {
-        pub fn whitespace_significance_callback(
-            parser: *Parser,
-            first_stmt: Expr,
-            bp: i16,
-            token: analysis.Token,
-        ) SyntaxError!?Expr {
-            var buff: pl.ArrayList(Expr) = .empty;
-            defer buff.deinit(parser.allocator);
-
-            try buff.append(parser.allocator, first_stmt);
-
-            switch (token.data.linebreak.i) {
-                .none => {
-                    log.debug("linebreak no indent", .{});
-                },
-                .indent => {
-                    log.debug("linebreak indent accepted by indentation parser", .{});
-
-                    const buffer = try parser.allocator.alloc(Expr, 1);
-
-                    buffer[0] = try parser.pratt(bp) orelse {
-                        log.err("linebreak indent block expected expression, got nothing", .{});
-                        return error.UnexpectedToken;
-                    };
-
-                    const unindent = try parser.lexer.next() orelse {
-                        log.err("linebreak indent block end expected unindent, got nothing", .{});
-                        return error.UnexpectedEof;
-                    };
-
-                    if (unindent.tag != .linebreak) {
-                        log.err("linebreak indent block end expected unindent, got: {}", .{unindent.tag});
-                        return error.UnexpectedToken;
-                    }
-
-                    if (unindent.data.linebreak.i != .unindent) {
-                        log.err("linebreak indent block end expected unindent, got: {}", .{unindent.data.linebreak.i});
-                        return error.UnexpectedToken;
-                    }
-
-                    log.debug("linebreak indent block successfully parsed by indentation parser: {any}", .{buffer});
-
-                    try buff.append(parser.allocator, Expr{
-                        .location = token.location,
-                        .type = ExprTypes.IndentedBlock,
-                        .token = token,
-                        .operands = common.Id.Buffer(Expr, .constant).fromSlice(buffer),
-                    });
-                },
-                .unindent => {
-                    log.debug("linebreak unindent rejected by indentation parser; this is a sentinel", .{});
-                    return null;
-                },
-            }
-
-            if (try parser.pratt(bp)) |second_stmt| {
-                try buff.append(parser.allocator, second_stmt);
-            }
-
-            return Expr{
-                .location = first_stmt.location,
-                .type = ExprTypes.Stmts,
-                .token = token,
-                .operands = common.Id.Buffer(Expr, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
-            };
-        }
-    }.whitespace_significance_callback,
-);
-
-test "parser_basic_integration" {
-    const input =
-        \\test
-        \\    foo
-        \\      1
-        \\      2
-        \\    bar
-        \\
-        \\
-        ;
-    const expected_output = "Stmts({ Identifier(test), IndentedBlock({ Stmts({ Identifier(foo), IndentedBlock({ Stmts({ Int(1), Int(2) }) }), Identifier(bar) }) }) })";
-
-    var gpa = std.heap.DebugAllocator(.{}).init;
-    const allocator = gpa.allocator();
-
-    var syntax = Syntax.init(allocator);
-    defer syntax.deinit();
-
-    try syntax.bindNud(basic_leaf_node_nud);
-    try syntax.bindLed(whitespace_significance_led);
-
-    var parser = Parser.init(allocator, &syntax, try analysis.Lexer0.init(.{}, input));
-    var expr = parser.pratt(std.math.maxInt(i16)) catch |err| {
-        log.err("syntax error: {s}", .{@errorName(err)});
-        return err;
-    } orelse {
-        log.err("expected a single expression, got nothing", .{});
-        return error.UnexpectedEof;
-    };
-    defer expr.deinit(allocator);
-
-    const output = try std.fmt.allocPrint(allocator, "{}", .{expr});
-    defer allocator.free(output);
-
-    try std.testing.expectEqualStrings(expected_output, output);
-}

@@ -110,8 +110,8 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const basic_analysis_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/basic_analysis.zig"),
+    const analysis_mod = b.createModule(.{
+        .root_source_file = b.path("src/mod/analysis.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -186,6 +186,7 @@ pub fn build(b: *std.Build) !void {
     const machine_test = b.addTest(.{ .root_module = machine_mod });
     const main_test = b.addTest(.{ .root_module = main_mod });
     const meta_language_test = b.addTest(.{ .root_module = meta_language_mod });
+    const analysis_test = b.addTest(.{ .root_module = analysis_mod });
     const ribbon_test = b.addTest(.{ .root_module = ribbon_mod });
 
 
@@ -249,9 +250,15 @@ pub fn build(b: *std.Build) !void {
     main_mod.addImport("common", common_mod);
     main_mod.addImport("utils", utils_mod);
 
+
+    analysis_mod.addImport("platform", platform_mod);
+    analysis_mod.addImport("common", common_mod);
+    analysis_mod.addImport("utils", utils_mod);
+
     meta_language_mod.addImport("platform", platform_mod);
     meta_language_mod.addImport("common", common_mod);
     meta_language_mod.addImport("utils", utils_mod);
+    meta_language_mod.addImport("analysis", analysis_mod);
 
     ribbon_mod.addImport("core", core_mod);
     ribbon_mod.addImport("abi", abi_mod);
@@ -260,7 +267,7 @@ pub fn build(b: *std.Build) !void {
     ribbon_mod.addImport("ir", ir_mod);
     ribbon_mod.addImport("machine", machine_mod);
     ribbon_mod.addImport("meta_language", meta_language_mod);
-    ribbon_mod.addImport("basic_analysis", basic_analysis_mod);
+    ribbon_mod.addImport("analysis", analysis_mod);
 
 
 
@@ -309,6 +316,7 @@ pub fn build(b: *std.Build) !void {
     check_step.dependOn(&machine_test.step);
     check_step.dependOn(&main_test.step);
     check_step.dependOn(&meta_language_test.step);
+    check_step.dependOn(&analysis_test.step);
     check_step.dependOn(&ribbon_test.step);
 
     const test_step = b.step("unit-test", "Run all unit tests");
@@ -324,6 +332,7 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&b.addRunArtifact(machine_test).step);
     test_step.dependOn(&b.addRunArtifact(main_test).step);
     test_step.dependOn(&b.addRunArtifact(meta_language_test).step);
+    test_step.dependOn(&b.addRunArtifact(analysis_test).step);
     test_step.dependOn(&b.addRunArtifact(ribbon_test).step);
 
 
