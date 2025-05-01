@@ -821,15 +821,156 @@ pub const ParserSignal = enum(i8) {
     panic = -1,
 };
 
+pub fn PatternModifier(comptime P: type) type {
+    return union(enum) {
+        const Self = @This();
 
+        none: void,
+        any: void,
+        standard: P,
+        inverted: P,
+        one_of: []const P,
+        any_of: []const P,
+        all_of: []const P,
+
+        const Q = if (pl.hasDecl(P, .QueryType)) P.QueryType else P;
+
+        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            switch (self.*) {
+                .none => try writer.print("none", .{}),
+                .any => try writer.print("any", .{}),
+                .standard => try writer.print("{}", .{self.standard}),
+                .inverted => try writer.print("inv({})", .{self.inverted}),
+                .one_of => try writer.print("one({any})", .{self.one_of}),
+                .any_of => try writer.print("any({any})", .{self.any_of}),
+                .all_of => try writer.print("all({any})", .{self.all_of}),
+            }
+        }
+
+        fn processCallback(self: *const Self, q: Q, comptime callback: fn (P, Q) bool) bool {
+            log.debug("processing {} with {}", .{q, self});
+            switch (self.*) {
+                .none => return false,
+                .any => return true,
+                .standard => |my_p| return callback(my_p, q),
+                .inverted => |my_p| return !callback(my_p, q),
+                .one_of => |my_ps| {
+                    for (my_ps) |my_p| {
+                        if (callback(my_p, q)) {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                },
+                .any_of => |my_ps| {
+                    for (my_ps) |my_p| {
+                        if (callback(my_p, q)) {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                },
+                .all_of => |my_ps| {
+                    for (my_ps) |my_p| {
+                        if (!callback(my_p, q)) {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                },
+            }
+        }
+
+        pub fn process(self: *const Self, q: Q) bool {
+            const result = self.processCallback(q, switch (P) {
+                common.Id.Buffer(u8, .constant) => struct {
+                    pub fn callback(a: P, b: Q) bool {
+                        return std.mem.eql(u8, a.asSlice(), b.asSlice());
+                    }
+                },
+                TokenPattern => struct {
+                    pub fn callback(a: P, b: Q) bool {
+                        if (@as(TokenType, a) != b.tag) return false;
+
+                        return switch (a) {
+                            .sequence => |p| p.process(b.data.sequence),
+                            .linebreak => |p| p.process(b.data.linebreak),
+                            .special => |p| p.process(b.data.special),
+                        };
+                    }
+                },
+                else => if (comptime std.meta.hasUniqueRepresentation(P)) struct {
+                    pub fn callback(a: P, b: Q) bool {
+                        return a == b;
+                    }
+                } else switch (@typeInfo(P)) {
+                    .bool => struct { // TODO: why is this necessary? bool doesnt have unique representation??
+                        pub fn callback(a: P, b: Q) bool {
+                            return a == b;
+                        }
+                    },
+                    .@"struct" => |info| struct {
+                        pub fn callback(a: P, b: Q) bool {
+                            inline for (info.fields) |field| {
+                                if (!@field(a, field.name).process(@field(b, field.name))) return false;
+                            }
+
+                            return true;
+                        }
+                    },
+                    else => @compileError("PatternModifier: unsupported type " ++ @typeName(P)),
+                },
+            }.callback);
+
+            log.debug("process result: {s}", .{if (result) "accept" else "reject"});
+
+            return result;
+        }
+    };
+}
+
+pub const TokenPattern = union(TokenType) {
+    pub const QueryType = *const Token;
+    sequence: PatternModifier(common.Id.Buffer(u8, .constant)),
+    linebreak: PatternModifier(struct {
+        const Self = @This();
+        pub const QueryType = @FieldType(TokenData, "linebreak");
+        n: PatternModifier(u32),
+        i: PatternModifier(IndentDelta),
+
+        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            try writer.print("⇓{}, {}", .{ self.n, self.i });
+        }
+    }),
+    special: PatternModifier(struct {
+        const Self = @This();
+        pub const QueryType = @FieldType(TokenData, "special");
+        escaped: PatternModifier(bool),
+        punctuation: PatternModifier(Punctuation),
+
+        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            try writer.print("{}, {}", .{self.escaped, self.punctuation});
+        }
+    }),
+
+    pub fn format(self: *const TokenPattern, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self.*) {
+            .sequence => try writer.print("s⟨{}⟩", .{self.sequence}),
+            .linebreak => try writer.print("b⟨{}⟩", .{self.linebreak}),
+            .special => try writer.print("p⟨{}⟩", .{self.special}),
+        }
+    }
+};
 
 pub fn PatternSet(comptime T: type) type {
     return struct {
         const Self = @This();
 
         const Data = struct {
-            tag: TokenType,
-            data: ?TokenData,
+            pattern: PatternModifier(TokenPattern),
             binding_power: i16,
             userdata: ?*anyopaque,
             callback: *const T,
@@ -859,12 +1000,11 @@ pub fn PatternSet(comptime T: type) type {
 
         pub fn bindPattern(
             self: *Self, allocator: std.mem.Allocator,
-            tag: TokenType, data: ?TokenData, binding_power: i16,
+            pattern: PatternModifier(TokenPattern), binding_power: i16,
             userdata: ?*anyopaque, callback: *const T,
         ) error{OutOfMemory}!void {
             try self.entries.append(allocator, Data {
-                .tag = tag,
-                .data = data,
+                .pattern = pattern,
                 .binding_power = binding_power,
                 .userdata = userdata,
                 .callback = callback,
@@ -876,32 +1016,15 @@ pub fn PatternSet(comptime T: type) type {
             self: *const PatternSet(T), allocator: std.mem.Allocator,
             token: *const Token,
         ) error{OutOfMemory}![]const QueryResult {
-            const tags = self.entries.items(.tag);
-            const data = self.entries.items(.data);
+            const patterns = self.entries.items(.pattern);
             const bps = self.entries.items(.binding_power);
             const userdata = self.entries.items(.userdata);
             const callbacks = self.entries.items(.callback);
 
             @constCast(self).query_cache.clearRetainingCapacity();
 
-            for (tags, 0..) |tag, index| {
-                if (tag != token.tag) continue;
-
-                if (data[index]) |*key_data| {
-                    switch (tag) {
-                        .sequence => {
-                            if (!std.mem.eql(u8, key_data.sequence.asSlice(), token.data.sequence.asSlice())) continue;
-                        },
-                        .linebreak => {
-                            if (key_data.linebreak.n != token.data.linebreak.n
-                            or  key_data.linebreak.i != token.data.linebreak.i) continue;
-                        },
-                        .special => {
-                            if (key_data.special.punctuation != token.data.special.punctuation
-                            or  key_data.special.escaped != token.data.special.escaped) continue;
-                        },
-                    }
-                }
+            for (patterns, 0..) |*pattern, index| {
+                if (!pattern.process(token)) continue;
 
                 try @constCast(self).query_cache.append(allocator, .{.binding_power = bps[index], .userdata = userdata[index], .callback = callbacks[index]});
             }
@@ -949,21 +1072,22 @@ pub const Syntax = struct {
 
     pub fn bindNud(
         self: *Syntax,
-        tag: TokenType,
-        data: ?TokenData,
+        pattern: PatternModifier(TokenPattern),
         binding_power: i16,
         comptime NudDef: anytype,
     ) error{OutOfMemory}!void {
         switch (@typeInfo(@TypeOf(NudDef))) {
             .@"fn" => {
+                log.debug("binding nud function", .{});
                 return self.bindNud(
-                    tag, data, binding_power,
+                    pattern, binding_power,
                     struct { pub const callback = NudDef; }
                 );
             },
             .type => {
+                log.debug("binding nud closure/inline function def", .{});
                 return self.nuds.bindPattern(
-                    self.allocator, tag, data, binding_power,
+                    self.allocator, pattern, binding_power,
                     if (comptime @hasDecl(NudDef, "userdata")) &@field(NudDef, "userdata")
                     else null,
                     struct {
@@ -1004,21 +1128,22 @@ pub const Syntax = struct {
 
     pub fn bindLed(
         self: *Syntax,
-        tag: TokenType,
-        data: ?TokenData,
+        pattern: PatternModifier(TokenPattern),
         binding_power: i16,
         comptime LedDef: anytype,
     ) error{OutOfMemory}!void {
         switch (@typeInfo(@TypeOf(LedDef))) {
             .@"fn" => {
+                log.debug("binding led function", .{});
                 return self.bindLed(
-                    tag, data, binding_power,
+                    pattern, binding_power,
                     struct { pub const callback = LedDef; }
                 );
             },
             .type => {
+                log.debug("binding led closure/inline function def", .{});
                 return self.leds.bindPattern(
-                    self.allocator, tag, data, binding_power,
+                    self.allocator, pattern, binding_power,
                     if (comptime @hasDecl(LedDef, "userdata")) &@field(LedDef, "userdata")
                     else null,
                     struct {
@@ -1086,6 +1211,15 @@ pub const Expr = extern struct {
     token: Token,
     /// Subexpressions of this expression, if any.
     operands: common.Id.Buffer(Expr, .constant),
+
+    pub fn deinit(self: *Expr, allocator: std.mem.Allocator) void {
+        const xs = @constCast(self.operands.asSlice());
+        for (xs) |*x| x.deinit(allocator);
+        if (xs.len != 0) {
+            // empty buffer != empty slice
+            allocator.free(xs);
+        }
+    }
 
     pub fn format(self: *const Expr, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         switch (self.type) {
@@ -1160,6 +1294,7 @@ pub fn whitespace_significance_led(
     token: Token,
 ) SyntaxError!?Expr {
     var buff: pl.ArrayList(Expr) = .empty;
+    defer buff.deinit(parser.allocator);
 
     try buff.append(parser.allocator, first_stmt);
 
@@ -1215,7 +1350,7 @@ pub fn whitespace_significance_led(
         .location = first_stmt.location,
         .type = ExprTypes.Stmts,
         .token = token,
-        .operands = common.Id.Buffer(Expr, .constant).fromSlice(buff.items),
+        .operands = common.Id.Buffer(Expr, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
     };
 }
 
@@ -1231,24 +1366,27 @@ test "parser_basic_integration" {
         ;
     const expected_output = "Stmts({ Identifier(test), IndentedBlock({ Stmts({ Identifier(foo), IndentedBlock({ Stmts({ Int(1), Int(2) }) }), Identifier(bar) }) }) })";
 
-    const allocator = std.heap.page_allocator;
+    var gpa = std.heap.DebugAllocator(.{}).init;
+    const allocator = gpa.allocator();
 
     var syntax = Syntax.init(allocator);
     defer syntax.deinit();
 
-    try syntax.bindNud(.sequence, null, std.math.minInt(i16), basic_leaf_node_nud);
-    try syntax.bindLed(.linebreak, null, std.math.maxInt(i16), whitespace_significance_led);
+    try syntax.bindNud(.{ .standard = .{ .sequence = .any } }, std.math.minInt(i16), basic_leaf_node_nud);
+    try syntax.bindLed(.{ .standard = .{ .linebreak = .any } }, std.math.maxInt(i16), whitespace_significance_led);
 
     var parser = Parser.init(allocator, &syntax, try Lexer0.init(.{}, input));
-    const expr = parser.pratt(std.math.maxInt(i16)) catch |err| {
+    var expr = parser.pratt(std.math.maxInt(i16)) catch |err| {
         log.err("syntax error: {s}", .{@errorName(err)});
         return err;
     } orelse {
         log.err("expected a single expression, got nothing", .{});
         return error.UnexpectedEof;
     };
+    defer expr.deinit(allocator);
 
     const output = try std.fmt.allocPrint(allocator, "{}", .{expr});
+    defer allocator.free(output);
 
     try std.testing.expectEqualStrings(expected_output, output);
 }
