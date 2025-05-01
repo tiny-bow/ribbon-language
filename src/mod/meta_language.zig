@@ -32,7 +32,7 @@ pub const Location = packed struct {
     buffer: BufferPosition = 0,
     visual: VisualPosition = .{},
     pub fn format(self: *const Location, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("{}:{} ({})", .{ self.visual.line, self.visual.column, self.buffer });
+        try writer.print("[{}:{} ({})]", .{ self.visual.line, self.visual.column, self.buffer });
     }
 };
 
@@ -46,20 +46,20 @@ pub const Token = extern struct {
     data: TokenData,
 
     pub fn format(self: Token, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{}:", .{self.location});
         switch (self.tag) {
             .sequence => {
                 const s = self.data.sequence;
+
                 try writer.print("s⟨{s}⟩", .{ s.asSlice() });
             },
             .linebreak => {
-                const lb = self.data.linebreak;
+                const b = self.data.linebreak;
 
-                if (lb.i > 0) {
-                    try writer.print("b⟨⇓{}⇒{}⟩", .{ lb.n, lb.i });
-                } else if (lb.i < 0) {
-                    try writer.print("b⟨⇓{}⇐{}⟩", .{ lb.n, -lb.i });
-                } else {
-                    try writer.print("b⟨⇓{}⟩", .{ lb.n });
+                switch (b.i) {
+                    .indent => try writer.print("b⟨⇓{}, ⇒⟩", .{ b.n }),
+                    .unindent => try writer.print("b⟨⇓{}, ⇐⟩", .{ b.n }),
+                    .none => try writer.print("b⟨⇓{}⟩", .{ b.n }),
                 }
             },
             .special => {
@@ -89,18 +89,23 @@ pub const TokenType = enum (u8) {
     special = 2,
 };
 
+pub const IndentDelta = enum(i8) {
+    unindent = -1,
+    none = 0,
+    indent = 1,
+};
+
 /// This is a packed union of all the possible types of tokens that can be produced by the lexer.
 pub const TokenData = packed union {
     /// a sequence of characters that do not fit the other categories,
     /// and contain no control characters or whitespace.
     sequence: common.Id.Buffer(u8, .constant),
-    /// \n * `n` new lines with `i`* relative indentation change.
-    ///
-    /// * provided in text-format-agnostic "levels";
-    /// to get actual indentations inspect column of the next token
+    /// `n` new lines with `i` relative indentation change.
+    /// Multiple levels of indentation change are split into multiple tokens,
+    /// with subsequent tokens having `n` = `0`.
     linebreak: packed struct {
         n: u32,
-        i: i32,
+        i: IndentDelta,
     },
     /// Special lexical control characters, such as `{`, `\"`, etc.
     special: Special,
@@ -359,7 +364,7 @@ pub const Lexer0 = struct {
                 .location = start,
                 .tag = .linebreak,
                 .data = TokenData{
-                    .linebreak = .{ .n = 0, .i = -1 },
+                    .linebreak = .{ .n = 0, .i = .unindent },
                 },
             };
         }
@@ -396,7 +401,7 @@ pub const Lexer0 = struct {
                     self.indentation[self.levels] = @intCast(newIndent); // TODO: check for overflow?
                     self.levels += 1;
 
-                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = 1 } };
+                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = .indent } };
                 } else if (newIndent < oldIndent) {
                     // we need to traverse back down the indentation stack until we find the right level
                     var newIndentIndex = self.levels - 1;
@@ -422,11 +427,11 @@ pub const Lexer0 = struct {
 
                     self.levels_queued = level_delta - 1;
 
-                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = -1 } };
+                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = .unindent } };
                 } else {
                     log.debug("same indentation level {} ({})", .{ self.levels - 1, n });
 
-                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = 0 } };
+                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = .none } };
                 }
             },
             '\\' => {
@@ -512,7 +517,9 @@ pub const Lexer0 = struct {
 test "lexer_basic_integration" {
     var lexer = try lexWithPeek(.{},
         \\test
-        \\    foo
+        \\  \\
+        \\foo
+        \\    bar
         \\        [
         \\            1,
         \\            2,
@@ -532,7 +539,17 @@ test "lexer_basic_integration" {
         .{
             .location = undefined,
             .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = 1 } },
+            .data = .{ .linebreak = .{ .n = 1, .i = .indent } },
+        },
+        .{
+            .location = undefined,
+            .tag = .special,
+            .data = .{ .special = .{ .escaped = true, .punctuation = Punctuation.fromChar('\\') } },
+        },
+        .{
+            .location = undefined,
+            .tag = .linebreak,
+            .data = .{ .linebreak = .{ .n = 1, .i = .unindent } },
         },
         .{
             .location = undefined,
@@ -542,7 +559,17 @@ test "lexer_basic_integration" {
         .{
             .location = undefined,
             .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = 1 } },
+            .data = .{ .linebreak = .{ .n = 1, .i = .indent } },
+        },
+        .{
+            .location = undefined,
+            .tag = .sequence,
+            .data = .{ .sequence = .fromSlice("bar") },
+        },
+        .{
+            .location = undefined,
+            .tag = .linebreak,
+            .data = .{ .linebreak = .{ .n = 1, .i = .indent } },
         },
         .{
             .location = undefined,
@@ -552,7 +579,7 @@ test "lexer_basic_integration" {
         .{
             .location = undefined,
             .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = 1 } },
+            .data = .{ .linebreak = .{ .n = 1, .i = .indent } },
         },
         .{
             .location = undefined,
@@ -567,7 +594,7 @@ test "lexer_basic_integration" {
         .{
             .location = undefined,
             .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = 0 } },
+            .data = .{ .linebreak = .{ .n = 1, .i = .none } },
         },
         .{
             .location = undefined,
@@ -582,7 +609,7 @@ test "lexer_basic_integration" {
         .{
             .location = undefined,
             .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = 0 } },
+            .data = .{ .linebreak = .{ .n = 1, .i = .none } },
         },
         .{
             .location = undefined,
@@ -592,7 +619,7 @@ test "lexer_basic_integration" {
         .{
             .location = undefined,
             .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = -1 } },
+            .data = .{ .linebreak = .{ .n = 1, .i = .unindent } },
         },
         .{
             .location = undefined,
@@ -602,36 +629,35 @@ test "lexer_basic_integration" {
         .{
             .location = undefined,
             .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = -1 } },
+            .data = .{ .linebreak = .{ .n = 1, .i = .unindent } },
         },
         .{
             .location = undefined,
             .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 0, .i = -1 } },
+            .data = .{ .linebreak = .{ .n = 0, .i = .unindent } },
         },
     };
 
     for (expect) |e| {
         const it = lexer.next() catch |err| {
-            log.err("{}: {s}\n", .{ lexer.inner.location, @errorName(err) });
+            log.err("{}: {s}", .{ lexer.inner.location, @errorName(err) });
             return err;
         };
 
         if (it) |tok| {
-            log.debug("{} to {}: {} (expecting {})\n", .{ tok.location, lexer.inner.location, tok.data, e });
+            log.debug("{} to {}: {} (expecting {})", .{ tok.location, lexer.inner.location, tok, e });
 
             try std.testing.expectEqual(e.tag, tok.tag);
+
             switch (e.tag) {
                 .sequence => {
                     const s = e.data.sequence;
                     try std.testing.expectEqualSlices(u8, s.asSlice(), tok.data.sequence.asSlice());
                 },
-
                 .special => {
                     const p = e.data.special;
                     try std.testing.expectEqual(p, tok.data.special);
                 },
-
                 .linebreak => {
                     const l = e.data.linebreak;
                     try std.testing.expectEqual(l.n, tok.data.linebreak.n);
@@ -639,7 +665,7 @@ test "lexer_basic_integration" {
                 },
             }
         } else {
-            log.err("unexpected EOF {}; expected {}\n", .{ lexer.inner.location, e });
+            log.err("unexpected EOF {}; expected {}", .{ lexer.inner.location, e });
             return error.UnexpectedEof;
         }
     }
@@ -690,50 +716,96 @@ pub const Parser = struct {
         var lexer_save_state = self.lexer;
 
         const first_token = try self.lexer.next() orelse return null;
+        log.debug("pratt: first token {}", .{first_token});
 
         const nuds = try self.syntax.findNuds(&first_token);
 
         if (nuds.len == 0) {
+            log.debug("pratt: unexpected token {}, no valid nuds found", .{first_token});
             self.lexer = lexer_save_state;
             return error.UnexpectedToken;
         }
 
-        if (nuds[0].binding_power > binding_power) return null;
+        var lhs = nuds: for (nuds, 0..) |nud, i| {
+            if (nud.binding_power > binding_power) {
+                log.debug("pratt: rejecting nud{} of greater binding power than current", .{i});
+                self.lexer = lexer_save_state;
+                continue :nuds;
+            }
 
-        var lhs = nuds: for (nuds) |nud| {
+            const lexer_save_state_2 = self.lexer;
+
             switch (nud.invoke(.{self, nud.binding_power, first_token, &out, &err})) {
-                .okay => break :nuds out,
-                .panic => return err,
-                .reject => continue :nuds,
+                .okay => {
+                    log.debug("pratt: nud{} accepted input", .{i});
+                    break :nuds out;
+                },
+                .panic => {
+                    self.lexer = lexer_save_state;
+                    log.debug("pratt: nud{} for {} panicked", .{i, first_token});
+                    return err;
+                },
+                .reject => {
+                    self.lexer = lexer_save_state_2;
+                    log.debug("pratt: nud{} for {} rejected", .{i, first_token});
+                    continue :nuds;
+                },
             }
         } else {
             self.lexer = lexer_save_state;
+            log.debug("pratt: unexpected token {}, no accepting nud found", .{first_token});
             return error.UnexpectedToken;
         };
 
         lexer_save_state = self.lexer;
 
-        while (try self.lexer.next()) |token| {
-            const leds = try self.syntax.findLeds(&token);
+        while (try self.lexer.next()) |curr_token| {
+            log.debug("infix token {}", .{curr_token});
 
-            if (leds.len == 0 or leds[0].binding_power > binding_power) {
+            const leds = try self.syntax.findLeds(&curr_token);
+
+            if (leds.len == 0) {
+                log.debug("pratt: unexpected token {}, no valid leds found", .{curr_token});
                 self.lexer = lexer_save_state;
                 return lhs;
             }
 
-            leds: for (leds) |led|{
-                switch (led.invoke(.{self, lhs, led.binding_power, token, &out, &err})) {
-                    .okay => { lhs = out; break :leds; },
-                    .panic => return err,
-                    .reject => continue :leds,
+            leds: for (leds, 0..) |led, i|{
+                if (led.binding_power > binding_power) {
+                    log.debug("pratt: rejecting led{} of greater binding power than current", .{i});
+                    continue :leds;
+                }
+
+                const lexer_save_state_2 = self.lexer;
+                switch (led.invoke(.{self, lhs, led.binding_power, curr_token, &out, &err})) {
+                    .okay => {
+                        log.debug("pratt: led{} accepted input", .{i});
+                        lhs = out;
+                        break :leds;
+                    },
+                    .panic => {
+                        self.lexer = lexer_save_state;
+                        log.debug("pratt: led{} for {} panicked", .{i, curr_token});
+                        return err;
+                    },
+                    .reject => {
+                        self.lexer = lexer_save_state_2;
+                        log.debug("pratt: led{} for {} rejected", .{i, curr_token});
+                        continue :leds;
+                    },
                 }
             } else {
                 self.lexer = lexer_save_state;
+                log.debug("pratt: unexpected token {}, no accepting led found", .{curr_token});
                 return lhs;
             }
 
             lexer_save_state = self.lexer;
+        } else {
+            log.debug("pratt: end of input", .{});
         }
+
+        log.debug("pratt: exit", .{});
 
         return lhs;
     }
@@ -880,40 +952,54 @@ pub const Syntax = struct {
         tag: TokenType,
         data: ?TokenData,
         binding_power: i16,
-        comptime NudDef: type,
+        comptime NudDef: anytype,
     ) error{OutOfMemory}!void {
-        return self.nuds.bindPattern(
-            self.allocator, tag, data, binding_power,
-            if (comptime @hasDecl(NudDef, "userdata")) &@field(NudDef, "userdata")
-            else null,
-            struct {
-                pub fn nud_callback_wrapper(
-                    userdata: ?*anyopaque,
-                    parser: *Parser,
-                    bp: i16,
-                    token: Token,
-                    out: *Expr,
-                    err: *SyntaxError,
-                ) callconv(.c) ParserSignal {
-                    const result =
-                        if (comptime @hasDecl(NudDef, "userdata"))
-                            @call(.auto, NudDef.callback, .{userdata} ++ .{parser, bp, token})
-                        else
-                            @call(.auto, NudDef.callback, .{parser, bp, token});
+        switch (@typeInfo(@TypeOf(NudDef))) {
+            .@"fn" => {
+                return self.bindNud(
+                    tag, data, binding_power,
+                    struct { pub const callback = NudDef; }
+                );
+            },
+            .type => {
+                return self.nuds.bindPattern(
+                    self.allocator, tag, data, binding_power,
+                    if (comptime @hasDecl(NudDef, "userdata")) &@field(NudDef, "userdata")
+                    else null,
+                    struct {
+                        pub fn nud_callback_wrapper(
+                            userdata: ?*anyopaque,
+                            parser: *Parser,
+                            bp: i16,
+                            token: Token,
+                            out: *Expr,
+                            err: *SyntaxError,
+                        ) callconv(.c) ParserSignal {
+                            const result =
+                                if (comptime @hasDecl(NudDef, "userdata"))
+                                    @call(.auto, NudDef.callback, .{userdata} ++ .{parser, bp, token})
+                                else
+                                    @call(.auto, NudDef.callback, .{parser, bp, token});
 
-                    const maybe = result catch |e| {
-                        err.* = e;
-                        return .panic;
-                    };
+                            const maybe = result catch |e| {
+                                err.* = e;
+                                return .panic;
+                            };
 
-                    out.* = maybe orelse {
-                        return .reject;
-                    };
+                            out.* = maybe orelse {
+                                return .reject;
+                            };
 
-                    return .okay;
-                }
-            }.nud_callback_wrapper
-        );
+                            return .okay;
+                        }
+                    }.nud_callback_wrapper
+                );
+            },
+
+            else => {
+                @compileError("Invalid type " ++ @typeName(@TypeOf(NudDef)) ++ " for NudDef, expected a function or a type with a callback and optional userdata decl");
+            }
+        }
     }
 
     pub fn bindLed(
@@ -921,39 +1007,54 @@ pub const Syntax = struct {
         tag: TokenType,
         data: ?TokenData,
         binding_power: i16,
-        comptime LedDef: type,
+        comptime LedDef: anytype,
     ) error{OutOfMemory}!void {
-        return self.leds.bindPattern(
-            self.allocator, tag, data, binding_power,
-            if (comptime @hasDecl(LedDef, "userdata")) &@field(LedDef, "userdata")
-            else null,
-            struct {
-                pub fn led_callback_wrapper(
-                    userdata: ?*anyopaque,
-                    parser: *Parser,
-                    lhs: Expr,
-                    bp: i16,
-                    token: Token,
-                    out: *Expr,
-                    err: *SyntaxError,
-                ) callconv(.c) ParserSignal {
-                    const result =
-                        if (comptime @hasDecl(LedDef, "userdata"))
-                            @call(.auto, LedDef.callback, .{userdata} ++ .{parser, lhs, bp, token, out, err})
-                        else
-                            @call(.auto, LedDef.callback, .{parser, lhs, bp, token, out});
+        switch (@typeInfo(@TypeOf(LedDef))) {
+            .@"fn" => {
+                return self.bindLed(
+                    tag, data, binding_power,
+                    struct { pub const callback = LedDef; }
+                );
+            },
+            .type => {
+                return self.leds.bindPattern(
+                    self.allocator, tag, data, binding_power,
+                    if (comptime @hasDecl(LedDef, "userdata")) &@field(LedDef, "userdata")
+                    else null,
+                    struct {
+                        pub fn led_callback_wrapper(
+                            userdata: ?*anyopaque,
+                            parser: *Parser,
+                            lhs: Expr,
+                            bp: i16,
+                            token: Token,
+                            out: *Expr,
+                            err: *SyntaxError,
+                        ) callconv(.c) ParserSignal {
+                            const result =
+                                if (comptime @hasDecl(LedDef, "userdata"))
+                                    @call(.auto, LedDef.callback, .{userdata} ++ .{parser, lhs, bp, token})
+                                else
+                                    @call(.auto, LedDef.callback, .{parser, lhs, bp, token});
 
-                    const maybe = result catch |e| {
-                        err.* = e;
-                        return .panic;
-                    };
+                            const maybe = result catch |e| {
+                                err.* = e;
+                                return .panic;
+                            };
 
-                    return maybe orelse {
-                        return .reject;
-                    };
-                }
-            }.led_callback_wrapper
-        );
+                            out.* = maybe orelse {
+                                return .reject;
+                            };
+
+                            return .okay;
+                        }
+                    }.led_callback_wrapper
+                );
+            },
+            else => {
+                @compileError("Invalid type " ++ @typeName(@TypeOf(LedDef)) ++ " for LedDef, expected a function or a type with a callback and optional userdata decl");
+            }
+        }
     }
 
     /// Find the nuds matching a given token, if any.
@@ -985,6 +1086,29 @@ pub const Expr = extern struct {
     token: Token,
     /// Subexpressions of this expression, if any.
     operands: common.Id.Buffer(Expr, .constant),
+
+    pub fn format(self: *const Expr, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self.type) {
+            ExprTypes.Int => {
+                try writer.print("Int({s})", .{self.token.data.sequence.asSlice()});
+            },
+            ExprTypes.Identifier => {
+                try writer.print("Identifier({s})", .{self.token.data.sequence.asSlice()});
+            },
+            ExprTypes.IndentedBlock => {
+                try writer.print("IndentedBlock({any})", .{self.operands.asSlice()});
+            },
+            ExprTypes.Stmts => {
+                try writer.print("Stmts({any})", .{self.operands.asSlice()});
+            },
+            ExprTypes.Qed => {
+                try writer.print("Qed", .{});
+            },
+            else => {
+                try writer.print("[{}]({}, {any})", .{@intFromEnum(self.type), self.token, self.operands.asSlice()});
+            }
+        }
+    }
 };
 
 /// Builtin types of expressions.
@@ -995,72 +1119,136 @@ pub var ExprTypes = gen: {
         .Int = fresh.next(),
         .Identifier = fresh.next(),
         .IndentedBlock = fresh.next(),
+        .Stmts = fresh.next(),
+        .Qed = fresh.next(),
         .fresh_id = fresh,
     };
 };
 
-test "parser_basic_integration" {
+pub fn basic_leaf_node_nud(
+    _: *Parser,
+    _: i16,
+    token: Token,
+) SyntaxError!?Expr {
+    const s = token.data.sequence.asSlice();
 
-    const allocator = std.testing.allocator;
+    const first_char = utils.text.nthCodepoint(0, s) catch unreachable orelse unreachable;
+
+    if (utils.text.isDecimal(first_char) and utils.text.isHexDigitStr(s)) {
+        return Expr{
+            .location = token.location,
+            .type = ExprTypes.Int,
+            .token = token,
+            .operands = .empty,
+        };
+    } else if (utils.text.isAlphanumericStr(s)) {
+        return Expr{
+            .location = token.location,
+            .type = ExprTypes.Identifier,
+            .token = token,
+            .operands = .empty,
+        };
+    } else {
+        return null;
+    }
+}
+
+pub fn whitespace_significance_led(
+    parser: *Parser,
+    first_stmt: Expr,
+    bp: i16,
+    token: Token,
+) SyntaxError!?Expr {
+    var buff: pl.ArrayList(Expr) = .empty;
+
+    try buff.append(parser.allocator, first_stmt);
+
+    switch (token.data.linebreak.i) {
+        .none => {
+            log.debug("linebreak no indent", .{});
+        },
+        .indent => {
+            log.debug("linebreak indent accepted by indentation parser", .{});
+
+            const buffer = try parser.allocator.alloc(Expr, 1);
+
+            buffer[0] = try parser.pratt(bp) orelse {
+                log.err("linebreak indent block expected expression, got nothing", .{});
+                return error.UnexpectedToken;
+            };
+
+            const unindent = try parser.lexer.next() orelse {
+                log.err("linebreak indent block end expected unindent, got nothing", .{});
+                return error.UnexpectedEof;
+            };
+
+            if (unindent.tag != .linebreak) {
+                log.err("linebreak indent block end expected unindent, got: {}", .{unindent.tag});
+                return error.UnexpectedToken;
+            }
+
+            if (unindent.data.linebreak.i != .unindent) {
+                log.err("linebreak indent block end expected unindent, got: {}", .{unindent.data.linebreak.i});
+                return error.UnexpectedToken;
+            }
+
+            log.debug("linebreak indent block successfully parsed by indentation parser: {any}", .{buffer});
+
+            try buff.append(parser.allocator, Expr{
+                .location = token.location,
+                .type = ExprTypes.IndentedBlock,
+                .token = token,
+                .operands = common.Id.Buffer(Expr, .constant).fromSlice(buffer),
+            });
+        },
+        .unindent => {
+            log.debug("linebreak unindent rejected by indentation parser; this is a sentinel", .{});
+            return null;
+        },
+    }
+
+    if (try parser.pratt(bp)) |second_stmt| {
+        try buff.append(parser.allocator, second_stmt);
+    }
+
+    return Expr{
+        .location = first_stmt.location,
+        .type = ExprTypes.Stmts,
+        .token = token,
+        .operands = common.Id.Buffer(Expr, .constant).fromSlice(buff.items),
+    };
+}
+
+test "parser_basic_integration" {
+    const input =
+        \\test
+        \\    foo
+        \\      1
+        \\      2
+        \\    bar
+        \\
+        \\
+        ;
+    const expected_output = "Stmts({ Identifier(test), IndentedBlock({ Stmts({ Identifier(foo), IndentedBlock({ Stmts({ Int(1), Int(2) }) }), Identifier(bar) }) }) })";
+
+    const allocator = std.heap.page_allocator;
 
     var syntax = Syntax.init(allocator);
     defer syntax.deinit();
 
-    try syntax.bindNud(.linebreak, null, std.math.minInt(i16), struct {
-        pub fn callback(
-            _: *Parser,
-            _: i16,
-            token: Token,
-        ) SyntaxError!?Expr {
-            return Expr{
-                .location = token.location,
-                .type = ExprTypes.IndentedBlock,
-                .token = token,
-                .operands = .empty,
-            };
-        }
-    });
+    try syntax.bindNud(.sequence, null, std.math.minInt(i16), basic_leaf_node_nud);
+    try syntax.bindLed(.linebreak, null, std.math.maxInt(i16), whitespace_significance_led);
 
-    try syntax.bindNud(.sequence, null, std.math.minInt(i16), struct {
-        pub fn callback(
-            _: *Parser,
-            _: i16,
-            token: Token,
-        ) SyntaxError!?Expr {
-            const s = token.data.sequence.asSlice();
+    var parser = Parser.init(allocator, &syntax, try Lexer0.init(.{}, input));
+    const expr = parser.pratt(std.math.maxInt(i16)) catch |err| {
+        log.err("syntax error: {s}", .{@errorName(err)});
+        return err;
+    } orelse {
+        log.err("expected a single expression, got nothing", .{});
+        return error.UnexpectedEof;
+    };
 
-            const first_char = utils.text.nthCodepoint(0, s) catch unreachable orelse unreachable;
+    const output = try std.fmt.allocPrint(allocator, "{}", .{expr});
 
-            if (utils.text.isDecimal(first_char) and utils.text.isHexDigitStr(s)) {
-                return Expr{
-                    .location = token.location,
-                    .type = ExprTypes.Int,
-                    .token = token,
-                    .operands = .empty,
-                };
-            } else if (utils.text.isAlphanumericStr(s)) {
-                return Expr{
-                    .location = token.location,
-                    .type = ExprTypes.Identifier,
-                    .token = token,
-                    .operands = .empty,
-                };
-            } else {
-                return null;
-            }
-        }
-    });
-
-    const parser = Parser.init(allocator, &syntax, try Lexer0.init(.{},
-        \\test
-        \\  [
-        \\      1,
-        \\      2,
-        \\      3
-        \\  ]
-        \\
-    ));
-    _ = parser;
-
-
+    try std.testing.expectEqualStrings(expected_output, output);
 }
