@@ -29,8 +29,6 @@ pub const Builtin = struct {
     names: struct {
         /// The name of the entry point of functions.
         entry: *const Name,
-        /// The name of the end point of functions.
-        end: *const Name,
 
         /// The name of the nil type.
         nil: *const Name,
@@ -1988,17 +1986,16 @@ pub const Function = struct {
     name: *const Name,
     /// The type of this function.
     type: *const Type,
-    /// The effect handler sets used in this function.
-    handler_sets: Id.Set(*const HandlerSet, 80) = .{},
     /// Arena allocator owning all `Instruction`s referenced by this function.
     arena: std.heap.ArenaAllocator,
-    /// The first instruction in the function; all paths must begin here by the time we construct the graph.
-    begin: *const Instruction,
-    /// The last instruction in the function; all paths must end here by the time we construct the graph.
-    end: *const Instruction,
-
+    /// Fresh id generator for blocks.
+    fresh_block_id: Id.of(Block) = .fromInt(1),
+    /// Basic blocks in this function.
+    blocks: Id.Set(*const Block, 80) = .empty,
     /// All instruction relations for the function are stored here in the form of use->def edges.
     edges: EdgeMap = .empty,
+    /// The beginning block of this function.
+    entry: *const Block,
 
     const EdgeMap = pl.UniqueReprMap(*const Instruction, EdgeList, 80);
     // Not a set because we can do for example `add x x`
@@ -2014,8 +2011,6 @@ pub const Function = struct {
     ) error{OutOfMemory}!*Function {
         const self = try root.allocator.create(Function);
 
-        var arena = std.heap.ArenaAllocator.init(root.allocator);
-
         self.* = .{
             .root = root,
             .module = module,
@@ -2023,33 +2018,14 @@ pub const Function = struct {
             .id = id,
             .name = name,
             .type = typeIr,
-            .arena = arena,
-            .begin = try arena.allocator().create(Instruction),
-            .end = try arena.allocator().create(Instruction),
+            .arena = std.heap.ArenaAllocator.init(root.allocator),
+            .entry = try Block.init(self, root.builtin.names.entry, .fromInt(1)),
         };
 
         try self.edges.ensureTotalCapacity(root.allocator, 1024);
+        try self.blocks.ensureTotalCapacity(root.allocator, 64);
 
-        @constCast(self.begin).* = Instruction {
-            .function = self,
-            .name = root.builtin.names.entry,
-            .type_cache = root.builtin.types.nil,
-            .operation = .begin,
-        };
-
-        @constCast(self.end).* = Instruction {
-            .function = self,
-            .name = root.builtin.names.end,
-            .type_cache = root.builtin.types.nil,
-            .operation = .join,
-        };
-
-        self.appendUseDef(self.end, .fromPtr(self.begin)) catch |err| {
-            switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => unreachable,
-            }
-        };
+        self.blocks.putAssumeCapacity(self.entry, {});
 
         return self;
     }
@@ -2175,26 +2151,15 @@ pub const Function = struct {
         var edges_it = self.edges.valueIterator();
         while (edges_it.next()) |list| list.deinit(allocator);
 
-        self.handler_sets.deinit(allocator);
+        var blocks_it = self.blocks.keyIterator();
+        while (blocks_it.next()) |blockPtr| Block.deinit(blockPtr.*);
+
         self.arena.deinit();
         self.edges.deinit(allocator);
     }
 
     pub fn onFormat(self: *const Function, formatter: anytype) !void {
         pl.todo(noreturn, .{self, formatter});
-    }
-
-    /// Creates a new default-initialized `Instruction` in this function.
-    /// The instruction is allocated in an arena owned by the function,
-    /// no memory management is necessary on behalf of the caller.
-    /// * Note this does not add the instruction to the function; the caller must do that manually
-    /// by attaching to `entry` or one of its descendants.
-    pub fn instr(ptr: *const Function, nameString: ?[]const u8, operation: Operation) error{OutOfMemory}!*const Instruction {
-        const self: *Function = @constCast(ptr);
-
-        const name = if (nameString) |ns| try self.root.internName(ns) else null;
-
-        return Instruction.init(self, name, operation);
     }
 };
 
@@ -2203,8 +2168,8 @@ pub const Function = struct {
 pub const HandlerSet = struct {
     /// The IR unit that owns this handler set.
     root: *const Builder,
-    /// The function that this handler set belongs to.
-    function: *const Function,
+    /// The block that this handler set belongs to.
+    block: *const Block,
     /// The unique identifier of this handler set.
     id: Id.of(HandlerSet),
     /// The handlers that this handler set contains.
@@ -2225,25 +2190,83 @@ pub const Handler = struct {
     function: *const Function,
 };
 
-/// Intermediate representation of instructions in sea of nodes style;
-/// created and managed by `Function`s.
-pub const Instruction = struct {
-    /// The function that this instruction belongs to.
+/// Intermediate representation of basic blocks.
+/// Blocks are used to group `Instruction`s together, inside `Function`s.
+pub const Block = struct {
+    /// The root IR unit that owns this block.
+    root: *const Builder,
+    /// The function that this block belongs to.
     function: *const Function,
-    /// The name of this instruction, if any, for debugging purposes.
+    /// The name of this block, if any, for debugging purposes.
     name: ?*const Name,
+    /// The unique identifier of this block.
+    id: Id.of(Block),
+    /// The instructions in this block.
+    instructions: pl.ArrayList(*const Instruction) = .empty,
+    /// The effect handler sets used in this block.
+    handler_sets: Id.Set(*const HandlerSet, 80) = .empty,
+
+    fn init(
+        function: *Function,
+        name: ?*const Name,
+        id: Id.of(Block),
+    ) error{OutOfMemory}!*const Block {
+        const self = try function.arena.allocator().create(Block);
+
+        self.* = Block {
+            .root = function.root,
+            .function = function,
+            .name = name,
+            .id = id,
+        };
+
+        return self;
+    }
+
+    fn deinit(ptr: *const Block) void {
+        const self: *Block = @constCast(ptr);
+
+        const allocator = self.root.allocator;
+        defer allocator.destroy(self);
+
+        self.instructions.deinit(allocator);
+    }
+
+    /// Get the index of a given instruction in this block.
+    /// Returns `null` if the instruction is not in this block.
+    pub fn getInstructionIndex(
+        ptr: *const Block,
+        i: *const Instruction,
+    ) ?usize {
+        return std.mem.indexOfScalar(*const Instruction, ptr.instructions.items, i);
+    }
+
+    /// Creates a new default-initialized `Instruction` at the end of this block.
+    /// The instruction is allocated in an arena owned by the function,
+    /// no memory management is necessary on behalf of the caller.
+    pub fn instr(ptr: *const Block, operation: Operation) error{OutOfMemory}!*const Instruction {
+        const self: *Block = @constCast(ptr);
+
+        return Instruction.init(self, operation);
+    }
+};
+
+/// Intermediate representation of instructions;
+/// created and organized by `Block`s, memory-managed by `Function`s.
+pub const Instruction = struct {
+    /// The block that this instruction belongs to.
+    block: *const Block,
     /// The kind of operation being performed by this instruction.
     operation: Operation,
     /// The cache for the type of this instruction; use `getType` to access.
     type_cache: ?*const Type,
 
-    fn init(function: *Function, name: ?*const Name, operation: Operation) error{OutOfMemory}!*const Instruction {
-        const self = try function.arena.allocator().create(Instruction);
-        errdefer function.arena.allocator().destroy(self);
+    fn init(block: *Block, operation: Operation) error{OutOfMemory}!*const Instruction {
+        const self = try @constCast(block.function).arena.allocator().create(Instruction);
+        errdefer @constCast(block.function).arena.allocator().destroy(self);
 
         self.* = Instruction {
-            .function = function,
-            .name = name,
+            .block = block,
             .operation = operation,
             .type_cache = null,
         };
@@ -2251,38 +2274,24 @@ pub const Instruction = struct {
         return self;
     }
 
-    /// Shortcut for chaining `Function.instr` and `Function.useDef`.
-    pub fn andThen(ptr: *const Instruction, nameString: ?[]const u8, operation: Operation) error{OutOfMemory}!*const Instruction {
-        const newInstr = try ptr.function.instr(nameString, operation);
-
-        ptr.function.appendUseDef(newInstr, .fromPtr(ptr)) catch |err| {
-            switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => unreachable,
-            }
-        };
-
-        return newInstr;
-    }
-
     /// Shortcut for `Function.insertUseDef`.
     pub fn insertUseDef(ptr: *const Instruction, index: usize, useDef: UseDef) error{OutOfMemory, InvalidCycle, InvalidIndex}!void {
-        return ptr.function.insertUseDef(ptr, index, useDef);
+        return ptr.block.function.insertUseDef(ptr, index, useDef);
     }
 
     /// Shortcut for `Function.appendUseDef`.
     pub fn appendUseDef(ptr: *const Instruction, input: UseDef) error{OutOfMemory, InvalidCycle}!void {
-        return ptr.function.appendUseDef(ptr, input);
+        return ptr.block.function.appendUseDef(ptr, input);
     }
 
     /// Shortcut for `Function.replaceUseDef`.
     pub fn replaceUseDef(ptr: *const Instruction, index: usize, input: UseDef) ?UseDef {
-        return ptr.function.replaceUseDef(ptr, index, input);
+        return ptr.block.function.replaceUseDef(ptr, index, input);
     }
 
     /// Shortcut for `Function.removeUseDef`.
     pub fn removeUseDef(ptr: *const Instruction, index: usize) ?UseDef {
-        return ptr.function.removeUseDef(ptr, index);
+        return ptr.block.function.removeUseDef(ptr, index);
     }
 
     /// Marks this instruction as dirty, so that it will recompute its type the next time `getType` is called.
@@ -2298,7 +2307,7 @@ pub const Instruction = struct {
 
     /// Simply loops over inputs and checks if any of them `isDirty`.
     pub fn hasDirtyUseDefs(self: *const Instruction) bool {
-        const useDefs = self.function.getUseDefs(self);
+        const useDefs = self.block.function.getUseDefs(self);
 
         for (useDefs) |input| {
             if (input.isDirty()) return true;
@@ -2324,34 +2333,27 @@ pub const Instruction = struct {
 
     /// Un-memoized version of `getType`.
     pub fn computeType(self: *const Instruction) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const ir.Type {
-        const useDefs = self.function.getUseDefs(self);
+        const useDefs = self.block.function.getUseDefs(self);
 
         return switch(self.operation) {
-            .nop => self.function.root.builtin.types.nil,
-            .begin => self.function.root.builtin.types.nil,
-            .join => self.function.root.builtin.types.nil,
-            .breakpoint => self.function.root.builtin.types.nil,
-            .@"unreachable" => self.function.root.builtin.types.noreturn,
-            .trap => self.function.root.builtin.types.noreturn,
-            .@"return" => self.function.root.builtin.types.noreturn,
-            .cancel => self.function.root.builtin.types.noreturn,
-            .unconditional_branch => self.function.root.builtin.types.nil,
-            .conditional_branch => self.function.root.builtin.types.nil,
+            .nop => self.block.root.builtin.types.nil,
+            .breakpoint => self.block.root.builtin.types.nil,
+            .@"unreachable" => self.block.root.builtin.types.noreturn,
+            .trap => self.block.root.builtin.types.noreturn,
+            .@"return" => self.block.root.builtin.types.noreturn,
+            .cancel => self.block.root.builtin.types.noreturn,
+            .unconditional_branch => self.block.root.builtin.types.nil,
+            .conditional_branch => self.block.root.builtin.types.nil,
             .phi =>
                 if (useDefs.len == 0) error.InvalidInstruction
                 else try useDefs[0].getType(),
-            .push_set => self.function.root.builtin.types.block,
-            .pop_set => self.function.root.builtin.types.nil,
             .call =>
                 if (useDefs.len == 0) error.InvalidInstruction
                 else (try (try useDefs[0].getType()).info.coerceFunction()).output,
             .prompt =>
                 if (useDefs.len == 0) error.InvalidInstruction
                 else (try (try useDefs[0].getType()).info.coerceFunction()).output,
-            .new_local =>
-                if (useDefs.len == 0 or useDefs[0].tag != .type) error.InvalidInstruction
-                else try self.function.root.internType(null, TypeInfo.localOf(useDefs[0].forcePtr(Type))),
-            .set_local => self.function.root.builtin.types.nil,
+            .set_local => self.block.root.builtin.types.nil,
             .get_local =>
                 if (useDefs.len == 0) error.InvalidInstruction
                 else checkLocal: {
@@ -2360,7 +2362,7 @@ pub const Instruction = struct {
                     break :checkLocal info.local.element;
                 },
             inline .eq, .ne, .le, .lt, .ge, .gt =>
-                self.function.root.builtin.types.bool,
+                self.block.root.builtin.types.bool,
             inline .bit_and, .bit_or, .bit_xor, .bit_not, .bit_lshift, .bit_rshift_a, .bit_rshift_l =>
                 if (useDefs.len == 0) error.InvalidInstruction
                 else try useDefs[0].getType(),
@@ -2479,14 +2481,11 @@ pub const UseDef = packed struct {
     }
 };
 
+
 /// Designates which kind of operation, be it data manipulation or control flow, is performed by an ir `Instruction`.
 pub const Operation = enum {
     /// No operation.
     nop,
-    /// Entry point pseudo-operation.
-    begin,
-    /// Join point pseudo-operation, representing the end of functions etc.
-    join,
     /// Indicates a breakpoint should be emitted in the output; skipped by optimizers.
     breakpoint,
     /// Indicates an undefined state; all uses may be discarded by optimizers.
@@ -2503,16 +2502,10 @@ pub const Operation = enum {
     conditional_branch,
     /// A unification point for virtual registers from predecessor blocks.
     phi,
-    /// Pushes an effect handler set.
-    push_set,
-    /// Pops an effect handler set.
-    pop_set,
     /// A standard function call.
     call,
     /// An effect handler prompt.
     prompt,
-    /// Create a local variable.
-    new_local,
     /// Set the value of a local variable.
     set_local,
     /// Get the value of a local variable.
