@@ -10,8 +10,13 @@ pub const std_options = std.Options{
     .log_level = .debug,
 };
 
-const input = "foo + 1 * 3 * 2 + 1";
-const expect = "(+ foo (+ (* 1 (* 3 2)) 1))";
+const input =
+    \\foo + 1 * 3 * 2 +
+    \\  1 * 2
+    \\
+    ;
+const expect = "(+ foo (+ (* 1 (* 3 2)) (do (* 1 2))))"
+    ;
 
 pub fn main() !void {
     var syn = try ribbon.meta_language.getCst(std.heap.page_allocator, .{}, input) orelse {

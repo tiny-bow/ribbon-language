@@ -179,7 +179,7 @@ pub fn assembleString(writer: anytype, source: []const u8, string: analysis.Synt
 }
 
 /// creates rml prefix/atomic parser defs.
-pub fn nuds() [2]analysis.Nud {
+pub fn nuds() [3]analysis.Nud {
     return .{
         analysis.createNud(
             "builtin_string",
@@ -270,12 +270,53 @@ pub fn nuds() [2]analysis.Nud {
                 }
             }.leaf,
         ),
+        analysis.createNud(
+            "builtin_space_sig",
+            std.math.maxInt(i16),
+            .{ .standard = .{ .linebreak = .{ .standard = .{ .n = .any, .i = .{ .standard = .indent }} } } },
+            null, struct {
+                pub fn space_sig(
+                    parser: *analysis.Parser,
+                    _: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("space_sig: parsing token {}", .{token.data.linebreak});
+
+                    const buff = parser.allocator.alloc(analysis.SyntaxTree, 1) catch unreachable;
+
+                    buff[0] = try parser.pratt(std.math.minInt(i16)) orelse return null;
+
+                    const unindent = try parser.lexer.next() orelse {
+                        return error.UnexpectedEof;
+                    };
+
+                    if (unindent.tag != .linebreak) {
+                        log.err("space_sig: indent block end expected unindent, got: {}", .{unindent.tag});
+                        return error.UnexpectedToken;
+                    }
+
+                    if (unindent.data.linebreak.i != .unindent) {
+                        log.err("space_sig: indent block end expected unindent, got: {}", .{unindent.data.linebreak.i});
+                        return error.UnexpectedToken;
+                    }
+
+                    log.debug("space_sig: indent block successfully parsed by indentation parser: {any}", .{buff});
+
+                    return analysis.SyntaxTree{
+                        .location = buff[0].location,
+                        .type = cst_types.IndentedBlock,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.space_sig,
+        ),
     };
 }
 
 
 /// creates rml infix/postfix parser defs.
-pub fn leds() [5]analysis.Led {
+pub fn leds() [4]analysis.Led {
     return .{
         analysis.createLed(
             "builtin_mul",
@@ -400,77 +441,6 @@ pub fn leds() [5]analysis.Led {
                     };
                 }
             }.sub,
-        ),
-        analysis.createLed(
-            "builtin_space_sig",
-            std.math.minInt(i16),
-            .{ .standard = .{ .linebreak = .{ .standard = .{ .n = .any, .i = .{ .inverted = .unindent }} } } },
-            null, struct {
-                pub fn space_sig(
-                    parser: *analysis.Parser,
-                    first_stmt: analysis.SyntaxTree,
-                    bp: i16,
-                    token: analysis.Token,
-                ) analysis.SyntaxError!?analysis.SyntaxTree {
-                    log.debug("space_sig: parsing token {}", .{token.data.linebreak});
-
-                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
-                    defer buff.deinit(parser.allocator);
-
-                    try buff.append(parser.allocator, first_stmt);
-
-                    switch (token.data.linebreak.i) {
-                        .none => {
-                            log.debug("space_sig: no indent", .{});
-                        },
-                        .indent => {
-                            log.debug("space_sig: indent accepted by indentation parser", .{});
-
-                            const buffer = try parser.allocator.alloc(analysis.SyntaxTree, 1);
-
-                            buffer[0] = try parser.pratt(bp) orelse {
-                                log.err("space_sig: indent block expected expression, got nothing", .{});
-                                return error.UnexpectedToken;
-                            };
-
-                            const unindent = try parser.lexer.next() orelse {
-                                return error.UnexpectedEof;
-                            };
-
-                            if (unindent.tag != .linebreak) {
-                                log.err("space_sig: indent block end expected unindent, got: {}", .{unindent.tag});
-                                return error.UnexpectedToken;
-                            }
-
-                            if (unindent.data.linebreak.i != .unindent) {
-                                log.err("space_sig: indent block end expected unindent, got: {}", .{unindent.data.linebreak.i});
-                                return error.UnexpectedToken;
-                            }
-
-                            log.debug("space_sig: indent block successfully parsed by indentation parser: {any}", .{buffer});
-
-                            try buff.append(parser.allocator, analysis.SyntaxTree{
-                                .location = token.location,
-                                .type = cst_types.IndentedBlock,
-                                .token = token,
-                                .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buffer),
-                            });
-                        },
-                        .unindent => unreachable,
-                    }
-
-                    if (try parser.pratt(bp)) |second_stmt| {
-                        try buff.append(parser.allocator, second_stmt);
-                    }
-
-                    return analysis.SyntaxTree{
-                        .location = first_stmt.location,
-                        .type = cst_types.Stmts,
-                        .token = token,
-                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
-                    };
-                }
-            }.space_sig,
         ),
     };
 }
