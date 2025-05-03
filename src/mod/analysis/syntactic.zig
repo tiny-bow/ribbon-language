@@ -284,7 +284,7 @@ pub fn PatternSet(comptime T: type) type {
                 {},
                 struct {
                     pub fn query_result_sort(_: void, a: QueryResult, b: QueryResult) bool {
-                        return a.binding_power > b.binding_power;
+                        return a.binding_power < b.binding_power;
                     }
                 }.query_result_sort
             );

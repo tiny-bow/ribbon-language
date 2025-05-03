@@ -20,6 +20,38 @@ test {
 var syntax_mutex = std.Thread.Mutex{};
 var syntax: ?analysis.Syntax = null;
 
+pub noinline fn dumpCstSExprs(source: []const u8, cst: analysis.SyntaxTree, writer: anytype) !void {
+    switch(cst.type) {
+        cst_types.Identifier, cst_types.Int => try writer.print("{s}", .{cst.token.data.sequence.asSlice()}),
+        cst_types.String => {
+            try writer.print("\"{s}\"", .{cst.token.data.sequence.asSlice()});
+        },
+        cst_types.IndentedBlock => try writer.writeAll("(do"),
+        cst_types.Stmts => try writer.writeAll("(begin"),
+        else => {
+            switch (cst.token.tag) {
+                .sequence => {
+                    try writer.writeAll("(");
+                    try writer.print("{s}", .{cst.token.data.sequence.asSlice()});
+                },
+                else => try writer.print("({}", .{cst.token}),
+            }
+        },
+    }
+
+    switch (cst.type) {
+        cst_types.String, cst_types.Identifier, cst_types.Int => return,
+        else => {
+            for (cst.operands.asSlice()) |child| {
+                try writer.writeByte(' ');
+                try dumpCstSExprs(source, child, writer);
+            }
+
+            try writer.writeByte(')');
+        }
+    }
+}
+
 /// Get the syntax for the meta-language.
 pub fn getSyntax() *const analysis.Syntax {
     syntax_mutex.lock();
@@ -95,18 +127,16 @@ pub const cst_types = gen: {
         .Identifier = fresh.next(),
         .IndentedBlock = fresh.next(),
         .Stmts = fresh.next(),
+        .Binary = fresh.next(),
         .Qed = fresh.next(),
     };
 };
 
-pub fn assembleString(allocator: std.mem.Allocator, source: []const u8, string: analysis.SyntaxTree) ![]const u8 {
+pub fn assembleString(writer: anytype, source: []const u8, string: analysis.SyntaxTree) !void {
     std.debug.assert(string.type == cst_types.String);
 
     const subexprs = string.operands.asSlice();
     log.debug("assembling string from subexprs: {any}", .{subexprs});
-
-    var out = pl.ArrayList(u8).empty;
-    defer out.deinit(allocator);
 
     const start_loc = subexprs[0].location;
     const end_loc = subexprs[subexprs.len - 1].location;
@@ -128,13 +158,13 @@ pub fn assembleString(allocator: std.mem.Allocator, source: []const u8, string: 
         if (ch == '\\') {
             if (try char_it.next()) |next_ch| {
                 switch (next_ch) {
-                    '\\' => try out.append(allocator, '\\'),
-                    'n' => try out.append(allocator, '\n'),
-                    't' => try out.append(allocator, '\t'),
-                    'r' => try out.append(allocator, '\r'),
-                    '"' => try out.append(allocator, '"'),
-                    '\'' => try out.append(allocator, '\''),
-                    '0' => try out.append(allocator, 0),
+                    '\\' => try writer.writeByte('\\'),
+                    'n' => try writer.writeByte('\n'),
+                    't' => try writer.writeByte('\t'),
+                    'r' => try writer.writeByte('\r'),
+                    '"' => try writer.writeByte('"'),
+                    '\'' => try writer.writeByte('\''),
+                    '0' => try writer.writeByte(0),
                     else => return error.InvalidEscape,
                 }
             } else {
@@ -143,11 +173,9 @@ pub fn assembleString(allocator: std.mem.Allocator, source: []const u8, string: 
         } else {
             var buf = [1]u8{0} ** 4;
             const len = std.unicode.utf8Encode(ch, &buf) catch unreachable;
-            try out.appendSlice(allocator, buf[0..len]);
+            try writer.writeAll(buf[0..len]);
         }
     }
-
-    return out.toOwnedSlice(allocator);
 }
 
 /// creates rml prefix/atomic parser defs.
@@ -273,7 +301,7 @@ pub fn leds() [5]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = first_stmt.location,
-                        .type = cst_types.Stmts,
+                        .type = cst_types.Binary,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
                     };
@@ -304,7 +332,7 @@ pub fn leds() [5]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = first_stmt.location,
-                        .type = cst_types.Stmts,
+                        .type = cst_types.Binary,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
                     };
@@ -335,7 +363,7 @@ pub fn leds() [5]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = first_stmt.location,
-                        .type = cst_types.Stmts,
+                        .type = cst_types.Binary,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
                     };
@@ -366,7 +394,7 @@ pub fn leds() [5]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = first_stmt.location,
-                        .type = cst_types.Stmts,
+                        .type = cst_types.Binary,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
                     };
