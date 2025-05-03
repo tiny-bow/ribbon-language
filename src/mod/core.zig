@@ -296,19 +296,19 @@ pub const Extents = packed struct(u128) {
 /// ownership varies.
 pub const AddressTable = extern struct {
     /// Constant value bindings section.
-    constants: Id.Buffer(*const Constant, .constant) = .{},
+    constants: Id.Buffer(*const Constant, .constant) = .empty,
     /// Global value bindings section.
-    globals: Id.Buffer(*const Global, .constant) = .{},
+    globals: Id.Buffer(*const Global, .constant) = .empty,
     /// Function value bindings section.
-    functions: Id.Buffer(*const Function, .constant) = .{},
+    functions: Id.Buffer(*const Function, .constant) = .empty,
     /// Builtin function value bindings section.
-    builtin_addresses: Id.Buffer(*const BuiltinAddress, .constant) = .{},
+    builtin_addresses: Id.Buffer(*const BuiltinAddress, .constant) = .empty,
     /// C ABI value bindings section.
-    foreign_addresses: Id.Buffer(*const ForeignAddress, .constant) = .{},
+    foreign_addresses: Id.Buffer(*const ForeignAddress, .constant) = .empty,
     /// Effect handler set bindings section.
-    handler_sets: Id.Buffer(*const HandlerSet, .constant) = .{},
+    handler_sets: Id.Buffer(*const HandlerSet, .constant) = .empty,
     /// Effect identity bindings section.
-    effects: Id.Buffer(*const Effect, .constant) = .{},
+    effects: Id.Buffer(*const Effect, .constant) = .empty,
 
     /// Get a pointer to a `Constant` from its `id`.
     /// * Does not perform any validation outside of debug mode
@@ -414,9 +414,9 @@ pub const AddressTable = extern struct {
 /// `*` Within Ribbon's compiler, not Zig's
 pub const SymbolTable = packed struct(u128) {
     /// This symbol table's keys.
-    keys: Id.Buffer(SymbolTable.Key, .constant) = .{},
+    keys: Id.Buffer(SymbolTable.Key, .constant) = .empty,
     /// This symbol table's values.
-    values: Id.Buffer(SymbolTable.Value, .constant) = .{},
+    values: Id.Buffer(SymbolTable.Value, .constant) = .empty,
 
     /// One half of a key/value pair used for address resolution in a `SymbolTable`.
     ///

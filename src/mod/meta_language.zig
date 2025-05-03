@@ -31,12 +31,12 @@ pub fn getSyntax() *const analysis.Syntax {
 
     var out = analysis.Syntax.init(std.heap.page_allocator);
 
-    inline for (comptime std.meta.fieldNames(@TypeOf(nud))) |name| {
-        out.bindNud(@field(nud, name)) catch unreachable;
+    inline for (nuds()) |nud| {
+        out.bindNud(nud) catch unreachable;
     }
 
-    inline for (comptime std.meta.fieldNames(@TypeOf(led))) |name| {
-        out.bindLed(@field(led, name)) catch unreachable;
+    inline for (leds()) |led| {
+        out.bindLed(led) catch unreachable;
     }
 
     syntax = out;
@@ -64,14 +64,14 @@ pub fn getCst(
 ) analysis.SyntaxError!?analysis.SyntaxTree {
     var parser = try getParser(allocator, lexer_settings, source);
 
-    const out = try parser.pratt(std.math.maxInt(i16)) orelse return null;
+    const out = try parser.pratt(std.math.minInt(i16)) orelse return null;
 
     if (!parser.isEof()) {
         const rem = source[parser.lexer.location.buffer..];
         if (parser.lexer.iterator.peek_cache) |cached_char| {
-            log.err("getCst: unused character in lexer cache: `{u}` ({x})", .{cached_char, cached_char});
+            log.err("getCst: unused character in lexer cache {}: `{u}` ({x})", .{parser.lexer.location, cached_char, cached_char});
         } else if (rem.len > 0) {
-            log.err("getCst: unexpected input after parsing: `{s}` ({any})", .{rem, rem});
+            log.err("getCst: unexpected input after parsing {}: `{s}` ({any})", .{parser.lexer.location, rem, rem});
         } else {
             unreachable;
         }
@@ -150,170 +150,299 @@ pub fn assembleString(allocator: std.mem.Allocator, source: []const u8, string: 
     return out.toOwnedSlice(allocator);
 }
 
-/// rml prefix/atomic parser defs.
-pub const nud = .{
-    .string = analysis.createNud(
-        "builtin_string",
-        std.math.minInt(i16),
-        .{ .standard = .{ .special = .{ .standard = .{ .escaped = .{ .standard = false }, .punctuation = .{ .standard = .double_quote } } } } },
-        null, struct {
-            pub fn string(
-                parser: *analysis.Parser,
-                _: i16,
-                token: analysis.Token,
-            ) analysis.SyntaxError!?analysis.SyntaxTree {
-                log.debug("string: parsing token {}", .{token});
+/// creates rml prefix/atomic parser defs.
+pub fn nuds() [2]analysis.Nud {
+    return .{
+        analysis.createNud(
+            "builtin_string",
+            std.math.maxInt(i16),
+            .{ .standard = .{ .special = .{ .standard = .{ .escaped = .{ .standard = false }, .punctuation = .{ .standard = .double_quote } } } } },
+            null, struct {
+                pub fn string(
+                    parser: *analysis.Parser,
+                    _: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("string: parsing token {}", .{token});
 
-                var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
-                defer buff.deinit(parser.allocator);
+                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
+                    defer buff.deinit(parser.allocator);
 
-                while (try parser.lexer.next()) |next_token| {
-                    if (next_token.tag == .special
-                    and !next_token.data.special.escaped
-                    and next_token.data.special.punctuation == .double_quote) {
-                        log.debug("string: found end of string token {}", .{next_token});
+                    while (try parser.lexer.next()) |next_token| {
+                        if (next_token.tag == .special
+                        and !next_token.data.special.escaped
+                        and next_token.data.special.punctuation == .double_quote) {
+                            log.debug("string: found end of string token {}", .{next_token});
 
-                        try buff.append(parser.allocator, analysis.SyntaxTree{
-                            .location = next_token.location,
-                            .type = cst_types.StringSentinel,
-                            .token = next_token,
-                            .operands = .empty,
-                        });
+                            try buff.append(parser.allocator, analysis.SyntaxTree{
+                                .location = next_token.location,
+                                .type = cst_types.StringSentinel,
+                                .token = next_token,
+                                .operands = .empty,
+                            });
 
+                            return analysis.SyntaxTree{
+                                .location = token.location,
+                                .type = cst_types.String,
+                                .token = token,
+                                .operands = .fromSlice(try buff.toOwnedSlice(parser.allocator)),
+                            };
+                        } else {
+                            try buff.append(parser.allocator, analysis.SyntaxTree{
+                                .location = next_token.location,
+                                .type = cst_types.StringElement,
+                                .token = next_token,
+                                .operands = .empty,
+                            });
+                        }
+                    } else {
+                        log.err("string: no end of string token found", .{});
+                        return error.UnexpectedEof;
+                    }
+                }
+            }.string,
+        ),
+        analysis.createNud(
+            "builtin_leaf",
+            std.math.maxInt(i16),
+            .{ .standard = .{ .sequence = .any } },
+            null, struct {
+                pub fn leaf(
+                    _: *analysis.Parser,
+                    _: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("leaf: parsing token", .{});
+                    log.debug("{}", .{token});
+                    const s = token.data.sequence.asSlice();
+                    log.debug("leaf: checking token {s}", .{s});
+
+                    const first_char = utils.text.nthCodepoint(0, s) catch unreachable orelse unreachable;
+
+                    if (utils.text.isDecimal(first_char) and utils.text.isHexDigitStr(s)) {
+                        log.debug("leaf: found int literal", .{});
                         return analysis.SyntaxTree{
                             .location = token.location,
-                            .type = cst_types.String,
+                            .type = cst_types.Int,
                             .token = token,
-                            .operands = .fromSlice(try buff.toOwnedSlice(parser.allocator)),
+                            .operands = .empty,
+                        };
+                    } else if (utils.text.isAlphanumericStr(s)) {
+                        log.debug("leaf: found identifier", .{});
+                        return analysis.SyntaxTree{
+                            .location = token.location,
+                            .type = cst_types.Identifier,
+                            .token = token,
+                            .operands = .empty,
                         };
                     } else {
-                        try buff.append(parser.allocator, analysis.SyntaxTree{
-                            .location = next_token.location,
-                            .type = cst_types.StringElement,
-                            .token = next_token,
-                            .operands = .empty,
-                        });
+                        log.debug("leaf: found unknown token", .{});
+                        return null;
                     }
-                } else {
-                    log.err("string: no end of string token found", .{});
-                    return error.UnexpectedEof;
                 }
-            }
-        }.string,
-    ),
-    .leaf = analysis.createNud(
-        "builtin_leaf",
-        std.math.minInt(i16),
-        .{ .standard = .{ .sequence = .any } },
-        null, struct {
-            pub fn leaf(
-                _: *analysis.Parser,
-                _: i16,
-                token: analysis.Token,
-            ) analysis.SyntaxError!?analysis.SyntaxTree {
-                log.debug("leaf: parsing token", .{});
-                log.debug("{}", .{token});
-                const s = token.data.sequence.asSlice();
-                log.debug("leaf: checking token {s}", .{s});
+            }.leaf,
+        ),
+    };
+}
 
-                const first_char = utils.text.nthCodepoint(0, s) catch unreachable orelse unreachable;
 
-                if (utils.text.isDecimal(first_char) and utils.text.isHexDigitStr(s)) {
-                    log.debug("leaf: found int literal", .{});
+/// creates rml infix/postfix parser defs.
+pub fn leds() [5]analysis.Led {
+    return .{
+        analysis.createLed(
+            "builtin_mul",
+            200,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("*") } } },
+            null, struct {
+                pub fn mul(
+                    parser: *analysis.Parser,
+                    first_stmt: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("mul: parsing token {}", .{token});
+
+                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
+                    defer buff.deinit(parser.allocator);
+
+                    try buff.append(parser.allocator, first_stmt);
+
+                    if (try parser.pratt(bp - 1)) |second_stmt| {
+                        try buff.append(parser.allocator, second_stmt);
+                    }
+
                     return analysis.SyntaxTree{
-                        .location = token.location,
-                        .type = cst_types.Int,
+                        .location = first_stmt.location,
+                        .type = cst_types.Stmts,
                         .token = token,
-                        .operands = .empty,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
                     };
-                } else if (utils.text.isAlphanumericStr(s)) {
-                    log.debug("leaf: found identifier", .{});
+                }
+            }.mul,
+        ),
+        analysis.createLed(
+            "builtin_div",
+            200,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("/") } } },
+            null, struct {
+                pub fn div(
+                    parser: *analysis.Parser,
+                    first_stmt: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("div: parsing token {}", .{token});
+
+                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
+                    defer buff.deinit(parser.allocator);
+
+                    try buff.append(parser.allocator, first_stmt);
+
+                    if (try parser.pratt(bp - 1)) |second_stmt| {
+                        try buff.append(parser.allocator, second_stmt);
+                    }
+
                     return analysis.SyntaxTree{
-                        .location = token.location,
-                        .type = cst_types.Identifier,
+                        .location = first_stmt.location,
+                        .type = cst_types.Stmts,
                         .token = token,
-                        .operands = .empty,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
                     };
-                } else {
-                    log.debug("leaf: found unknown token", .{});
-                    return null;
                 }
-            }
-        }.leaf,
-    ),
-};
+            }.div,
+        ),
+        analysis.createLed(
+            "builtin_add",
+            100,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("+") } } },
+            null, struct {
+                pub fn add(
+                    parser: *analysis.Parser,
+                    first_stmt: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("add: parsing token {}", .{token});
 
-/// rml infix/postfix parser defs.
-pub const led = .{
-    .space_sig = analysis.createLed(
-        "builtin_space_sig",
-        std.math.maxInt(i16),
-        .{ .standard = .{ .linebreak = .{ .standard = .{ .n = .any, .i = .{ .inverted = .unindent }} } } },
-        null, struct {
-            pub fn space_sig(
-                parser: *analysis.Parser,
-                first_stmt: analysis.SyntaxTree,
-                bp: i16,
-                token: analysis.Token,
-            ) analysis.SyntaxError!?analysis.SyntaxTree {
-                log.debug("space_sig: parsing token {}", .{token.data.linebreak});
+                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
+                    defer buff.deinit(parser.allocator);
 
-                var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
-                defer buff.deinit(parser.allocator);
+                    try buff.append(parser.allocator, first_stmt);
 
-                try buff.append(parser.allocator, first_stmt);
+                    if (try parser.pratt(bp - 1)) |second_stmt| {
+                        try buff.append(parser.allocator, second_stmt);
+                    }
 
-                switch (token.data.linebreak.i) {
-                    .none => {
-                        log.debug("space_sig: no indent", .{});
-                    },
-                    .indent => {
-                        log.debug("space_sig: indent accepted by indentation parser", .{});
-
-                        const buffer = try parser.allocator.alloc(analysis.SyntaxTree, 1);
-
-                        buffer[0] = try parser.pratt(bp) orelse {
-                            log.err("space_sig: indent block expected expression, got nothing", .{});
-                            return error.UnexpectedToken;
-                        };
-
-                        const unindent = try parser.lexer.next() orelse {
-                            return error.UnexpectedEof;
-                        };
-
-                        if (unindent.tag != .linebreak) {
-                            log.err("space_sig: indent block end expected unindent, got: {}", .{unindent.tag});
-                            return error.UnexpectedToken;
-                        }
-
-                        if (unindent.data.linebreak.i != .unindent) {
-                            log.err("space_sig: indent block end expected unindent, got: {}", .{unindent.data.linebreak.i});
-                            return error.UnexpectedToken;
-                        }
-
-                        log.debug("space_sig: indent block successfully parsed by indentation parser: {any}", .{buffer});
-
-                        try buff.append(parser.allocator, analysis.SyntaxTree{
-                            .location = token.location,
-                            .type = cst_types.IndentedBlock,
-                            .token = token,
-                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buffer),
-                        });
-                    },
-                    .unindent => unreachable,
+                    return analysis.SyntaxTree{
+                        .location = first_stmt.location,
+                        .type = cst_types.Stmts,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
+                    };
                 }
+            }.add,
+        ),
+        analysis.createLed(
+            "builtin_sub",
+            100,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("-") } } },
+            null, struct {
+                pub fn sub(
+                    parser: *analysis.Parser,
+                    first_stmt: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("sub: parsing token {}", .{token});
 
-                if (try parser.pratt(bp)) |second_stmt| {
-                    try buff.append(parser.allocator, second_stmt);
+                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
+                    defer buff.deinit(parser.allocator);
+
+                    try buff.append(parser.allocator, first_stmt);
+
+                    if (try parser.pratt(bp - 1)) |second_stmt| {
+                        try buff.append(parser.allocator, second_stmt);
+                    }
+
+                    return analysis.SyntaxTree{
+                        .location = first_stmt.location,
+                        .type = cst_types.Stmts,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
+                    };
                 }
+            }.sub,
+        ),
+        analysis.createLed(
+            "builtin_space_sig",
+            std.math.minInt(i16),
+            .{ .standard = .{ .linebreak = .{ .standard = .{ .n = .any, .i = .{ .inverted = .unindent }} } } },
+            null, struct {
+                pub fn space_sig(
+                    parser: *analysis.Parser,
+                    first_stmt: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("space_sig: parsing token {}", .{token.data.linebreak});
 
-                return analysis.SyntaxTree{
-                    .location = first_stmt.location,
-                    .type = cst_types.Stmts,
-                    .token = token,
-                    .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
-                };
-            }
-        }.space_sig,
-    ),
-};
+                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
+                    defer buff.deinit(parser.allocator);
+
+                    try buff.append(parser.allocator, first_stmt);
+
+                    switch (token.data.linebreak.i) {
+                        .none => {
+                            log.debug("space_sig: no indent", .{});
+                        },
+                        .indent => {
+                            log.debug("space_sig: indent accepted by indentation parser", .{});
+
+                            const buffer = try parser.allocator.alloc(analysis.SyntaxTree, 1);
+
+                            buffer[0] = try parser.pratt(bp) orelse {
+                                log.err("space_sig: indent block expected expression, got nothing", .{});
+                                return error.UnexpectedToken;
+                            };
+
+                            const unindent = try parser.lexer.next() orelse {
+                                return error.UnexpectedEof;
+                            };
+
+                            if (unindent.tag != .linebreak) {
+                                log.err("space_sig: indent block end expected unindent, got: {}", .{unindent.tag});
+                                return error.UnexpectedToken;
+                            }
+
+                            if (unindent.data.linebreak.i != .unindent) {
+                                log.err("space_sig: indent block end expected unindent, got: {}", .{unindent.data.linebreak.i});
+                                return error.UnexpectedToken;
+                            }
+
+                            log.debug("space_sig: indent block successfully parsed by indentation parser: {any}", .{buffer});
+
+                            try buff.append(parser.allocator, analysis.SyntaxTree{
+                                .location = token.location,
+                                .type = cst_types.IndentedBlock,
+                                .token = token,
+                                .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buffer),
+                            });
+                        },
+                        .unindent => unreachable,
+                    }
+
+                    if (try parser.pratt(bp)) |second_stmt| {
+                        try buff.append(parser.allocator, second_stmt);
+                    }
+
+                    return analysis.SyntaxTree{
+                        .location = first_stmt.location,
+                        .type = cst_types.Stmts,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
+                    };
+                }
+            }.space_sig,
+        ),
+    };
+}

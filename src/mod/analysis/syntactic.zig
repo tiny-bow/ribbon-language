@@ -523,7 +523,7 @@ pub const Parser = struct {
         var lexer_save_state = self.lexer;
 
         const first_token = try self.lexer.next() orelse return null;
-        log.debug("pratt: first token {}", .{first_token});
+        log.debug("pratt: first token {}; bp: {}", .{first_token, binding_power});
 
         const nuds = try self.syntax.findNuds(&first_token);
 
@@ -536,8 +536,8 @@ pub const Parser = struct {
         }
 
         var lhs = nuds: for (nuds) |nud| {
-            if (nud.binding_power > binding_power) {
-                log.debug("pratt: rejecting nud {s} of greater binding power than current", .{nud.name});
+            if (nud.binding_power < binding_power) {
+                log.debug("pratt: rejecting nud {s} of lesser binding power ({}) than current ({})", .{nud.name, nud.binding_power, binding_power});
                 self.lexer = lexer_save_state;
                 continue :nuds;
             }
@@ -584,8 +584,8 @@ pub const Parser = struct {
             }
 
             leds: for (leds) |led|{
-                if (led.binding_power > binding_power) {
-                    log.debug("pratt: rejecting led {s} of greater binding power than current", .{led.name});
+                if (led.binding_power < binding_power) {
+                    log.debug("pratt: rejecting led {s} of lesser binding power ({}) than current ({})", .{led.name, led.binding_power, binding_power});
                     continue :leds;
                 }
 
