@@ -15,6 +15,18 @@ pub const VisualPosition = packed struct {
 pub const Location = packed struct {
     buffer: BufferPosition = 0,
     visual: VisualPosition = .{},
+
+    pub fn localize(local_to: *const Location, to_localize: *const Location) Location {
+        std.debug.assert(local_to.buffer <= to_localize.buffer);
+        return .{
+            .buffer = to_localize.buffer - local_to.buffer,
+            .visual = VisualPosition{
+                .line = to_localize.visual.line -| local_to.visual.line,
+                .column = to_localize.visual.column -| local_to.visual.column,
+            },
+        };
+    }
+
     pub fn format(self: *const Location, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("[{}:{} ({})]", .{ self.visual.line, self.visual.column, self.buffer });
     }
