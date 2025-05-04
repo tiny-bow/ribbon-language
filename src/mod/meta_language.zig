@@ -271,52 +271,106 @@ pub fn nuds() [3]analysis.Nud {
             }.leaf,
         ),
         analysis.createNud(
-            "builtin_space_sig",
+            "leading_linebreak",
             std.math.maxInt(i16),
-            .{ .standard = .{ .linebreak = .{ .standard = .{ .n = .any, .i = .{ .standard = .indent }} } } },
+            .{ .standard = .{ .linebreak = .any } },
             null, struct {
-                pub fn space_sig(
+                pub fn indentation(
                     parser: *analysis.Parser,
                     _: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
-                    log.debug("space_sig: parsing token {}", .{token.data.linebreak});
+                    const save_state = parser.lexer;
 
-                    const buff = parser.allocator.alloc(analysis.SyntaxTree, 1) catch unreachable;
+                    log.debug("leading_linebreak: parsing token {}", .{token});
 
-                    buff[0] = try parser.pratt(std.math.minInt(i16)) orelse return null;
+                    const next_token = try parser.lexer.next() orelse {
+                        log.err("leading_linebreak: source ends with whitespace, returning sentinel", .{});
 
-                    const unindent = try parser.lexer.next() orelse {
-                        return error.UnexpectedEof;
+                        return analysis.SyntaxTree {
+                            .location = token.location,
+                            .type = cst_types.Qed,
+                            .token = token,
+                            .operands = .empty,
+                        };
                     };
 
-                    if (unindent.tag != .linebreak) {
-                        log.err("space_sig: indent block end expected unindent, got: {}", .{unindent.tag});
-                        return error.UnexpectedToken;
+                    log.debug("leading_linebreak: checking next token {}", .{next_token});
+
+                    if (next_token.tag == .indentation) {
+                        log.debug("leading_linebreak: found indentation token", .{});
+                        if (next_token.data.indentation == .indent) {
+                            log.debug("leading_linebreak: found indent token, returning sentinel", .{});
+                            return parser_utils.indentation(parser, 0, next_token);
+                        } else {
+                            log.debug("leading_linebreak: found unindent token, this is a sentinel; rejecting", .{});
+                            return null;
+                        }
+                    } else {
+                        log.debug("leading_linebreak: next token is not indentation, recursing pratt", .{});
                     }
 
-                    if (unindent.data.linebreak.i != .unindent) {
-                        log.err("space_sig: indent block end expected unindent, got: {}", .{unindent.data.linebreak.i});
-                        return error.UnexpectedToken;
-                    }
+                    parser.lexer = save_state;
 
-                    log.debug("space_sig: indent block successfully parsed by indentation parser: {any}", .{buff});
-
-                    return analysis.SyntaxTree{
-                        .location = buff[0].location,
-                        .type = cst_types.IndentedBlock,
-                        .token = token,
-                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
-                    };
+                    return parser.pratt(std.math.minInt(i16));
                 }
-            }.space_sig,
+            }.indentation,
         ),
     };
 }
 
+pub const parser_utils = struct {
+    pub fn indentation(
+        parser: *analysis.Parser,
+        _: i16,
+        token: analysis.Token,
+    ) analysis.SyntaxError!?analysis.SyntaxTree {
+        log.debug("indentation: parsing token {}", .{token.data.linebreak});
+
+        const buff = parser.allocator.alloc(analysis.SyntaxTree, 1) catch unreachable;
+
+        buff[0] = try parser.pratt(std.math.minInt(i16)) orelse return null;
+
+        const lb = try parser.lexer.next() orelse {
+            return error.UnexpectedEof;
+        };
+
+        if (lb.tag != .linebreak) {
+            log.err("indentation: indent block end expected linebreak, got: {}", .{lb.tag});
+            return error.UnexpectedToken;
+        }
+
+        const save_state = parser.lexer;
+        const ind = try parser.lexer.next() orelse {
+            return error.UnexpectedEof;
+        };
+
+        if (ind.tag != .indentation) {
+            log.err("indentation: indent block end expected indentation token, got: {}", .{ind.tag});
+            return error.UnexpectedToken;
+        }
+
+        if (ind.data.indentation != .unindent) {
+            log.err("indentation: indent block end expected unindent token, got: {}", .{ind.data.indentation});
+            return error.UnexpectedToken;
+        }
+
+        parser.lexer = save_state;
+
+        log.debug("indentation: indent block successfully parsed by indentation parser: {any}", .{buff});
+
+        return analysis.SyntaxTree{
+            .location = buff[0].location,
+            .type = cst_types.IndentedBlock,
+            .token = token,
+            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+        };
+    }
+};
+
 
 /// creates rml infix/postfix parser defs.
-pub fn leds() [4]analysis.Led {
+pub fn leds() [5]analysis.Led {
     return .{
         analysis.createLed(
             "builtin_mul",
@@ -442,5 +496,61 @@ pub fn leds() [4]analysis.Led {
                 }
             }.sub,
         ),
+        analysis.createLed(
+            "builtin_newline",
+            std.math.minInt(i16),
+            .{
+                .any_of = &.{
+                    .{ .linebreak = .any },
+                    .{ .indentation = .{ .standard = .unindent } },
+                },
+            },
+            null, struct {
+                pub fn newline(
+                    parser: *analysis.Parser,
+                    first_stmt: analysis.SyntaxTree,
+                    _: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("newline: parsing token {}", .{token});
+
+                    switch (token.tag) {
+                        .linebreak => {
+                            const lexer_save_state = parser.lexer;
+
+                            if (try parser.lexer.next()) |next_token| {
+                                log.debug("newline: checking next token {} is not indentation", .{next_token});
+                                if (next_token.tag == .indentation) {
+                                    log.debug("newline: found indentation token; rejecting", .{});
+                                    return null;
+                                } else {
+                                    log.debug("newline: not indentation, continuing with stmt parse", .{});
+                                    parser.lexer = lexer_save_state;
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+
+                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
+                    defer buff.deinit(parser.allocator);
+
+                    try buff.append(parser.allocator, first_stmt);
+
+                    if (try parser.pratt(std.math.minInt(i16))) |second_stmt| {
+                        try buff.append(parser.allocator, second_stmt);
+
+                        return analysis.SyntaxTree{
+                            .location = first_stmt.location,
+                            .type = cst_types.Stmts,
+                            .token = token,
+                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
+                        };
+                    } else {
+                        return first_stmt;
+                    }
+                }
+            }.newline,
+        )
     };
 }

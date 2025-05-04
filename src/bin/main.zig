@@ -13,9 +13,10 @@ pub const std_options = std.Options{
 const input =
     \\foo + 1 * 3 * 2 +
     \\  1 * 2
+    \\test
     \\
     ;
-const expect = "(+ foo (+ (* 1 (* 3 2)) (do (* 1 2))))"
+const expect = "(begin (+ foo (+ (* 1 (* 3 2)) (do (* 1 2)))) test)"
     ;
 
 pub fn main() !void {

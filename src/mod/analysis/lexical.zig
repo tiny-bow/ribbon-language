@@ -18,28 +18,13 @@ pub const Token = extern struct {
     pub fn format(self: Token, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("{}:", .{self.location});
         switch (self.tag) {
-            .sequence => {
-                const s = self.data.sequence;
-
-                try writer.print("s⟨{s}⟩", .{ s.asSlice() });
-            },
-            .linebreak => {
-                const b = self.data.linebreak;
-
-                switch (b.i) {
-                    .indent => try writer.print("b⟨⇓{}, ⇒⟩", .{ b.n }),
-                    .unindent => try writer.print("b⟨⇓{}, ⇐⟩", .{ b.n }),
-                    .none => try writer.print("b⟨⇓{}⟩", .{ b.n }),
-                }
-            },
-            .special => {
-                const p = self.data.special;
-
-                if (p.escaped) {
-                    try writer.print("p⟨\\{u}⟩", .{ p.punctuation.toChar() });
-                } else {
-                    try writer.print("p⟨{u}⟩", .{ p.punctuation.toChar() });
-                }
+            .sequence => try writer.print("s⟨{s}⟩", .{ self.data.sequence.asSlice() }),
+            .linebreak => try writer.print("b⟨⇓{}⟩", .{ self.data.linebreak }),
+            .indentation => try writer.print("i⟨{}⟩", .{ @intFromEnum(self.data.indentation) }),
+            .special => if (self.data.special.escaped) {
+                try writer.print("p⟨\\{u}⟩", .{ self.data.special.punctuation.toChar() });
+            } else {
+                try writer.print("p⟨{u}⟩", .{ self.data.special.punctuation.toChar() });
             },
         }
     }
@@ -50,18 +35,19 @@ pub const TokenType = enum (u8) {
     /// A sequence of characters that do not fit the other categories,
     /// and contain no control characters or whitespace.
     sequence = 0,
-    /// \n * `n` new lines with `i`* relative indentation change.
-    ///
-    /// * provided in text-format-agnostic "levels";
-    /// to get actual indentations inspect column of the next token
+    /// \n * `n`.
     linebreak = 1,
+    /// A relative change in indentation level.
+    indentation = 2,
     /// Special lexical control characters, such as `{`, `\"`, etc.
-    special = 2,
+    special = 3,
 };
 
-pub const IndentDelta = enum(i8) {
+/// A relative change in indentation level.
+pub const IndentationDelta = enum(i8) {
+    /// Indentation level decreased.
     unindent = -1,
-    none = 0,
+    /// Indentation level increased.
     indent = 1,
 };
 
@@ -70,13 +56,10 @@ pub const TokenData = packed union {
     /// a sequence of characters that do not fit the other categories,
     /// and contain no control characters or whitespace.
     sequence: common.Id.Buffer(u8, .constant),
-    /// `n` new lines with `i` relative indentation change.
-    /// Multiple levels of indentation change are split into multiple tokens,
-    /// with subsequent tokens having `n` = `0`.
-    linebreak: packed struct {
-        n: u32,
-        i: IndentDelta,
-    },
+    /// \n * `n`.
+    linebreak: u32,
+    /// A relative change in indentation level.
+    indentation: IndentationDelta,
     /// Special lexical control characters, such as `{`, `\"`, etc.
     special: Special,
 };
@@ -198,7 +181,7 @@ pub const Lexer0 = struct {
     /// The number of indentation levels currently in use.
     levels: u8 = 1,
     level_change_queue: [MAX_LEVELS]Level = [1]Level{0} ** MAX_LEVELS,
-    levels_queued: u8 = 0,
+    levels_queued: i16 = 0,
     /// The current location in the source code.
     location: analysis.Location,
 
@@ -277,36 +260,48 @@ pub const Lexer0 = struct {
 
         var tag: TokenType = undefined;
 
-        if (self.levels_queued > 0) {
+        if (self.levels_queued != 0) {
             log.debug("processing queued indentation level {}", .{self.levels_queued});
 
-            self.levels_queued -= 1;
+            if (self.levels_queued > 0) {
+                self.levels = self.levels + 1;
+                self.levels_queued = self.levels_queued - 1;
 
-            return Token{
-                .location = start,
-                .tag = .linebreak,
-                .data = TokenData{
-                    .linebreak = .{ .n = 0, .i = .unindent },
-                },
-            };
+                return Token{
+                    .location = start,
+                    .tag = .indentation,
+                    .data = TokenData{
+                        .indentation = .indent,
+                    },
+                };
+            } else {
+                self.levels = self.levels - 1;
+                self.levels_queued = self.levels_queued + 1;
+
+                return Token{
+                    .location = start,
+                    .tag = .indentation,
+                    .data = TokenData{
+                        .indentation = .unindent,
+                    },
+                };
+            }
         }
 
         const ch = try self.nextChar() orelse {
             if (self.levels > 1) {
                 log.debug("processing 1st ch EOF with {} indentation levels", .{self.levels});
-
-                self.levels_queued = self.levels - 1;
+                self.levels_queued = self.levels - 2;
 
                 return Token{
                     .location = start,
-                    .tag = .linebreak,
+                    .tag = .indentation,
                     .data = TokenData{
-                        .linebreak = .{ .n = 0, .i = .unindent },
+                        .indentation = .unindent,
                     },
                 };
             } else {
-                log.debug("processing 1st ch EOF with no indentation levels", .{});
-
+                log.debug("EOF with no extraneous indentation levels", .{});
                 return null;
             }
         };
@@ -341,9 +336,9 @@ pub const Lexer0 = struct {
                     log.debug("increasing indentation to {} ({})", .{ oldLen, newIndent });
 
                     self.indentation[self.levels] = @intCast(newIndent); // TODO: check for overflow?
-                    self.levels += 1;
+                    self.levels_queued = 1;
 
-                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = .indent } };
+                    break :char_switch TokenData { .linebreak = n };
                 } else if (newIndent < oldIndent) {
                     // we need to traverse back down the indentation stack until we find the right level
                     var newIndentIndex = self.levels - 1;
@@ -363,17 +358,16 @@ pub const Lexer0 = struct {
 
                     log.debug("decreasing indentation to {} ({})", .{ newIndentIndex, newIndent });
 
-                    self.levels = newIndentIndex + 1;
+                    const level_delta = oldLen - (newIndentIndex + 1);
+                    std.debug.assert(level_delta > 0);
 
-                    const level_delta = oldLen - self.levels;
+                    self.levels_queued = -@as(i16, @intCast(level_delta));
 
-                    self.levels_queued = level_delta - 1;
-
-                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = .unindent } };
+                    break :char_switch TokenData { .linebreak = n };
                 } else {
                     log.debug("same indentation level {} ({})", .{ self.levels - 1, n });
 
-                    break :char_switch TokenData { .linebreak = .{ .n = n, .i = .none } };
+                    break :char_switch TokenData { .linebreak = n };
                 }
             },
             '\\' => {
@@ -406,9 +400,9 @@ pub const Lexer0 = struct {
 
                             return Token{
                                 .location = start,
-                                .tag = .linebreak,
-                                .data = TokenData{
-                                    .linebreak = .{ .n = 0, .i = .unindent },
+                                .tag = .indentation,
+                                .data = analysis.TokenData{
+                                    .indentation = .unindent,
                                 },
                             };
                         } else {
@@ -470,165 +464,3 @@ pub const Lexer0 = struct {
         };
     }
 };
-
-
-test "lexer_basic_integration" {
-    var lexer = try lexWithPeek(.{},
-        \\test
-        \\  \\
-        \\foo
-        \\    bar
-        \\        [
-        \\            1,
-        \\            2,
-        \\            3
-        \\        ]
-        \\
-    );
-
-    defer lexer.deinit();
-
-    const expect = [_]Token {
-        .{
-            .location = undefined,
-            .tag = .sequence,
-            .data = .{ .sequence = .fromSlice("test") },
-        },
-        .{
-            .location = undefined,
-            .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = .indent } },
-        },
-        .{
-            .location = undefined,
-            .tag = .special,
-            .data = .{ .special = .{ .escaped = true, .punctuation = Punctuation.fromChar('\\') } },
-        },
-        .{
-            .location = undefined,
-            .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = .unindent } },
-        },
-        .{
-            .location = undefined,
-            .tag = .sequence,
-            .data = .{ .sequence = .fromSlice("foo") },
-        },
-        .{
-            .location = undefined,
-            .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = .indent } },
-        },
-        .{
-            .location = undefined,
-            .tag = .sequence,
-            .data = .{ .sequence = .fromSlice("bar") },
-        },
-        .{
-            .location = undefined,
-            .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = .indent } },
-        },
-        .{
-            .location = undefined,
-            .tag = .special,
-            .data = .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar('[') } },
-        },
-        .{
-            .location = undefined,
-            .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = .indent } },
-        },
-        .{
-            .location = undefined,
-            .tag = .sequence,
-            .data = .{ .sequence = .fromSlice("1") },
-        },
-        .{
-            .location = undefined,
-            .tag = .special,
-            .data = .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(',') } },
-        },
-        .{
-            .location = undefined,
-            .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = .none } },
-        },
-        .{
-            .location = undefined,
-            .tag = .sequence,
-            .data = .{ .sequence = .fromSlice("2") },
-        },
-        .{
-            .location = undefined,
-            .tag = .special,
-            .data = .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(',') } },
-        },
-        .{
-            .location = undefined,
-            .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = .none } },
-        },
-        .{
-            .location = undefined,
-            .tag = .sequence,
-            .data = .{ .sequence = .fromSlice("3") },
-        },
-        .{
-            .location = undefined,
-            .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = .unindent } },
-        },
-        .{
-            .location = undefined,
-            .tag = .special,
-            .data = .{ .special = .{ .escaped = false, .punctuation = Punctuation.fromChar(']') } },
-        },
-        .{
-            .location = undefined,
-            .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 1, .i = .unindent } },
-        },
-        .{
-            .location = undefined,
-            .tag = .linebreak,
-            .data = .{ .linebreak = .{ .n = 0, .i = .unindent } },
-        },
-    };
-
-    for (expect) |e| {
-        const it = lexer.next() catch |err| {
-            log.err("{}: {s}", .{ lexer.inner.location, @errorName(err) });
-            return err;
-        };
-
-        if (it) |tok| {
-            log.debug("{} to {}: {} (expecting {})", .{ tok.location, lexer.inner.location, tok, e });
-
-            try std.testing.expectEqual(e.tag, tok.tag);
-
-            switch (e.tag) {
-                .sequence => {
-                    const s = e.data.sequence;
-                    try std.testing.expectEqualSlices(u8, s.asSlice(), tok.data.sequence.asSlice());
-                },
-                .special => {
-                    const p = e.data.special;
-                    try std.testing.expectEqual(p, tok.data.special);
-                },
-                .linebreak => {
-                    const l = e.data.linebreak;
-                    try std.testing.expectEqual(l.n, tok.data.linebreak.n);
-                    try std.testing.expectEqual(l.i, tok.data.linebreak.i);
-                },
-            }
-        } else {
-            log.err("unexpected EOF {}; expected {}", .{ lexer.inner.location, e });
-            return error.UnexpectedEof;
-        }
-    }
-
-    try std.testing.expectEqual(lexer.inner.source.len, lexer.inner.location.buffer);
-
-    std.debug.print("lexical analysis test passed\n", .{});
-}

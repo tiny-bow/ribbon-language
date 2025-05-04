@@ -131,6 +131,7 @@ pub fn PatternModifier(comptime P: type) type {
                         return switch (a) {
                             .sequence => |p| p.process(b.data.sequence),
                             .linebreak => |p| p.process(b.data.linebreak),
+                            .indentation => |p| p.process(b.data.indentation),
                             .special => |p| p.process(b.data.special),
                         };
                     }
@@ -168,16 +169,8 @@ pub fn PatternModifier(comptime P: type) type {
 pub const TokenPattern = union(analysis.TokenType) {
     pub const QueryType = *const analysis.Token;
     sequence: PatternModifier(common.Id.Buffer(u8, .constant)),
-    linebreak: PatternModifier(struct {
-        const Self = @This();
-        pub const QueryType = @FieldType(analysis.TokenData, "linebreak");
-        n: PatternModifier(u32),
-        i: PatternModifier(analysis.IndentDelta),
-
-        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-            try writer.print("⇓{}, {}", .{ self.n, self.i });
-        }
-    }),
+    linebreak: PatternModifier(u32),
+    indentation: PatternModifier(analysis.IndentationDelta),
     special: PatternModifier(struct {
         const Self = @This();
         pub const QueryType = @FieldType(analysis.TokenData, "special");
@@ -193,6 +186,7 @@ pub const TokenPattern = union(analysis.TokenType) {
         switch (self.*) {
             .sequence => try writer.print("s⟨{}⟩", .{self.sequence}),
             .linebreak => try writer.print("b⟨{}⟩", .{self.linebreak}),
+            .indentation => try writer.print("i⟨{}⟩", .{self.indentation}),
             .special => try writer.print("p⟨{}⟩", .{self.special}),
         }
     }
