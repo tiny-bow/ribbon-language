@@ -119,7 +119,7 @@ pub fn getCst(
 
 /// rml concrete syntax tree types.
 pub const cst_types = gen: {
-    var fresh = common.Id.of(analysis.SyntaxTree).fromInt(1);
+    var fresh = common.Id.of(analysis.SyntaxTree).fromInt(0);
 
     break :gen .{
         .Int = fresh.next(),
