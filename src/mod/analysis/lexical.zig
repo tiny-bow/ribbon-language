@@ -291,13 +291,13 @@ pub const Lexer0 = struct {
         const ch = try self.nextChar() orelse {
             if (self.levels > 1) {
                 log.debug("processing 1st ch EOF with {} indentation levels", .{self.levels});
-                self.levels_queued = self.levels - 2;
+                self.levels_queued = self.levels - 1;
 
                 return Token{
                     .location = start,
-                    .tag = .indentation,
+                    .tag = .linebreak,
                     .data = TokenData{
-                        .indentation = .unindent,
+                        .linebreak = 0,
                     },
                 };
             } else {

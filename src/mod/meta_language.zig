@@ -71,6 +71,8 @@ pub fn getSyntax() *const analysis.Syntax {
         out.bindLed(led) catch unreachable;
     }
 
+    _ = out.bindJuxt(juxt());
+
     syntax = out;
 
     return &syntax.?;
@@ -127,10 +129,19 @@ pub const cst_types = gen: {
         .Identifier = fresh.next(),
         .IndentedBlock = fresh.next(),
         .Stmts = fresh.next(),
+        .Apply = fresh.next(),
         .Binary = fresh.next(),
         .Qed = fresh.next(),
     };
 };
+
+// comptime {
+//     for (std.meta.fieldNames(@TypeOf(cst_types))) |name| {
+//         const value = @field(cst_types, name);
+
+//         @compileLog(name, value);
+//     }
+// }
 
 pub fn assembleString(writer: anytype, source: []const u8, string: analysis.SyntaxTree) !void {
     std.debug.assert(string.type == cst_types.String);
@@ -272,7 +283,7 @@ pub fn nuds() [3]analysis.Nud {
         ),
         analysis.createNud(
             "leading_linebreak",
-            std.math.maxInt(i16),
+            std.math.maxInt(i16) - 1,
             .{ .standard = .{ .linebreak = .any } },
             null, struct {
                 pub fn indentation(
@@ -285,7 +296,7 @@ pub fn nuds() [3]analysis.Nud {
                     log.debug("leading_linebreak: parsing token {}", .{token});
 
                     const next_token = try parser.lexer.next() orelse {
-                        log.err("leading_linebreak: source ends with whitespace, returning sentinel", .{});
+                        log.debug("leading_linebreak: source ends with whitespace, returning sentinel", .{});
 
                         return analysis.SyntaxTree {
                             .location = token.location,
@@ -311,7 +322,7 @@ pub fn nuds() [3]analysis.Nud {
                     }
 
                     parser.lexer = save_state;
-
+                    log.debug("leading_linebreak: returning pratt", .{});
                     return parser.pratt(std.math.minInt(i16));
                 }
             }.indentation,
@@ -368,6 +379,50 @@ pub const parser_utils = struct {
     }
 };
 
+pub fn juxt() analysis.Juxt {
+    return analysis.createJuxt(
+        "builtin_apply",
+        null, struct {
+            pub fn apply(
+                parser: *analysis.Parser,
+                lhs: analysis.SyntaxTree,
+                rhs: analysis.SyntaxTree,
+            ) analysis.SyntaxError!?struct { analysis.SyntaxTree, ?i16 } {
+                log.debug("apply: {} {}", .{lhs, rhs});
+
+                if (rhs.type == cst_types.Qed) {
+                    log.debug("apply: rhs is qed, returning lhs", .{});
+                    return .{ lhs, std.math.maxInt(i16) };
+                }
+
+                const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+
+                log.debug("apply: buffer allocation {x}", .{@intFromPtr(buff.ptr)});
+
+                buff[0] = lhs;
+                buff[1] = rhs;
+
+                log.debug("apply: buffer written; returning", .{});
+
+                return .{
+                    analysis.SyntaxTree{
+                        .location = lhs.location,
+                        .type = cst_types.Apply,
+                        .token = analysis.Token{
+                            .location = lhs.location,
+                            .tag = .sequence,
+                            .data = analysis.TokenData{
+                                .sequence = common.Id.Buffer(u8, .constant).fromSlice("apply"),
+                            },
+                        },
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    },
+                    std.math.maxInt(i16),
+                };
+            }
+        }.apply,
+    );
+}
 
 /// creates rml infix/postfix parser defs.
 pub fn leds() [5]analysis.Led {
@@ -512,43 +567,69 @@ pub fn leds() [5]analysis.Led {
                     _: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
-                    log.debug("newline: parsing token {}", .{token});
+                    var current_token = token;
+                    log.debug("newline: parsing token {}", .{current_token});
 
-                    switch (token.tag) {
-                        .linebreak => {
-                            const lexer_save_state = parser.lexer;
+                    var save_state = parser.lexer;
 
-                            if (try parser.lexer.next()) |next_token| {
-                                log.debug("newline: checking next token {} is not indentation", .{next_token});
-                                if (next_token.tag == .indentation) {
-                                    log.debug("newline: found indentation token; rejecting", .{});
-                                    return null;
-                                } else {
-                                    log.debug("newline: not indentation, continuing with stmt parse", .{});
-                                    parser.lexer = lexer_save_state;
+                    var stmts: std.ArrayListUnmanaged(analysis.SyntaxTree) = .empty;
+                    defer stmts.deinit(parser.allocator);
+
+                    try stmts.append(parser.allocator, first_stmt);
+
+                    gather: while (true) {
+                        const save_state_2 = parser.lexer;
+
+                        switch (current_token.tag) {
+                            .linebreak => {
+                                if (try parser.lexer.next()) |next_token| {
+                                    log.debug("newline: checking next token {} is not indentation", .{next_token});
+                                    if (next_token.tag == .indentation) {
+                                        log.debug("newline: found indentation token; rejecting", .{});
+                                        parser.lexer = save_state;
+                                        if (stmts.items.len == 1) {
+                                            return null;
+                                        } else {
+                                            break :gather;
+                                        }
+                                    } else {
+                                        log.debug("newline: not indentation, continuing with stmt parse", .{});
+                                        parser.lexer = save_state_2;
+                                    }
                                 }
+                            },
+                            .indentation => {
+                                if (current_token.data.indentation != .unindent) {
+                                    log.debug("newline: found indentation token, returning sentinel", .{});
+                                    parser.lexer = save_state;
+                                    break :gather;
+                                }
+                            },
+                            else => {
+                                log.debug("newline: found unexpected token, returning", .{});
+                                break :gather;
                             }
-                        },
-                        else => {},
+                        }
+
+                        if (try parser.pratt(std.math.minInt(i16))) |second_stmt| {
+                            try stmts.append(parser.allocator, second_stmt);
+
+                            save_state = parser.lexer;
+
+                            current_token = try parser.lexer.next() orelse break :gather;
+                        } else if (stmts.items.len == 1) {
+                            return first_stmt;
+                        } else {
+                            break :gather;
+                        }
                     }
 
-                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
-                    defer buff.deinit(parser.allocator);
-
-                    try buff.append(parser.allocator, first_stmt);
-
-                    if (try parser.pratt(std.math.minInt(i16))) |second_stmt| {
-                        try buff.append(parser.allocator, second_stmt);
-
-                        return analysis.SyntaxTree{
-                            .location = first_stmt.location,
-                            .type = cst_types.Stmts,
-                            .token = token,
-                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
-                        };
-                    } else {
-                        return first_stmt;
-                    }
+                    return analysis.SyntaxTree{
+                        .location = first_stmt.location,
+                        .type = cst_types.Stmts,
+                        .token = current_token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try stmts.toOwnedSlice(parser.allocator)),
+                    };
                 }
             }.newline,
         )

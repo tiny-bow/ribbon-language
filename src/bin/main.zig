@@ -13,11 +13,11 @@ pub const std_options = std.Options{
 const input =
     \\foo + 1 * 3 * 2 +
     \\  1 * 2
-    \\test
+    \\test 1
+    \\test 2 3
     \\
     ;
-const expect = "(begin (+ foo (+ (* 1 (* 3 2)) (do (* 1 2)))) test)"
-    ;
+const expect = "(begin (+ foo (+ (* 1 (* 3 2)) (do (* 1 2)))) (apply test 1) (apply (apply test 2) 3))";
 
 pub fn main() !void {
     var syn = try ribbon.meta_language.getCst(std.heap.page_allocator, .{}, input) orelse {

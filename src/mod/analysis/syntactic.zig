@@ -62,6 +62,7 @@ pub fn PatternModifier(comptime P: type) type {
         any: void,
         standard: P,
         inverted: P,
+        none_of: []const P,
         one_of: []const P,
         any_of: []const P,
         all_of: []const P,
@@ -74,6 +75,7 @@ pub fn PatternModifier(comptime P: type) type {
                 .any => try writer.print("any", .{}),
                 .standard => try writer.print("{}", .{self.standard}),
                 .inverted => try writer.print("inv({})", .{self.inverted}),
+                .none_of => try writer.print("none({any})", .{self.none_of}),
                 .one_of => try writer.print("one({any})", .{self.one_of}),
                 .any_of => try writer.print("any({any})", .{self.any_of}),
                 .all_of => try writer.print("all({any})", .{self.all_of}),
@@ -87,6 +89,15 @@ pub fn PatternModifier(comptime P: type) type {
                 .any => return true,
                 .standard => |my_p| return callback(my_p, q),
                 .inverted => |my_p| return !callback(my_p, q),
+                .none_of => |my_ps| {
+                    for (my_ps) |my_p| {
+                        if (callback(my_p, q)) {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                },
                 .one_of => |my_ps| {
                     for (my_ps) |my_p| {
                         if (callback(my_p, q)) {
@@ -298,6 +309,7 @@ pub const Syntax = struct {
     nuds: PatternSet(NudCallbackMarker) = .empty,
     /// Led patterns for known token types.
     leds: PatternSet(LedCallbackMarker) = .empty,
+    juxt: ?Juxt = null,
 
     /// Initialize a new, empty syntax.
     pub fn init(
@@ -327,6 +339,15 @@ pub const Syntax = struct {
         return self.leds.bindPattern(self.allocator, led);
     }
 
+    pub fn bindJuxt(
+        self: *Syntax,
+        juxt: Juxt,
+    ) ?Juxt {
+        const old = self.juxt;
+        self.juxt = juxt;
+        return old;
+    }
+
     /// Find the nuds matching a given token, if any.
     pub fn findNuds(self: *const Syntax, token: *const analysis.Token) error{OutOfMemory}![]const PatternSet(NudCallbackMarker).QueryResult {
         return self.nuds.findPatterns(self.allocator, token);
@@ -353,6 +374,14 @@ const NudCallbackMarker = fn () callconv(.C) void;
 
 const LedCallbackMarker = fn () callconv(.C) void;
 
+const JuxtCallbackMarker = fn () callconv(.C) void;
+// pub const JuxtCallback = fn (
+//     userdata: ?*anyopaque,
+//     parser: *Parser,
+//     lhs: SyntaxTree, rhs: SyntaxTree,
+//     err: *SyntaxError, out: *SyntaxTree,
+// ) callconv(.C) ParserSignal;
+
 pub fn Pattern(comptime T: type) type {
     return struct {
         /// The name to refer to this pattern by in debug messages.
@@ -375,6 +404,33 @@ pub const Nud = Pattern(NudCallbackMarker);
 /// A led is a function/closure that takes a parser and a token, as well as a left hand side expression,
 /// and parses some subset of the source code as an infix or postfix expression.
 pub const Led = Pattern(LedCallbackMarker);
+
+pub const Juxt = struct {
+    /// The name to refer to this pattern by in debug messages.
+    name: []const u8,
+    /// Optional user data to pass to the callback.
+    userdata: ?*anyopaque,
+    /// The callback to invoke when this pattern is matched.
+    callback: *const JuxtCallbackMarker,
+
+    pub fn invoke(
+        self: *const Juxt,
+        args: anytype,
+    ) ParserSignal {
+        const closure_args = .{self.userdata} ++ args;
+        return @call(.auto, @as(*const FunctionType(@TypeOf(closure_args), ParserSignal, .C), @ptrCast(self.callback)), closure_args);
+    }
+};
+
+pub fn createJuxt(name: []const u8, userdata: anytype, callback: anytype) Juxt {
+    const Userdata = comptime @TypeOf(userdata);
+    const uInfo = comptime @typeInfo(Userdata);
+    return Juxt {
+        .name = name,
+        .userdata = if (comptime uInfo == .null) null else @ptrCast(userdata),
+        .callback = wrapJuxtCallback(if (comptime uInfo == .null) void else Userdata, callback),
+    };
+}
 
 /// Expected inputs:
 /// * `..., null, fn (*Parser, i16, Token) SyntaxError!?Expr`
@@ -406,6 +462,44 @@ pub fn createLed(name: []const u8, binding_power: i16, token: PatternModifier(To
         .userdata = if (comptime uInfo == .null) null else @ptrCast(userdata),
         .callback = wrapLedCallback(if (comptime uInfo == .null) void else Userdata, callback),
     };
+}
+
+pub fn wrapJuxtCallback(comptime Userdata: type, callback: anytype) *const JuxtCallbackMarker {
+    return @ptrCast(&struct {
+        pub fn juxt_callback_wrapper(
+            userdata: ?*anyopaque,
+            parser: *Parser,
+            lhs: SyntaxTree,
+            rhs: SyntaxTree,
+            err: *SyntaxError,
+            out_tree: *SyntaxTree,
+            out_bp: *?i16,
+        ) callconv(.c) ParserSignal {
+            const result = invoke: {
+                if (comptime Userdata != void) {
+                    log.debug("invoking juxt callback with userdata", .{});
+                    break :invoke @call(.auto, callback, .{userdata, parser, lhs, rhs});
+                } else {
+                    log.debug("invoking juxt callback without userdata", .{});
+                    break :invoke @call(.auto, callback, .{parser, lhs, rhs});
+                }
+            };
+
+            const maybe = result catch |e| {
+                err.* = e;
+                return .panic;
+            };
+
+            const tree, const bp = maybe orelse {
+                return .reject;
+            };
+
+            out_tree.* = tree;
+            out_bp.* = bp;
+
+            return .okay;
+        }
+    }.juxt_callback_wrapper);
 }
 
 /// Expected inputs:
@@ -506,108 +600,173 @@ pub const Parser = struct {
         return self.lexer.isEof();
     }
 
-    /// Run the pratt algorithm at the current offset in the lexer stream.
-    pub fn pratt(
-        self: *Parser,
-        binding_power: i16,
-    ) Error!?SyntaxTree {
-        var out: SyntaxTree = undefined;
-        var err: SyntaxError = undefined;
-
-        var lexer_save_state = self.lexer;
-
-        const first_token = try self.lexer.next() orelse return null;
-        log.debug("pratt: first token {}; bp: {}", .{first_token, binding_power});
-
-        const nuds = try self.syntax.findNuds(&first_token);
+    pub fn parseNud(self: *Parser, binding_power: i16, token: analysis.Token) Error!?SyntaxTree {
+        const nuds = try self.syntax.findNuds(&token);
 
         log.debug("pratt: found {} nuds", .{nuds.len});
 
         if (nuds.len == 0) {
-            log.debug("pratt: unexpected token {}, no valid nuds found", .{first_token});
-            self.lexer = lexer_save_state;
+            log.debug("pratt: unexpected token {}, no valid nuds found", .{token});
             return null;
         }
 
-        var lhs = nuds: for (nuds) |nud| {
+        var out: SyntaxTree = undefined;
+        var err: SyntaxError = undefined;
+        const lexer_save_state = self.lexer;
+
+        nuds: for (nuds) |nud| {
             if (nud.binding_power < binding_power) {
                 log.debug("pratt: rejecting nud {s} of lesser binding power ({}) than current ({})", .{nud.name, nud.binding_power, binding_power});
                 self.lexer = lexer_save_state;
                 continue :nuds;
             }
 
-            const lexer_save_state_2 = self.lexer;
-
-            switch (nud.invoke(.{self, nud.binding_power, first_token, &out, &err})) {
+            switch (nud.invoke(.{self, nud.binding_power, token, &out, &err})) {
                 .okay => {
                     log.debug("pratt: nud {s} accepted input", .{nud.name});
-                    break :nuds out;
+                    return out;
                 },
                 .panic => {
                     self.lexer = lexer_save_state;
-                    log.debug("pratt: nud {s} for {} panicked", .{nud.name, first_token});
+                    log.debug("pratt: nud {s} for {} panicked", .{nud.name, token});
                     return err;
                 },
                 .reject => {
-                    self.lexer = lexer_save_state_2;
-                    log.debug("pratt: nud {s} for {} rejected", .{nud.name, first_token});
+                    self.lexer = lexer_save_state;
+                    log.debug("pratt: nud {s} for {} rejected", .{nud.name, token});
                     continue :nuds;
                 },
             }
-
-            lexer_save_state = self.lexer;
         } else {
-            self.lexer = lexer_save_state;
-            log.debug("pratt: unexpected token {}, no accepting nud found", .{first_token});
-            return error.UnexpectedToken;
+            log.debug("pratt: all nuds rejected token {}", .{token});
+            return null;
+        }
+    }
+
+    pub fn parseLed(self: *Parser, binding_power: i16, token: analysis.Token, lhs: SyntaxTree) Error!?SyntaxTree {
+        const leds = try self.syntax.findLeds(&token);
+
+        log.debug("pratt: found {} leds", .{leds.len});
+
+        if (leds.len == 0) {
+            log.debug("pratt: unexpected token {}, no valid leds found", .{token});
+            return null;
+        }
+
+        var out: SyntaxTree = undefined;
+        var err: SyntaxError = undefined;
+
+        const lexer_save_state = self.lexer;
+
+        leds: for (leds) |led| {
+            if (led.binding_power < binding_power) {
+                log.debug("pratt: rejecting led {s} of lesser binding power ({}) than current ({})", .{led.name, led.binding_power, binding_power});
+                continue :leds;
+            }
+
+            switch (led.invoke(.{self, lhs, led.binding_power, token, &out, &err})) {
+                .okay => {
+                    log.debug("pratt: led {s} accepted input", .{led.name});
+                    return out;
+                },
+                .panic => {
+                    self.lexer = lexer_save_state;
+                    log.debug("pratt: led {s} for {} panicked", .{led.name, token});
+                    return err;
+                },
+                .reject => {
+                    self.lexer = lexer_save_state;
+                    log.debug("pratt: led {s} for {} rejected", .{led.name, token});
+                    continue :leds;
+                },
+            }
+        } else {
+            log.debug("pratt: all leds rejected token {}", .{token});
+            return null;
+        }
+    }
+
+    pub fn parseJuxt(
+        self: *Parser,
+        lhs: SyntaxTree,
+        rhs: SyntaxTree,
+    ) Error!?struct { SyntaxTree, ?i16 } {
+        const juxt = self.syntax.juxt orelse {
+            log.debug("pratt: unexpected juxtaposition ({} {}), no juxt pattern bound", .{lhs, rhs});
+            return null;
         };
 
-        lexer_save_state = self.lexer;
+        var out_tree: SyntaxTree = undefined;
+        var out_bp: ?i16 = null;
+        var err: SyntaxError = undefined;
+        const lexer_save_state = self.lexer;
+
+        switch (juxt.invoke(.{self, lhs, rhs, &err, &out_tree, &out_bp})) {
+            .okay => {
+                return .{ out_tree, out_bp };
+            },
+            .panic => {
+                self.lexer = lexer_save_state;
+                return err;
+            },
+            .reject => {
+                self.lexer = lexer_save_state;
+                return null;
+            },
+        }
+    }
+
+    /// Run the pratt algorithm at the current offset in the lexer stream.
+    pub fn pratt(
+        self: *Parser,
+        binding_power: i16,
+    ) Error!?SyntaxTree {
+        var current_bp = binding_power;
+        const first_token = try self.lexer.next() orelse return null;
+        log.debug("pratt: first token {}; bp: {}", .{first_token, current_bp});
+
+        var save_state = self.lexer;
+
+        var lhs = try self.parseNud(current_bp, first_token) orelse {
+            self.lexer = save_state;
+            return null;
+        };
+        errdefer lhs.deinit(self.allocator);
+
+        save_state = self.lexer;
 
         while (try self.lexer.next()) |curr_token| {
             log.debug("pratt: infix token {}", .{curr_token});
 
-            const leds = try self.syntax.findLeds(&curr_token);
-
-            log.debug("pratt: found {} leds", .{leds.len});
-
-            if (leds.len == 0) {
-                log.debug("pratt: unexpected token {}, no valid leds found", .{curr_token});
-                self.lexer = lexer_save_state;
-                return lhs;
-            }
-
-            leds: for (leds) |led|{
-                if (led.binding_power < binding_power) {
-                    log.debug("pratt: rejecting led {s} of lesser binding power ({}) than current ({})", .{led.name, led.binding_power, binding_power});
-                    continue :leds;
-                }
-
-                const lexer_save_state_2 = self.lexer;
-                switch (led.invoke(.{self, lhs, led.binding_power, curr_token, &out, &err})) {
-                    .okay => {
-                        log.debug("pratt: led {s} accepted input", .{led.name});
-                        lhs = out;
-                        break :leds;
-                    },
-                    .panic => {
-                        self.lexer = lexer_save_state;
-                        log.debug("pratt: led {s} for {} panicked", .{led.name, curr_token});
-                        return err;
-                    },
-                    .reject => {
-                        self.lexer = lexer_save_state_2;
-                        log.debug("pratt: led {s} for {} rejected", .{led.name, curr_token});
-                        continue :leds;
-                    },
-                }
+            if (try self.parseLed(current_bp, curr_token, lhs)) |new_lhs| {
+                log.debug("pratt: infix token {} accepted", .{curr_token});
+                save_state = self.lexer;
+                lhs = new_lhs;
             } else {
-                self.lexer = lexer_save_state;
-                log.debug("pratt: unexpected token {}, no accepting led found", .{curr_token});
-                return lhs;
-            }
+                log.debug("pratt: token {} rejected as infix; trying nud juxtaposition", .{curr_token});
 
-            lexer_save_state = self.lexer;
+                const rhs = try self.parseNud(current_bp, curr_token) orelse {
+                    log.debug("pratt: token {} rejected as infix and nud; ending loop with lhs {}", .{curr_token, lhs});
+                    self.lexer = save_state;
+                    return lhs;
+                };
+
+                const new_lhs, const maybe_new_bp = try self.parseJuxt(lhs, rhs) orelse {
+                    log.debug("pratt: token {} rejected as infix and nud; ending loop with lhs {}", .{curr_token, lhs});
+                    self.lexer = save_state;
+                    return lhs;
+                };
+
+                lhs = new_lhs;
+                if (maybe_new_bp) |bp| {
+                    log.debug("pratt: juxtaposition accepted as {}; with new bp {}", .{new_lhs, current_bp});
+                    current_bp = bp;
+                } else {
+                    log.debug("pratt: juxtaposition accepted as {}; with null bp", .{lhs});
+                }
+
+                save_state = self.lexer;
+            }
         } else {
             log.debug("pratt: end of input", .{});
         }
