@@ -599,9 +599,10 @@ pub fn leds() [5]analysis.Led {
                                 }
                             },
                             .indentation => {
+                                parser.lexer = save_state;
+
                                 if (current_token.data.indentation != .unindent) {
-                                    log.debug("newline: found indentation token, returning sentinel", .{});
-                                    parser.lexer = save_state;
+                                    log.debug("newline: found indentation token, stopping", .{});
                                     break :gather;
                                 }
                             },
