@@ -17,6 +17,8 @@ pub const SyntaxError = error {
 pub const SyntaxTree = extern struct {
     /// The source location where the expression began.
     location: analysis.Location,
+    /// The source precedence of this expression.
+    precedence: i16,
     /// The type of the expression.
     type: common.Id.of(SyntaxTree),
     /// The token that generated this expression.

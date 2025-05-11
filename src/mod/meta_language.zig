@@ -236,7 +236,7 @@ pub fn nuds() [6]analysis.Nud {
             null, struct {
                 pub fn function(
                     parser: *analysis.Parser,
-                    _: i16,
+                    bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
                     log.debug("function: parsing token {}", .{token});
@@ -274,6 +274,7 @@ pub fn nuds() [6]analysis.Nud {
 
                             return analysis.SyntaxTree{
                                 .location = token.location,
+                                .precedence = bp,
                                 .type = cst_types.Lambda,
                                 .token = token,
                                 .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
@@ -296,7 +297,7 @@ pub fn nuds() [6]analysis.Nud {
             null, struct {
                 pub fn leading_br(
                     parser: *analysis.Parser,
-                    _: i16,
+                    bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
                     log.debug("leading_br: parsing token {}", .{token});
@@ -305,6 +306,7 @@ pub fn nuds() [6]analysis.Nud {
 
                     return analysis.SyntaxTree{
                         .location = token.location,
+                        .precedence = bp,
                         .type = .null,
                         .token = token,
                         .operands = .empty,
@@ -319,7 +321,7 @@ pub fn nuds() [6]analysis.Nud {
             null, struct {
                 pub fn block(
                     parser: *analysis.Parser,
-                    _: i16,
+                    bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
                     log.debug("indent: parsing token {}", .{token});
@@ -345,6 +347,7 @@ pub fn nuds() [6]analysis.Nud {
                             try parser.lexer.advance(); // discard indent
                             return analysis.SyntaxTree{
                                 .location = token.location,
+                                .precedence = bp,
                                 .type = cst_types.Block,
                                 .token = token,
                                 .operands = .fromSlice(buff),
@@ -367,7 +370,7 @@ pub fn nuds() [6]analysis.Nud {
             null, struct {
                 pub fn block(
                     parser: *analysis.Parser,
-                    _: i16,
+                    bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
                     log.debug("block: parsing token {}", .{token});
@@ -391,6 +394,7 @@ pub fn nuds() [6]analysis.Nud {
                             try parser.lexer.advance(); // discard end paren
                             return analysis.SyntaxTree{
                                 .location = token.location,
+                                .precedence = bp,
                                 .type = cst_types.Block,
                                 .token = token,
                                 .operands = if (inner) |sub| mk_buf: {
@@ -418,7 +422,7 @@ pub fn nuds() [6]analysis.Nud {
             null, struct {
                 pub fn string(
                     parser: *analysis.Parser,
-                    _: i16,
+                    bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
                     log.debug("string: parsing token {}", .{token});
@@ -436,6 +440,7 @@ pub fn nuds() [6]analysis.Nud {
 
                             try buff.append(parser.allocator, analysis.SyntaxTree{
                                 .location = next_token.location,
+                                .precedence = bp,
                                 .type = cst_types.StringSentinel,
                                 .token = next_token,
                                 .operands = .empty,
@@ -443,6 +448,7 @@ pub fn nuds() [6]analysis.Nud {
 
                             return analysis.SyntaxTree{
                                 .location = token.location,
+                                .precedence = bp,
                                 .type = cst_types.String,
                                 .token = token,
                                 .operands = .fromSlice(try buff.toOwnedSlice(parser.allocator)),
@@ -450,6 +456,7 @@ pub fn nuds() [6]analysis.Nud {
                         } else {
                             try buff.append(parser.allocator, analysis.SyntaxTree{
                                 .location = next_token.location,
+                                .precedence = bp,
                                 .type = cst_types.StringElement,
                                 .token = next_token,
                                 .operands = .empty,
@@ -469,7 +476,7 @@ pub fn nuds() [6]analysis.Nud {
             null, struct {
                 pub fn leaf(
                     parser: *analysis.Parser,
-                    _: i16,
+                    bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
                     log.debug("leaf: parsing token", .{});
@@ -485,6 +492,7 @@ pub fn nuds() [6]analysis.Nud {
                         log.debug("leaf: found int literal", .{});
                         return analysis.SyntaxTree{
                             .location = token.location,
+                            .precedence = bp,
                             .type = cst_types.Int,
                             .token = token,
                             .operands = .empty,
@@ -493,6 +501,7 @@ pub fn nuds() [6]analysis.Nud {
                         log.debug("leaf: found identifier", .{});
                         return analysis.SyntaxTree{
                             .location = token.location,
+                            .precedence = bp,
                             .type = cst_types.Identifier,
                             .token = token,
                             .operands = .empty,
@@ -523,6 +532,11 @@ pub fn leds() [9]analysis.Led {
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
                     log.debug("decl: parsing token {}", .{token});
 
+                    if (lhs.precedence == bp) {
+                        log.debug("decl: lhs is has same binding power; panic", .{});
+                        return error.UnexpectedInput;
+                    }
+
                     try parser.lexer.advance(); // discard operator
 
                     const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
@@ -536,6 +550,7 @@ pub fn leds() [9]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = lhs.location,
+                        .precedence = bp,
                         .type = cst_types.Decl,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
@@ -548,13 +563,18 @@ pub fn leds() [9]analysis.Led {
             std.math.minInt(i16),
             .{ .standard = .{ .sequence = .{ .standard = .fromSlice("=") } } },
             null, struct {
-                pub fn decl(
+                pub fn set(
                     parser: *analysis.Parser,
                     lhs: analysis.SyntaxTree,
                     bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
-                    log.debug("decl: parsing token {}", .{token});
+                    log.debug("set: parsing token {}", .{token});
+
+                    if (lhs.precedence == bp) {
+                        log.debug("set: lhs is has same binding power; panic", .{});
+                        return error.UnexpectedInput;
+                    }
 
                     try parser.lexer.advance(); // discard operator
 
@@ -569,12 +589,13 @@ pub fn leds() [9]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = lhs.location,
+                        .precedence = bp,
                         .type = cst_types.Set,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
                     };
                 }
-            }.decl,
+            }.set,
         ),
         analysis.createLed(
             "builtin_list",
@@ -608,6 +629,7 @@ pub fn leds() [9]analysis.Led {
                         buff[0] = lhs;
                         return analysis.SyntaxTree{
                             .location = lhs.location,
+                            .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
                             .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
@@ -631,6 +653,7 @@ pub fn leds() [9]analysis.Led {
 
                         return .{
                             .location = lhs.location,
+                            .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
                             .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
@@ -647,6 +670,7 @@ pub fn leds() [9]analysis.Led {
 
                         return .{
                             .location = lhs.location,
+                            .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
                             .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
@@ -663,6 +687,7 @@ pub fn leds() [9]analysis.Led {
 
                         return .{
                             .location = lhs.location,
+                            .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
                             .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
@@ -682,6 +707,7 @@ pub fn leds() [9]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = lhs.location,
+                        .precedence = bp,
                         .type = cst_types.List,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
@@ -703,7 +729,7 @@ pub fn leds() [9]analysis.Led {
                 pub fn seq(
                     parser: *analysis.Parser,
                     lhs: analysis.SyntaxTree,
-                    _: i16,
+                    bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
                     log.debug("seq: lhs {}", .{lhs});
@@ -743,6 +769,7 @@ pub fn leds() [9]analysis.Led {
 
                         return .{
                             .location = lhs.location,
+                            .precedence = bp,
                             .type = cst_types.Seq,
                             .token = token,
                             .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
@@ -759,6 +786,7 @@ pub fn leds() [9]analysis.Led {
 
                         return .{
                             .location = lhs.location,
+                            .precedence = bp,
                             .type = cst_types.Seq,
                             .token = token,
                             .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
@@ -775,6 +803,7 @@ pub fn leds() [9]analysis.Led {
 
                         return .{
                             .location = lhs.location,
+                            .precedence = bp,
                             .type = cst_types.Seq,
                             .token = token,
                             .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
@@ -794,6 +823,7 @@ pub fn leds() [9]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = lhs.location,
+                        .precedence = bp,
                         .type = cst_types.Seq,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
@@ -842,6 +872,7 @@ pub fn leds() [9]analysis.Led {
 
                         return .{
                             .location = lhs.location,
+                            .precedence = bp,
                             .type = cst_types.Apply,
                             .token = token,
                             .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
@@ -861,6 +892,7 @@ pub fn leds() [9]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = lhs.location,
+                        .precedence = bp,
                         .type = cst_types.Apply,
                         .token = analysis.Token{
                             .location = token.location,
@@ -900,6 +932,7 @@ pub fn leds() [9]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = lhs.location,
+                        .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
@@ -933,6 +966,7 @@ pub fn leds() [9]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = lhs.location,
+                        .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
@@ -966,6 +1000,7 @@ pub fn leds() [9]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = lhs.location,
+                        .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
@@ -999,6 +1034,7 @@ pub fn leds() [9]analysis.Led {
 
                     return analysis.SyntaxTree{
                         .location = lhs.location,
+                        .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),

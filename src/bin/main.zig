@@ -43,6 +43,10 @@ const tests: []const struct {input: []const u8, expect: anyerror![]const u8} = &
     .{ .input = "fun x, y, z. x, y, z", .expect = "⟨λ ⟨𝓵𝓲𝓼𝓽 x y z⟩ ⟨𝓵𝓲𝓼𝓽 x y z⟩⟩" },
     .{ .input = "fun x (y, z). Set [\n  x,\n  y,\n  z\n]", .expect = "⟨λ ⟨𝓪𝓹𝓹 x (⟨𝓵𝓲𝓼𝓽 y z⟩)⟩ ⟨𝓪𝓹𝓹 Set [⌊⟨𝓵𝓲𝓼𝓽 x y z⟩⌋]⟩⟩" },
     .{ .input = "fun x (y, z). Set\n  [ x\n  , y\n  , z\n  ]", .expect = "⟨λ ⟨𝓪𝓹𝓹 x (⟨𝓵𝓲𝓼𝓽 y z⟩)⟩ ⟨𝓪𝓹𝓹 Set ⌊[⟨𝓵𝓲𝓼𝓽 x y z⟩]⌋⟩⟩" },
+    .{ .input = "x := y := z", .expect = error.UnexpectedInput },
+    .{ .input = "x = y == z", .expect = error.UnexpectedInput },
+    .{ .input = "x = y := z", .expect = error.UnexpectedInput },
+    .{ .input = "x := y = z", .expect = error.UnexpectedInput },
 };
 
 pub fn main() !void {
@@ -69,7 +73,7 @@ pub fn main() !void {
                 log.err("input {s} succeeded: {}; but expected {}", .{input, unexpectedly_okay, expect_err});
                 failures.append(i) catch unreachable;
             } else |err| {
-                if (err == error.TestFailure) {
+                if (err == error.TestFailure or err == error.TestExpectedEqual) {
                     log.err("input {s} succeeded, but the output was wrong; expected {}", .{input, expect_err});
                     failures.append(i) catch unreachable;
                 } else if (expect_err != err) {
