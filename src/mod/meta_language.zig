@@ -20,7 +20,7 @@ test {
 var syntax_mutex = std.Thread.Mutex{};
 var syntax: ?analysis.Syntax = null;
 
-pub noinline fn dumpCstSExprs(source: []const u8, cst: analysis.SyntaxTree, writer: anytype) !void {
+pub fn dumpCstSExprs(source: []const u8, cst: analysis.SyntaxTree, writer: anytype) !void {
     switch(cst.type) {
         cst_types.Identifier, cst_types.Int => try writer.print("{s}", .{cst.token.data.sequence.asSlice()}),
         cst_types.String => {
@@ -35,6 +35,8 @@ pub noinline fn dumpCstSExprs(source: []const u8, cst: analysis.SyntaxTree, writ
         },
         cst_types.Seq => try writer.writeAll("⟨𝓼𝓮𝓺"),
         cst_types.Apply => try writer.writeAll("⟨𝓪𝓹𝓹"),
+        cst_types.Decl => try writer.writeAll("⟨𝓭𝓮𝓬𝓵"),
+        cst_types.Set => try writer.writeAll("⟨𝓼𝓮𝓽"),
         else => {
             switch (cst.token.tag) {
                 .sequence => {
@@ -163,7 +165,8 @@ pub const cst_types = gen: {
         .Seq = fresh.next(),
         .Apply = fresh.next(),
         .Binary = fresh.next(),
-        .Qed = fresh.next(),
+        .Decl = fresh.next(),
+        .Set = fresh.next(),
     };
 };
 
@@ -443,8 +446,74 @@ pub fn nuds() [5]analysis.Nud {
 }
 
 /// creates rml infix/postfix parser defs.
-pub fn leds() [6]analysis.Led {
+pub fn leds() [8]analysis.Led {
     return .{
+        analysis.createLed(
+            "builtin_decl_inferred_type",
+            -100,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice(":=") } } },
+            null, struct {
+                pub fn decl(
+                    parser: *analysis.Parser,
+                    first_stmt: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("decl: parsing token {}", .{token});
+
+                    try parser.lexer.advance(); // discard operator
+
+                    const second_stmt = if (try parser.pratt(bp)) |rhs| rhs else {
+                        log.debug("no rhs, panic", .{});
+                        return error.UnexpectedInput;
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = first_stmt;
+                    buff[1] = second_stmt;
+
+                    return analysis.SyntaxTree{
+                        .location = first_stmt.location,
+                        .type = cst_types.Decl,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.decl,
+        ),
+        analysis.createLed(
+            "builtin_set",
+            -100,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("=") } } },
+            null, struct {
+                pub fn decl(
+                    parser: *analysis.Parser,
+                    first_stmt: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("decl: parsing token {}", .{token});
+
+                    try parser.lexer.advance(); // discard operator
+
+                    const second_stmt = if (try parser.pratt(bp)) |rhs| rhs else {
+                        log.debug("no rhs, panic", .{});
+                        return error.UnexpectedInput;
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = first_stmt;
+                    buff[1] = second_stmt;
+
+                    return analysis.SyntaxTree{
+                        .location = first_stmt.location,
+                        .type = cst_types.Set,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.decl,
+        ),
         analysis.createLed(
             "builtin_seq",
             std.math.minInt(i16),
@@ -532,11 +601,6 @@ pub fn leds() [6]analysis.Led {
 
                     log.debug("apply: rhs {}", .{rhs});
 
-                    if (rhs.type == cst_types.Qed) {
-                        log.debug("apply: rhs is qed, returning lhs", .{});
-                        return lhs;
-                    }
-
                     const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 2);
 
                     log.debug("apply: buffer allocation {x}", .{@intFromPtr(buff.ptr)});
@@ -563,7 +627,7 @@ pub fn leds() [6]analysis.Led {
         ),
         analysis.createLed(
             "builtin_mul",
-            -100,
+            -1000,
             .{ .standard = .{ .sequence = .{ .standard = .fromSlice("*") } } },
             null, struct {
                 pub fn mul(
@@ -599,7 +663,7 @@ pub fn leds() [6]analysis.Led {
         ),
         analysis.createLed(
             "builtin_div",
-            -100,
+            -1000,
             .{ .standard = .{ .sequence = .{ .standard = .fromSlice("/") } } },
             null, struct {
                 pub fn div(
@@ -635,7 +699,7 @@ pub fn leds() [6]analysis.Led {
         ),
         analysis.createLed(
             "builtin_add",
-            -200,
+            -2000,
             .{ .standard = .{ .sequence = .{ .standard = .fromSlice("+") } } },
             null, struct {
                 pub fn add(
@@ -671,7 +735,7 @@ pub fn leds() [6]analysis.Led {
         ),
         analysis.createLed(
             "builtin_sub",
-            -200,
+            -2000,
             .{ .standard = .{ .sequence = .{ .standard = .fromSlice("-") } } },
             null, struct {
                 pub fn sub(
