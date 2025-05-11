@@ -19,7 +19,7 @@ pub const Token = extern struct {
         try writer.print("{}:", .{self.location});
         switch (self.tag) {
             .sequence => try writer.print("s⟨{s}⟩", .{ self.data.sequence.asSlice() }),
-            .linebreak => try writer.print("b⟨⇓{}⟩", .{ self.data.linebreak }),
+            .linebreak => try writer.print("b⟨⇓⟩", .{}),
             .indentation => try writer.print("i⟨{}⟩", .{ @intFromEnum(self.data.indentation) }),
             .special => if (self.data.special.escaped) {
                 try writer.print("p⟨\\{u}⟩", .{ self.data.special.punctuation.toChar() });
@@ -49,6 +49,22 @@ pub const IndentationDelta = enum(i8) {
     unindent = -1,
     /// Indentation level increased.
     indent = 1,
+
+    /// Inverts the indentation delta.
+    pub fn invert(self: IndentationDelta) IndentationDelta {
+        return switch (self) {
+            .unindent => .indent,
+            .indent => .unindent,
+        };
+    }
+
+    /// Get a codepoint representing the indentation delta.
+    pub fn toChar(self: IndentationDelta) pl.Char {
+        return switch (self) {
+            .indent => '⌊',
+            .unindent => '⌋',
+        };
+    }
 };
 
 /// This is a packed union of all the possible types of tokens that can be produced by the lexer.
@@ -56,8 +72,8 @@ pub const TokenData = packed union {
     /// a sequence of characters that do not fit the other categories,
     /// and contain no control characters or whitespace.
     sequence: common.Id.Buffer(u8, .constant),
-    /// \n * `n`.
-    linebreak: u32,
+    /// \n
+    linebreak: void,
     /// A relative change in indentation level.
     indentation: IndentationDelta,
     /// Special lexical control characters, such as `{`, `\"`, etc.
@@ -111,6 +127,19 @@ pub const Punctuation = enum(pl.Char) {
     /// `#`
     hash = '#',
 
+    /// Inverts bracket-like punctuation, ie `(` to `)`.
+    pub fn invert(self: Punctuation) ?Punctuation {
+        return switch (self) {
+            .paren_l => .paren_r,
+            .paren_r => .paren_l,
+            .brace_l => .brace_r,
+            .brace_r => .brace_l,
+            .bracket_l => .bracket_r,
+            .bracket_r => .bracket_l,
+            else => null,
+        };
+    }
+
     /// Given a punctuation type, returns the corresponding character.
     pub fn toChar(self: Punctuation) pl.Char {
         return @intFromEnum(self);
@@ -149,8 +178,15 @@ pub fn lexWithPeek(
     settings: Lexer0.Settings,
     text: []const u8,
 ) LexicalError!Lexer1 {
-    const lexer = try Lexer0.init(settings, text);
-    return try Lexer1.from(lexer);
+    return try Lexer1.from(try Lexer0.init(settings, text));
+}
+
+/// Create a new lexer for a given source, without lookahead.
+pub fn lexNoPeek(
+    settings: Lexer0.Settings,
+    text: []const u8,
+) LexicalError!Lexer0 {
+    return try Lexer0.init(settings, text);
 }
 
 
@@ -182,6 +218,7 @@ pub const Lexer0 = struct {
     levels: u8 = 1,
     level_change_queue: [MAX_LEVELS]Level = [1]Level{0} ** MAX_LEVELS,
     levels_queued: i16 = 0,
+    br_queued: bool = false,
     /// The current location in the source code.
     location: analysis.Location,
 
@@ -270,35 +307,40 @@ pub const Lexer0 = struct {
                 return Token{
                     .location = start,
                     .tag = .indentation,
-                    .data = TokenData{
-                        .indentation = .indent,
-                    },
+                    .data = TokenData{ .indentation = .indent },
                 };
             } else {
                 self.levels = self.levels - 1;
                 self.levels_queued = self.levels_queued + 1;
+                self.br_queued = true;
 
                 return Token{
                     .location = start,
                     .tag = .indentation,
-                    .data = TokenData{
-                        .indentation = .unindent,
-                    },
+                    .data = TokenData{ .indentation = .unindent },
                 };
             }
+        } else if (self.br_queued) {
+            log.debug("processing queued line end", .{});
+
+            self.br_queued = false;
+
+            return Token{
+                .location = start,
+                .tag = .linebreak,
+                .data = TokenData{ .linebreak = {} },
+            };
         }
 
         const ch = try self.nextChar() orelse {
             if (self.levels > 1) {
                 log.debug("processing 1st ch EOF with {} indentation levels", .{self.levels});
-                self.levels_queued = self.levels - 1;
+                self.levels_queued = self.levels - 2;
 
                 return Token{
                     .location = start,
-                    .tag = .linebreak,
-                    .data = TokenData{
-                        .linebreak = 0,
-                    },
+                    .tag = .indentation,
+                    .data = TokenData{ .indentation = .unindent },
                 };
             } else {
                 log.debug("EOF with no extraneous indentation levels", .{});
@@ -309,8 +351,6 @@ pub const Lexer0 = struct {
         const data = char_switch: switch (ch) {
             '\n' => {
                 log.debug("processing line break", .{});
-
-                tag = .linebreak;
 
                 var n: u32 = 1;
 
@@ -336,9 +376,10 @@ pub const Lexer0 = struct {
                     log.debug("increasing indentation to {} ({})", .{ oldLen, newIndent });
 
                     self.indentation[self.levels] = @intCast(newIndent); // TODO: check for overflow?
-                    self.levels_queued = 1;
+                    self.levels += 1;
 
-                    break :char_switch TokenData { .linebreak = n };
+                    tag = .indentation;
+                    break :char_switch TokenData { .indentation = .indent };
                 } else if (newIndent < oldIndent) {
                     // we need to traverse back down the indentation stack until we find the right level
                     var newIndentIndex = self.levels - 1;
@@ -361,13 +402,17 @@ pub const Lexer0 = struct {
                     const level_delta = oldLen - (newIndentIndex + 1);
                     std.debug.assert(level_delta > 0);
 
-                    self.levels_queued = -@as(i16, @intCast(level_delta));
+                    self.levels -= 1;
+                    self.levels_queued = -@as(i16, @intCast(level_delta - 1));
+                    if (self.levels_queued == 0) self.br_queued = true;
 
-                    break :char_switch TokenData { .linebreak = n };
+                    tag = .indentation;
+                    break :char_switch TokenData { .indentation = .unindent };
                 } else {
                     log.debug("same indentation level {} ({})", .{ self.levels - 1, n });
 
-                    break :char_switch TokenData { .linebreak = n };
+                    tag = .linebreak;
+                    break :char_switch TokenData { .linebreak = {} };
                 }
             },
             '\\' => {
@@ -397,6 +442,8 @@ pub const Lexer0 = struct {
                             log.debug("processing nth ch EOF with {} indentation levels", .{self.levels});
 
                             self.levels_queued = self.levels - 2;
+
+                            if (self.levels_queued == 0) self.br_queued = true;
 
                             return Token{
                                 .location = start,

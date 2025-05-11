@@ -28,12 +28,13 @@ pub const LexerSettings = lexical.Lexer0.Settings;
 pub const LexicalError = lexical.LexicalError;
 
 pub const SyntaxTree = syntactic.SyntaxTree;
+pub const ParserSettings = syntactic.Parser.Settings;
 pub const Syntax = syntactic.Syntax;
 pub const Parser = syntactic.Parser;
-pub const Juxt = syntactic.Juxt;
 pub const Nud = syntactic.Nud;
 pub const Led = syntactic.Led;
 pub const SyntaxError = syntactic.SyntaxError;
+pub const lexNoPeek = lexical.lexNoPeek;
+pub const lexWithPeek = lexical.lexWithPeek;
 pub const createNud = syntactic.createNud;
 pub const createLed = syntactic.createLed;
-pub const createJuxt = syntactic.createJuxt;

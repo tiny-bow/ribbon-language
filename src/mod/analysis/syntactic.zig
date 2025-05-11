@@ -141,7 +141,7 @@ pub fn PatternModifier(comptime P: type) type {
 
                         return switch (a) {
                             .sequence => |p| p.process(b.data.sequence),
-                            .linebreak => |p| p.process(b.data.linebreak),
+                            .linebreak => true,
                             .indentation => |p| p.process(b.data.indentation),
                             .special => |p| p.process(b.data.special),
                         };
@@ -180,7 +180,7 @@ pub fn PatternModifier(comptime P: type) type {
 pub const TokenPattern = union(analysis.TokenType) {
     pub const QueryType = *const analysis.Token;
     sequence: PatternModifier(common.Id.Buffer(u8, .constant)),
-    linebreak: PatternModifier(u32),
+    linebreak: void,
     indentation: PatternModifier(analysis.IndentationDelta),
     special: PatternModifier(struct {
         const Self = @This();
@@ -267,6 +267,7 @@ pub fn PatternSet(comptime T: type) type {
         /// Find the patterns matching a given token, if any.
         pub fn findPatterns(
             self: *const PatternSet(T), allocator: std.mem.Allocator,
+            binding_power: i16,
             token: *const analysis.Token,
         ) error{OutOfMemory}![]const QueryResult {
             const patterns = self.entries.items(.token);
@@ -278,7 +279,15 @@ pub fn PatternSet(comptime T: type) type {
             @constCast(self).query_cache.clearRetainingCapacity();
 
             for (patterns, 0..) |*pattern, index| {
-                if (!pattern.process(token)) continue;
+                if (bps[index] < binding_power) {
+                    log.debug("rejecting pattern {s} of lesser binding power ({}) than current ({})", .{names[index], bps[index], binding_power});
+                    continue;
+                }
+
+                if (!pattern.process(token)) {
+                    log.debug("pattern {s} rejected token {}", .{names[index], token});
+                    continue;
+                }
 
                 try @constCast(self).query_cache.append(allocator, .{.name = names[index], .binding_power = bps[index], .userdata = userdata[index], .callback = callbacks[index]});
             }
@@ -309,7 +318,6 @@ pub const Syntax = struct {
     nuds: PatternSet(NudCallbackMarker) = .empty,
     /// Led patterns for known token types.
     leds: PatternSet(LedCallbackMarker) = .empty,
-    juxt: ?Juxt = null,
 
     /// Initialize a new, empty syntax.
     pub fn init(
@@ -339,23 +347,14 @@ pub const Syntax = struct {
         return self.leds.bindPattern(self.allocator, led);
     }
 
-    pub fn bindJuxt(
-        self: *Syntax,
-        juxt: Juxt,
-    ) ?Juxt {
-        const old = self.juxt;
-        self.juxt = juxt;
-        return old;
-    }
-
     /// Find the nuds matching a given token, if any.
-    pub fn findNuds(self: *const Syntax, token: *const analysis.Token) error{OutOfMemory}![]const PatternSet(NudCallbackMarker).QueryResult {
-        return self.nuds.findPatterns(self.allocator, token);
+    pub fn findNuds(self: *const Syntax, bp: i16, token: *const analysis.Token) error{OutOfMemory}![]const PatternSet(NudCallbackMarker).QueryResult {
+        return self.nuds.findPatterns(self.allocator, bp, token);
     }
 
     /// Find the leds matching a given token, if any.
-    pub fn findLeds(self: *const Syntax, token: *const analysis.Token) error{OutOfMemory}![]const PatternSet(LedCallbackMarker).QueryResult {
-        return self.leds.findPatterns(self.allocator, token);
+    pub fn findLeds(self: *const Syntax, bp: i16, token: *const analysis.Token) error{OutOfMemory}![]const PatternSet(LedCallbackMarker).QueryResult {
+        return self.leds.findPatterns(self.allocator, bp, token);
     }
 
     /// Parse a source string using this syntax.
@@ -364,23 +363,16 @@ pub const Syntax = struct {
         allocator: std.mem.Allocator,
         lexer_settings: analysis.LexerSettings,
         source: []const u8,
+        parser_settings: Parser.Settings,
     ) SyntaxError!Parser {
-        const lexer = try analysis.Lexer0.init(lexer_settings, source);
-        return Parser.init(allocator, self, lexer);
+        const lexer = try analysis.lexWithPeek(lexer_settings, source);
+        return Parser.init(allocator, self, lexer, parser_settings);
     }
 };
 
 const NudCallbackMarker = fn () callconv(.C) void;
 
 const LedCallbackMarker = fn () callconv(.C) void;
-
-const JuxtCallbackMarker = fn () callconv(.C) void;
-// pub const JuxtCallback = fn (
-//     userdata: ?*anyopaque,
-//     parser: *Parser,
-//     lhs: SyntaxTree, rhs: SyntaxTree,
-//     err: *SyntaxError, out: *SyntaxTree,
-// ) callconv(.C) ParserSignal;
 
 pub fn Pattern(comptime T: type) type {
     return struct {
@@ -405,32 +397,6 @@ pub const Nud = Pattern(NudCallbackMarker);
 /// and parses some subset of the source code as an infix or postfix expression.
 pub const Led = Pattern(LedCallbackMarker);
 
-pub const Juxt = struct {
-    /// The name to refer to this pattern by in debug messages.
-    name: []const u8,
-    /// Optional user data to pass to the callback.
-    userdata: ?*anyopaque,
-    /// The callback to invoke when this pattern is matched.
-    callback: *const JuxtCallbackMarker,
-
-    pub fn invoke(
-        self: *const Juxt,
-        args: anytype,
-    ) ParserSignal {
-        const closure_args = .{self.userdata} ++ args;
-        return @call(.auto, @as(*const FunctionType(@TypeOf(closure_args), ParserSignal, .C), @ptrCast(self.callback)), closure_args);
-    }
-};
-
-pub fn createJuxt(name: []const u8, userdata: anytype, callback: anytype) Juxt {
-    const Userdata = comptime @TypeOf(userdata);
-    const uInfo = comptime @typeInfo(Userdata);
-    return Juxt {
-        .name = name,
-        .userdata = if (comptime uInfo == .null) null else @ptrCast(userdata),
-        .callback = wrapJuxtCallback(if (comptime uInfo == .null) void else Userdata, callback),
-    };
-}
 
 /// Expected inputs:
 /// * `..., null, fn (*Parser, i16, Token) SyntaxError!?Expr`
@@ -462,44 +428,6 @@ pub fn createLed(name: []const u8, binding_power: i16, token: PatternModifier(To
         .userdata = if (comptime uInfo == .null) null else @ptrCast(userdata),
         .callback = wrapLedCallback(if (comptime uInfo == .null) void else Userdata, callback),
     };
-}
-
-pub fn wrapJuxtCallback(comptime Userdata: type, callback: anytype) *const JuxtCallbackMarker {
-    return @ptrCast(&struct {
-        pub fn juxt_callback_wrapper(
-            userdata: ?*anyopaque,
-            parser: *Parser,
-            lhs: SyntaxTree,
-            rhs: SyntaxTree,
-            err: *SyntaxError,
-            out_tree: *SyntaxTree,
-            out_bp: *?i16,
-        ) callconv(.c) ParserSignal {
-            const result = invoke: {
-                if (comptime Userdata != void) {
-                    log.debug("invoking juxt callback with userdata", .{});
-                    break :invoke @call(.auto, callback, .{userdata, parser, lhs, rhs});
-                } else {
-                    log.debug("invoking juxt callback without userdata", .{});
-                    break :invoke @call(.auto, callback, .{parser, lhs, rhs});
-                }
-            };
-
-            const maybe = result catch |e| {
-                err.* = e;
-                return .panic;
-            };
-
-            const tree, const bp = maybe orelse {
-                return .reject;
-            };
-
-            out_tree.* = tree;
-            out_bp.* = bp;
-
-            return .okay;
-        }
-    }.juxt_callback_wrapper);
 }
 
 /// Expected inputs:
@@ -578,21 +506,30 @@ pub const Parser = struct {
     /// The syntax used by this parser.
     syntax: *const Syntax,
     /// Token stream being parsed.
-    lexer: analysis.Lexer0,
+    lexer: analysis.Lexer1,
+    /// Settings for this parser.
+    settings: Settings,
 
     /// Alias for `SyntaxError`.
     pub const Error = SyntaxError;
+
+    pub const Settings = struct {
+        /// Whether to ignore whitespace tokens when parsing; Default: false.
+        ignore_space: bool = false,
+    };
 
     /// Create a new parser.
     pub fn init(
         allocator: std.mem.Allocator,
         syntax: *const Syntax,
-        lexer: analysis.Lexer0,
+        lexer: analysis.Lexer1,
+        settings: Settings,
     ) Parser {
         return Parser{
             .allocator = allocator,
             .syntax = syntax,
             .lexer = lexer,
+            .settings = settings,
         };
     }
 
@@ -601,7 +538,7 @@ pub const Parser = struct {
     }
 
     pub fn parseNud(self: *Parser, binding_power: i16, token: analysis.Token) Error!?SyntaxTree {
-        const nuds = try self.syntax.findNuds(&token);
+        const nuds = try self.syntax.findNuds(binding_power, &token);
 
         log.debug("pratt: found {} nuds", .{nuds.len});
 
@@ -612,27 +549,21 @@ pub const Parser = struct {
 
         var out: SyntaxTree = undefined;
         var err: SyntaxError = undefined;
-        const lexer_save_state = self.lexer;
+        const save_state = self.lexer;
 
         nuds: for (nuds) |nud| {
-            if (nud.binding_power < binding_power) {
-                log.debug("pratt: rejecting nud {s} of lesser binding power ({}) than current ({})", .{nud.name, nud.binding_power, binding_power});
-                self.lexer = lexer_save_state;
-                continue :nuds;
-            }
-
             switch (nud.invoke(.{self, nud.binding_power, token, &out, &err})) {
                 .okay => {
                     log.debug("pratt: nud {s} accepted input", .{nud.name});
                     return out;
                 },
                 .panic => {
-                    self.lexer = lexer_save_state;
                     log.debug("pratt: nud {s} for {} panicked", .{nud.name, token});
                     return err;
                 },
                 .reject => {
-                    self.lexer = lexer_save_state;
+                    log.debug("restoring saved state", .{});
+                    self.lexer = save_state;
                     log.debug("pratt: nud {s} for {} rejected", .{nud.name, token});
                     continue :nuds;
                 },
@@ -644,7 +575,7 @@ pub const Parser = struct {
     }
 
     pub fn parseLed(self: *Parser, binding_power: i16, token: analysis.Token, lhs: SyntaxTree) Error!?SyntaxTree {
-        const leds = try self.syntax.findLeds(&token);
+        const leds = try self.syntax.findLeds(binding_power, &token);
 
         log.debug("pratt: found {} leds", .{leds.len});
 
@@ -656,26 +587,21 @@ pub const Parser = struct {
         var out: SyntaxTree = undefined;
         var err: SyntaxError = undefined;
 
-        const lexer_save_state = self.lexer;
+        const save_state = self.lexer;
 
         leds: for (leds) |led| {
-            if (led.binding_power < binding_power) {
-                log.debug("pratt: rejecting led {s} of lesser binding power ({}) than current ({})", .{led.name, led.binding_power, binding_power});
-                continue :leds;
-            }
-
             switch (led.invoke(.{self, lhs, led.binding_power, token, &out, &err})) {
                 .okay => {
                     log.debug("pratt: led {s} accepted input", .{led.name});
                     return out;
                 },
                 .panic => {
-                    self.lexer = lexer_save_state;
                     log.debug("pratt: led {s} for {} panicked", .{led.name, token});
                     return err;
                 },
                 .reject => {
-                    self.lexer = lexer_save_state;
+                    log.debug("restoring saved state", .{});
+                    self.lexer = save_state;
                     log.debug("pratt: led {s} for {} rejected", .{led.name, token});
                     continue :leds;
                 },
@@ -686,48 +612,33 @@ pub const Parser = struct {
         }
     }
 
-    pub fn parseJuxt(
-        self: *Parser,
-        lhs: SyntaxTree,
-        rhs: SyntaxTree,
-    ) Error!?struct { SyntaxTree, ?i16 } {
-        const juxt = self.syntax.juxt orelse {
-            log.debug("pratt: unexpected juxtaposition ({} {}), no juxt pattern bound", .{lhs, rhs});
-            return null;
-        };
-
-        var out_tree: SyntaxTree = undefined;
-        var out_bp: ?i16 = null;
-        var err: SyntaxError = undefined;
-        const lexer_save_state = self.lexer;
-
-        switch (juxt.invoke(.{self, lhs, rhs, &err, &out_tree, &out_bp})) {
-            .okay => {
-                return .{ out_tree, out_bp };
-            },
-            .panic => {
-                self.lexer = lexer_save_state;
-                return err;
-            },
-            .reject => {
-                self.lexer = lexer_save_state;
-                return null;
-            },
-        }
-    }
-
     /// Run the pratt algorithm at the current offset in the lexer stream.
     pub fn pratt(
         self: *Parser,
         binding_power: i16,
     ) Error!?SyntaxTree {
-        var current_bp = binding_power;
-        const first_token = try self.lexer.next() orelse return null;
-        log.debug("pratt: first token {}; bp: {}", .{first_token, current_bp});
-
         var save_state = self.lexer;
+        var first_token = try self.lexer.peek() orelse return null;
 
-        var lhs = try self.parseNud(current_bp, first_token) orelse {
+        if (self.settings.ignore_space) {
+            while (first_token.tag == .linebreak or first_token.tag == .indentation) {
+                if (self.settings.ignore_space) {
+                    log.debug("pratt: ignoring whitespace token {}", .{first_token});
+                    try self.lexer.advance();
+                    first_token = try self.lexer.peek() orelse {
+                        log.debug("pratt: input is all whitespace, returning null", .{});
+                        return null;
+                    };
+                } else {
+                    break;
+                }
+            }
+        }
+
+        log.debug("pratt: first token {}; bp: {}", .{first_token, binding_power});
+
+        var lhs = try self.parseNud(binding_power, first_token) orelse {
+            log.debug("restoring saved state", .{});
             self.lexer = save_state;
             return null;
         };
@@ -735,37 +646,35 @@ pub const Parser = struct {
 
         save_state = self.lexer;
 
-        while (try self.lexer.next()) |curr_token| {
+        while (try self.lexer.peek()) |x| {
+            var curr_token = x;
+
+            if (self.settings.ignore_space) {
+                while (curr_token.tag == .linebreak or curr_token.tag == .indentation) {
+                    if (self.settings.ignore_space) {
+                        log.debug("pratt: ignoring whitespace token {}", .{curr_token});
+                        try self.lexer.advance();
+                        curr_token = try self.lexer.peek() orelse {
+                            log.debug("pratt: remaining input is all whitespace, returning lhs", .{});
+                            return lhs;
+                        };
+                    } else {
+                        break;
+                    }
+                }
+            }
+
             log.debug("pratt: infix token {}", .{curr_token});
 
-            if (try self.parseLed(current_bp, curr_token, lhs)) |new_lhs| {
+            if (try self.parseLed(binding_power, curr_token, lhs)) |new_lhs| {
                 log.debug("pratt: infix token {} accepted", .{curr_token});
                 save_state = self.lexer;
                 lhs = new_lhs;
             } else {
-                log.debug("pratt: token {} rejected as infix; trying nud juxtaposition", .{curr_token});
-
-                const rhs = try self.parseNud(current_bp, curr_token) orelse {
-                    log.debug("pratt: token {} rejected as infix and nud; ending loop with lhs {}", .{curr_token, lhs});
-                    self.lexer = save_state;
-                    return lhs;
-                };
-
-                const new_lhs, const maybe_new_bp = try self.parseJuxt(lhs, rhs) orelse {
-                    log.debug("pratt: token {} rejected as infix and nud; ending loop with lhs {}", .{curr_token, lhs});
-                    self.lexer = save_state;
-                    return lhs;
-                };
-
-                lhs = new_lhs;
-                if (maybe_new_bp) |bp| {
-                    log.debug("pratt: juxtaposition accepted as {}; with new bp {}", .{new_lhs, current_bp});
-                    current_bp = bp;
-                } else {
-                    log.debug("pratt: juxtaposition accepted as {}; with null bp", .{lhs});
-                }
-
-                save_state = self.lexer;
+                log.debug("restoring saved state", .{});
+                self.lexer = save_state;
+                log.debug("pratt: token {} rejected as infix", .{curr_token});
+                break;
             }
         } else {
             log.debug("pratt: end of input", .{});
