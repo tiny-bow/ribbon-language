@@ -219,6 +219,7 @@ pub const Lexer0 = struct {
     level_change_queue: [MAX_LEVELS]Level = [1]Level{0} ** MAX_LEVELS,
     levels_queued: i16 = 0,
     br_queued: bool = false,
+    done: bool = false,
     /// The current location in the source code.
     location: analysis.Location,
 
@@ -336,6 +337,9 @@ pub const Lexer0 = struct {
             if (self.levels > 1) {
                 log.debug("processing 1st ch EOF with {} indentation levels", .{self.levels});
                 self.levels_queued = self.levels - 2;
+                self.levels -= 1;
+
+                if (self.levels_queued == 0) self.br_queued = true;
 
                 return Token{
                     .location = start,
@@ -442,6 +446,7 @@ pub const Lexer0 = struct {
                             log.debug("processing nth ch EOF with {} indentation levels", .{self.levels});
 
                             self.levels_queued = self.levels - 2;
+                            self.levels -= 1;
 
                             if (self.levels_queued == 0) self.br_queued = true;
 

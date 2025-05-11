@@ -7,7 +7,7 @@ const ribbon = @import("ribbon_language");
 const log = std.log.scoped(.main);
 
 pub const std_options = std.Options{
-    .log_level = .debug,
+    .log_level = if (tests.len > 1) .info else .debug,
 };
 
 const tests: []const struct {input: []const u8, expect: anyerror![]const u8} = &.{
@@ -37,6 +37,7 @@ const tests: []const struct {input: []const u8, expect: anyerror![]const u8} = &
     .{ .input = "foo(1) * 3 * 2 + (1 * 2); alert 'hello world' + 2; test 2 3;", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨𝓼𝓮𝓺 ⟨+ ⟨𝓪𝓹𝓹 alert 'hello world'⟩ 2⟩ ⟨𝓪𝓹𝓹 ⟨𝓪𝓹𝓹 test 2⟩ 3⟩⟩⟩" },
     .{ .input = "foo(1) * 3 * 2 + (1 * 2);\nalert 'hello world' + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨𝓼𝓮𝓺 ⟨+ ⟨𝓪𝓹𝓹 alert 'hello world'⟩ 2⟩ ⟨𝓪𝓹𝓹 ⟨𝓪𝓹𝓹 test 2⟩ 3⟩⟩⟩" },
     .{ .input = "\n\n \nfoo(1) * 3 * 2 +\n  1 * 2;\nalert 'hello\nworld' + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨𝓼𝓮𝓺 ⟨+ ⟨𝓪𝓹𝓹 alert 'hello\nworld'⟩ 2⟩ ⟨𝓪𝓹𝓹 ⟨𝓪𝓹𝓹 test 2⟩ 3⟩⟩⟩" },
+    .{ .input = "incr := fun x.\n  y := x + 1\n  y = y * 2\n  3 / y\n", .expect = "⟨𝓭𝓮𝓬𝓵 incr ⟨λx. ⌊⟨𝓼𝓮𝓺 ⟨𝓭𝓮𝓬𝓵 y ⟨+ x 1⟩⟩ ⟨𝓼𝓮𝓺 ⟨𝓼𝓮𝓽 y ⟨* y 2⟩⟩ ⟨/ 3 y⟩⟩⟩⌋⟩⟩" },
 };
 
 pub fn main() !void {

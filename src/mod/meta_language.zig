@@ -37,6 +37,14 @@ pub fn dumpCstSExprs(source: []const u8, cst: analysis.SyntaxTree, writer: anyty
         cst_types.Apply => try writer.writeAll("⟨𝓪𝓹𝓹"),
         cst_types.Decl => try writer.writeAll("⟨𝓭𝓮𝓬𝓵"),
         cst_types.Set => try writer.writeAll("⟨𝓼𝓮𝓽"),
+        cst_types.Lambda => {
+            try writer.writeAll("⟨λ");
+            try dumpCstSExprs(source, cst.operands.asSlice()[0], writer);
+            try writer.writeAll(". ");
+            try dumpCstSExprs(source, cst.operands.asSlice()[1], writer);
+            try writer.writeAll("⟩");
+            return;
+        },
         else => {
             switch (cst.token.tag) {
                 .sequence => {
@@ -141,8 +149,6 @@ pub fn getCst(
             log.err("getCst: unused character in lexer cache {}: `{u}` ({x})", .{parser.lexer.inner.location, cached_char, cached_char});
         } else if (rem.len > 0) {
             log.err("getCst: unexpected input after parsing {}: `{s}` ({any})", .{parser.lexer.inner.location, rem, rem});
-        } else {
-            unreachable;
         }
 
         return inner;
@@ -167,6 +173,7 @@ pub const cst_types = gen: {
         .Binary = fresh.next(),
         .Decl = fresh.next(),
         .Set = fresh.next(),
+        .Lambda = fresh.next(),
     };
 };
 
@@ -225,8 +232,68 @@ pub fn assembleString(writer: anytype, source: []const u8, string: analysis.Synt
 }
 
 /// creates rml prefix/atomic parser defs.
-pub fn nuds() [5]analysis.Nud {
+pub fn nuds() [6]analysis.Nud {
     return .{
+        analysis.createNud(
+            "builtin_function",
+            std.math.maxInt(i16),
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("fun") } } },
+            null, struct {
+                pub fn function(
+                    parser: *analysis.Parser,
+                    _: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("function: parsing token {}", .{token});
+
+                    try parser.lexer.advance(); // discard fn token
+
+                    var patt = try parser.pratt(std.math.minInt(i16)) orelse {
+                        log.debug("function: no pattern found; panic", .{});
+                        return error.UnexpectedInput;
+                    };
+                    errdefer patt.deinit(parser.allocator);
+
+                    log.debug("function: got pattern {}", .{patt});
+
+                    if (try parser.lexer.peek()) |next_tok| {
+                        if (next_tok.tag == .special
+                        and next_tok.data.special.escaped == false
+                        and next_tok.data.special.punctuation == .dot) {
+                            log.debug("function: found dot token {}", .{next_tok});
+
+                            try parser.lexer.advance(); // discard dot
+
+                            var inner = try parser.pratt(std.math.minInt(i16)) orelse {
+                                log.debug("function: no inner expression found; panic", .{});
+                                return error.UnexpectedInput;
+                            };
+                            errdefer inner.deinit(parser.allocator);
+
+                            log.debug("function: got inner expression {}", .{inner});
+
+                            const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+
+                            buff[0] = patt;
+                            buff[1] = inner;
+
+                            return analysis.SyntaxTree{
+                                .location = token.location,
+                                .type = cst_types.Lambda,
+                                .token = token,
+                                .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                            };
+                        } else {
+                            log.debug("function: expected dot token, found {}; panic", .{next_tok});
+                            return error.UnexpectedInput;
+                        }
+                    } else {
+                        log.debug("function: no dot token found; panic", .{});
+                        return error.UnexpectedEof;
+                    }
+                }
+            }.function,
+        ),
         analysis.createNud(
             "builtin_leading_br",
             std.math.maxInt(i16),
@@ -450,7 +517,7 @@ pub fn leds() [8]analysis.Led {
     return .{
         analysis.createLed(
             "builtin_decl_inferred_type",
-            -100,
+            std.math.minInt(i16),
             .{ .standard = .{ .sequence = .{ .standard = .fromSlice(":=") } } },
             null, struct {
                 pub fn decl(
@@ -463,7 +530,7 @@ pub fn leds() [8]analysis.Led {
 
                     try parser.lexer.advance(); // discard operator
 
-                    const second_stmt = if (try parser.pratt(bp)) |rhs| rhs else {
+                    const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
                         log.debug("no rhs, panic", .{});
                         return error.UnexpectedInput;
                     };
@@ -483,7 +550,7 @@ pub fn leds() [8]analysis.Led {
         ),
         analysis.createLed(
             "builtin_set",
-            -100,
+            std.math.minInt(i16),
             .{ .standard = .{ .sequence = .{ .standard = .fromSlice("=") } } },
             null, struct {
                 pub fn decl(
@@ -496,7 +563,7 @@ pub fn leds() [8]analysis.Led {
 
                     try parser.lexer.advance(); // discard operator
 
-                    const second_stmt = if (try parser.pratt(bp)) |rhs| rhs else {
+                    const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
                         log.debug("no rhs, panic", .{});
                         return error.UnexpectedInput;
                     };
