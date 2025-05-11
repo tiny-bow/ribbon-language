@@ -166,6 +166,7 @@ pub const cst_types = gen: {
         .List = fresh.next(),
         .Apply = fresh.next(),
         .Binary = fresh.next(),
+        .Unary = fresh.next(),
         .Decl = fresh.next(),
         .Set = fresh.next(),
         .Lambda = fresh.next(),
@@ -227,7 +228,7 @@ pub fn assembleString(writer: anytype, source: []const u8, string: analysis.Synt
 }
 
 /// creates rml prefix/atomic parser defs.
-pub fn nuds() [6]analysis.Nud {
+pub fn nuds() [9]analysis.Nud {
     return .{
         analysis.createNud(
             "builtin_function",
@@ -498,7 +499,17 @@ pub fn nuds() [6]analysis.Nud {
                             .operands = .empty,
                         };
                     } else if (utils.text.isAlphanumericStr(s)) {
-                        log.debug("leaf: found identifier", .{});
+                        log.debug("leaf: found identifier {s}", .{s});
+
+                        const applicable_nuds = try parser.syntax.findNuds(std.math.minInt(i16), &token);
+                        const applicable_leds = try parser.syntax.findLeds(std.math.minInt(i16), &token);
+                        if (applicable_nuds.len != 1 or applicable_leds.len != 1) {
+                            log.debug("leaf: identifier {s} is bound by another pattern, rejecting", .{s});
+                            return null;
+                        } else {
+                            log.debug("leaf: identifier {s} is not bound by another pattern; parsing as identifier", .{s});
+                        }
+
                         return analysis.SyntaxTree{
                             .location = token.location,
                             .precedence = bp,
@@ -513,11 +524,116 @@ pub fn nuds() [6]analysis.Nud {
                 }
             }.leaf,
         ),
+        analysis.createNud(
+            "builtin_logical_not",
+            -2999,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("not") } } },
+            null, struct {
+                pub fn logical_not(
+                    parser: *analysis.Parser,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("logical_not: parsing token {}", .{token});
+
+                    try parser.lexer.advance(); // discard not
+
+                    var inner = try parser.pratt(bp) orelse none: {
+                        log.debug("logical_not: no inner expression found", .{});
+                        break :none null;
+                    };
+                    errdefer if (inner) |*i| i.deinit(parser.allocator);
+
+                    return analysis.SyntaxTree{
+                        .location = token.location,
+                        .precedence = bp,
+                        .type = cst_types.Unary,
+                        .token = token,
+                        .operands = if (inner) |sub| mk_buf: {
+                            const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 1);
+                            buff[0] = sub;
+
+                            break :mk_buf .fromSlice(buff);
+                        } else .empty,
+                    };
+                }
+            }.logical_not,
+        ),
+        analysis.createNud(
+            "builtin_unary_minus",
+            -1999,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("-") } } },
+            null, struct {
+                pub fn unary_minus(
+                    parser: *analysis.Parser,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("unary_minus: parsing token {}", .{token});
+
+                    try parser.lexer.advance(); // discard -
+
+                    var inner = try parser.pratt(bp) orelse none: {
+                        log.debug("unary_minus: no inner expression found", .{});
+                        break :none null;
+                    };
+                    errdefer if (inner) |*i| i.deinit(parser.allocator);
+
+                    return analysis.SyntaxTree{
+                        .location = token.location,
+                        .precedence = bp,
+                        .type = cst_types.Unary,
+                        .token = token,
+                        .operands = if (inner) |sub| mk_buf: {
+                            const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 1);
+                            buff[0] = sub;
+
+                            break :mk_buf .fromSlice(buff);
+                        } else .empty,
+                    };
+                }
+            }.unary_minus,
+        ),
+        analysis.createNud(
+            "builtin_unary_plus",
+            -1999,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("+") } } },
+            null, struct {
+                pub fn unary_plus(
+                    parser: *analysis.Parser,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("unary_plus: parsing token {}", .{token});
+
+                    try parser.lexer.advance(); // discard -
+
+                    var inner = try parser.pratt(bp) orelse none: {
+                        log.debug("unary_plus: no inner expression found", .{});
+                        break :none null;
+                    };
+                    errdefer if (inner) |*i| i.deinit(parser.allocator);
+
+                    return analysis.SyntaxTree{
+                        .location = token.location,
+                        .precedence = bp,
+                        .type = cst_types.Unary,
+                        .token = token,
+                        .operands = if (inner) |sub| mk_buf: {
+                            const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 1);
+                            buff[0] = sub;
+
+                            break :mk_buf .fromSlice(buff);
+                        } else .empty,
+                    };
+                }
+            }.unary_plus,
+        ),
     };
 }
 
 /// creates rml infix/postfix parser defs.
-pub fn leds() [9]analysis.Led {
+pub fn leds() [17]analysis.Led {
     return .{
         analysis.createLed(
             "builtin_decl_inferred_type",
@@ -533,14 +649,14 @@ pub fn leds() [9]analysis.Led {
                     log.debug("decl: parsing token {}", .{token});
 
                     if (lhs.precedence == bp) {
-                        log.debug("decl: lhs is has same binding power; panic", .{});
+                        log.debug("decl: lhs has same binding power; panic", .{});
                         return error.UnexpectedInput;
                     }
 
                     try parser.lexer.advance(); // discard operator
 
                     const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
-                        log.debug("no rhs, panic", .{});
+                        log.debug("decl: no rhs; panic", .{});
                         return error.UnexpectedInput;
                     };
 
@@ -572,14 +688,14 @@ pub fn leds() [9]analysis.Led {
                     log.debug("set: parsing token {}", .{token});
 
                     if (lhs.precedence == bp) {
-                        log.debug("set: lhs is has same binding power; panic", .{});
+                        log.debug("set: lhs has same binding power; panic", .{});
                         return error.UnexpectedInput;
                     }
 
                     try parser.lexer.advance(); // discard operator
 
                     const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
-                        log.debug("no rhs, panic", .{});
+                        log.debug("set: no rhs; panic", .{});
                         return error.UnexpectedInput;
                     };
 
@@ -624,7 +740,7 @@ pub fn leds() [9]analysis.Led {
                     }
 
                     var rhs = if (try parser.pratt(bp)) |r| r else {
-                        log.debug("no rhs, return singleton list", .{});
+                        log.debug("list: no rhs; return singleton list", .{});
                         const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 1);
                         buff[0] = lhs;
                         return analysis.SyntaxTree{
@@ -748,7 +864,7 @@ pub fn leds() [9]analysis.Led {
                     }
 
                     var rhs = if (try parser.pratt(std.math.minInt(i16))) |r| r else {
-                        log.debug("no rhs, return lhs", .{});
+                        log.debug("seq: no rhs; return lhs", .{});
                         return lhs;
                     };
                     errdefer rhs.deinit(parser.allocator);
@@ -922,7 +1038,7 @@ pub fn leds() [9]analysis.Led {
                     try parser.lexer.advance(); // discard operator
 
                     const rhs = if (try parser.pratt(bp + 1)) |r| r else {
-                        log.debug("no rhs, panic", .{});
+                        log.debug("mul: no rhs; panic", .{});
                         return error.UnexpectedInput;
                     };
 
@@ -956,7 +1072,7 @@ pub fn leds() [9]analysis.Led {
                     try parser.lexer.advance(); // discard operator
 
                     const rhs = if (try parser.pratt(bp + 1)) |r| r else {
-                        log.debug("no rhs, panic", .{});
+                        log.debug("div: no rhs; panic", .{});
                         return error.UnexpectedInput;
                     };
 
@@ -990,7 +1106,7 @@ pub fn leds() [9]analysis.Led {
                     try parser.lexer.advance(); // discard operator
 
                     const rhs = if (try parser.pratt(bp + 1)) |r| r else {
-                        log.debug("no rhs, panic", .{});
+                        log.debug("add: no rhs; panic", .{});
                         return error.UnexpectedInput;
                     };
 
@@ -1024,7 +1140,7 @@ pub fn leds() [9]analysis.Led {
                     try parser.lexer.advance(); // discard operator
 
                     const rhs = if (try parser.pratt(bp + 1)) |r| r else {
-                        log.debug("no rhs, panic", .{});
+                        log.debug("sub: no rhs; panic", .{});
                         return error.UnexpectedInput;
                     };
 
@@ -1041,6 +1157,316 @@ pub fn leds() [9]analysis.Led {
                     };
                 }
             }.sub,
+        ),
+
+        analysis.createLed(
+            "builtin_eq",
+            -4001,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("==") } } },
+            null, struct {
+                pub fn eq(
+                    parser: *analysis.Parser,
+                    lhs: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("eq: parsing token {}", .{token});
+
+                    if (lhs.precedence == bp) {
+                        log.debug("eq: lhs has same binding power; panic", .{});
+                        return error.UnexpectedInput;
+                    }
+
+                    try parser.lexer.advance(); // discard operator
+
+                    const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
+                        log.debug("eq: no rhs; panic", .{});
+                        return error.UnexpectedInput;
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = second_stmt;
+
+                    return analysis.SyntaxTree{
+                        .location = lhs.location,
+                        .precedence = bp,
+                        .type = cst_types.Binary,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.eq,
+        ),
+
+        analysis.createLed(
+            "builtin_neq",
+            -4001,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("!=") } } },
+            null, struct {
+                pub fn neq(
+                    parser: *analysis.Parser,
+                    lhs: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("neq: parsing token {}", .{token});
+
+                    if (lhs.precedence == bp) {
+                        log.debug("neq: lhs has same binding power; panic", .{});
+                        return error.UnexpectedInput;
+                    }
+
+                    try parser.lexer.advance(); // discard operator
+
+                    const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
+                        log.debug("neq: no rhs, panic", .{});
+                        return error.UnexpectedInput;
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = second_stmt;
+
+                    return analysis.SyntaxTree{
+                        .location = lhs.location,
+                        .precedence = bp,
+                        .type = cst_types.Binary,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.neq,
+        ),
+
+        analysis.createLed(
+            "builtin_lt",
+            -4000,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("<") } } },
+            null, struct {
+                pub fn lt(
+                    parser: *analysis.Parser,
+                    lhs: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("lt: parsing token {}", .{token});
+
+                    if (lhs.precedence == bp) {
+                        log.debug("lt: lhs has same binding power; panic", .{});
+                        return error.UnexpectedInput;
+                    }
+
+                    try parser.lexer.advance(); // discard operator
+
+                    const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
+                        log.debug("lt: no rhs; panic", .{});
+                        return error.UnexpectedInput;
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = second_stmt;
+
+                    return analysis.SyntaxTree{
+                        .location = lhs.location,
+                        .precedence = bp,
+                        .type = cst_types.Binary,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.lt,
+        ),
+
+        analysis.createLed(
+            "builtin_gt",
+            -4000,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice(">") } } },
+            null, struct {
+                pub fn gt(
+                    parser: *analysis.Parser,
+                    lhs: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("gt: parsing token {}", .{token});
+
+                    if (lhs.precedence == bp) {
+                        log.debug("gt: lhs has same binding power; panic", .{});
+                        return error.UnexpectedInput;
+                    }
+
+                    try parser.lexer.advance(); // discard operator
+
+                    const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
+                        log.debug("gt: no rhs; panic", .{});
+                        return error.UnexpectedInput;
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = second_stmt;
+
+                    return analysis.SyntaxTree{
+                        .location = lhs.location,
+                        .precedence = bp,
+                        .type = cst_types.Binary,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.gt,
+        ),
+
+        analysis.createLed(
+            "builtin_leq",
+            -4000,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("<=") } } },
+            null, struct {
+                pub fn leq(
+                    parser: *analysis.Parser,
+                    lhs: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("leq: parsing token {}", .{token});
+
+                    if (lhs.precedence == bp) {
+                        log.debug("leq: lhs has same binding power; panic", .{});
+                        return error.UnexpectedInput;
+                    }
+
+                    try parser.lexer.advance(); // discard operator
+
+                    const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
+                        log.debug("leq: no rhs; panic", .{});
+                        return error.UnexpectedInput;
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = second_stmt;
+
+                    return analysis.SyntaxTree{
+                        .location = lhs.location,
+                        .precedence = bp,
+                        .type = cst_types.Binary,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.leq,
+        ),
+
+        analysis.createLed(
+            "builtin_geq",
+            -4000,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice(">=") } } },
+            null, struct {
+                pub fn geq(
+                    parser: *analysis.Parser,
+                    lhs: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("geq: parsing token {}", .{token});
+
+                    if (lhs.precedence == bp) {
+                        log.debug("geq: lhs has same binding power; panic", .{});
+                        return error.UnexpectedInput;
+                    }
+
+                    try parser.lexer.advance(); // discard operator
+
+                    const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
+                        log.debug("geq: no rhs; panic", .{});
+                        return error.UnexpectedInput;
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = second_stmt;
+
+                    return analysis.SyntaxTree{
+                        .location = lhs.location,
+                        .precedence = bp,
+                        .type = cst_types.Binary,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.geq,
+        ),
+
+        analysis.createLed(
+            "builtin_logical_and",
+            -3000,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("and") } } },
+            null, struct {
+                pub fn logical_and(
+                    parser: *analysis.Parser,
+                    lhs: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("logical_and: parsing token {}", .{token});
+
+                    try parser.lexer.advance(); // discard operator
+
+                    const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
+                        log.debug("logical_and: no rhs; panic", .{});
+                        return error.UnexpectedInput;
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = second_stmt;
+
+                    return analysis.SyntaxTree{
+                        .location = lhs.location,
+                        .precedence = bp,
+                        .type = cst_types.Binary,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.logical_and,
+        ),
+
+        analysis.createLed(
+            "builtin_logical_or",
+            -3000,
+            .{ .standard = .{ .sequence = .{ .standard = .fromSlice("or") } } },
+            null, struct {
+                pub fn logical_or(
+                    parser: *analysis.Parser,
+                    lhs: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("logical_or: parsing token {}", .{token});
+
+                    try parser.lexer.advance(); // discard operator
+
+                    const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
+                        log.debug("logical_or: no rhs; panic", .{});
+                        return error.UnexpectedInput;
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = second_stmt;
+
+                    return analysis.SyntaxTree{
+                        .location = lhs.location,
+                        .precedence = bp,
+                        .type = cst_types.Binary,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.logical_or,
         ),
     };
 }
