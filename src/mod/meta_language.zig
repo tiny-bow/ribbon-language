@@ -222,8 +222,31 @@ pub fn assembleString(writer: anytype, source: []const u8, string: analysis.Synt
 }
 
 /// creates rml prefix/atomic parser defs.
-pub fn nuds() [4]analysis.Nud {
+pub fn nuds() [5]analysis.Nud {
     return .{
+        analysis.createNud(
+            "builtin_leading_br",
+            std.math.maxInt(i16),
+            .{ .standard = .linebreak },
+            null, struct {
+                pub fn leading_br(
+                    parser: *analysis.Parser,
+                    _: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("leading_br: parsing token {}", .{token});
+
+                    try parser.lexer.advance(); // discard linebreak
+
+                    return analysis.SyntaxTree{
+                        .location = token.location,
+                        .type = .null,
+                        .token = token,
+                        .operands = .empty,
+                    };
+                }
+            }.leading_br,
+        ),
         analysis.createNud(
             "builtin_indent",
             std.math.maxInt(i16),

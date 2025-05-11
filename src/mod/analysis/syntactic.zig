@@ -618,14 +618,14 @@ pub const Parser = struct {
         binding_power: i16,
     ) Error!?SyntaxTree {
         var save_state = self.lexer;
-        var first_token = try self.lexer.peek() orelse return null;
+        const first_token = try self.lexer.peek() orelse return null;
 
         if (self.settings.ignore_space) {
             while (first_token.tag == .linebreak or first_token.tag == .indentation) {
                 if (self.settings.ignore_space) {
                     log.debug("pratt: ignoring whitespace token {}", .{first_token});
                     try self.lexer.advance();
-                    first_token = try self.lexer.peek() orelse {
+                    _ = try self.lexer.peek() orelse {
                         log.debug("pratt: input is all whitespace, returning null", .{});
                         return null;
                     };
@@ -637,9 +637,26 @@ pub const Parser = struct {
 
         log.debug("pratt: first token {}; bp: {}", .{first_token, binding_power});
 
-        var lhs = try self.parseNud(binding_power, first_token) orelse {
+        var lhs = lhs: while (try self.lexer.peek()) |nth_first_token| {
+            const x = try self.parseNud(binding_power, nth_first_token) orelse {
+                log.debug("restoring saved state", .{});
+                self.lexer = save_state;
+                log.debug("pratt: reached end of recognized input while consuming (possibly ignored) nud(s)", .{});
+                return null;
+            };
+
+            if (x.type == .null) {
+                log.debug("pratt: nud returned null, reiterating loop (assumes nud function advanced)", .{});
+                std.debug.assert(x.operands.len == 0);
+
+                continue :lhs;
+            } else {
+                break :lhs x;
+            }
+        } else {
             log.debug("restoring saved state", .{});
             self.lexer = save_state;
+            log.debug("pratt: reached end of recognized input while consuming (possibly ignored) nud(s)", .{});
             return null;
         };
         errdefer lhs.deinit(self.allocator);

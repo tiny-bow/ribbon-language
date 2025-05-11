@@ -11,6 +11,7 @@ pub const std_options = std.Options{
 };
 
 const tests: []const struct {input: []const u8, expect: []const u8} = &.{
+    .{ .input = "\n1", .expect = "1" },
     .{ .input = "()", .expect = "()" },
     .{ .input = "a b", .expect = "⟨𝓪𝓹𝓹 a b⟩" },
     .{ .input = "a b c", .expect = "⟨𝓪𝓹𝓹 ⟨𝓪𝓹𝓹 a b⟩ c⟩" },
@@ -33,7 +34,7 @@ const tests: []const struct {input: []const u8, expect: []const u8} = &.{
     .{ .input = "foo(1) * 3 * 2 +\n  1 * 2\nalert 'hello world' + 2\ntest 2 3\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨𝓼𝓮𝓺 ⟨+ ⟨𝓪𝓹𝓹 alert 'hello world'⟩ 2⟩ ⟨𝓪𝓹𝓹 ⟨𝓪𝓹𝓹 test 2⟩ 3⟩⟩⟩" },
     .{ .input = "foo(1) * 3 * 2 + (1 * 2); alert 'hello world' + 2; test 2 3;", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨𝓼𝓮𝓺 ⟨+ ⟨𝓪𝓹𝓹 alert 'hello world'⟩ 2⟩ ⟨𝓪𝓹𝓹 ⟨𝓪𝓹𝓹 test 2⟩ 3⟩⟩⟩" },
     .{ .input = "foo(1) * 3 * 2 + (1 * 2);\nalert 'hello world' + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨𝓼𝓮𝓺 ⟨+ ⟨𝓪𝓹𝓹 alert 'hello world'⟩ 2⟩ ⟨𝓪𝓹𝓹 ⟨𝓪𝓹𝓹 test 2⟩ 3⟩⟩⟩" },
-    .{ .input = "foo(1) * 3 * 2 +\n  1 * 2;\nalert 'hello\nworld' + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨𝓼𝓮𝓺 ⟨+ ⟨𝓪𝓹𝓹 alert 'hello\nworld'⟩ 2⟩ ⟨𝓪𝓹𝓹 ⟨𝓪𝓹𝓹 test 2⟩ 3⟩⟩⟩" },
+    .{ .input = "\n\n \nfoo(1) * 3 * 2 +\n  1 * 2;\nalert 'hello\nworld' + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨𝓼𝓮𝓺 ⟨+ ⟨𝓪𝓹𝓹 alert 'hello\nworld'⟩ 2⟩ ⟨𝓪𝓹𝓹 ⟨𝓪𝓹𝓹 test 2⟩ 3⟩⟩⟩" },
 };
 
 pub fn main() !void {
