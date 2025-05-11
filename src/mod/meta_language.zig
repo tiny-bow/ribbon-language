@@ -425,7 +425,13 @@ pub fn leds() [6]analysis.Led {
         analysis.createLed(
             "builtin_seq",
             std.math.minInt(i16),
-            .{ .standard = .linebreak },
+            .{ .any_of = &.{
+                .linebreak,
+                .{ .special = .{ .standard = .{
+                    .escaped = .{ .standard = false },
+                    .punctuation = .{ .standard = .semicolon },
+                } } },
+            } },
             null, struct {
                 pub fn seq(
                     parser: *analysis.Parser,
