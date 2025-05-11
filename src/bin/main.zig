@@ -10,7 +10,7 @@ pub const std_options = std.Options{
     .log_level = .debug,
 };
 
-const tests: []const struct {input: []const u8, expect: []const u8} = &.{
+const tests: []const struct {input: []const u8, expect: anyerror![]const u8} = &.{
     .{ .input = "\n1", .expect = "1" },
     .{ .input = "()", .expect = "()" },
     .{ .input = "a b", .expect = "⟨𝓪𝓹𝓹 a b⟩" },
@@ -43,15 +43,37 @@ pub fn main() !void {
     var failures = std.ArrayList(usize).init(std.heap.page_allocator);
     defer failures.deinit();
 
-    for (tests, 0..) |t, i| {
+    testing: for (tests, 0..) |t, i| {
         log.info("test {}/{}", .{i, tests.len});
         const input = t.input;
-        const expect = t.expect;
 
-        tryTest(input, expect) catch |err| {
-            log.err("input {s} failed: {}", .{input, err});
-            failures.append(i) catch unreachable;
-        };
+        if (t.expect) |expect_str| {
+            tryTest(input, expect_str) catch |err| {
+                log.err("input {s} failed: {}", .{input, err});
+                failures.append(i) catch unreachable;
+                continue :testing;
+            };
+
+            log.info("input {s} succeeded: {s}", .{input, expect_str});
+        } else |expect_err| {
+            std.debug.assert(expect_err != error.TestFailure);
+
+            const maybe_err = tryTest(input, "");
+            if (maybe_err) |unexpectedly_okay| {
+                log.err("input {s} succeeded: {}; but expected {}", .{input, unexpectedly_okay, expect_err});
+                failures.append(i) catch unreachable;
+            } else |err| {
+                if (err == error.TestFailure) {
+                    log.err("input {s} succeeded, but the output was wrong; expected {}", .{input, expect_err});
+                    failures.append(i) catch unreachable;
+                } else if (expect_err != err) {
+                    log.err("input {s} failed: {}; but expected {}", .{input, err, expect_err});
+                    failures.append(i) catch unreachable;
+                } else {
+                    log.info("input {s} failed as expected", .{input});
+                }
+            }
+        }
     }
 
     if (failures.items.len > 0) {
