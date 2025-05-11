@@ -37,14 +37,8 @@ pub fn dumpCstSExprs(source: []const u8, cst: analysis.SyntaxTree, writer: anyty
         cst_types.Apply => try writer.writeAll("⟨𝓪𝓹𝓹"),
         cst_types.Decl => try writer.writeAll("⟨𝓭𝓮𝓬𝓵"),
         cst_types.Set => try writer.writeAll("⟨𝓼𝓮𝓽"),
-        cst_types.Lambda => {
-            try writer.writeAll("⟨λ");
-            try dumpCstSExprs(source, cst.operands.asSlice()[0], writer);
-            try writer.writeAll(". ");
-            try dumpCstSExprs(source, cst.operands.asSlice()[1], writer);
-            try writer.writeAll("⟩");
-            return;
-        },
+        cst_types.List => try writer.writeAll("⟨𝓵𝓲𝓼𝓽"),
+        cst_types.Lambda => try writer.writeAll("⟨λ"),
         else => {
             switch (cst.token.tag) {
                 .sequence => {
@@ -169,6 +163,7 @@ pub const cst_types = gen: {
         .Identifier = fresh.next(),
         .Block = fresh.next(),
         .Seq = fresh.next(),
+        .List = fresh.next(),
         .Apply = fresh.next(),
         .Binary = fresh.next(),
         .Decl = fresh.next(),
@@ -513,7 +508,7 @@ pub fn nuds() [6]analysis.Nud {
 }
 
 /// creates rml infix/postfix parser defs.
-pub fn leds() [8]analysis.Led {
+pub fn leds() [9]analysis.Led {
     return .{
         analysis.createLed(
             "builtin_decl_inferred_type",
@@ -522,7 +517,7 @@ pub fn leds() [8]analysis.Led {
             null, struct {
                 pub fn decl(
                     parser: *analysis.Parser,
-                    first_stmt: analysis.SyntaxTree,
+                    lhs: analysis.SyntaxTree,
                     bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
@@ -536,11 +531,11 @@ pub fn leds() [8]analysis.Led {
                     };
 
                     const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
-                    buff[0] = first_stmt;
+                    buff[0] = lhs;
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = first_stmt.location,
+                        .location = lhs.location,
                         .type = cst_types.Decl,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
@@ -555,7 +550,7 @@ pub fn leds() [8]analysis.Led {
             null, struct {
                 pub fn decl(
                     parser: *analysis.Parser,
-                    first_stmt: analysis.SyntaxTree,
+                    lhs: analysis.SyntaxTree,
                     bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
@@ -569,17 +564,130 @@ pub fn leds() [8]analysis.Led {
                     };
 
                     const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
-                    buff[0] = first_stmt;
+                    buff[0] = lhs;
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = first_stmt.location,
+                        .location = lhs.location,
                         .type = cst_types.Set,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
                     };
                 }
             }.decl,
+        ),
+        analysis.createLed(
+            "builtin_list",
+            std.math.minInt(i16) + 100,
+            .{ .standard = .{ .special = .{ .standard = .{ .escaped = .{ .standard = false }, .punctuation = .{ .standard = .comma } } } } },
+            null, struct {
+                pub fn list(
+                    parser: *analysis.Parser,
+                    lhs: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("list: lhs {}", .{lhs});
+
+                    try parser.lexer.advance(); // discard linebreak
+
+                    if (try parser.lexer.peek()) |next_token| {
+                        if (next_token.tag == .indentation
+                        and next_token.data.indentation == .unindent) {
+                            log.debug("list: found unindent token, returning lhs", .{});
+                            return lhs;
+                        }
+                    } else {
+                        log.debug("list: no next token found; returning lhs", .{});
+                        return lhs;
+                    }
+
+                    var rhs = if (try parser.pratt(bp)) |r| r else {
+                        log.debug("no rhs, return singleton list", .{});
+                        const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 1);
+                        buff[0] = lhs;
+                        return analysis.SyntaxTree{
+                            .location = lhs.location,
+                            .type = cst_types.List,
+                            .token = token,
+                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                        };
+                    };
+                    errdefer rhs.deinit(parser.allocator);
+
+                    log.debug("list: found rhs {}", .{rhs});
+
+                    if (lhs.type == cst_types.List and rhs.type == cst_types.List) {
+                        log.debug("list: both lhs and rhs are lists, concatenating", .{});
+
+                        const lhs_operands = lhs.operands.asSlice();
+                        const rhs_operands = rhs.operands.asSlice();
+                        defer parser.allocator.free(lhs_operands);
+                        defer parser.allocator.free(rhs_operands);
+
+                        const new_operands = try parser.allocator.alloc(analysis.SyntaxTree, lhs_operands.len + rhs_operands.len);
+                        @memcpy(new_operands[0..lhs_operands.len], lhs_operands);
+                        @memcpy(new_operands[lhs_operands.len..], rhs_operands);
+
+                        return .{
+                            .location = lhs.location,
+                            .type = cst_types.List,
+                            .token = token,
+                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
+                        };
+                    } else if (lhs.type == cst_types.List) {
+                        log.debug("list: lhs is a list, concatenating rhs", .{});
+
+                        const lhs_operands = lhs.operands.asSlice();
+                        defer parser.allocator.free(lhs_operands);
+
+                        const new_operands = try parser.allocator.alloc(analysis.SyntaxTree, lhs_operands.len + 1);
+                        @memcpy(new_operands[0..lhs_operands.len], lhs_operands);
+                        new_operands[lhs_operands.len] = rhs;
+
+                        return .{
+                            .location = lhs.location,
+                            .type = cst_types.List,
+                            .token = token,
+                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
+                        };
+                    } else if (rhs.type == cst_types.List) {
+                        log.debug("list: rhs is a list, concatenating lhs", .{});
+
+                        const rhs_operands = rhs.operands.asSlice();
+                        defer parser.allocator.free(rhs_operands);
+
+                        const new_operands = try parser.allocator.alloc(analysis.SyntaxTree, rhs_operands.len + 1);
+                        new_operands[0] = lhs;
+                        @memcpy(new_operands[1..], rhs_operands);
+
+                        return .{
+                            .location = lhs.location,
+                            .type = cst_types.List,
+                            .token = token,
+                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
+                        };
+                    } else {
+                        log.debug("list: creating new list", .{});
+                    }
+
+                    const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+
+                    log.debug("list: buffer allocation {x}", .{@intFromPtr(buff.ptr)});
+
+                    buff[0] = lhs;
+                    buff[1] = rhs;
+
+                    log.debug("list: buffer written; returning", .{});
+
+                    return analysis.SyntaxTree{
+                        .location = lhs.location,
+                        .type = cst_types.List,
+                        .token = token,
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                    };
+                }
+            }.list,
         ),
         analysis.createLed(
             "builtin_seq",
@@ -594,11 +702,11 @@ pub fn leds() [8]analysis.Led {
             null, struct {
                 pub fn seq(
                     parser: *analysis.Parser,
-                    first_stmt: analysis.SyntaxTree,
+                    lhs: analysis.SyntaxTree,
                     _: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
-                    log.debug("seq: first_stmt {}", .{first_stmt});
+                    log.debug("seq: lhs {}", .{lhs});
 
                     try parser.lexer.advance(); // discard linebreak
 
@@ -606,32 +714,86 @@ pub fn leds() [8]analysis.Led {
                         if (next_token.tag == .indentation
                         and next_token.data.indentation == .unindent) {
                             log.debug("seq: found unindent token, returning lhs", .{});
-                            return first_stmt;
+                            return lhs;
                         }
                     } else {
                         log.debug("seq: no next token found; returning lhs", .{});
-                        return first_stmt;
+                        return lhs;
                     }
 
-                    var second_stmt = if (try parser.pratt(std.math.minInt(i16))) |rhs| rhs else {
+                    var rhs = if (try parser.pratt(std.math.minInt(i16))) |r| r else {
                         log.debug("no rhs, return lhs", .{});
-                        return first_stmt;
+                        return lhs;
                     };
-                    errdefer second_stmt.deinit(parser.allocator);
+                    errdefer rhs.deinit(parser.allocator);
 
-                    log.debug("seq: found rhs {}", .{second_stmt});
+                    log.debug("seq: found rhs {}", .{rhs});
+
+                    if (lhs.type == cst_types.Seq and rhs.type == cst_types.Seq) {
+                        log.debug("seq: both lhs and rhs are seqs, concatenating", .{});
+
+                        const lhs_operands = lhs.operands.asSlice();
+                        const rhs_operands = rhs.operands.asSlice();
+                        defer parser.allocator.free(lhs_operands);
+                        defer parser.allocator.free(rhs_operands);
+
+                        const new_operands = try parser.allocator.alloc(analysis.SyntaxTree, lhs_operands.len + rhs_operands.len);
+                        @memcpy(new_operands[0..lhs_operands.len], lhs_operands);
+                        @memcpy(new_operands[lhs_operands.len..], rhs_operands);
+
+                        return .{
+                            .location = lhs.location,
+                            .type = cst_types.Seq,
+                            .token = token,
+                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
+                        };
+                    } else if (lhs.type == cst_types.Seq) {
+                        log.debug("seq: lhs is a seq, concatenating rhs", .{});
+
+                        const lhs_operands = lhs.operands.asSlice();
+                        defer parser.allocator.free(lhs_operands);
+
+                        const new_operands = try parser.allocator.alloc(analysis.SyntaxTree, lhs_operands.len + 1);
+                        @memcpy(new_operands[0..lhs_operands.len], lhs_operands);
+                        new_operands[lhs_operands.len] = rhs;
+
+                        return .{
+                            .location = lhs.location,
+                            .type = cst_types.Seq,
+                            .token = token,
+                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
+                        };
+                    } else if (rhs.type == cst_types.Seq) {
+                        log.debug("seq: rhs is a seq, concatenating lhs", .{});
+
+                        const rhs_operands = rhs.operands.asSlice();
+                        defer parser.allocator.free(rhs_operands);
+
+                        const new_operands = try parser.allocator.alloc(analysis.SyntaxTree, rhs_operands.len + 1);
+                        new_operands[0] = lhs;
+                        @memcpy(new_operands[1..], rhs_operands);
+
+                        return .{
+                            .location = lhs.location,
+                            .type = cst_types.Seq,
+                            .token = token,
+                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
+                        };
+                    } else {
+                        log.debug("seq: creating new seq", .{});
+                    }
 
                     const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 2);
 
                     log.debug("seq: buffer allocation {x}", .{@intFromPtr(buff.ptr)});
 
-                    buff[0] = first_stmt;
-                    buff[1] = second_stmt;
+                    buff[0] = lhs;
+                    buff[1] = rhs;
 
                     log.debug("seq: buffer written; returning", .{});
 
                     return analysis.SyntaxTree{
-                        .location = first_stmt.location,
+                        .location = lhs.location,
                         .type = cst_types.Seq,
                         .token = token,
                         .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
@@ -668,6 +830,26 @@ pub fn leds() [8]analysis.Led {
 
                     log.debug("apply: rhs {}", .{rhs});
 
+                    if (lhs.type == cst_types.Apply) {
+                        log.debug("apply: lhs is an apply, concatenating rhs", .{});
+
+                        const lhs_operands = lhs.operands.asSlice();
+                        defer parser.allocator.free(lhs_operands);
+
+                        const new_operands = try parser.allocator.alloc(analysis.SyntaxTree, lhs_operands.len + 1);
+                        @memcpy(new_operands[0..lhs_operands.len], lhs_operands);
+                        new_operands[lhs_operands.len] = rhs;
+
+                        return .{
+                            .location = lhs.location,
+                            .type = cst_types.Apply,
+                            .token = token,
+                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(new_operands),
+                        };
+                    } else {
+                        log.debug("apply: lhs is not an apply, creating new apply", .{});
+                    }
+
                     const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 2);
 
                     log.debug("apply: buffer allocation {x}", .{@intFromPtr(buff.ptr)});
@@ -699,7 +881,7 @@ pub fn leds() [8]analysis.Led {
             null, struct {
                 pub fn mul(
                     parser: *analysis.Parser,
-                    first_stmt: analysis.SyntaxTree,
+                    lhs: analysis.SyntaxTree,
                     bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
@@ -707,23 +889,20 @@ pub fn leds() [8]analysis.Led {
 
                     try parser.lexer.advance(); // discard operator
 
-                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
-                    defer buff.deinit(parser.allocator);
-
-                    try buff.append(parser.allocator, first_stmt);
-
-                    if (try parser.pratt(bp + 1)) |second_stmt| {
-                        try buff.append(parser.allocator, second_stmt);
-                    } else {
+                    const rhs = if (try parser.pratt(bp + 1)) |r| r else {
                         log.debug("no rhs, panic", .{});
                         return error.UnexpectedInput;
-                    }
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = rhs;
 
                     return analysis.SyntaxTree{
-                        .location = first_stmt.location,
+                        .location = lhs.location,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
                     };
                 }
             }.mul,
@@ -735,7 +914,7 @@ pub fn leds() [8]analysis.Led {
             null, struct {
                 pub fn div(
                     parser: *analysis.Parser,
-                    first_stmt: analysis.SyntaxTree,
+                    lhs: analysis.SyntaxTree,
                     bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
@@ -743,23 +922,20 @@ pub fn leds() [8]analysis.Led {
 
                     try parser.lexer.advance(); // discard operator
 
-                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
-                    defer buff.deinit(parser.allocator);
-
-                    try buff.append(parser.allocator, first_stmt);
-
-                    if (try parser.pratt(bp + 1)) |second_stmt| {
-                        try buff.append(parser.allocator, second_stmt);
-                    } else {
+                    const rhs = if (try parser.pratt(bp + 1)) |r| r else {
                         log.debug("no rhs, panic", .{});
                         return error.UnexpectedInput;
-                    }
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = rhs;
 
                     return analysis.SyntaxTree{
-                        .location = first_stmt.location,
+                        .location = lhs.location,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
                     };
                 }
             }.div,
@@ -771,7 +947,7 @@ pub fn leds() [8]analysis.Led {
             null, struct {
                 pub fn add(
                     parser: *analysis.Parser,
-                    first_stmt: analysis.SyntaxTree,
+                    lhs: analysis.SyntaxTree,
                     bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
@@ -779,23 +955,20 @@ pub fn leds() [8]analysis.Led {
 
                     try parser.lexer.advance(); // discard operator
 
-                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
-                    defer buff.deinit(parser.allocator);
-
-                    try buff.append(parser.allocator, first_stmt);
-
-                    if (try parser.pratt(bp + 1)) |second_stmt| {
-                        try buff.append(parser.allocator, second_stmt);
-                    } else {
+                    const rhs = if (try parser.pratt(bp + 1)) |r| r else {
                         log.debug("no rhs, panic", .{});
                         return error.UnexpectedInput;
-                    }
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = rhs;
 
                     return analysis.SyntaxTree{
-                        .location = first_stmt.location,
+                        .location = lhs.location,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
                     };
                 }
             }.add,
@@ -807,7 +980,7 @@ pub fn leds() [8]analysis.Led {
             null, struct {
                 pub fn sub(
                     parser: *analysis.Parser,
-                    first_stmt: analysis.SyntaxTree,
+                    lhs: analysis.SyntaxTree,
                     bp: i16,
                     token: analysis.Token,
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
@@ -815,23 +988,20 @@ pub fn leds() [8]analysis.Led {
 
                     try parser.lexer.advance(); // discard operator
 
-                    var buff: pl.ArrayList(analysis.SyntaxTree) = .empty;
-                    defer buff.deinit(parser.allocator);
-
-                    try buff.append(parser.allocator, first_stmt);
-
-                    if (try parser.pratt(bp + 1)) |second_stmt| {
-                        try buff.append(parser.allocator, second_stmt);
-                    } else {
+                    const rhs = if (try parser.pratt(bp + 1)) |r| r else {
                         log.debug("no rhs, panic", .{});
                         return error.UnexpectedInput;
-                    }
+                    };
+
+                    const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    buff[0] = lhs;
+                    buff[1] = rhs;
 
                     return analysis.SyntaxTree{
-                        .location = first_stmt.location,
+                        .location = lhs.location,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(try buff.toOwnedSlice(parser.allocator)),
+                        .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
                     };
                 }
             }.sub,
