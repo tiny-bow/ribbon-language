@@ -17,8 +17,7 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-var syntax_mutex = std.Thread.Mutex{};
-var syntax: ?analysis.Syntax = null;
+
 
 
 /// A meta-language expression.
@@ -721,10 +720,15 @@ pub fn dumpCstSExprs(source: []const u8, cst: analysis.SyntaxTree, writer: anyty
 
 /// Get the syntax for the meta-language.
 pub fn getSyntax() *const analysis.Syntax {
-    syntax_mutex.lock();
-    defer syntax_mutex.unlock();
+    const static = struct {
+        pub var syntax_mutex = std.Thread.Mutex{};
+        pub var syntax: ?analysis.Syntax = null;
+    };
 
-    if (syntax) |*s| {
+    static.syntax_mutex.lock();
+    defer static.syntax_mutex.unlock();
+
+    if (static.syntax) |*s| {
         return s;
     }
 
@@ -738,9 +742,9 @@ pub fn getSyntax() *const analysis.Syntax {
         out.bindLed(led) catch unreachable;
     }
 
-    syntax = out;
+    static.syntax = out;
 
-    return &syntax.?;
+    return &static.syntax.?;
 }
 
 /// Get a parser for the meta-language.
