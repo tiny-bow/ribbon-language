@@ -1971,6 +1971,224 @@ pub const Global = struct {
     }
 };
 
+
+
+
+pub const InstructionOperandList = pl.ArrayList(Operand);
+pub const InstructionMap = pl.UniqueReprMap(*const Instruction, InstructionOperandList, 80);
+
+
+pub const Ref = packed struct {
+    tag: Tag,
+    ptr: u48,
+
+    pub const Tag = enum(u16) {
+        /// A pointer to an instruction.
+        instruction,
+        /// A pointer to an input.
+        input,
+        /// A pointer to a block edge.
+        terminator,
+    };
+
+    pub fn instruction(value: *const Instruction) Ref {
+        return Ref{ .tag = .instruction, .ptr = @intCast(@intFromPtr(value)) };
+    }
+
+    pub fn input(value: *const Instruction) Ref {
+        return Ref{ .tag = .input, .ptr = @intCast(@intFromPtr(value)) };
+    }
+
+    pub fn terminator(value: *const BlockEdge) Ref {
+        return Ref{ .tag = .terminator, .ptr = @intCast(@intFromPtr(value)) };
+    }
+};
+pub const RefSet = pl.UniqueReprSet(Ref, 80);
+pub const RefMap = pl.UniqueReprMap(Ref, RefSet, 80);
+pub const BlockRef: type = *const Block;
+pub const BlockRefSet = pl.UniqueReprSet(BlockRef, 80);
+pub const BlockRefMap = pl.UniqueReprMap(BlockRef, BlockRefSet, 80);
+
+pub const Graph = struct {
+    allocator: std.mem.Allocator,
+    use_def: RefMap,
+    def_use: RefMap,
+    predecessor: BlockRefMap,
+    successor: BlockRefMap,
+    entry: ?*const Block = null,
+
+    pub fn init(allocator: std.mem.Allocator, instr_edge_capacity: u32, block_edge_capacity: u32) error{OutOfMemory}!Graph {
+        var self = Graph{
+            .allocator = allocator,
+            .use_def = .empty,
+            .def_use = .empty,
+            .predecessor = .empty,
+            .successor = .empty,
+        };
+
+        try self.use_def.ensureTotalCapacity(allocator, instr_edge_capacity);
+        errdefer self.use_def.deinit(allocator);
+
+        try self.def_use.ensureTotalCapacity(allocator, instr_edge_capacity);
+        errdefer self.def_use.deinit(allocator);
+
+        try self.predecessor.ensureTotalCapacity(allocator, block_edge_capacity);
+        errdefer self.predecessor.deinit(allocator);
+
+        try self.successor.ensureTotalCapacity(allocator, block_edge_capacity);
+        errdefer self.successor.deinit(allocator);
+
+        return self;
+    }
+
+    pub fn deinit(self: *Graph) void {
+        var use_def_it = self.use_def.valueIterator();
+        while (use_def_it.next()) |x| x.deinit(self.allocator);
+
+        var def_use_it = self.def_use.valueIterator();
+        while (def_use_it.next()) |x| x.deinit(self.allocator);
+
+        var pred_it = self.predecessor.valueIterator();
+        while (pred_it.next()) |x| x.deinit(self.allocator);
+
+        var succ_it = self.successor.valueIterator();
+        while (succ_it.next()) |x| x.deinit(self.allocator);
+
+        self.use_def.deinit(self.allocator);
+        self.def_use.deinit(self.allocator);
+        self.predecessor.deinit(self.allocator);
+        self.successor.deinit(self.allocator);
+    }
+
+    pub fn refEdge(self: *Graph, use: Ref, def: Ref) !void {
+        const use_def = try self.use_def.getOrPut(self.allocator, use);
+        if (!use_def.found_existing) {
+            use_def.value_ptr.* = RefSet.empty;
+        }
+
+        try use_def.value_ptr.put(self.allocator, def, {});
+
+        const def_use = try self.def_use.getOrPut(self.allocator, def);
+        if (!def_use.found_existing) {
+            def_use.value_ptr.* = RefSet.empty;
+        }
+
+        try def_use.value_ptr.put(self.allocator, use, {});
+    }
+
+    pub fn blockEdge(self: *Graph, pred: BlockRef, succ: BlockRef) !void {
+        const pred_edges = try self.predecessor.getOrPut(self.allocator, pred);
+        if (!pred_edges.found_existing) {
+            pred_edges.value_ptr.* = BlockRefSet.empty;
+        }
+
+        try pred_edges.value_ptr.put(self.allocator, succ, {});
+
+        const succ_edges = try self.successor.getOrPut(self.allocator, succ);
+        if (!succ_edges.found_existing) {
+            succ_edges.value_ptr.* = BlockRefSet.empty;
+        }
+
+        try succ_edges.value_ptr.put(self.allocator, pred, {});
+    }
+
+    pub fn traverse(self: *Graph, visitor: *Visitor(*const Block), block: *const Block) !void {
+        if (!try visitor.visit(block)) return;
+
+        if (self.entry == null) self.entry = block;
+
+        if (block.function.block_edges.getPtr(block)) |succ_data| {
+            if (succ_data.terminator) |terminator| {
+                operands: for (terminator.values.items) |operand| {
+                    switch (operand.tag) {
+                        .input => try self.refEdge(.terminator(succ_data), .{ .tag = .input, .ptr = operand.ptr }),
+                        .instruction => try self.refEdge(.terminator(succ_data), .{ .tag = .instruction, .ptr = operand.ptr }),
+                        .type, .constant => continue :operands,
+                    }
+                }
+            }
+
+            var succ_block_it = succ_data.successors.iterator();
+
+            while (succ_block_it.next()) |succ_edge_entry| {
+                const succ: *const Block = succ_edge_entry.key_ptr.*;
+                const outputs_to_succ: []const Output = succ_edge_entry.value_ptr.items;
+
+                try self.traverse(visitor, succ);
+
+                for (outputs_to_succ) |output| {
+                    switch (output.tag) {
+                        .instruction => try self.refEdge(.terminator(succ_data), .{ .tag = .instruction, .ptr = output.ptr }),
+                        .constant => continue,
+                    }
+                }
+
+                try self.blockEdge(block, succ);
+            }
+        }
+
+        instructions: for (block.instructions.items) |instruction| {
+            const operands = (block.function.instruction_edges.getPtr(instruction) orelse continue :instructions).items;
+
+            operands: for (operands) |operand| {
+                switch (operand.tag) {
+                    .input => try self.refEdge(.instruction(instruction), .{ .tag = .input, .ptr = operand.ptr }),
+                    .instruction => try self.refEdge(.instruction(instruction), .{ .tag = .instruction, .ptr = operand.ptr }),
+                    .type, .constant => continue :operands,
+                }
+            }
+        }
+    }
+};
+
+
+pub fn Visitor(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        allocator: std.mem.Allocator,
+        visited_values: pl.UniqueReprSet(T, 80),
+
+        pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!Self {
+            var self = Self{
+                .allocator = allocator,
+                .visited_values = .empty,
+            };
+
+            try self.visited_values.ensureTotalCapacity(allocator, 256);
+
+            return self;
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.visited_values.deinit(self.allocator);
+        }
+
+        pub fn clearVisited(self: *Self) void {
+            self.visited_values.clearRetainingCapacity();
+        }
+
+        pub fn visit(self: *Self, value: T) !bool {
+            const value_gop = try self.visited_values.getOrPut(self.allocator, value);
+            return value_gop.found_existing;
+        }
+    };
+}
+
+
+/// Creates a use->def map, def->use map, and control flow graph, for a function.
+pub fn map(allocator: std.mem.Allocator, function: *const Function) !Graph {
+    var graph = try Graph.init(allocator, 1024, 64);
+    errdefer graph.deinit();
+
+    var visitor = try Visitor(*const Block).init(allocator);
+    defer visitor.deinit();
+
+    try graph.traverse(&visitor, function.entry);
+
+    return graph;
+}
+
 /// An intermediate representation of functions.
 /// Functions are defined in modules and must be given a name for symbol resolution purposes.
 pub const Function = struct {
@@ -1993,13 +2211,11 @@ pub const Function = struct {
     /// Basic blocks in this function.
     blocks: Id.Set(*const Block, 80) = .empty,
     /// All instruction relations for the function are stored here in the form of use->def edges.
-    edges: EdgeMap = .empty,
+    instruction_edges: InstructionMap = .empty,
+    /// All block relations for the function are stored here in the form of def->use edges.
+    block_edges: BlockMap = .empty,
     /// The beginning block of this function.
     entry: *const Block,
-
-    const EdgeMap = pl.UniqueReprMap(*const Instruction, EdgeList, 80);
-    // Not a set because we can do for example `add x x`
-    const EdgeList = pl.ArrayList(UseDef);
 
     fn init(
         root: *const Builder,
@@ -2022,8 +2238,9 @@ pub const Function = struct {
             .entry = try Block.init(self, root.builtin.names.entry, .fromInt(1)),
         };
 
-        try self.edges.ensureTotalCapacity(root.allocator, 1024);
+        try self.block_edges.ensureTotalCapacity(root.allocator, 16);
         try self.blocks.ensureTotalCapacity(root.allocator, 64);
+        try self.instruction_edges.ensureTotalCapacity(root.allocator, 1024);
 
         self.blocks.putAssumeCapacity(self.entry, {});
 
@@ -2033,12 +2250,12 @@ pub const Function = struct {
     fn getOrCreateEdgeList(
         ptr: *const Function,
         use: *const Instruction,
-    ) error{OutOfMemory}!*EdgeList {
+    ) error{OutOfMemory}!*InstructionOperandList {
         const self: *Function = @constCast(ptr);
 
-        const getOrPut = try self.edges.getOrPut(self.root.allocator, use);
+        const getOrPut = try self.instruction_edges.getOrPut(self.root.allocator, use);
         if (!getOrPut.found_existing) {
-            getOrPut.value_ptr.* = try EdgeList.initCapacity(self.root.allocator, 128);
+            getOrPut.value_ptr.* = try InstructionOperandList.initCapacity(self.root.allocator, 128);
         }
 
         return getOrPut.value_ptr;
@@ -2049,7 +2266,7 @@ pub const Function = struct {
     pub fn getUseDefs(
         ptr: *const Function,
         use: *const Instruction,
-    ) []const UseDef {
+    ) []const Operand {
         return (ptr.getOrCreateEdgeList(use) catch return &.{}).items;
     }
 
@@ -2059,7 +2276,7 @@ pub const Function = struct {
     pub fn prependUseDef(
         ptr: *const Function,
         use: *const Instruction,
-        def: UseDef,
+        def: Operand,
     ) error{OutOfMemory, InvalidIndex, InvalidCycle}!void {
         return ptr.insertUseDef(use, 0, def);
     }
@@ -2069,11 +2286,11 @@ pub const Function = struct {
     pub fn appendUseDef(
         ptr: *const Function,
         use: *const Instruction,
-        def: UseDef,
+        def: Operand,
     ) error{OutOfMemory, InvalidCycle}!void {
         const self: *Function = @constCast(ptr);
 
-        if (UseDef.fromPtr(use) == def) return error.InvalidCycle;
+        if (Operand.fromPtr(use) == def) return error.InvalidCycle;
 
         const edgeList = try self.getOrCreateEdgeList(use);
 
@@ -2086,11 +2303,11 @@ pub const Function = struct {
         ptr: *const Function,
         use: *const Instruction,
         index: usize,
-        def: UseDef,
+        def: Operand,
     ) error{OutOfMemory, InvalidIndex, InvalidCycle}!void {
         const self: *Function = @constCast(ptr);
 
-        if (UseDef.fromPtr(use) == def) return error.InvalidCycle;
+        if (Operand.fromPtr(use) == def) return error.InvalidCycle;
 
         const edgeList = try self.getOrCreateEdgeList(use);
 
@@ -2108,11 +2325,11 @@ pub const Function = struct {
         ptr: *const Function,
         use: *const Instruction,
         index: usize,
-        def: UseDef,
-    ) ?UseDef {
+        def: Operand,
+    ) ?Operand {
         const self: *Function = @constCast(ptr);
 
-        if (self.edges.getPtr(use)) |defs| {
+        if (self.instruction_edges.getPtr(use)) |defs| {
             if (index < defs.items.len) {
                 const old = defs.items[index];
                 defs.items[index] = def;
@@ -2132,10 +2349,10 @@ pub const Function = struct {
         ptr: *const Function,
         use: *const Instruction,
         index: usize,
-    ) ?UseDef {
+    ) ?Operand {
         const self: *Function = @constCast(ptr);
 
-        if (self.edges.getPtr(use)) |defs| {
+        if (self.instruction_edges.getPtr(use)) |defs| {
             if (index < defs.items.len) return defs.orderedRemove(index);
         }
 
@@ -2148,14 +2365,14 @@ pub const Function = struct {
         const allocator = self.root.allocator;
         defer allocator.destroy(self);
 
-        var edges_it = self.edges.valueIterator();
+        var edges_it = self.instruction_edges.valueIterator();
         while (edges_it.next()) |list| list.deinit(allocator);
 
         var blocks_it = self.blocks.keyIterator();
         while (blocks_it.next()) |blockPtr| Block.deinit(blockPtr.*);
 
         self.arena.deinit();
-        self.edges.deinit(allocator);
+        self.instruction_edges.deinit(allocator);
     }
 
     pub fn onFormat(self: *const Function, formatter: anytype) !void {
@@ -2190,6 +2407,21 @@ pub const Handler = struct {
     function: *const Function,
 };
 
+pub const BlockMap = pl.UniqueReprMap(*const Block, BlockEdge, 80);
+
+pub const SuccessorMap = pl.UniqueReprArrayMap(*const Block, OutputList, false);
+pub const OutputList = pl.ArrayList(Output);
+
+pub const BlockEdge = struct {
+    /// The successors of this block.
+    /// Since we do not use phi nodes, this maps DefUse pairs to the respective inputs.
+    successors: SuccessorMap = .empty,
+
+    /// The terminator of this block, if it has been initialized.
+    /// A `null` terminator is semantically equivalent to `unreachable` instructions.
+    terminator: ?Terminator = null,
+};
+
 /// Intermediate representation of basic blocks.
 /// Blocks are used to group `Instruction`s together, inside `Function`s.
 pub const Block = struct {
@@ -2201,10 +2433,12 @@ pub const Block = struct {
     name: ?*const Name,
     /// The unique identifier of this block.
     id: Id.of(Block),
-    /// The instructions in this block.
-    instructions: pl.ArrayList(*const Instruction) = .empty,
+    /// The inputs required by this block.
+    inputs: Id.Set(*const Input, 80) = .empty,
     /// The effect handler sets used in this block.
     handler_sets: Id.Set(*const HandlerSet, 80) = .empty,
+    /// The instructions in this block.
+    instructions: pl.ArrayList(*const Instruction) = .empty,
 
     fn init(
         function: *Function,
@@ -2232,6 +2466,23 @@ pub const Block = struct {
         self.instructions.deinit(allocator);
     }
 
+    /// Create a new input for this block, with the given type.
+    /// This can be used in a DefUse to bind an input to an instruction.
+    pub fn input(
+        ptr: *const Block,
+        nameString: ?[]const u8,
+        typeIr: *const Type,
+    ) !*const Input {
+        const self: *Block = @constCast(ptr);
+        const name = if (nameString) |ns| try self.root.internName(ns) else null;
+
+        const out = try Input.init(self, @enumFromInt(self.inputs.count()), name, typeIr);
+
+        try self.inputs.put(self.root.allocator, out, {});
+
+        return out;
+    }
+
     /// Get the index of a given instruction in this block.
     /// Returns `null` if the instruction is not in this block.
     pub fn getInstructionIndex(
@@ -2249,6 +2500,26 @@ pub const Block = struct {
 
         return Instruction.init(self, operation);
     }
+};
+
+pub const Terminator = struct {
+    /// The kind of termination being performed by this terminator.
+    termination: Termination,
+    /// The value inputs to this terminator, if any.
+    values: InstructionOperandList = .empty,
+};
+
+pub const Termination = enum {
+    /// Indicates a defined but undesirable state that should halt execution.
+    trap,
+    /// Return flow control from a function or handler.
+    @"return",
+    /// Cancel the effect block of the current handler.
+    cancel,
+    /// Jump to the output instruction.
+    unconditional_branch,
+    /// Jump to the output instruction, if the input is non-zero.
+    conditional_branch,
 };
 
 /// Intermediate representation of instructions;
@@ -2275,22 +2546,22 @@ pub const Instruction = struct {
     }
 
     /// Shortcut for `Function.insertUseDef`.
-    pub fn insertUseDef(ptr: *const Instruction, index: usize, useDef: UseDef) error{OutOfMemory, InvalidCycle, InvalidIndex}!void {
+    pub fn insertUseDef(ptr: *const Instruction, index: usize, useDef: Operand) error{OutOfMemory, InvalidCycle, InvalidIndex}!void {
         return ptr.block.function.insertUseDef(ptr, index, useDef);
     }
 
     /// Shortcut for `Function.appendUseDef`.
-    pub fn appendUseDef(ptr: *const Instruction, input: UseDef) error{OutOfMemory, InvalidCycle}!void {
+    pub fn appendUseDef(ptr: *const Instruction, input: Operand) error{OutOfMemory, InvalidCycle}!void {
         return ptr.block.function.appendUseDef(ptr, input);
     }
 
     /// Shortcut for `Function.replaceUseDef`.
-    pub fn replaceUseDef(ptr: *const Instruction, index: usize, input: UseDef) ?UseDef {
+    pub fn replaceUseDef(ptr: *const Instruction, index: usize, input: Operand) ?Operand {
         return ptr.block.function.replaceUseDef(ptr, index, input);
     }
 
     /// Shortcut for `Function.removeUseDef`.
-    pub fn removeUseDef(ptr: *const Instruction, index: usize) ?UseDef {
+    pub fn removeUseDef(ptr: *const Instruction, index: usize) ?Operand {
         return ptr.block.function.removeUseDef(ptr, index);
     }
 
@@ -2331,6 +2602,7 @@ pub const Instruction = struct {
         return null;
     }
 
+
     /// Un-memoized version of `getType`.
     pub fn computeType(self: *const Instruction) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const ir.Type {
         const useDefs = self.block.function.getUseDefs(self);
@@ -2338,15 +2610,7 @@ pub const Instruction = struct {
         return switch(self.operation) {
             .nop => self.block.root.builtin.types.nil,
             .breakpoint => self.block.root.builtin.types.nil,
-            .@"unreachable" => self.block.root.builtin.types.noreturn,
-            .trap => self.block.root.builtin.types.noreturn,
-            .@"return" => self.block.root.builtin.types.noreturn,
-            .cancel => self.block.root.builtin.types.noreturn,
-            .unconditional_branch => self.block.root.builtin.types.nil,
-            .conditional_branch => self.block.root.builtin.types.nil,
-            .phi =>
-                if (useDefs.len == 0) error.InvalidInstruction
-                else try useDefs[0].getType(),
+            .@"unreachable" => self.block.root.builtin.types.noreturn, // TODO: should be like, bottom?
             .call =>
                 if (useDefs.len == 0) error.InvalidInstruction
                 else (try (try useDefs[0].getType()).info.coerceFunction()).output,
@@ -2391,38 +2655,148 @@ pub const Instruction = struct {
     }
 };
 
+/// Placeholder for the inputs to an ir `Block`, designating a type for a would-be phi node.
+pub const Input = packed struct {
+    block: *const Block,
+    id: Id.of(Input),
+    name: ?*const Name,
+    type: *const Type,
+
+    fn init(
+        block: *const Block,
+        id: Id.of(Input),
+        name: ?*const Name,
+        typeIr: *const Type,
+    ) error{OutOfMemory}!*const Input {
+        const self = try @constCast(block.function).arena.allocator().create(Input);
+
+        self.* = Input {
+            .block = block,
+            .id = id,
+            .name = name,
+            .type = typeIr,
+        };
+
+        return self;
+    }
+
+    fn deinit(ptr: *const Input) void {
+        const self: *Input = @constCast(ptr);
+
+        const allocator = self.root.allocator;
+        defer allocator.destroy(self);
+
+        self.type.deinit(allocator);
+    }
+};
+
+/// Binds inputs to an ir `Block` for a specific predecessor.
+/// Can be either a constant, or an instruction belonging to the predecessor.
+pub const Output = packed struct {
+    /// The kind of value carried by this output.
+    tag: Tag,
+    /// The address of the value carried by this output.
+    ptr: u48,
+
+    /// Determine if the owner of this output needs to recalculate its type.
+    pub fn isDirty(self: Output) bool {
+        return switch (self.tag) {
+            inline .constant => false,
+            .instruction => @as(*const Instruction, @ptrFromInt(self.ptr)).isDirty(),
+        };
+    }
+
+    /// Get the type of an output.
+    pub fn getType(self: Output) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const Type {
+        return switch (self.tag) {
+            .constant => @as(*const Constant, @ptrFromInt(self.ptr)).data.type,
+            .instruction => try @as(*const Instruction, @ptrFromInt(self.ptr)).getType(),
+        };
+    }
+
+    /// Marker for which kind of value is carried by an output.
+    pub const Tag = enum(u16) {
+        /// Receives a constant value.
+        constant,
+        /// Receives the output of another instruction.
+        instruction,
+
+        /// Creates a new `Tag` from any type that is a valid output.
+        pub fn fromType(comptime T: type) Tag {
+            comptime return switch (T) {
+                *const Constant, *Constant => .constant,
+                *const Instruction, *Instruction => .instruction,
+                else => @compileError(@typeName(T) ++ " is not a valid output type"),
+            };
+        }
+    };
+
+    /// Creates a new `output` from a pointer to any type that is a valid output.
+    /// The type of the pointer is used to determine the `Tag` of the output.
+    /// The pointer must be a valid pointer to the type.
+    pub fn fromPtr(ptr: anytype) Output {
+        const tag = comptime Tag.fromType(@TypeOf(ptr));
+
+        return Output {
+            .tag = tag,
+            .ptr = @intCast(@intFromPtr(ptr)),
+        };
+    }
+
+    /// Create a typed pointer from an output.
+    /// The type of the parameter must match the tag of the output, or else null is returned; see also `forcePtr`.
+    pub fn toPtr(self: Output, comptime T: type) ?*const T {
+        const tag = comptime Tag.fromType(*const T);
+
+        if (self.tag != tag) return null;
+
+        return @ptrFromInt(self.ptr);
+    }
+
+    /// Create a typed pointer from an output.
+    /// Only checks that the tag matches the type in debug mode; see also `toPtr`.
+    pub fn forcePtr(self: Output, comptime T: type) *const T {
+        const tag = comptime Tag.fromType(*const T);
+
+        std.debug.assert(self.tag == tag);
+
+        return @ptrFromInt(self.ptr);
+    }
+};
+
 /// The inputs to an ir `Instruction`.
 /// Can be either a constant, a type, or another instruction.
-pub const UseDef = packed struct {
+pub const Operand = packed struct {
     /// The kind of value carried by this input.
     tag: Tag,
     /// The address of the value carried by this input.
     ptr: u48,
 
     /// Determine if the owner of this UseDef needs to recalculate its type.
-    pub fn isDirty(self: UseDef) bool {
+    pub fn isDirty(self: Operand) bool {
         return switch (self.tag) {
-            inline .type, .constant => false,
+            inline .type, .constant, .input => false,
             .instruction => @as(*const Instruction, @ptrFromInt(self.ptr)).isDirty(),
         };
     }
 
     /// Get the type of an input.
-    pub fn getType(self: UseDef) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const Type {
+    pub fn getType(self: Operand) error{InvalidInstruction, TypeMismatch, OutOfMemory}!*const Type {
         return switch (self.tag) {
             .type => @as(*const Type, @ptrFromInt(self.ptr)).root.builtin.types.type,
             .constant => @as(*const Constant, @ptrFromInt(self.ptr)).data.type,
+            .input => @as(*const Input, @ptrFromInt(self.ptr)).type,
             .instruction => try @as(*const Instruction, @ptrFromInt(self.ptr)).getType(),
         };
     }
 
-    fn addOutput(self: UseDef, owner: *const Instruction) error{TooManyEdges}!void {
+    fn addOutput(self: Operand, owner: *const Instruction) error{TooManyEdges}!void {
         if (self.toPtr(Instruction)) |instr| {
             try instr.addOutput(owner);
         }
     }
 
-    fn removeOutput(self: UseDef, owner: *const Instruction) void {
+    fn removeOutput(self: Operand, owner: *const Instruction) void {
         if (self.toPtr(Instruction)) |instr| {
             instr.removeOutput(owner);
         }
@@ -2432,6 +2806,8 @@ pub const UseDef = packed struct {
     pub const Tag = enum(u16) {
         /// Receives a type.
         type,
+        /// Receives a block input.
+        input,
         /// Receives a constant value.
         constant,
         /// Receives the output of another instruction.
@@ -2441,6 +2817,7 @@ pub const UseDef = packed struct {
         pub fn fromType(comptime T: type) Tag {
             comptime return switch (T) {
                 *const Type, *Type => .type,
+                *const Input, *Input => .input,
                 *const Constant, *Constant => .constant,
                 *const Instruction, *Instruction => .instruction,
                 else => @compileError(@typeName(T) ++ " is not a valid UseDef type"),
@@ -2451,10 +2828,10 @@ pub const UseDef = packed struct {
     /// Creates a new `UseDef` from a pointer to any type that is a valid input.
     /// The type of the pointer is used to determine the `Tag` of the input.
     /// The pointer must be a valid pointer to the type.
-    pub fn fromPtr(ptr: anytype) UseDef {
+    pub fn fromPtr(ptr: anytype) Operand {
         const tag = comptime Tag.fromType(@TypeOf(ptr));
 
-        return UseDef {
+        return Operand {
             .tag = tag,
             .ptr = @intCast(@intFromPtr(ptr)),
         };
@@ -2462,7 +2839,7 @@ pub const UseDef = packed struct {
 
     /// Create a typed pointer from an UseDef.
     /// The type of the parameter must match the tag of the UseDef, or else null is returned; see also `forcePtr`.
-    pub fn toPtr(self: UseDef, comptime T: type) ?*const T {
+    pub fn toPtr(self: Operand, comptime T: type) ?*const T {
         const tag = comptime Tag.fromType(*const T);
 
         if (self.tag != tag) return null;
@@ -2472,7 +2849,7 @@ pub const UseDef = packed struct {
 
     /// Create a typed pointer from an UseDef.
     /// Only checks that the tag matches the type in debug mode; see also `toPtr`.
-    pub fn forcePtr(self: UseDef, comptime T: type) *const T {
+    pub fn forcePtr(self: Operand, comptime T: type) *const T {
         const tag = comptime Tag.fromType(*const T);
 
         std.debug.assert(self.tag == tag);
@@ -2490,18 +2867,6 @@ pub const Operation = enum {
     breakpoint,
     /// Indicates an undefined state; all uses may be discarded by optimizers.
     @"unreachable",
-    /// Indicates a defined but undesirable state that should halt execution.
-    trap,
-    /// Return flow control from a function or handler.
-    @"return",
-    /// Cancel the effect block of the current handler.
-    cancel,
-    /// Jump to the output instruction.
-    unconditional_branch,
-    /// Jump to the output instruction, if the input is non-zero.
-    conditional_branch,
-    /// A unification point for virtual registers from predecessor blocks.
-    phi,
     /// A standard function call.
     call,
     /// An effect handler prompt.
