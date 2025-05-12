@@ -43,6 +43,26 @@ pub const Expr = struct {
         set: []Expr,
         lambda: []Expr,
 
+        pub fn mayRequireParens(self: *const Data) bool {
+            switch (self.*) {
+                .int => return false,
+                .char => return false,
+                .string => return false,
+                .identifier => return false,
+                .symbol => return false,
+                .seq => return true,
+                .list => return false,
+                .tuple => return false,
+                .array => return false,
+                .compound => return false,
+                .apply => return true,
+                .operator => return true,
+                .decl => return true,
+                .set => return true,
+                .lambda => return false,
+            }
+        }
+
         pub fn deinit(self: *Data, allocator: std.mem.Allocator) void {
             switch (self.*) {
                 .int => {},
@@ -136,16 +156,36 @@ pub const Expr = struct {
             switch (self.operands.len) {
                 1 => {
                     switch (self.position) {
-                        .prefix => try writer.print("{s} {}", .{self.token.data.sequence.asSlice(), self.operands[0]}),
-                        .postfix => try writer.print("{} {s}", .{self.operands[0], self.token.data.sequence.asSlice()}),
+                        .prefix => {
+                            try writer.print("{s} ", .{self.token.data.sequence.asSlice()});
+                            try self.operands[0].display(self.precedence, writer);
+                        },
+                        .postfix => {
+                            try self.operands[0].display(self.precedence, writer);
+                            try writer.print("{s}", .{self.token.data.sequence.asSlice()});
+                        },
                         .infix => unreachable,
                     }
                 },
                 2 => {
                     switch (self.position) {
-                        .prefix => try writer.print("{s} {} {}", .{self.token.data.sequence.asSlice(), self.operands[0], self.operands[1]}),
-                        .postfix => try writer.print("{} {} {s}", .{self.operands[0], self.operands[1], self.token.data.sequence.asSlice()}),
-                        .infix => try writer.print("{} {s} {}", .{self.operands[0], self.token.data.sequence.asSlice(), self.operands[1]}),
+                        .prefix => {
+                            try writer.print("{s} ", .{self.token.data.sequence.asSlice()});
+                            try self.operands[0].display(self.precedence, writer);
+                            try writer.writeByte(' ');
+                            try self.operands[1].display(self.precedence, writer);
+                        },
+                        .postfix => {
+                            try self.operands[0].display(self.precedence, writer);
+                            try writer.writeByte(' ');
+                            try self.operands[1].display(self.precedence, writer);
+                            try writer.print(" {s}", .{self.token.data.sequence.asSlice()});
+                        },
+                        .infix => {
+                            try self.operands[0].display(self.precedence, writer);
+                            try writer.print(" {s} ", .{self.token.data.sequence.asSlice()});
+                            try self.operands[1].display(self.precedence, writer);
+                        },
                     }
                 },
                 else => unreachable,
@@ -175,18 +215,17 @@ pub const Expr = struct {
         }
     }
 
-    pub fn format(
-        self: *const Expr,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+    pub fn display(self: *const Expr, bp: i16, writer: anytype) !void {
+        const need_parens = self.data.mayRequireParens() and self.precedence() < bp;
+
+        if (need_parens) try writer.writeByte('(');
+
         switch (self.data) {
-            .int => return writer.print("{d}", .{self.data.int}),
-            .char => return writer.print("'{u}'", .{self.data.char}),
-            .string => return writer.print("\"{s}\"", .{self.data.string}),
-            .identifier => return writer.print("{s}", .{self.data.identifier}),
-            .symbol => return writer.print("{}", .{self.data.symbol}),
+            .int => try writer.print("{d}", .{self.data.int}),
+            .char => try writer.print("'{u}'", .{self.data.char}),
+            .string => try writer.print("\"{s}\"", .{self.data.string}),
+            .identifier => try writer.print("{s}", .{self.data.identifier}),
+            .symbol => try writer.print("{}", .{self.data.symbol}),
             .list => {
                 try writer.writeAll("⟨ ");
                 for (self.data.list) |child| {
@@ -195,9 +234,15 @@ pub const Expr = struct {
                 try writer.writeAll("⟩");
             },
             .tuple => {
-                try writer.writeAll("( ");
-                for (self.data.tuple) |child| {
-                    try writer.print("{}, ", .{child});
+                try writer.writeAll("(");
+                for (self.data.tuple, 0..) |child, i| {
+                    try writer.print("{}", .{child});
+
+                    if (i < self.data.tuple.len - 1) {
+                        try writer.writeAll(", ");
+                    } else if (self.data.tuple.len == 1) {
+                        try writer.writeAll(",");
+                    }
                 }
                 try writer.writeAll(")");
             },
@@ -216,20 +261,34 @@ pub const Expr = struct {
                 try writer.writeAll("}");
             },
             .seq => {
-                for (self.data.seq) |child| {
-                    try writer.print("{}; ", .{child});
+                for (self.data.seq, 0..) |child, i| {
+                    try writer.print("{}", .{child});
+                    if (i < self.data.seq.len - 1) {
+                        try writer.writeAll("; ");
+                    }
                 }
             },
             .apply => {
                 for (self.data.apply) |child| {
-                    try writer.print("{} ", .{child});
+                    try child.display(0, writer);
                 }
             },
-            .operator => return writer.print("{}", .{self.data.operator}),
-            .decl => return writer.print("{} := {}", .{self.data.decl[0], self.data.decl[1]}),
-            .set => return writer.print("{} = {}", .{self.data.set[0], self.data.set[1]}),
-            .lambda => return writer.print("fun {}. {}", .{self.data.lambda[0], self.data.lambda[1]}),
+            .operator => try writer.print("{}", .{self.data.operator}),
+            .decl => try writer.print("{} := {}", .{self.data.decl[0], self.data.decl[1]}),
+            .set => try writer.print("{} = {}", .{self.data.set[0], self.data.set[1]}),
+            .lambda => try writer.print("fun {}. {}", .{self.data.lambda[0], self.data.lambda[1]}),
         }
+
+        if (need_parens) try writer.writeByte(')');
+    }
+
+    pub fn format(
+        self: *const Expr,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        try self.display(std.math.minInt(i16), writer);
     }
 };
 
@@ -247,7 +306,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             const bytes = cst.token.data.sequence.asSlice();
 
             const int = std.fmt.parseInt(i64, bytes, 0) catch |err| {
-                log.err("parseCst: failed to parse int literal {s}: {}", .{bytes, err});
+                log.debug("parseCst: failed to parse int literal {s}: {}", .{bytes, err});
                 return error.UnexpectedInput;
             };
 
@@ -283,8 +342,8 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
                 };
             }
 
-            std.debug.assert(cst.token.tag == .special);
-            std.debug.assert(cst.token.data.special.escaped == false);
+            if (cst.token.tag != .special
+            or  cst.token.data.special.escaped != false) return error.UnexpectedInput;
 
             return Expr{
                 .location = cst.location,
@@ -294,13 +353,12 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             };
         },
 
-        cst_types.StringElement => unreachable,
-        cst_types.StringSentinel => unreachable,
+        cst_types.StringElement, cst_types.StringSentinel => return error.UnexpectedInput,
 
         cst_types.Block => {
             if (cst.operands.len == 0) { // unit values
-                std.debug.assert(cst.token.tag == .special); // empty indentation block cant be yielded by the parser
-                std.debug.assert(cst.token.data.special.escaped == false);
+                if (cst.token.tag != .special
+                or  cst.token.data.special.escaped != false) return error.UnexpectedInput;
 
                 return switch (cst.token.data.special.punctuation) {
                     .paren_l => Expr{
@@ -315,12 +373,12 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
                         .location = cst.location,
                         .data = .{ .array = &.{}, },
                     },
-                    else => unreachable,
+                    else => return error.UnexpectedInput,
                 };
             }
 
             if (cst.token.tag == .indentation) {
-                std.debug.assert(cst.operands.len == 1);
+                if (cst.operands.len != 1) return error.UnexpectedInput;
                 return try parseCst(allocator, source, cst.operands.asSlice()[0]);
             }
 
@@ -330,7 +388,22 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             if (cst.operands.len == 1) {
                 const inner = try parseCst(allocator, source, cst.operands.asSlice()[0]);
 
-                if (inner.data == .list or inner.data == .seq) {
+                if (inner.data == .seq) {
+                    return switch (cst.token.data.special.punctuation) {
+                        .paren_l => Expr{
+                            .attributes = inner.attributes,
+                            .location = cst.location,
+                            .data = .{ .seq = inner.data.seq },
+                        },
+                        .brace_l => Expr{
+                            .attributes = inner.attributes,
+                            .location = cst.location,
+                            .data = .{ .seq = inner.data.seq },
+                        },
+                        .bracket_l => return error.UnexpectedInput,
+                        else => return error.UnexpectedInput,
+                    };
+                } else if (inner.data == .list) {
                     return switch (cst.token.data.special.punctuation) {
                         .paren_l => Expr{
                             .attributes = inner.attributes,
@@ -347,7 +420,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
                             .location = cst.location,
                             .data = .{ .array = inner.data.list },
                         },
-                        else => unreachable,
+                        else => return error.UnexpectedInput,
                     };
                 } else {
                     switch (cst.token.data.special.punctuation) {
@@ -370,10 +443,10 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
                                 .data = .{ .array = buff },
                             };
                         },
-                        else => unreachable,
+                        else => return error.UnexpectedInput,
                     }
                 }
-            } else unreachable; // should not be possible
+            } else return error.UnexpectedInput; // should not be possible
         },
 
         cst_types.List => {
@@ -663,17 +736,13 @@ pub fn getCst(
         if (std.meta.isError(out) or (try out) == null or !parser.isEof()) {
             log.debug("getCst: parser result was null or error, or did not consume input {} {} {}", .{ std.meta.isError(out), if (!std.meta.isError(out)) (try out) == null else false, !parser.isEof() });
 
-            const inner = inner: {
-                if (parser.lexer.peek()) |maybe_cached_token| {
-                    if (maybe_cached_token) |cached_token| {
-                        log.debug("getCst: unused token in lexer cache {}: `{s}` ({x})", .{parser.lexer.inner.location, cached_token, cached_token});
-                    }
-                    break :inner analysis.SyntaxError.UnexpectedInput;
-                } else |err| {
-                    log.debug("syntax error: {}", .{err});
-                    break :inner err;
+            if (parser.lexer.peek()) |maybe_cached_token| {
+                if (maybe_cached_token) |cached_token| {
+                    log.debug("getCst: unused token in lexer cache {}: `{s}` ({x})", .{parser.lexer.inner.location, cached_token, cached_token});
                 }
-            };
+            } else |err| {
+                log.debug("syntax error: {}", .{err});
+            }
 
             const rem = source[parser.lexer.inner.location.buffer..];
 
@@ -682,8 +751,6 @@ pub fn getCst(
             } else if (rem.len > 0) {
                 log.debug("getCst: unexpected input after parsing {}: `{s}` ({any})", .{parser.lexer.inner.location, rem, rem});
             }
-
-            return inner;
         }
     }
 
@@ -802,7 +869,7 @@ pub fn nuds() [10]analysis.Nud {
 
                             var inner = try parser.pratt(std.math.minInt(i16)) orelse {
                                 log.debug("function: no inner expression found; panic", .{});
-                                return error.UnexpectedInput;
+                                return error.UnexpectedEof;
                             };
                             errdefer inner.deinit(parser.allocator);
 
@@ -871,7 +938,7 @@ pub fn nuds() [10]analysis.Nud {
 
                     var inner = try parser.pratt(std.math.minInt(i16)) orelse {
                         log.debug("indent: no inner expression found; panic", .{});
-                        return error.UnexpectedInput;
+                        return error.UnexpectedEof;
                     };
                     errdefer inner.deinit(parser.allocator);
 
@@ -972,7 +1039,7 @@ pub fn nuds() [10]analysis.Nud {
 
                     const content = try parser.lexer.next() orelse {
                         log.debug("single_quote: no content found; panic", .{});
-                        return error.UnexpectedInput;
+                        return error.UnexpectedEof;
                     };
 
                     log.debug("single_quote: found content token {}", .{content});
@@ -1029,13 +1096,13 @@ pub fn nuds() [10]analysis.Nud {
 
                             break :consume try parser.lexer.next() orelse {
                                 log.debug("single_quote: no secondary token found; panic", .{});
-                                return error.UnexpectedInput;
+                                return error.UnexpectedEof;
                             };
                         } else null;
 
                         const end_quote = try parser.lexer.next() orelse {
                             log.debug("single_quote: no end quote found; panic", .{});
-                            return error.UnexpectedInput;
+                            return error.UnexpectedEof;
                         };
 
                         if (end_quote.tag != .special
@@ -1191,7 +1258,7 @@ pub fn nuds() [10]analysis.Nud {
                             });
                         }
                     } else {
-                        log.err("string: no end of string token found", .{});
+                        log.debug("string: no end of string token found", .{});
                         return error.UnexpectedEof;
                     }
                 }
@@ -2202,7 +2269,7 @@ test "expr_parse" {
             _ = .{input, expect};
             var syn = try getCst(std.testing.allocator, .{}, input) orelse {
                 log.err("Failed to parse source", .{});
-                return error.BadEncoding;
+                return error.NullCst;
             };
             defer syn.deinit(std.testing.allocator);
 
@@ -2225,8 +2292,11 @@ test "expr_parse" {
         .{ .input = "1 + 2 + 3", .expect = "1 + 2 + 3" }, // 2
         .{ .input = "1 - 2 * 3", .expect = "1 - 2 * 3" }, // 3
         .{ .input = "1 * 2 + 3", .expect = "1 * 2 + 3" }, // 4
-        .{ .input = "1, 2, 3", .expect = "⟨ 1, 2, 3, ⟩" }, // 5
-        .{ .input = "[1, 2, 3]", .expect = "[ 1, 2, 3, ]" }, // 6
+        .{ .input = "(1 + 2) * 3", .expect = "(1 + 2) * 3" }, // 5
+        .{ .input = "1, 2, 3", .expect = "⟨ 1, 2, 3, ⟩" }, // 6
+        .{ .input = "[1, 2, 3]", .expect = "[ 1, 2, 3, ]" }, // 7
+        .{ .input = "(1, 2, 3,)", .expect = "(1, 2, 3)" }, // 8
+        .{ .input = "(1, )", .expect = "(1,)" }, // 9
     });
 }
 
@@ -2311,7 +2381,7 @@ test "cst_parse" {
         .{ .input = "'\\n'", .expect = "'\n'" }, // 44
         .{ .input = "'\\0'", .expect = "'\x00'" }, // 45
         .{ .input = "'x", .expect = "'x" }, // 46
-        .{ .input = "'\\0", .expect = error.UnexpectedInput }, // 47
+        .{ .input = "'\\0", .expect = error.UnexpectedEof }, // 47
         .{ .input = "'x + 'y", .expect = "⟨+ 'x 'y⟩"}, // 48
     });
 }
