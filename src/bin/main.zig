@@ -10,7 +10,7 @@ const log = std.log.scoped(.main);
 const repl = @import("repl");
 
 pub const std_options = std.Options{
-    .log_level = .warn,
+    .log_level = .info,
 };
 
 const Repl = repl.Builder(ReplContext);
@@ -32,9 +32,58 @@ pub fn main() !void {
     var R = Repl.init(&ctx, allocator);
     defer R.deinit();
 
-    while (try R.getInput(">")) |input| {
-        if (std.mem.eql(u8, input, "exit")) break;
+    var line_count: u32 = 0;
 
-        std.debug.print("input: {s}\n", .{input});
+    var line_accumulator = std.ArrayList(u8).init(allocator);
+    defer line_accumulator.deinit();
+
+    while (R.getInput(">") catch |err| {
+        switch (err) {
+            error.EndOfStream => {
+                std.debug.print("[STREAM CLOSED] goodbye 💝\n", .{});
+                return;
+            },
+            error.CtrlC => {
+                std.debug.print("[CTRL + C] goodbye 💝\n", .{});
+                return;
+            },
+            else => {
+                log.err("cannot get input: {}", .{err});
+                return;
+            },
+        }
+    }) |input| {
+        if (std.mem.eql(u8, input, "exit")) {
+            std.debug.print("[EXIT] goodbye 💝\n", .{});
+            return;
+        }
+
+        line_count += 1;
+
+        line_accumulator.appendSlice(input) catch @panic("OOM in line accumulator");
+
+        var cst = ribbon.meta_language.getCst(allocator, .{
+            .attrOffset = .{ .column = 0, .line = line_count },
+        }, line_accumulator.items) catch |err| {
+            if (err == error.UnexpectedEof) {
+                std.debug.print("Incomplete input, waiting for more...\n", .{});
+            } else {
+                log.err("Error parsing input: {}", .{err});
+                line_accumulator.clearRetainingCapacity();
+            }
+
+            continue;
+        } orelse continue;
+        defer cst.deinit(allocator);
+
+        line_accumulator.clearRetainingCapacity();
+
+        var expr = ribbon.meta_language.parseCst(allocator, input, cst) catch |err| {
+            log.err("Error parsing CST: {}", .{err});
+            continue;
+        };
+        defer expr.deinit(allocator);
+
+        std.debug.print("{}\n", .{expr});
     }
 }
