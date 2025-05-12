@@ -20,6 +20,526 @@ test {
 var syntax_mutex = std.Thread.Mutex{};
 var syntax: ?analysis.Syntax = null;
 
+
+pub const Expr = struct {
+    location: analysis.Location,
+    attributes: pl.StringMap(Expr) = .empty,
+    data: Expr.Data,
+
+    pub const Data = union(enum) {
+        int: i64,
+        char: pl.Char,
+        string: []const u8,
+        identifier: []const u8,
+        symbol: Symbol,
+        seq: []Expr,
+        list: []Expr,
+        tuple: []Expr,
+        array: []Expr,
+        compound: []Expr,
+        apply: []Expr,
+        operator: Expr.Operator,
+        decl: []Expr,
+        set: []Expr,
+        lambda: []Expr,
+
+        pub fn deinit(self: *Data, allocator: std.mem.Allocator) void {
+            switch (self.*) {
+                .int => {},
+                .char => {},
+                .identifier => {},
+                .symbol => {},
+                .string => allocator.free(self.string),
+                .seq => {
+                    for (self.seq) |*child| child.deinit(allocator);
+
+                    allocator.free(self.seq);
+                },
+                .list => {
+                    for (self.list) |*child| child.deinit(allocator);
+
+                    allocator.free(self.list);
+                },
+                .tuple => {
+                    for (self.tuple) |*child| child.deinit(allocator);
+
+                    allocator.free(self.tuple);
+                },
+                .array => {
+                    for (self.array) |*child| child.deinit(allocator);
+
+                    allocator.free(self.array);
+                },
+                .compound => {
+                    for (self.compound) |*child| child.deinit(allocator);
+
+                    allocator.free(self.compound);
+                },
+                .apply => {
+                    for (self.apply) |*child| child.deinit(allocator);
+
+                    allocator.free(self.apply);
+                },
+                .operator => {
+                    for (self.operator.operands) |*child| child.deinit(allocator);
+
+                    allocator.free(self.operator.operands);
+                },
+                .decl => {
+                    for (self.decl) |*child| child.deinit(allocator);
+
+                    allocator.free(self.decl);
+                },
+                .set => {
+                    for (self.set) |*child| child.deinit(allocator);
+
+                    allocator.free(self.set);
+                },
+                .lambda => {
+                    for (self.lambda) |*child| child.deinit(allocator);
+
+                    allocator.free(self.lambda);
+                },
+            }
+        }
+    };
+
+    pub const Symbol = union(enum) {
+        punctuation: analysis.Punctuation,
+        sequence: []const u8,
+
+        pub fn format(
+            self: *const Symbol,
+            comptime _: []const u8,
+            _: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            switch (self.*) {
+                .punctuation => try writer.print("{u}", .{self.punctuation.toChar()}),
+                .sequence => try writer.print("{s}", .{self.sequence}),
+            }
+        }
+    };
+
+    pub const Operator = struct {
+        position: enum { prefix, infix, postfix },
+        precedence: i16,
+        token: analysis.Token,
+        operands: []Expr,
+
+        pub fn format(
+            self: *const Operator,
+            comptime _: []const u8,
+            _: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            switch (self.operands.len) {
+                1 => {
+                    switch (self.position) {
+                        .prefix => try writer.print("{s} {}", .{self.token.data.sequence.asSlice(), self.operands[0]}),
+                        .postfix => try writer.print("{} {s}", .{self.operands[0], self.token.data.sequence.asSlice()}),
+                        .infix => unreachable,
+                    }
+                },
+                2 => {
+                    switch (self.position) {
+                        .prefix => try writer.print("{s} {} {}", .{self.token.data.sequence.asSlice(), self.operands[0], self.operands[1]}),
+                        .postfix => try writer.print("{} {} {s}", .{self.operands[0], self.operands[1], self.token.data.sequence.asSlice()}),
+                        .infix => try writer.print("{} {s} {}", .{self.operands[0], self.token.data.sequence.asSlice(), self.operands[1]}),
+                    }
+                },
+                else => unreachable,
+            }
+        }
+    };
+
+
+    pub fn deinit(self: *Expr, allocator: std.mem.Allocator) void {
+        var it = self.attributes.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(allocator);
+        }
+
+        self.attributes.deinit(allocator);
+        self.data.deinit(allocator);
+    }
+
+    pub fn precedence(self: *const Expr) i16 {
+        switch (self.data) {
+            .operator => return self.data.operator.precedence,
+            .int, .char, .string, .identifier, .symbol, .decl, .set, .lambda => return std.math.maxInt(i16),
+            .list, .tuple, .array, .compound => return std.math.maxInt(i16),
+            .seq => return std.math.minInt(i16),
+            .apply => return 0,
+        }
+    }
+
+    pub fn format(
+        self: *const Expr,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        switch (self.data) {
+            .int => return writer.print("{d}", .{self.data.int}),
+            .char => return writer.print("'{u}'", .{self.data.char}),
+            .string => return writer.print("\"{s}\"", .{self.data.string}),
+            .identifier => return writer.print("{s}", .{self.data.identifier}),
+            .symbol => return writer.print("{}", .{self.data.symbol}),
+            .list => {
+                try writer.writeAll("⟨ ");
+                for (self.data.list) |child| {
+                    try writer.print("{}, ", .{child});
+                }
+                try writer.writeAll("⟩");
+            },
+            .tuple => {
+                try writer.writeAll("( ");
+                for (self.data.tuple) |child| {
+                    try writer.print("{}, ", .{child});
+                }
+                try writer.writeAll(")");
+            },
+            .array => {
+                try writer.writeAll("[ ");
+                for (self.data.array) |child| {
+                    try writer.print("{}, ", .{child});
+                }
+                try writer.writeAll("]");
+            },
+            .compound => {
+                try writer.writeAll("{ ");
+                for (self.data.compound) |child| {
+                    try writer.print("{}, ", .{child});
+                }
+                try writer.writeAll("}");
+            },
+            .seq => {
+                for (self.data.seq) |child| {
+                    try writer.print("{}; ", .{child});
+                }
+            },
+            .apply => {
+                for (self.data.apply) |child| {
+                    try writer.print("{} ", .{child});
+                }
+            },
+            .operator => return writer.print("{}", .{self.data.operator}),
+            .decl => return writer.print("{} := {}", .{self.data.decl[0], self.data.decl[1]}),
+            .set => return writer.print("{} = {}", .{self.data.set[0], self.data.set[1]}),
+            .lambda => return writer.print("fun {}. {}", .{self.data.lambda[0], self.data.lambda[1]}),
+        }
+    }
+};
+
+/// Cleans up a concrete syntax tree, producing an `Expr`.
+/// This removes comments, indentation, parens and other purely-syntactic elements,
+/// as well as finalizing literals, applying attributes etc.
+pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.SyntaxTree) !Expr {
+    switch (cst.type) {
+        cst_types.Identifier => return Expr{
+            .location = cst.location,
+            .data = .{ .identifier = cst.token.data.sequence.asSlice() },
+        },
+
+        cst_types.Int => {
+            const bytes = cst.token.data.sequence.asSlice();
+
+            const int = std.fmt.parseInt(i64, bytes, 0) catch |err| {
+                log.err("parseCst: failed to parse int literal {s}: {}", .{bytes, err});
+                return error.UnexpectedInput;
+            };
+
+            return Expr{
+                .location = cst.location,
+                .data = .{ .int = int },
+            };
+        },
+
+        cst_types.String => {
+            var buf = std.ArrayList(u8).init(allocator);
+            defer buf.deinit();
+
+            const writer = buf.writer();
+
+            try assembleString(writer, source, cst);
+
+            return Expr{
+                .location = cst.location,
+                .data = .{ .string = try buf.toOwnedSlice() },
+            };
+        },
+
+        cst_types.Symbol => {
+            if (cst.token.tag == .sequence) {
+                const bytes = cst.token.data.sequence.asSlice();
+
+                return Expr{
+                    .location = cst.location,
+                    .data = .{ .symbol = .{
+                        .sequence = bytes,
+                    } },
+                };
+            }
+
+            std.debug.assert(cst.token.tag == .special);
+            std.debug.assert(cst.token.data.special.escaped == false);
+
+            return Expr{
+                .location = cst.location,
+                .data = .{ .symbol = .{
+                    .punctuation = cst.token.data.special.punctuation,
+                } },
+            };
+        },
+
+        cst_types.StringElement => unreachable,
+        cst_types.StringSentinel => unreachable,
+
+        cst_types.Block => {
+            if (cst.operands.len == 0) { // unit values
+                std.debug.assert(cst.token.tag == .special); // empty indentation block cant be yielded by the parser
+                std.debug.assert(cst.token.data.special.escaped == false);
+
+                return switch (cst.token.data.special.punctuation) {
+                    .paren_l => Expr{
+                        .location = cst.location,
+                        .data = .{ .tuple = &.{}, },
+                    },
+                    .brace_l => Expr{
+                        .location = cst.location,
+                        .data = .{ .compound = &.{}, },
+                    },
+                    .bracket_l => Expr{
+                        .location = cst.location,
+                        .data = .{ .array = &.{}, },
+                    },
+                    else => unreachable,
+                };
+            }
+
+            if (cst.token.tag == .indentation) {
+                std.debug.assert(cst.operands.len == 1);
+                return try parseCst(allocator, source, cst.operands.asSlice()[0]);
+            }
+
+            std.debug.assert(cst.token.tag == .special);
+            std.debug.assert(cst.token.data.special.escaped == false);
+
+            if (cst.operands.len == 1) {
+                const inner = try parseCst(allocator, source, cst.operands.asSlice()[0]);
+
+                if (inner.data == .list or inner.data == .seq) {
+                    return switch (cst.token.data.special.punctuation) {
+                        .paren_l => Expr{
+                            .attributes = inner.attributes,
+                            .location = cst.location,
+                            .data = .{ .tuple = inner.data.list },
+                        },
+                        .brace_l => Expr{
+                            .attributes = inner.attributes,
+                            .location = cst.location,
+                            .data = .{ .compound = inner.data.list },
+                        },
+                        .bracket_l => Expr{
+                            .attributes = inner.attributes,
+                            .location = cst.location,
+                            .data = .{ .array = inner.data.list },
+                        },
+                        else => unreachable,
+                    };
+                } else {
+                    switch (cst.token.data.special.punctuation) {
+                        .paren_l => return inner,
+                        .brace_l => {
+                            const buff = try allocator.alloc(Expr, 1);
+                            buff[0] = inner;
+
+                            return Expr{
+                                .location = cst.location,
+                                .data = .{ .compound = buff },
+                            };
+                        },
+                        .bracket_l => {
+                            const buff = try allocator.alloc(Expr, 1);
+                            buff[0] = inner;
+
+                            return Expr{
+                                .location = cst.location,
+                                .data = .{ .array = buff },
+                            };
+                        },
+                        else => unreachable,
+                    }
+                }
+            } else unreachable; // should not be possible
+        },
+
+        cst_types.List => {
+            if (cst.operands.len == 0) {
+                return Expr{
+                    .location = cst.location,
+                    .data = .{ .list = &.{}, },
+                };
+            }
+
+            var subs = try allocator.alloc(Expr, cst.operands.len);
+            errdefer allocator.free(subs);
+
+            for (cst.operands.asSlice(), 0..) |child, i| {
+                subs[i] = try parseCst(allocator, source, child);
+            }
+
+            return Expr{
+                .location = cst.location,
+                .data = .{ .list = subs },
+            };
+        },
+
+        cst_types.Seq => {
+            if (cst.operands.len == 0) {
+                return Expr{
+                    .location = cst.location,
+                    .data = .{ .seq = &.{}, },
+                };
+            }
+
+            var subs = try allocator.alloc(Expr, cst.operands.len);
+            errdefer allocator.free(subs);
+
+            for (cst.operands.asSlice(), 0..) |child, i| {
+                subs[i] = try parseCst(allocator, source, child);
+            }
+
+            return Expr{
+                .location = cst.location,
+                .data = .{ .seq = subs },
+            };
+        },
+
+        cst_types.Apply => {
+            if (cst.operands.len == 0) {
+                return Expr{
+                    .location = cst.location,
+                    .data = .{ .apply = &.{}, },
+                };
+            }
+
+            var subs = try allocator.alloc(Expr, cst.operands.len);
+            errdefer allocator.free(subs);
+
+            for (cst.operands.asSlice(), 0..) |child, i| {
+                subs[i] = try parseCst(allocator, source, child);
+            }
+
+            return Expr{
+                .location = cst.location,
+                .data = .{ .apply = subs },
+            };
+        },
+
+        cst_types.Decl => {
+            const operands = cst.operands.asSlice();
+            std.debug.assert(operands.len == 2);
+
+            const name_or_pattern = try parseCst(allocator, source, operands[0]);
+            const value = try parseCst(allocator, source, operands[1]);
+
+            const buff = try allocator.alloc(Expr, 2);
+            buff[0] = name_or_pattern;
+            buff[1] = value;
+
+            return Expr{
+                .location = cst.location,
+                .data = .{ .decl = buff },
+            };
+        },
+
+        cst_types.Set => {
+            const operands = cst.operands.asSlice();
+            std.debug.assert(operands.len == 2);
+
+            const name_or_pattern = try parseCst(allocator, source, operands[0]);
+            const value = try parseCst(allocator, source, operands[1]);
+
+            const buff = try allocator.alloc(Expr, 2);
+            buff[0] = name_or_pattern;
+            buff[1] = value;
+
+            return Expr{
+                .location = cst.location,
+                .data = .{ .set = buff },
+            };
+        },
+
+        cst_types.Lambda => {
+            const operands = cst.operands.asSlice();
+            std.debug.assert(operands.len == 2);
+
+            const name_or_pattern = try parseCst(allocator, source, operands[0]);
+            const value = try parseCst(allocator, source, operands[1]);
+
+            const buff = try allocator.alloc(Expr, 2);
+            buff[0] = name_or_pattern;
+            buff[1] = value;
+
+            return Expr{
+                .location = cst.location,
+                .data = .{ .lambda = buff },
+            };
+        },
+
+        cst_types.Prefix => {
+            const operands = cst.operands.asSlice();
+            std.debug.assert(operands.len == 1);
+
+            const inner = try parseCst(allocator, source, operands[0]);
+
+            const buff = try allocator.alloc(Expr, 1);
+            buff[0] = inner;
+
+            return Expr{
+                .location = cst.location,
+                .data = .{ .operator = .{
+                    .position = .prefix,
+                    .token = cst.token,
+                    .precedence = cst.precedence,
+                    .operands = buff,
+                } },
+            };
+        },
+
+        cst_types.Binary => {
+            const operands = cst.operands.asSlice();
+            std.debug.assert(operands.len == 2);
+
+            const left = try parseCst(allocator, source, operands[0]);
+            const right = try parseCst(allocator, source, operands[1]);
+
+            const buff = try allocator.alloc(Expr, 2);
+            buff[0] = left;
+            buff[1] = right;
+
+            return Expr{
+                .location = cst.location,
+                .data = .{ .operator = .{
+                    .position = .infix,
+                    .token = cst.token,
+                    .precedence = cst.precedence,
+                    .operands = buff,
+                } },
+            };
+        },
+
+        else => {
+            log.debug("parseCst: unexpected cst type {}", .{cst.type});
+            unreachable;
+        },
+    }
+}
+
+/// Dumps an rml concrete syntax tree to a string.
 pub fn dumpCstSExprs(source: []const u8, cst: analysis.SyntaxTree, writer: anytype) !void {
     switch(cst.type) {
         cst_types.Identifier, cst_types.Int => try writer.print("{s}", .{cst.token.data.sequence.asSlice()}),
@@ -137,33 +657,34 @@ pub fn getCst(
 
     const out = parser.pratt(std.math.minInt(i16));
 
-    log.debug("getCst: parser result: {!?}", .{out});
+    if (std.debug.runtime_safety) {
+        log.debug("getCst: parser result: {!?}", .{out});
 
+        if (std.meta.isError(out) or (try out) == null or !parser.isEof()) {
+            log.debug("getCst: parser result was null or error, or did not consume input {} {} {}", .{ std.meta.isError(out), if (!std.meta.isError(out)) (try out) == null else false, !parser.isEof() });
 
-    if (std.meta.isError(out) or (try out) == null or !parser.isEof()) {
-        log.debug("getCst: parser result was null or error, or did not consume input {} {} {}", .{ std.meta.isError(out), if (!std.meta.isError(out)) (try out) == null else false, !parser.isEof() });
-
-        const inner = inner: {
-            if (parser.lexer.peek()) |maybe_cached_token| {
-                if (maybe_cached_token) |cached_token| {
-                    log.err("getCst: unused token in lexer cache {}: `{s}` ({x})", .{parser.lexer.inner.location, cached_token, cached_token});
+            const inner = inner: {
+                if (parser.lexer.peek()) |maybe_cached_token| {
+                    if (maybe_cached_token) |cached_token| {
+                        log.debug("getCst: unused token in lexer cache {}: `{s}` ({x})", .{parser.lexer.inner.location, cached_token, cached_token});
+                    }
+                    break :inner analysis.SyntaxError.UnexpectedInput;
+                } else |err| {
+                    log.debug("syntax error: {}", .{err});
+                    break :inner err;
                 }
-                break :inner analysis.SyntaxError.UnexpectedInput;
-            } else |err| {
-                log.err("syntax error: {}", .{err});
-                break :inner err;
+            };
+
+            const rem = source[parser.lexer.inner.location.buffer..];
+
+            if (parser.lexer.inner.iterator.peek_cache) |cached_char| {
+                log.debug("getCst: unused character in lexer cache {}: `{u}` ({x})", .{parser.lexer.inner.location, cached_char, cached_char});
+            } else if (rem.len > 0) {
+                log.debug("getCst: unexpected input after parsing {}: `{s}` ({any})", .{parser.lexer.inner.location, rem, rem});
             }
-        };
 
-        const rem = source[parser.lexer.inner.location.buffer..];
-
-        if (parser.lexer.inner.iterator.peek_cache) |cached_char| {
-            log.err("getCst: unused character in lexer cache {}: `{u}` ({x})", .{parser.lexer.inner.location, cached_char, cached_char});
-        } else if (rem.len > 0) {
-            log.err("getCst: unexpected input after parsing {}: `{s}` ({any})", .{parser.lexer.inner.location, rem, rem});
+            return inner;
         }
-
-        return inner;
     }
 
     return try out;
@@ -184,7 +705,7 @@ pub const cst_types = gen: {
         .List = fresh.next(),
         .Apply = fresh.next(),
         .Binary = fresh.next(),
-        .Unary = fresh.next(),
+        .Prefix = fresh.next(),
         .Decl = fresh.next(),
         .Set = fresh.next(),
         .Lambda = fresh.next(),
@@ -750,7 +1271,7 @@ pub fn nuds() [10]analysis.Nud {
                     return analysis.SyntaxTree{
                         .location = token.location,
                         .precedence = bp,
-                        .type = cst_types.Unary,
+                        .type = cst_types.Prefix,
                         .token = token,
                         .operands = if (inner) |sub| mk_buf: {
                             const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 1);
@@ -785,7 +1306,7 @@ pub fn nuds() [10]analysis.Nud {
                     return analysis.SyntaxTree{
                         .location = token.location,
                         .precedence = bp,
-                        .type = cst_types.Unary,
+                        .type = cst_types.Prefix,
                         .token = token,
                         .operands = if (inner) |sub| mk_buf: {
                             const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 1);
@@ -820,7 +1341,7 @@ pub fn nuds() [10]analysis.Nud {
                     return analysis.SyntaxTree{
                         .location = token.location,
                         .precedence = bp,
-                        .type = cst_types.Unary,
+                        .type = cst_types.Prefix,
                         .token = token,
                         .operands = if (inner) |sub| mk_buf: {
                             const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 1);
@@ -1672,4 +2193,125 @@ pub fn leds() [17]analysis.Led {
             }.logical_or,
         ),
     };
+}
+
+
+test "expr_parse" {
+    try pl.snapshotTest(.use_log("expr"), struct {
+        pub fn testExpr(input: []const u8, expect: []const u8) !void {
+            _ = .{input, expect};
+            var syn = try getCst(std.testing.allocator, .{}, input) orelse {
+                log.err("Failed to parse source", .{});
+                return error.BadEncoding;
+            };
+            defer syn.deinit(std.testing.allocator);
+
+            var expr = try parseCst(std.testing.allocator, input, syn);
+            defer expr.deinit(std.testing.allocator);
+
+            log.info("input: {s}\nresult: {any}", .{ input, expr });
+
+            var buf = std.ArrayList(u8).init(std.testing.allocator);
+            defer buf.deinit();
+
+            const writer = buf.writer();
+            try writer.print("{any}", .{expr});
+
+            try std.testing.expectEqualStrings(expect, buf.items);
+        }
+    }.testExpr, &.{
+        .{ .input = "1 + 2", .expect = "1 + 2" }, // 0
+        .{ .input = "1 * 2", .expect = "1 * 2" }, // 1
+        .{ .input = "1 + 2 + 3", .expect = "1 + 2 + 3" }, // 2
+        .{ .input = "1 - 2 * 3", .expect = "1 - 2 * 3" }, // 3
+        .{ .input = "1 * 2 + 3", .expect = "1 * 2 + 3" }, // 4
+        .{ .input = "1, 2, 3", .expect = "⟨ 1, 2, 3, ⟩" }, // 5
+        .{ .input = "[1, 2, 3]", .expect = "[ 1, 2, 3, ]" }, // 6
+    });
+}
+
+test "cst_parse" {
+    try pl.snapshotTest(.use_log("cst"), struct {
+        pub fn testCst(input: []const u8, expect: []const u8) !void {
+            _ = .{ input, expect };
+            var syn = try getCst(std.testing.allocator, .{}, input) orelse {
+                log.err("Failed to parse source", .{});
+                return error.BadEncoding;
+            };
+            defer syn.deinit(std.testing.allocator);
+
+            log.info("input: {s}\nresult: {}", .{
+                input,
+                std.fmt.Formatter(struct {
+                    pub fn formatter(
+                        data: struct { input: []const u8, syn: analysis.SyntaxTree},
+                        comptime _: []const u8,
+                        _: std.fmt.FormatOptions,
+                        writer: anytype,
+                    ) !void {
+                        return dumpCstSExprs(data.input, data.syn, writer);
+                    }
+                }.formatter) { .data = .{ .input = input, .syn = syn } }
+            });
+
+            var buf = std.ArrayList(u8).init(std.testing.allocator);
+            defer buf.deinit();
+
+            const writer = buf.writer();
+
+            try dumpCstSExprs(input, syn, writer);
+
+            try std.testing.expectEqualStrings(expect, buf.items);
+        }
+    }.testCst, &.{
+        .{ .input = "\n1", .expect = "1" }, // 0
+        .{ .input = "()", .expect = "()" }, // 1
+        .{ .input = "a b", .expect = "⟨𝓪𝓹𝓹 a b⟩" }, // 2
+        .{ .input = "a b c", .expect = "⟨𝓪𝓹𝓹 a b c⟩" }, // 3
+        .{ .input = "1 * a b", .expect = "⟨* 1 ⟨𝓪𝓹𝓹 a b⟩⟩" }, // 4
+        .{ .input = "1 * (a b)", .expect = "⟨* 1 (⟨𝓪𝓹𝓹 a b⟩)⟩" }, // 5
+        .{ .input = "1 + 2", .expect = "⟨+ 1 2⟩" }, // 6
+        .{ .input = "1 * 2", .expect = "⟨* 1 2⟩" }, // 7
+        .{ .input = "1 + 2 + 3", .expect = "⟨+ ⟨+ 1 2⟩ 3⟩" }, // 8
+        .{ .input = "1 - 2 - 3", .expect = "⟨- ⟨- 1 2⟩ 3⟩" }, // 9
+        .{ .input = "1 * 2 * 3", .expect = "⟨* ⟨* 1 2⟩ 3⟩" }, // 10
+        .{ .input = "1 / 2 / 3", .expect = "⟨/ ⟨/ 1 2⟩ 3⟩" }, // 11
+        .{ .input = "1 + 2 * 3", .expect = "⟨+ 1 ⟨* 2 3⟩⟩" }, // 12
+        .{ .input = "a b := x y", .expect = "⟨𝓭𝓮𝓬𝓵 ⟨𝓪𝓹𝓹 a b⟩ ⟨𝓪𝓹𝓹 x y⟩⟩" }, // 13
+        .{ .input = "a b = x y", .expect = "⟨𝓼𝓮𝓽 ⟨𝓪𝓹𝓹 a b⟩ ⟨𝓪𝓹𝓹 x y⟩⟩" }, // 14
+        .{ .input = "x y\nz w", .expect = "⟨𝓼𝓮𝓺 ⟨𝓪𝓹𝓹 x y⟩ ⟨𝓪𝓹𝓹 z w⟩⟩" }, // 15
+        .{ .input = "x y\nz w\n", .expect = "⟨𝓼𝓮𝓺 ⟨𝓪𝓹𝓹 x y⟩ ⟨𝓪𝓹𝓹 z w⟩⟩" }, // 16
+        .{ .input = "a b\nc d\ne f\n", .expect = "⟨𝓼𝓮𝓺 ⟨𝓪𝓹𝓹 a b⟩ ⟨𝓪𝓹𝓹 c d⟩ ⟨𝓪𝓹𝓹 e f⟩⟩" }, // 17
+        .{ .input = "1\n2\n3\n4\n", .expect = "⟨𝓼𝓮𝓺 1 2 3 4⟩" }, // 18
+        .{ .input = "1;2;3;4;", .expect = "⟨𝓼𝓮𝓺 1 2 3 4⟩" }, // 19
+        .{ .input = "1 *\n  2 + 3\n", .expect = "⟨* 1 ⌊⟨+ 2 3⟩⌋⟩" }, // 20
+        .{ .input = "1 *\n  2 + 3\n4", .expect = "⟨𝓼𝓮𝓺 ⟨* 1 ⌊⟨+ 2 3⟩⌋⟩ 4⟩" }, // 21
+        .{ .input = "foo(1) * 3 * 2 +\n  1 * 2\nalert \"hello world\" + 2\ntest 2 3\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 22
+        .{ .input = "foo(1) * 3 * 2 + (1 * 2); alert \"hello world\" + 2; test 2 3;", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 23
+        .{ .input = "foo(1) * 3 * 2 + (1 * 2);\nalert \"hello world\" + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 24
+        .{ .input = "\n\n \nfoo(1) * 3 * 2 +\n  1 * 2;\nalert \"hello\nworld\" + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello\nworld\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 25
+        .{ .input = "incr := fun x.\n  y := x + 1\n  y = y * 2\n  3 / y\n", .expect = "⟨𝓭𝓮𝓬𝓵 incr ⟨λ x ⌊⟨𝓼𝓮𝓺 ⟨𝓭𝓮𝓬𝓵 y ⟨+ x 1⟩⟩ ⟨𝓼𝓮𝓽 y ⟨* y 2⟩⟩ ⟨/ 3 y⟩⟩⌋⟩⟩" }, // 26
+        .{ .input = "fun x y z. x * y * z", .expect = "⟨λ ⟨𝓪𝓹𝓹 x y z⟩ ⟨* ⟨* x y⟩ z⟩⟩" }, // 27
+        .{ .input = "x, y, z", .expect = "⟨𝓵𝓲𝓼𝓽 x y z⟩" }, // 28
+        .{ .input = "fun x, y, z. x, y, z", .expect = "⟨λ ⟨𝓵𝓲𝓼𝓽 x y z⟩ ⟨𝓵𝓲𝓼𝓽 x y z⟩⟩" }, // 29
+        .{ .input = "fun x (y, z). Set [\n  x,\n  y,\n  z\n]", .expect = "⟨λ ⟨𝓪𝓹𝓹 x (⟨𝓵𝓲𝓼𝓽 y z⟩)⟩ ⟨𝓪𝓹𝓹 Set [⌊⟨𝓵𝓲𝓼𝓽 x y z⟩⌋]⟩⟩" }, // 30
+        .{ .input = "fun x (y, z). Set\n  [ x\n  , y\n  , z\n  ]", .expect = "⟨λ ⟨𝓪𝓹𝓹 x (⟨𝓵𝓲𝓼𝓽 y z⟩)⟩ ⟨𝓪𝓹𝓹 Set ⌊[⟨𝓵𝓲𝓼𝓽 x y z⟩]⌋⟩⟩" }, // 31
+        .{ .input = "x := y := z", .expect = error.UnexpectedInput }, // 32
+        .{ .input = "x = y = z", .expect = error.UnexpectedInput }, // 33
+        .{ .input = "x = y := z", .expect = error.UnexpectedInput }, // 34
+        .{ .input = "x := y = z", .expect = error.UnexpectedInput }, // 35
+        .{ .input = "x == y != z", .expect = error.UnexpectedInput }, // 36
+        .{ .input = "not x and y", .expect = "⟨and ⟨not x⟩ y⟩" }, // 37
+        .{ .input = "f x and - y == not w or z + 1", .expect = "⟨== ⟨and ⟨𝓪𝓹𝓹 f x⟩ ⟨- y⟩⟩ ⟨or ⟨not w⟩ ⟨+ z 1⟩⟩⟩" }, // 38
+        .{ .input = "x-x", .expect = "x-x" }, // 39
+        .{ .input = "- x", .expect = "⟨- x⟩" }, // 40
+        .{ .input = "+ x - y", .expect = "⟨- ⟨+ x⟩ y⟩" }, // 41
+        .{ .input = "'h'", .expect = "'h'" }, // 42
+        .{ .input = "'\\r'", .expect = "'\r'" }, // 43
+        .{ .input = "'\\n'", .expect = "'\n'" }, // 44
+        .{ .input = "'\\0'", .expect = "'\x00'" }, // 45
+        .{ .input = "'x", .expect = "'x" }, // 46
+        .{ .input = "'\\0", .expect = error.UnexpectedInput }, // 47
+        .{ .input = "'x + 'y", .expect = "⟨+ 'x 'y⟩"}, // 48
+    });
 }

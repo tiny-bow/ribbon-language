@@ -3,137 +3,15 @@ const driver = @This();
 const std = @import("std");
 
 const ribbon = @import("ribbon_language");
+const pl = @import("platform");
 
 const log = std.log.scoped(.main);
 
 pub const std_options = std.Options{
-    .log_level = if (tests.len > 1) .info else .debug,
-};
-
-const tests: []const struct {input: []const u8, expect: anyerror![]const u8} = &.{
-    .{ .input = "\n1", .expect = "1" }, // 0
-    .{ .input = "()", .expect = "()" }, // 1
-    .{ .input = "a b", .expect = "⟨𝓪𝓹𝓹 a b⟩" }, // 2
-    .{ .input = "a b c", .expect = "⟨𝓪𝓹𝓹 a b c⟩" }, // 3
-    .{ .input = "1 * a b", .expect = "⟨* 1 ⟨𝓪𝓹𝓹 a b⟩⟩" }, // 4
-    .{ .input = "1 * (a b)", .expect = "⟨* 1 (⟨𝓪𝓹𝓹 a b⟩)⟩" }, // 5
-    .{ .input = "1 + 2", .expect = "⟨+ 1 2⟩" }, // 6
-    .{ .input = "1 * 2", .expect = "⟨* 1 2⟩" }, // 7
-    .{ .input = "1 + 2 + 3", .expect = "⟨+ ⟨+ 1 2⟩ 3⟩" }, // 8
-    .{ .input = "1 - 2 - 3", .expect = "⟨- ⟨- 1 2⟩ 3⟩" }, // 9
-    .{ .input = "1 * 2 * 3", .expect = "⟨* ⟨* 1 2⟩ 3⟩" }, // 10
-    .{ .input = "1 / 2 / 3", .expect = "⟨/ ⟨/ 1 2⟩ 3⟩" }, // 11
-    .{ .input = "1 + 2 * 3", .expect = "⟨+ 1 ⟨* 2 3⟩⟩" }, // 12
-    .{ .input = "a b := x y", .expect = "⟨𝓭𝓮𝓬𝓵 ⟨𝓪𝓹𝓹 a b⟩ ⟨𝓪𝓹𝓹 x y⟩⟩" }, // 13
-    .{ .input = "a b = x y", .expect = "⟨𝓼𝓮𝓽 ⟨𝓪𝓹𝓹 a b⟩ ⟨𝓪𝓹𝓹 x y⟩⟩" }, // 14
-    .{ .input = "x y\nz w", .expect = "⟨𝓼𝓮𝓺 ⟨𝓪𝓹𝓹 x y⟩ ⟨𝓪𝓹𝓹 z w⟩⟩" }, // 15
-    .{ .input = "x y\nz w\n", .expect = "⟨𝓼𝓮𝓺 ⟨𝓪𝓹𝓹 x y⟩ ⟨𝓪𝓹𝓹 z w⟩⟩" }, // 16
-    .{ .input = "a b\nc d\ne f\n", .expect = "⟨𝓼𝓮𝓺 ⟨𝓪𝓹𝓹 a b⟩ ⟨𝓪𝓹𝓹 c d⟩ ⟨𝓪𝓹𝓹 e f⟩⟩" }, // 17
-    .{ .input = "1\n2\n3\n4\n", .expect = "⟨𝓼𝓮𝓺 1 2 3 4⟩" }, // 18
-    .{ .input = "1;2;3;4;", .expect = "⟨𝓼𝓮𝓺 1 2 3 4⟩" }, // 19
-    .{ .input = "1 *\n  2 + 3\n", .expect = "⟨* 1 ⌊⟨+ 2 3⟩⌋⟩" }, // 20
-    .{ .input = "1 *\n  2 + 3\n4", .expect = "⟨𝓼𝓮𝓺 ⟨* 1 ⌊⟨+ 2 3⟩⌋⟩ 4⟩" }, // 21
-    .{ .input = "foo(1) * 3 * 2 +\n  1 * 2\nalert \"hello world\" + 2\ntest 2 3\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 22
-    .{ .input = "foo(1) * 3 * 2 + (1 * 2); alert \"hello world\" + 2; test 2 3;", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 23
-    .{ .input = "foo(1) * 3 * 2 + (1 * 2);\nalert \"hello world\" + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 24
-    .{ .input = "\n\n \nfoo(1) * 3 * 2 +\n  1 * 2;\nalert \"hello\nworld\" + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello\nworld\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 25
-    .{ .input = "incr := fun x.\n  y := x + 1\n  y = y * 2\n  3 / y\n", .expect = "⟨𝓭𝓮𝓬𝓵 incr ⟨λ x ⌊⟨𝓼𝓮𝓺 ⟨𝓭𝓮𝓬𝓵 y ⟨+ x 1⟩⟩ ⟨𝓼𝓮𝓽 y ⟨* y 2⟩⟩ ⟨/ 3 y⟩⟩⌋⟩⟩" }, // 26
-    .{ .input = "fun x y z. x * y * z", .expect = "⟨λ ⟨𝓪𝓹𝓹 x y z⟩ ⟨* ⟨* x y⟩ z⟩⟩" }, // 27
-    .{ .input = "x, y, z", .expect = "⟨𝓵𝓲𝓼𝓽 x y z⟩" }, // 28
-    .{ .input = "fun x, y, z. x, y, z", .expect = "⟨λ ⟨𝓵𝓲𝓼𝓽 x y z⟩ ⟨𝓵𝓲𝓼𝓽 x y z⟩⟩" }, // 29
-    .{ .input = "fun x (y, z). Set [\n  x,\n  y,\n  z\n]", .expect = "⟨λ ⟨𝓪𝓹𝓹 x (⟨𝓵𝓲𝓼𝓽 y z⟩)⟩ ⟨𝓪𝓹𝓹 Set [⌊⟨𝓵𝓲𝓼𝓽 x y z⟩⌋]⟩⟩" }, // 30
-    .{ .input = "fun x (y, z). Set\n  [ x\n  , y\n  , z\n  ]", .expect = "⟨λ ⟨𝓪𝓹𝓹 x (⟨𝓵𝓲𝓼𝓽 y z⟩)⟩ ⟨𝓪𝓹𝓹 Set ⌊[⟨𝓵𝓲𝓼𝓽 x y z⟩]⌋⟩⟩" }, // 31
-    .{ .input = "x := y := z", .expect = error.UnexpectedInput }, // 32
-    .{ .input = "x = y = z", .expect = error.UnexpectedInput }, // 33
-    .{ .input = "x = y := z", .expect = error.UnexpectedInput }, // 34
-    .{ .input = "x := y = z", .expect = error.UnexpectedInput }, // 35
-    .{ .input = "x == y != z", .expect = error.UnexpectedInput }, // 36
-    .{ .input = "not x and y", .expect = "⟨and ⟨not x⟩ y⟩" }, // 37
-    .{ .input = "f x and - y == not w or z + 1", .expect = "⟨== ⟨and ⟨𝓪𝓹𝓹 f x⟩ ⟨- y⟩⟩ ⟨or ⟨not w⟩ ⟨+ z 1⟩⟩⟩" }, // 38
-    .{ .input = "x-x", .expect = "x-x" }, // 39
-    .{ .input = "- x", .expect = "⟨- x⟩" }, // 40
-    .{ .input = "+ x - y", .expect = "⟨- ⟨+ x⟩ y⟩" }, // 41
-    .{ .input = "'h'", .expect = "'h'" }, // 42
-    .{ .input = "'\\r'", .expect = "'\r'" }, // 43
-    .{ .input = "'\\n'", .expect = "'\n'" }, // 44
-    .{ .input = "'\\0'", .expect = "'\x00'" }, // 45
-    .{ .input = "'x", .expect = "'x" }, // 46
-    .{ .input = "'\\0", .expect = error.UnexpectedInput }, // 47
-    .{ .input = "'x + 'y", .expect = "⟨+ 'x 'y⟩"}, // 48
+    .log_level = .warn,
 };
 
 pub fn main() !void {
-    var failures = std.ArrayList(usize).init(std.heap.page_allocator);
-    defer failures.deinit();
-
-    testing: for (tests, 0..) |t, i| {
-        log.info("test {}/{}", .{i, tests.len});
-        const input = t.input;
-
-        if (t.expect) |expect_str| {
-            tryTest(input, expect_str) catch |err| {
-                log.err("input {s} failed: {}", .{input, err});
-                failures.append(i) catch unreachable;
-                continue :testing;
-            };
-
-            log.info("input {s} succeeded: {s}", .{input, expect_str});
-        } else |expect_err| {
-            std.debug.assert(expect_err != error.TestFailure);
-
-            const maybe_err = tryTest(input, "");
-            if (maybe_err) |unexpectedly_okay| {
-                log.err("input {s} succeeded: {}; but expected {}", .{input, unexpectedly_okay, expect_err});
-                failures.append(i) catch unreachable;
-            } else |err| {
-                if (err == error.TestFailure or err == error.TestExpectedEqual) {
-                    log.err("input {s} succeeded, but the output was wrong; expected {}", .{input, expect_err});
-                    failures.append(i) catch unreachable;
-                } else if (expect_err != err) {
-                    log.err("input {s} failed: {}; but expected {}", .{input, err, expect_err});
-                    failures.append(i) catch unreachable;
-                } else {
-                    log.info("input {s} failed as expected", .{input});
-                }
-            }
-        }
-    }
-
-    if (failures.items.len > 0) {
-        log.err("Failed {}/{} tests: {any}", .{failures.items.len, tests.len, failures.items});
-        return error.TestFailed;
-    } else {
-        log.info("All tests passed", .{});
-    }
+    log.warn("todo: REPL", .{});
 }
 
-fn tryTest(input: []const u8, expect: []const u8) !void {
-    var syn = try ribbon.meta_language.getCst(std.heap.page_allocator, .{}, input) orelse {
-        log.err("Failed to parse source", .{});
-        return error.BadEncoding;
-    };
-    defer syn.deinit(std.heap.page_allocator);
-
-    log.info("input: {s}\nresult: {}", .{
-        input,
-        std.fmt.Formatter(struct {
-            pub fn formatter(
-                data: struct { input: []const u8, syn: ribbon.analysis.SyntaxTree},
-                comptime _: []const u8,
-                _: std.fmt.FormatOptions,
-                writer: anytype,
-            ) !void {
-                return ribbon.meta_language.dumpCstSExprs(data.input, data.syn, writer);
-            }
-        }.formatter) { .data = .{ .input = input, .syn = syn } }
-    });
-
-    var buf = std.ArrayList(u8).init(std.heap.page_allocator);
-    defer buf.deinit();
-
-    const writer = buf.writer();
-
-    try ribbon.meta_language.dumpCstSExprs(input, syn, writer);
-
-    try std.testing.expectEqualStrings(expect, buf.items);
-}
