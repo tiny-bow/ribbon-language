@@ -33,10 +33,10 @@ const tests: []const struct {input: []const u8, expect: anyerror![]const u8} = &
     .{ .input = "1;2;3;4;", .expect = "⟨𝓼𝓮𝓺 1 2 3 4⟩" }, // 19
     .{ .input = "1 *\n  2 + 3\n", .expect = "⟨* 1 ⌊⟨+ 2 3⟩⌋⟩" }, // 20
     .{ .input = "1 *\n  2 + 3\n4", .expect = "⟨𝓼𝓮𝓺 ⟨* 1 ⌊⟨+ 2 3⟩⌋⟩ 4⟩" }, // 21
-    .{ .input = "foo(1) * 3 * 2 +\n  1 * 2\nalert 'hello world' + 2\ntest 2 3\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨+ ⟨𝓪𝓹𝓹 alert 'hello world'⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 22
-    .{ .input = "foo(1) * 3 * 2 + (1 * 2); alert 'hello world' + 2; test 2 3;", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert 'hello world'⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 23
-    .{ .input = "foo(1) * 3 * 2 + (1 * 2);\nalert 'hello world' + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert 'hello world'⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 24
-    .{ .input = "\n\n \nfoo(1) * 3 * 2 +\n  1 * 2;\nalert 'hello\nworld' + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨+ ⟨𝓪𝓹𝓹 alert 'hello\nworld'⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 25
+    .{ .input = "foo(1) * 3 * 2 +\n  1 * 2\nalert \"hello world\" + 2\ntest 2 3\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 22
+    .{ .input = "foo(1) * 3 * 2 + (1 * 2); alert \"hello world\" + 2; test 2 3;", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 23
+    .{ .input = "foo(1) * 3 * 2 + (1 * 2);\nalert \"hello world\" + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 24
+    .{ .input = "\n\n \nfoo(1) * 3 * 2 +\n  1 * 2;\nalert \"hello\nworld\" + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello\nworld\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 25
     .{ .input = "incr := fun x.\n  y := x + 1\n  y = y * 2\n  3 / y\n", .expect = "⟨𝓭𝓮𝓬𝓵 incr ⟨λ x ⌊⟨𝓼𝓮𝓺 ⟨𝓭𝓮𝓬𝓵 y ⟨+ x 1⟩⟩ ⟨𝓼𝓮𝓽 y ⟨* y 2⟩⟩ ⟨/ 3 y⟩⟩⌋⟩⟩" }, // 26
     .{ .input = "fun x y z. x * y * z", .expect = "⟨λ ⟨𝓪𝓹𝓹 x y z⟩ ⟨* ⟨* x y⟩ z⟩⟩" }, // 27
     .{ .input = "x, y, z", .expect = "⟨𝓵𝓲𝓼𝓽 x y z⟩" }, // 28
@@ -50,10 +50,16 @@ const tests: []const struct {input: []const u8, expect: anyerror![]const u8} = &
     .{ .input = "x == y != z", .expect = error.UnexpectedInput }, // 36
     .{ .input = "not x and y", .expect = "⟨and ⟨not x⟩ y⟩" }, // 37
     .{ .input = "f x and - y == not w or z + 1", .expect = "⟨== ⟨and ⟨𝓪𝓹𝓹 f x⟩ ⟨- y⟩⟩ ⟨or ⟨not w⟩ ⟨+ z 1⟩⟩⟩" }, // 38
-    // TODO: would be nice to not have to use space/paren here; but kebab case is cool too? idk
-    .{ .input = "-x", .expect = error.UnexpectedInput }, // 39
+    .{ .input = "x-x", .expect = "x-x" }, // 39
     .{ .input = "- x", .expect = "⟨- x⟩" }, // 40
     .{ .input = "+ x - y", .expect = "⟨- ⟨+ x⟩ y⟩" }, // 41
+    .{ .input = "'h'", .expect = "'h'" }, // 42
+    .{ .input = "'\\r'", .expect = "'\r'" }, // 43
+    .{ .input = "'\\n'", .expect = "'\n'" }, // 44
+    .{ .input = "'\\0'", .expect = "'\x00'" }, // 45
+    .{ .input = "'x", .expect = "'x" }, // 46
+    .{ .input = "'\\0", .expect = error.UnexpectedInput }, // 47
+    .{ .input = "'x + 'y", .expect = "⟨+ 'x 'y⟩"}, // 48
 };
 
 pub fn main() !void {

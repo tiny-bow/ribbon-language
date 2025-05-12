@@ -85,7 +85,7 @@ pub fn PatternModifier(comptime P: type) type {
         }
 
         fn processCallback(self: *const Self, q: Q, comptime callback: fn (P, Q) bool) bool {
-            log.debug("processing {} with {}", .{q, self});
+            // log.debug("processing {} with {}", .{q, self});
             switch (self.*) {
                 .none => return false,
                 .any => return true,
@@ -172,7 +172,7 @@ pub fn PatternModifier(comptime P: type) type {
                 },
             }.callback);
 
-            log.debug("process result: {s}", .{if (result) "accept" else "reject"});
+            // log.debug("process result: {s}", .{if (result) "accept" else "reject"});
 
             return result;
         }
@@ -282,12 +282,12 @@ pub fn PatternSet(comptime T: type) type {
 
             for (patterns, 0..) |*pattern, index| {
                 if (bps[index] < binding_power) {
-                    log.debug("rejecting pattern {s} of lesser binding power ({}) than current ({})", .{names[index], bps[index], binding_power});
+                    // log.debug("rejecting pattern {s} of lesser binding power ({}) than current ({})", .{names[index], bps[index], binding_power});
                     continue;
                 }
 
                 if (!pattern.process(token)) {
-                    log.debug("pattern {s} rejected token {}", .{names[index], token});
+                    // log.debug("pattern {s} rejected token {}", .{names[index], token});
                     continue;
                 }
 

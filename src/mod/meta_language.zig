@@ -39,6 +39,21 @@ pub fn dumpCstSExprs(source: []const u8, cst: analysis.SyntaxTree, writer: anyty
         cst_types.Set => try writer.writeAll("⟨𝓼𝓮𝓽"),
         cst_types.List => try writer.writeAll("⟨𝓵𝓲𝓼𝓽"),
         cst_types.Lambda => try writer.writeAll("⟨λ"),
+        cst_types.Symbol => {
+            try writer.writeAll("'");
+            switch (cst.token.tag) {
+                .special => {
+                    if (cst.token.data.special.escaped) {
+                        try writer.print("\\{u}", .{cst.token.data.special.punctuation.toChar()});
+                    } else {
+                        try writer.print("{u}", .{cst.token.data.special.punctuation.toChar()});
+                    }
+                },
+                .sequence => try writer.print("{s}", .{cst.token.data.sequence.asSlice()}),
+                else => unreachable,
+            }
+            return;
+        },
         else => {
             switch (cst.token.tag) {
                 .sequence => {
@@ -120,11 +135,14 @@ pub fn getCst(
 ) analysis.SyntaxError!?analysis.SyntaxTree {
     var parser = try getParser(allocator, lexer_settings, source, .{ .ignore_space = false });
 
-    const out = try parser.pratt(std.math.minInt(i16));
+    const out = parser.pratt(std.math.minInt(i16));
 
-    log.debug("getCst: parser result: {?}", .{out});
+    log.debug("getCst: parser result: {!?}", .{out});
 
-    if (!parser.isEof()) {
+
+    if (std.meta.isError(out) or (try out) == null or !parser.isEof()) {
+        log.debug("getCst: parser result was null or error, or did not consume input {} {} {}", .{ std.meta.isError(out), if (!std.meta.isError(out)) (try out) == null else false, !parser.isEof() });
+
         const inner = inner: {
             if (parser.lexer.peek()) |maybe_cached_token| {
                 if (maybe_cached_token) |cached_token| {
@@ -148,7 +166,7 @@ pub fn getCst(
         return inner;
     }
 
-    return out.?;
+    return try out;
 }
 
 /// rml concrete syntax tree types.
@@ -170,6 +188,7 @@ pub const cst_types = gen: {
         .Decl = fresh.next(),
         .Set = fresh.next(),
         .Lambda = fresh.next(),
+        .Symbol = fresh.next(),
     };
 };
 
@@ -228,7 +247,7 @@ pub fn assembleString(writer: anytype, source: []const u8, string: analysis.Synt
 }
 
 /// creates rml prefix/atomic parser defs.
-pub fn nuds() [9]analysis.Nud {
+pub fn nuds() [10]analysis.Nud {
     return .{
         analysis.createNud(
             "builtin_function",
@@ -417,9 +436,196 @@ pub fn nuds() [9]analysis.Nud {
             }.block,
         ),
         analysis.createNud(
+            "builtin_single_quote",
+            std.math.maxInt(i16),
+            .{ .standard = .{ .special = .{ .standard = .{ .escaped = .{ .standard = false }, .punctuation = .{ .standard = .single_quote } } } } },
+            null, struct {
+                pub fn quote(
+                    parser: *analysis.Parser,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.SyntaxError!?analysis.SyntaxTree {
+                    log.debug("single_quote: parsing token {}", .{token});
+
+                    try parser.lexer.advance(); // discard beginning quote
+
+                    const content = try parser.lexer.next() orelse {
+                        log.debug("single_quote: no content found; panic", .{});
+                        return error.UnexpectedInput;
+                    };
+
+                    log.debug("single_quote: found content token {}", .{content});
+
+                    var require_literal = false;
+                    var consume_next = false;
+
+                    var require_symbol = false;
+
+                    switch (content.tag) {
+                        .special => {
+                            if (content.data.special.escaped) {
+                                log.debug("single_quote: found escaped token {}", .{content});
+                                require_literal = true;
+                            } else {
+                                log.debug("single_quote: found punctuation, unescaped {}", .{content});
+
+                                if (content.data.special.punctuation == .backslash) {
+                                    log.debug("single_quote: found unescaped backslash token; expect escape sequence char literal", .{});
+                                    consume_next = true;
+                                    require_literal = true;
+                                } else if (content.data.special.punctuation == .single_quote) {
+                                    log.debug("single_quote: found end quote token {}", .{content});
+
+                                    const is_space = content.location.buffer > token.location.buffer + 1;
+                                    if (!is_space) {
+                                        log.debug("token {} not expected with no space between proceeding token; panic", .{content});
+                                        return error.UnexpectedInput;
+                                    }
+
+                                    log.debug("single_quote: found end quote token {} with space between proceeding token", .{content});
+
+                                    require_literal = true;
+                                }
+                            }
+                        },
+                        .sequence => {
+                            if (content.data.sequence.len > 1) {
+                                log.debug("single_quote: content is seq > 1, must be a symbol", .{});
+                                require_symbol = true;
+                            }
+                        },
+                        else => {
+                            log.debug("single_quote: found unexpected token {}; panic", .{content});
+                            return error.UnexpectedInput;
+                        },
+                    }
+
+                    if (require_literal) {
+                        log.debug("single_quote: require literal - content token {}", .{content});
+
+                        const secondary = if (consume_next) consume: {
+                            log.debug("single_quote: required to consume next token", .{});
+
+                            break :consume try parser.lexer.next() orelse {
+                                log.debug("single_quote: no secondary token found; panic", .{});
+                                return error.UnexpectedInput;
+                            };
+                        } else null;
+
+                        const end_quote = try parser.lexer.next() orelse {
+                            log.debug("single_quote: no end quote found; panic", .{});
+                            return error.UnexpectedInput;
+                        };
+
+                        if (end_quote.tag != .special
+                        or  end_quote.data.special.escaped != false
+                        or  end_quote.data.special.punctuation != .single_quote) {
+                            log.debug("single_quote: expected single quote to end literal, found {}; panic", .{end_quote});
+                            return error.UnexpectedInput;
+                        }
+
+                        const buff = try parser.allocator.alloc(analysis.SyntaxTree, if (consume_next) 3 else 2);
+
+                        buff[0] = .{
+                            .location = content.location,
+                            .precedence = std.math.maxInt(i16),
+                            .type = cst_types.StringElement,
+                            .token = content,
+                            .operands = .empty,
+                        };
+                        var i: usize = 1;
+                        if (secondary) |s| {
+                            buff[i] = .{
+                                .location = s.location,
+                                .precedence = std.math.maxInt(i16),
+                                .type = cst_types.StringElement,
+                                .token = s,
+                                .operands = .empty,
+                            };
+                            i += 1;
+                        }
+                        buff[i] = .{
+                            .location = end_quote.location,
+                            .precedence = std.math.maxInt(i16),
+                            .type = cst_types.StringSentinel,
+                            .token = end_quote,
+                            .operands = .empty,
+                        };
+
+                        return analysis.SyntaxTree{
+                            .location = token.location,
+                            .precedence = bp,
+                            .type = cst_types.String,
+                            .token = token,
+                            .operands = common.Id.Buffer(analysis.SyntaxTree, .constant).fromSlice(buff),
+                        };
+                    } else if (require_symbol) {
+                        log.debug("single_quote: require symbol token {}", .{content});
+
+                        return analysis.SyntaxTree{
+                            .location = token.location,
+                            .precedence = bp,
+                            .type = cst_types.Symbol,
+                            .token = content,
+                            .operands = .empty,
+                        };
+                    }
+
+                    log.debug("single_quote: not explicitly a literal or symbol, checking for end quote", .{});
+
+                    if (try parser.lexer.peek()) |end_tok| {
+                        if (end_tok.tag == .special
+                        and end_tok.data.special.escaped == false
+                        and end_tok.data.special.punctuation == .single_quote) {
+                            log.debug("single_quote: found end of quote token {}", .{end_tok});
+
+                            try parser.lexer.advance(); // discard end quote
+
+                            const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                            buff[0] = .{
+                                .location = content.location,
+                                .precedence = std.math.maxInt(i16),
+                                .type = cst_types.StringElement,
+                                .token = content,
+                                .operands = .empty,
+                            };
+
+                            buff[1] = .{
+                                .location = end_tok.location,
+                                .precedence = std.math.maxInt(i16),
+                                .type = cst_types.StringSentinel,
+                                .token = end_tok,
+                                .operands = .empty,
+                            };
+
+                            return analysis.SyntaxTree{
+                                .location = token.location,
+                                .precedence = bp,
+                                .type = cst_types.String,
+                                .token = token,
+                                .operands = .fromSlice(buff),
+                            };
+                        } else {
+                            log.debug("single_quote: found unexpected token {}; not a char literal", .{end_tok});
+                        }
+                    } else {
+                        log.debug("single_quote: no end quote token found; not a char literal", .{});
+                    }
+
+                    return analysis.SyntaxTree{
+                        .location = token.location,
+                        .precedence = bp,
+                        .type = cst_types.Symbol,
+                        .token = content,
+                        .operands = .empty,
+                    };
+                }
+            }.quote,
+        ),
+        analysis.createNud(
             "builtin_string",
             std.math.maxInt(i16),
-            .{ .standard = .{ .special = .{ .standard = .{ .escaped = .{ .standard = false }, .punctuation = .{ .any_of = &.{.double_quote, .single_quote} } } } } },
+            .{ .standard = .{ .special = .{ .standard = .{ .escaped = .{ .standard = false }, .punctuation = .{ .standard = .double_quote } } } } },
             null, struct {
                 pub fn string(
                     parser: *analysis.Parser,
@@ -498,7 +704,7 @@ pub fn nuds() [9]analysis.Nud {
                             .token = token,
                             .operands = .empty,
                         };
-                    } else if (utils.text.isAlphanumericStr(s)) {
+                    } else {
                         log.debug("leaf: found identifier {s}", .{s});
 
                         const applicable_nuds = try parser.syntax.findNuds(std.math.minInt(i16), &token);
@@ -517,9 +723,6 @@ pub fn nuds() [9]analysis.Nud {
                             .token = token,
                             .operands = .empty,
                         };
-                    } else {
-                        log.debug("leaf: found unknown token", .{});
-                        return null;
                     }
                 }
             }.leaf,
@@ -606,7 +809,7 @@ pub fn nuds() [9]analysis.Nud {
                 ) analysis.SyntaxError!?analysis.SyntaxTree {
                     log.debug("unary_plus: parsing token {}", .{token});
 
-                    try parser.lexer.advance(); // discard -
+                    try parser.lexer.advance(); // discard +
 
                     var inner = try parser.pratt(bp) orelse none: {
                         log.debug("unary_plus: no inner expression found", .{});
