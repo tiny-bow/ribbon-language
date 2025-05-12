@@ -30,6 +30,14 @@ pub fn build(b: *std.Build) !void {
     const Buffer_mod = platform_dep.module("Buffer");
     const Stack_mod = platform_dep.module("Stack");
 
+    const repl_dep = b.dependency("repl", .{
+        .target = target,
+        .optimize = optimize,
+        .builtin_platform = false,
+    });
+
+    const repl_mod = repl_dep.module("repl");
+    repl_mod.addImport("utils", utils_mod);
 
     // create all modules //
 
@@ -249,6 +257,7 @@ pub fn build(b: *std.Build) !void {
     main_mod.addImport("platform", platform_mod);
     main_mod.addImport("common", common_mod);
     main_mod.addImport("utils", utils_mod);
+    main_mod.addImport("repl", repl_mod);
 
 
     analysis_mod.addImport("platform", platform_mod);

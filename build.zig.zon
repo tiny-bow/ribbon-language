@@ -10,6 +10,9 @@
         .platform = .{
             .path = "../ribbon-platform",
         },
+        .repl = .{
+            .path = "../repl",
+        },
         .nasm = .{
             .url = "git+https://github.com/allyourcodebase/nasm#c153aec97cfe50a4600d9cf3d5f703d58f9ccd56",
             .hash = "nasm-2.16.1-4-J30EdyVnXADate9iz7jWR4Q9tL1jU9S2Lw7PGgfOjP0v",
