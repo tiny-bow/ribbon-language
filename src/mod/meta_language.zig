@@ -21,28 +21,56 @@ var syntax_mutex = std.Thread.Mutex{};
 var syntax: ?analysis.Syntax = null;
 
 
+/// A meta-language expression.
+/// This is a tree structure, where each node is an expression.
 pub const Expr = struct {
+    /// The source location of the expression.
     source: analysis.SourceLocation,
+    /// The attributes of the expression.
+    /// These are used to store metadata about the expression.
     attributes: pl.StringMap(Expr) = .empty,
+    /// The data of the expression.
     data: Expr.Data,
 
+    /// The variant of expression carried by an `Expr`.
+    /// This is a union of all possible expression types.
+    /// Not all syntactic combinations are semantically valid.
     pub const Data = union(enum) {
+        /// 64-bit signed integer literal.
         int: i64,
+        /// Character literal.
         char: pl.Char,
+        /// String literal.
         string: []const u8,
+        /// Variable reference.
         identifier: []const u8,
-        symbol: Symbol,
+        /// Symbol literal.
+        /// This is a special token that is simply a name, but is not a variable reference.
+        /// It is used as a kind of global enum.
+        symbol: Expr.Symbol,
+        /// Sequenced expressions; statement list.
         seq: []Expr,
+        /// Comma-separated expressions; abstract list.
         list: []Expr,
+        /// Product constructor compound literal.
         tuple: []Expr,
+        /// Array constructor compound literal.
         array: []Expr,
+        /// Object constructor compound literal.
         compound: []Expr,
+        /// Function application.
         apply: []Expr,
+        /// Operator application.
         operator: Expr.Operator,
+        /// Declaration.
         decl: []Expr,
+        /// Assignment.
         set: []Expr,
+        /// Function abstraction.
         lambda: []Expr,
 
+        /// Determines if the expression *potentially* requires parentheses,
+        /// depending on the precedence of its possible-parent.
         pub fn mayRequireParens(self: *const Data) bool {
             switch (self.*) {
                 .int => return false,
@@ -63,6 +91,7 @@ pub const Expr = struct {
             }
         }
 
+        /// Deinitializes the expression and its sub-expressions, freeing any allocated memory.
         pub fn deinit(self: *Data, allocator: std.mem.Allocator) void {
             switch (self.*) {
                 .int => {},
@@ -124,6 +153,7 @@ pub const Expr = struct {
         }
     };
 
+    /// Data for a symbol literal.
     pub const Symbol = union(enum) {
         punctuation: analysis.Punctuation,
         sequence: []const u8,
@@ -141,6 +171,7 @@ pub const Expr = struct {
         }
     };
 
+    /// Data for an operator application.
     pub const Operator = struct {
         position: enum { prefix, infix, postfix },
         precedence: i16,
@@ -193,7 +224,7 @@ pub const Expr = struct {
         }
     };
 
-
+    /// Deinitializes the expression and its sub-expressions, freeing any allocated memory.
     pub fn deinit(self: *Expr, allocator: std.mem.Allocator) void {
         var it = self.attributes.iterator();
         while (it.next()) |entry| {
@@ -205,6 +236,7 @@ pub const Expr = struct {
         self.data.deinit(allocator);
     }
 
+    /// Returns the precedence of the expression.
     pub fn precedence(self: *const Expr) i16 {
         switch (self.data) {
             .operator => return self.data.operator.precedence,
@@ -215,6 +247,9 @@ pub const Expr = struct {
         }
     }
 
+    /// Writes a source-text representation of the expression to the given writer.
+    /// * This is *not* the same as the original text parsed to produce this expression;
+    ///   it is a canonical representation of the expression.
     pub fn display(self: *const Expr, bp: i16, writer: anytype) !void {
         const need_parens = self.data.mayRequireParens() and self.precedence() < bp;
 
@@ -282,6 +317,7 @@ pub const Expr = struct {
         if (need_parens) try writer.writeByte(')');
     }
 
+    /// `std.fmt` impl
     pub fn format(
         self: *const Expr,
         comptime _: []const u8,
@@ -802,21 +838,28 @@ pub const cst_types = gen: {
 // comptime {
 //     for (std.meta.fieldNames(@TypeOf(cst_types))) |name| {
 //         const value = @field(cst_types, name);
-
 //         @compileLog(name, value);
 //     }
 // }
 
+/// Assembles an rml concrete syntax tree string literal into a buffer.
+/// * This requires the start and end components of the provided syntax tree to be from the same source buffer;
+///   other contents are ignored, and the string is assembled from the intermediate source text.
 pub fn assembleString(writer: anytype, source: []const u8, string: analysis.SyntaxTree) !void {
     std.debug.assert(string.type == cst_types.String);
 
     const subexprs = string.operands.asSlice();
-    // log.debug("assembling string from subexprs: {any}", .{subexprs});
+
+    if (!std.mem.eql(u8, subexprs[0].source.name, subexprs[subexprs.len - 1].source.name)) {
+        log.err("assembleString: input string tree has mismatched source origins, {} and {}", .{
+            subexprs[0],
+            subexprs[subexprs.len - 1],
+        });
+        return error.InvalidString;
+    }
 
     const start_loc = subexprs[0].source.location;
     const end_loc = subexprs[subexprs.len - 1].source.location;
-
-    // log.debug("string subsection: {} -> {}", .{start_loc, end_loc});
 
     if (start_loc.buffer > end_loc.buffer or end_loc.buffer > source.len) {
         log.err("assembleString: invalid string {} -> {}", .{start_loc, end_loc});
@@ -824,8 +867,6 @@ pub fn assembleString(writer: anytype, source: []const u8, string: analysis.Synt
     }
 
     const sub = source[start_loc.buffer..end_loc.buffer];
-
-    // log.debug("string subsection: `{s}`", .{sub});
 
     var char_it = analysis.CodepointIterator.from(sub);
 
