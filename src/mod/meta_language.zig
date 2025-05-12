@@ -22,7 +22,7 @@ var syntax: ?analysis.Syntax = null;
 
 
 pub const Expr = struct {
-    location: analysis.Location,
+    source: analysis.SourceLocation,
     attributes: pl.StringMap(Expr) = .empty,
     data: Expr.Data,
 
@@ -298,7 +298,7 @@ pub const Expr = struct {
 pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.SyntaxTree) !Expr {
     switch (cst.type) {
         cst_types.Identifier => return Expr{
-            .location = cst.location,
+           .source = cst.source,
             .data = .{ .identifier = cst.token.data.sequence.asSlice() },
         },
 
@@ -311,7 +311,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             };
 
             return Expr{
-                .location = cst.location,
+               .source = cst.source,
                 .data = .{ .int = int },
             };
         },
@@ -325,7 +325,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             try assembleString(writer, source, cst);
 
             return Expr{
-                .location = cst.location,
+               .source = cst.source,
                 .data = .{ .string = try buf.toOwnedSlice() },
             };
         },
@@ -335,7 +335,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
                 const bytes = cst.token.data.sequence.asSlice();
 
                 return Expr{
-                    .location = cst.location,
+                   .source = cst.source,
                     .data = .{ .symbol = .{
                         .sequence = bytes,
                     } },
@@ -346,7 +346,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             or  cst.token.data.special.escaped != false) return error.UnexpectedInput;
 
             return Expr{
-                .location = cst.location,
+               .source = cst.source,
                 .data = .{ .symbol = .{
                     .punctuation = cst.token.data.special.punctuation,
                 } },
@@ -362,15 +362,15 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
 
                 return switch (cst.token.data.special.punctuation) {
                     .paren_l => Expr{
-                        .location = cst.location,
+                       .source = cst.source,
                         .data = .{ .tuple = &.{}, },
                     },
                     .brace_l => Expr{
-                        .location = cst.location,
+                       .source = cst.source,
                         .data = .{ .compound = &.{}, },
                     },
                     .bracket_l => Expr{
-                        .location = cst.location,
+                       .source = cst.source,
                         .data = .{ .array = &.{}, },
                     },
                     else => return error.UnexpectedInput,
@@ -392,12 +392,12 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
                     return switch (cst.token.data.special.punctuation) {
                         .paren_l => Expr{
                             .attributes = inner.attributes,
-                            .location = cst.location,
+                           .source = cst.source,
                             .data = .{ .seq = inner.data.seq },
                         },
                         .brace_l => Expr{
                             .attributes = inner.attributes,
-                            .location = cst.location,
+                           .source = cst.source,
                             .data = .{ .seq = inner.data.seq },
                         },
                         .bracket_l => return error.UnexpectedInput,
@@ -407,17 +407,17 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
                     return switch (cst.token.data.special.punctuation) {
                         .paren_l => Expr{
                             .attributes = inner.attributes,
-                            .location = cst.location,
+                           .source = cst.source,
                             .data = .{ .tuple = inner.data.list },
                         },
                         .brace_l => Expr{
                             .attributes = inner.attributes,
-                            .location = cst.location,
+                           .source = cst.source,
                             .data = .{ .compound = inner.data.list },
                         },
                         .bracket_l => Expr{
                             .attributes = inner.attributes,
-                            .location = cst.location,
+                           .source = cst.source,
                             .data = .{ .array = inner.data.list },
                         },
                         else => return error.UnexpectedInput,
@@ -430,7 +430,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
                             buff[0] = inner;
 
                             return Expr{
-                                .location = cst.location,
+                               .source = cst.source,
                                 .data = .{ .compound = buff },
                             };
                         },
@@ -439,7 +439,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
                             buff[0] = inner;
 
                             return Expr{
-                                .location = cst.location,
+                               .source = cst.source,
                                 .data = .{ .array = buff },
                             };
                         },
@@ -452,7 +452,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
         cst_types.List => {
             if (cst.operands.len == 0) {
                 return Expr{
-                    .location = cst.location,
+                   .source = cst.source,
                     .data = .{ .list = &.{}, },
                 };
             }
@@ -465,7 +465,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             }
 
             return Expr{
-                .location = cst.location,
+               .source = cst.source,
                 .data = .{ .list = subs },
             };
         },
@@ -473,7 +473,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
         cst_types.Seq => {
             if (cst.operands.len == 0) {
                 return Expr{
-                    .location = cst.location,
+                   .source = cst.source,
                     .data = .{ .seq = &.{}, },
                 };
             }
@@ -486,7 +486,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             }
 
             return Expr{
-                .location = cst.location,
+               .source = cst.source,
                 .data = .{ .seq = subs },
             };
         },
@@ -494,7 +494,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
         cst_types.Apply => {
             if (cst.operands.len == 0) {
                 return Expr{
-                    .location = cst.location,
+                   .source = cst.source,
                     .data = .{ .apply = &.{}, },
                 };
             }
@@ -507,7 +507,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             }
 
             return Expr{
-                .location = cst.location,
+               .source = cst.source,
                 .data = .{ .apply = subs },
             };
         },
@@ -524,7 +524,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             buff[1] = value;
 
             return Expr{
-                .location = cst.location,
+               .source = cst.source,
                 .data = .{ .decl = buff },
             };
         },
@@ -541,7 +541,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             buff[1] = value;
 
             return Expr{
-                .location = cst.location,
+               .source = cst.source,
                 .data = .{ .set = buff },
             };
         },
@@ -558,7 +558,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             buff[1] = value;
 
             return Expr{
-                .location = cst.location,
+               .source = cst.source,
                 .data = .{ .lambda = buff },
             };
         },
@@ -573,7 +573,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             buff[0] = inner;
 
             return Expr{
-                .location = cst.location,
+               .source = cst.source,
                 .data = .{ .operator = .{
                     .position = .prefix,
                     .token = cst.token,
@@ -595,7 +595,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             buff[1] = right;
 
             return Expr{
-                .location = cst.location,
+               .source = cst.source,
                 .data = .{ .operator = .{
                     .position = .infix,
                     .token = cst.token,
@@ -711,11 +711,14 @@ pub fn getSyntax() *const analysis.Syntax {
 pub fn getParser(
     allocator: std.mem.Allocator,
     lexer_settings: analysis.LexerSettings,
+    source_name: []const u8,
     source: []const u8,
-    parser_settings: analysis.ParserSettings,
 ) analysis.SyntaxError!analysis.Parser {
     const ml_syntax = getSyntax();
-    return ml_syntax.createParser(allocator, lexer_settings, source, parser_settings);
+    return ml_syntax.createParser(allocator, lexer_settings, source, .{
+        .ignore_space = false,
+        .source_name = source_name,
+    });
 }
 
 /// Parse a meta-language source string to a concrete syntax tree.
@@ -724,9 +727,10 @@ pub fn getParser(
 pub fn getCst(
     allocator: std.mem.Allocator,
     lexer_settings: analysis.LexerSettings,
+    source_name: []const u8,
     source: []const u8,
 ) analysis.SyntaxError!?analysis.SyntaxTree {
-    var parser = try getParser(allocator, lexer_settings, source, .{ .ignore_space = false });
+    var parser = try getParser(allocator, lexer_settings, source_name, source);
 
     const out = parser.pratt(std.math.minInt(i16));
 
@@ -755,6 +759,21 @@ pub fn getCst(
     }
 
     return try out;
+}
+
+/// Parse a meta-language source string to an `Expr`.
+/// * Returns null if the source is empty.
+/// * Returns an error if we cannot parse the entire source.
+pub fn getExpr(
+    allocator: std.mem.Allocator,
+    lexer_settings: analysis.LexerSettings,
+    source_name: []const u8,
+    source: []const u8,
+) (analysis.SyntaxError || error { InvalidString, InvalidEscape })!?Expr {
+    var cst = try getCst(allocator, lexer_settings, source_name, source) orelse return null;
+    defer cst.deinit(allocator);
+
+    return try parseCst(allocator, source, cst);
 }
 
 /// rml concrete syntax tree types.
@@ -794,8 +813,8 @@ pub fn assembleString(writer: anytype, source: []const u8, string: analysis.Synt
     const subexprs = string.operands.asSlice();
     // log.debug("assembling string from subexprs: {any}", .{subexprs});
 
-    const start_loc = subexprs[0].location;
-    const end_loc = subexprs[subexprs.len - 1].location;
+    const start_loc = subexprs[0].source.location;
+    const end_loc = subexprs[subexprs.len - 1].source.location;
 
     // log.debug("string subsection: {} -> {}", .{start_loc, end_loc});
 
@@ -881,7 +900,7 @@ pub fn nuds() [10]analysis.Nud {
                             buff[1] = inner;
 
                             return analysis.SyntaxTree{
-                                .location = token.location,
+                                .source = .{ .name = parser.settings.source_name, .location = token.location },
                                 .precedence = bp,
                                 .type = cst_types.Lambda,
                                 .token = token,
@@ -913,7 +932,7 @@ pub fn nuds() [10]analysis.Nud {
                     try parser.lexer.advance(); // discard linebreak
 
                     return analysis.SyntaxTree{
-                        .location = token.location,
+                        .source = .{ .name = parser.settings.source_name, .location = token.location },
                         .precedence = bp,
                         .type = .null,
                         .token = token,
@@ -954,7 +973,7 @@ pub fn nuds() [10]analysis.Nud {
 
                             try parser.lexer.advance(); // discard indent
                             return analysis.SyntaxTree{
-                                .location = token.location,
+                                .source = .{ .name = parser.settings.source_name, .location = token.location },
                                 .precedence = bp,
                                 .type = cst_types.Block,
                                 .token = token,
@@ -1001,7 +1020,7 @@ pub fn nuds() [10]analysis.Nud {
 
                             try parser.lexer.advance(); // discard end paren
                             return analysis.SyntaxTree{
-                                .location = token.location,
+                                .source = .{ .name = parser.settings.source_name, .location = token.location },
                                 .precedence = bp,
                                 .type = cst_types.Block,
                                 .token = token,
@@ -1115,7 +1134,7 @@ pub fn nuds() [10]analysis.Nud {
                         const buff = try parser.allocator.alloc(analysis.SyntaxTree, if (consume_next) 3 else 2);
 
                         buff[0] = .{
-                            .location = content.location,
+                            .source = .{ .name = parser.settings.source_name, .location = content.location },
                             .precedence = std.math.maxInt(i16),
                             .type = cst_types.StringElement,
                             .token = content,
@@ -1124,7 +1143,7 @@ pub fn nuds() [10]analysis.Nud {
                         var i: usize = 1;
                         if (secondary) |s| {
                             buff[i] = .{
-                                .location = s.location,
+                                .source = .{ .name = parser.settings.source_name, .location = s.location },
                                 .precedence = std.math.maxInt(i16),
                                 .type = cst_types.StringElement,
                                 .token = s,
@@ -1133,7 +1152,7 @@ pub fn nuds() [10]analysis.Nud {
                             i += 1;
                         }
                         buff[i] = .{
-                            .location = end_quote.location,
+                            .source = .{ .name = parser.settings.source_name, .location = end_quote.location },
                             .precedence = std.math.maxInt(i16),
                             .type = cst_types.StringSentinel,
                             .token = end_quote,
@@ -1141,7 +1160,7 @@ pub fn nuds() [10]analysis.Nud {
                         };
 
                         return analysis.SyntaxTree{
-                            .location = token.location,
+                            .source = .{ .name = parser.settings.source_name, .location = token.location },
                             .precedence = bp,
                             .type = cst_types.String,
                             .token = token,
@@ -1151,7 +1170,7 @@ pub fn nuds() [10]analysis.Nud {
                         log.debug("single_quote: require symbol token {}", .{content});
 
                         return analysis.SyntaxTree{
-                            .location = token.location,
+                            .source = .{ .name = parser.settings.source_name, .location = token.location },
                             .precedence = bp,
                             .type = cst_types.Symbol,
                             .token = content,
@@ -1171,7 +1190,7 @@ pub fn nuds() [10]analysis.Nud {
 
                             const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
                             buff[0] = .{
-                                .location = content.location,
+                                .source = .{ .name = parser.settings.source_name, .location = content.location },
                                 .precedence = std.math.maxInt(i16),
                                 .type = cst_types.StringElement,
                                 .token = content,
@@ -1179,7 +1198,7 @@ pub fn nuds() [10]analysis.Nud {
                             };
 
                             buff[1] = .{
-                                .location = end_tok.location,
+                                .source = .{ .name = parser.settings.source_name, .location = end_tok.location },
                                 .precedence = std.math.maxInt(i16),
                                 .type = cst_types.StringSentinel,
                                 .token = end_tok,
@@ -1187,7 +1206,7 @@ pub fn nuds() [10]analysis.Nud {
                             };
 
                             return analysis.SyntaxTree{
-                                .location = token.location,
+                                .source = .{ .name = parser.settings.source_name, .location = token.location },
                                 .precedence = bp,
                                 .type = cst_types.String,
                                 .token = token,
@@ -1201,7 +1220,7 @@ pub fn nuds() [10]analysis.Nud {
                     }
 
                     return analysis.SyntaxTree{
-                        .location = token.location,
+                        .source = .{ .name = parser.settings.source_name, .location = token.location },
                         .precedence = bp,
                         .type = cst_types.Symbol,
                         .token = content,
@@ -1234,7 +1253,7 @@ pub fn nuds() [10]analysis.Nud {
                             log.debug("string: found end of string token {}", .{next_token});
 
                             try buff.append(parser.allocator, analysis.SyntaxTree{
-                                .location = next_token.location,
+                                .source = .{ .name = parser.settings.source_name, .location = next_token.location },
                                 .precedence = bp,
                                 .type = cst_types.StringSentinel,
                                 .token = next_token,
@@ -1242,7 +1261,7 @@ pub fn nuds() [10]analysis.Nud {
                             });
 
                             return analysis.SyntaxTree{
-                                .location = token.location,
+                                .source = .{ .name = parser.settings.source_name, .location = token.location },
                                 .precedence = bp,
                                 .type = cst_types.String,
                                 .token = token,
@@ -1250,7 +1269,7 @@ pub fn nuds() [10]analysis.Nud {
                             };
                         } else {
                             try buff.append(parser.allocator, analysis.SyntaxTree{
-                                .location = next_token.location,
+                                .source = .{ .name = parser.settings.source_name, .location = next_token.location },
                                 .precedence = bp,
                                 .type = cst_types.StringElement,
                                 .token = next_token,
@@ -1286,7 +1305,7 @@ pub fn nuds() [10]analysis.Nud {
                     if (utils.text.isDecimal(first_char) and utils.text.isHexDigitStr(s)) {
                         log.debug("leaf: found int literal", .{});
                         return analysis.SyntaxTree{
-                            .location = token.location,
+                            .source = .{ .name = parser.settings.source_name, .location = token.location },
                             .precedence = bp,
                             .type = cst_types.Int,
                             .token = token,
@@ -1305,7 +1324,7 @@ pub fn nuds() [10]analysis.Nud {
                         }
 
                         return analysis.SyntaxTree{
-                            .location = token.location,
+                            .source = .{ .name = parser.settings.source_name, .location = token.location },
                             .precedence = bp,
                             .type = cst_types.Identifier,
                             .token = token,
@@ -1336,7 +1355,7 @@ pub fn nuds() [10]analysis.Nud {
                     errdefer if (inner) |*i| i.deinit(parser.allocator);
 
                     return analysis.SyntaxTree{
-                        .location = token.location,
+                        .source = .{ .name = parser.settings.source_name, .location = token.location },
                         .precedence = bp,
                         .type = cst_types.Prefix,
                         .token = token,
@@ -1371,7 +1390,7 @@ pub fn nuds() [10]analysis.Nud {
                     errdefer if (inner) |*i| i.deinit(parser.allocator);
 
                     return analysis.SyntaxTree{
-                        .location = token.location,
+                        .source = .{ .name = parser.settings.source_name, .location = token.location },
                         .precedence = bp,
                         .type = cst_types.Prefix,
                         .token = token,
@@ -1406,7 +1425,7 @@ pub fn nuds() [10]analysis.Nud {
                     errdefer if (inner) |*i| i.deinit(parser.allocator);
 
                     return analysis.SyntaxTree{
-                        .location = token.location,
+                        .source = .{ .name = parser.settings.source_name, .location = token.location },
                         .precedence = bp,
                         .type = cst_types.Prefix,
                         .token = token,
@@ -1456,7 +1475,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Decl,
                         .token = token,
@@ -1495,7 +1514,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Set,
                         .token = token,
@@ -1535,7 +1554,7 @@ pub fn leds() [17]analysis.Led {
                         const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 1);
                         buff[0] = lhs;
                         return analysis.SyntaxTree{
-                            .location = lhs.location,
+                            .source = lhs.source,
                             .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
@@ -1559,7 +1578,7 @@ pub fn leds() [17]analysis.Led {
                         @memcpy(new_operands[lhs_operands.len..], rhs_operands);
 
                         return .{
-                            .location = lhs.location,
+                           .source = lhs.source,
                             .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
@@ -1576,7 +1595,7 @@ pub fn leds() [17]analysis.Led {
                         new_operands[lhs_operands.len] = rhs;
 
                         return .{
-                            .location = lhs.location,
+                            .source = lhs.source,
                             .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
@@ -1593,7 +1612,7 @@ pub fn leds() [17]analysis.Led {
                         @memcpy(new_operands[1..], rhs_operands);
 
                         return .{
-                            .location = lhs.location,
+                           .source = lhs.source,
                             .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
@@ -1613,7 +1632,7 @@ pub fn leds() [17]analysis.Led {
                     log.debug("list: buffer written; returning", .{});
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.List,
                         .token = token,
@@ -1675,7 +1694,7 @@ pub fn leds() [17]analysis.Led {
                         @memcpy(new_operands[lhs_operands.len..], rhs_operands);
 
                         return .{
-                            .location = lhs.location,
+                           .source = lhs.source,
                             .precedence = bp,
                             .type = cst_types.Seq,
                             .token = token,
@@ -1692,7 +1711,7 @@ pub fn leds() [17]analysis.Led {
                         new_operands[lhs_operands.len] = rhs;
 
                         return .{
-                            .location = lhs.location,
+                           .source = lhs.source,
                             .precedence = bp,
                             .type = cst_types.Seq,
                             .token = token,
@@ -1709,7 +1728,7 @@ pub fn leds() [17]analysis.Led {
                         @memcpy(new_operands[1..], rhs_operands);
 
                         return .{
-                            .location = lhs.location,
+                           .source = lhs.source,
                             .precedence = bp,
                             .type = cst_types.Seq,
                             .token = token,
@@ -1729,7 +1748,7 @@ pub fn leds() [17]analysis.Led {
                     log.debug("seq: buffer written; returning", .{});
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Seq,
                         .token = token,
@@ -1778,7 +1797,7 @@ pub fn leds() [17]analysis.Led {
                         new_operands[lhs_operands.len] = rhs;
 
                         return .{
-                            .location = lhs.location,
+                           .source = lhs.source,
                             .precedence = bp,
                             .type = cst_types.Apply,
                             .token = token,
@@ -1798,7 +1817,7 @@ pub fn leds() [17]analysis.Led {
                     log.debug("apply: buffer written; returning", .{});
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Apply,
                         .token = analysis.Token{
@@ -1838,7 +1857,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = rhs;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -1872,7 +1891,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = rhs;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -1906,7 +1925,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = rhs;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -1940,7 +1959,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = rhs;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -1980,7 +1999,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -2020,7 +2039,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -2060,7 +2079,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -2100,7 +2119,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -2140,7 +2159,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -2180,7 +2199,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -2215,7 +2234,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -2250,7 +2269,7 @@ pub fn leds() [17]analysis.Led {
                     buff[1] = second_stmt;
 
                     return analysis.SyntaxTree{
-                        .location = lhs.location,
+                        .source = lhs.source,
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
@@ -2267,7 +2286,7 @@ test "expr_parse" {
     try pl.snapshotTest(.use_log("expr"), struct {
         pub fn testExpr(input: []const u8, expect: []const u8) !void {
             _ = .{input, expect};
-            var syn = try getCst(std.testing.allocator, .{}, input) orelse {
+            var syn = try getCst(std.testing.allocator, .{}, "test", input) orelse {
                 log.err("Failed to parse source", .{});
                 return error.NullCst;
             };
@@ -2304,7 +2323,7 @@ test "cst_parse" {
     try pl.snapshotTest(.use_log("cst"), struct {
         pub fn testCst(input: []const u8, expect: []const u8) !void {
             _ = .{ input, expect };
-            var syn = try getCst(std.testing.allocator, .{}, input) orelse {
+            var syn = try getCst(std.testing.allocator, .{}, "test", input) orelse {
                 log.err("Failed to parse source", .{});
                 return error.BadEncoding;
             };

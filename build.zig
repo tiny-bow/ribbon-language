@@ -263,6 +263,7 @@ pub fn build(b: *std.Build) !void {
     analysis_mod.addImport("platform", platform_mod);
     analysis_mod.addImport("common", common_mod);
     analysis_mod.addImport("utils", utils_mod);
+    analysis_mod.addImport("Id", Id_mod);
 
     meta_language_mod.addImport("platform", platform_mod);
     meta_language_mod.addImport("common", common_mod);

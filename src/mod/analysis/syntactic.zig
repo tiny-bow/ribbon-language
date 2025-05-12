@@ -14,9 +14,9 @@ pub const SyntaxError = error {
 
 
 /// A concrete syntax tree node yielded by the meta language parser.
-pub const SyntaxTree = extern struct {
+pub const SyntaxTree = struct {
     /// The source location where the expression began.
-    location: analysis.Location,
+    source: analysis.SourceLocation,
     /// The source precedence of this expression.
     precedence: i16,
     /// The type of the expression.
@@ -475,7 +475,7 @@ pub fn wrapLedCallback(comptime Userdata: type, callback: anytype) *const LedCal
         pub fn led_callback_wrapper(
             userdata: ?*anyopaque,
             parser: *Parser,
-            lhs: SyntaxTree,
+            lhs: *SyntaxTree,
             bp: i16,
             token: analysis.Token,
             out: *SyntaxTree,
@@ -483,9 +483,9 @@ pub fn wrapLedCallback(comptime Userdata: type, callback: anytype) *const LedCal
         ) callconv(.c) ParserSignal {
             const result =
                 if (comptime Userdata != void)
-                    @call(.auto, callback, .{userdata} ++ .{parser, lhs, bp, token})
+                    @call(.auto, callback, .{userdata} ++ .{parser, lhs.*, bp, token})
                 else
-                    @call(.auto, callback, .{parser, lhs, bp, token});
+                    @call(.auto, callback, .{parser, lhs.*, bp, token});
 
             const maybe = result catch |e| {
                 err.* = e;
@@ -500,6 +500,9 @@ pub fn wrapLedCallback(comptime Userdata: type, callback: anytype) *const LedCal
         }
     }.led_callback_wrapper);
 }
+
+// TODO: it would be better if the parser was generic over both lexer and result types.
+// this is not really fun to do in zig; probably after bootstrap.
 
 /// Pratt parser.
 pub const Parser = struct {
@@ -518,6 +521,8 @@ pub const Parser = struct {
     pub const Settings = struct {
         /// Whether to ignore whitespace tokens when parsing; Default: false.
         ignore_space: bool = false,
+        /// The name of the source file being parsed.
+        source_name: []const u8 = "anonymous",
     };
 
     /// Create a new parser.
@@ -592,7 +597,7 @@ pub const Parser = struct {
         const save_state = self.lexer;
 
         leds: for (leds) |led| {
-            switch (led.invoke(.{self, lhs, led.binding_power, token, &out, &err})) {
+            switch (led.invoke(.{self, &lhs, led.binding_power, token, &out, &err})) {
                 .okay => {
                     log.debug("pratt: led {s} accepted input", .{led.name});
                     return out;

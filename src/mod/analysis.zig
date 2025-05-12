@@ -11,6 +11,7 @@ test {
 }
 
 pub const BufferPosition = source.BufferPosition;
+pub const SourceLocation = source.Source;
 pub const Location = source.Location;
 pub const VisualPosition = source.VisualPosition;
 pub const CodepointIterator = source.CodepointIterator;

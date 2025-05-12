@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const Id = @import("Id");
+
 /// A position in the source code, in terms of the buffer.
 pub const BufferPosition = u64;
 
@@ -9,6 +11,16 @@ pub const VisualPosition = packed struct {
     line: u32 = 1,
     /// 1-based column number.
     column: u32 = 1,
+};
+
+/// A `Location`, with a source name attached.
+pub const Source = struct {
+    name: []const u8 = "anonymous",
+    location: Location = .{},
+
+    pub fn format(self: *const Source, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("[{}:{}:{}]", .{ self.name, self.location.visual.line, self.location.visual.column });
+    }
 };
 
 /// A location in the source code, both buffer-wise and line and column.

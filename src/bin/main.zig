@@ -49,7 +49,7 @@ pub fn main() !void {
             },
             else => {
                 log.err("cannot get input: {}", .{err});
-                return;
+                return err;
             },
         }
     }) |input| {
@@ -62,27 +62,28 @@ pub fn main() !void {
 
         line_accumulator.appendSlice(input) catch @panic("OOM in line accumulator");
 
-        var cst = ribbon.meta_language.getCst(allocator, .{
-            .attrOffset = .{ .column = 0, .line = line_count },
-        }, line_accumulator.items) catch |err| {
+        var expr = ribbon.meta_language.getExpr(
+            allocator,
+            .{ .attrOffset = .{ .column = 0, .line = line_count } },
+            "stdin",
+            line_accumulator.items,
+        ) catch |err| {
             if (err == error.UnexpectedEof) {
                 std.debug.print("Incomplete input, waiting for more...\n", .{});
             } else {
                 log.err("Error parsing input: {}", .{err});
+                R.history.add(line_accumulator.items) catch @panic("OOM in history");
+
                 line_accumulator.clearRetainingCapacity();
             }
 
             continue;
         } orelse continue;
-        defer cst.deinit(allocator);
+        defer expr.deinit(allocator);
+
+        R.history.add(line_accumulator.items) catch @panic("OOM in history");
 
         line_accumulator.clearRetainingCapacity();
-
-        var expr = ribbon.meta_language.parseCst(allocator, input, cst) catch |err| {
-            log.err("Error parsing CST: {}", .{err});
-            continue;
-        };
-        defer expr.deinit(allocator);
 
         std.debug.print("{}\n", .{expr});
     }
