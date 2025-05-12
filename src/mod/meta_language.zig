@@ -12,12 +12,74 @@ const pl = @import("platform");
 const common = @import("common");
 const utils = @import("utils");
 const analysis = @import("analysis");
+const core = @import("core");
 
 test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
 
+/// A meta-language value.
+pub const Value = packed struct {
+    /// Indicates the variant of `data`.
+    tag: Tag,
+    /// Variant-specific data, discriminated by `tag`.
+    data: Data,
+
+    /// Indicates the variant of the `data` in a `Value`.
+    pub const Tag: type = std.meta.FieldEnum(Data);
+
+    /// Variant-specific data for a `Value`.
+    /// This is a union of all possible value types.
+    pub const Data = packed union {
+        /// 64-bit signed integer value.
+        int: i64,
+        /// Character value.
+        char: pl.Char,
+        /// String value.
+        string: *Value.String,
+        /// Interned symbolic value, can be compared by reference.
+        symbol: *Value.String,
+        /// Linear list of values.
+        array: *pl.ArrayList(Value),
+        /// Table of values.
+        record: *pl.StringMap(Value),
+        /// Function value.
+        bytecode: *core.Function,
+        /// Native value.
+        native: core.ForeignAddress,
+        /// Builtin value.
+        builtin: *core.BuiltinAddress,
+        /// Syntax tree.
+        syntax: *analysis.SyntaxTree,
+    };
+
+    /// Variant data for a string `Value`.
+    pub const String = opaque {
+        const len_size = @sizeOf(usize);
+        const len_align = @alignOf(usize);
+
+        /// Duplicates a slice of bytes into a new string.
+        pub fn init(allocator: std.mem.Allocator, value: []const u8) !*String {
+            const str = try allocator.alignedAlloc(u8, len_align, value.len + len_size);
+            @memcpy(str[0..len_size], std.mem.asBytes(&value.len));
+            @memcpy(str[len_size..], value);
+
+            return @ptrCast(str);
+        }
+
+        /// Deinitializes the string and frees its memory.
+        pub fn deinit(self: *String, allocator: std.mem.Allocator) void {
+            const l = self.len();
+            allocator.free(@as([*]align(len_align) u8, @ptrCast(@alignCast(self)))[0..l + len_size]);
+        }
+
+        /// Get the length of the string.
+        pub fn len(self: *const String) usize {
+            return @as(*const usize, @ptrCast(@alignCast(self))).*;
+        }
+    };
+};
 
 
 /// A meta-language expression.
