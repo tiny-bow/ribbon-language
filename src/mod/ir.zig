@@ -1974,8 +1974,8 @@ pub const Global = struct {
 
 
 
-pub const InstructionOperandList = pl.ArrayList(Operand);
-pub const InstructionMap = pl.UniqueReprMap(*const Instruction, InstructionOperandList, 80);
+const InstructionOperandList = pl.ArrayList(Operand);
+const InstructionMap = pl.UniqueReprMap(*const Instruction, InstructionOperandList, 80);
 
 
 pub const Ref = packed struct {
@@ -2003,11 +2003,12 @@ pub const Ref = packed struct {
         return Ref{ .tag = .terminator, .ptr = @intCast(@intFromPtr(value)) };
     }
 };
-pub const RefSet = pl.UniqueReprSet(Ref, 80);
-pub const RefMap = pl.UniqueReprMap(Ref, RefSet, 80);
-pub const BlockRef: type = *const Block;
-pub const BlockRefSet = pl.UniqueReprSet(BlockRef, 80);
-pub const BlockRefMap = pl.UniqueReprMap(BlockRef, BlockRefSet, 80);
+
+const RefSet = pl.UniqueReprSet(Ref, 80);
+const RefMap = pl.UniqueReprMap(Ref, RefSet, 80);
+const BlockRef: type = *const Block;
+const BlockRefSet = pl.UniqueReprSet(BlockRef, 80);
+const BlockRefMap = pl.UniqueReprMap(BlockRef, BlockRefSet, 80);
 
 /// Data and control flow graph.
 /// Contains a use->def map, a def->use map, and successor + predecessor maps.
@@ -2446,8 +2447,8 @@ pub const ColorGraph = struct {
 
     pub const Color = u64;
 
-    pub const ColorMap = pl.UniqueReprMap(Ref, Color, 80);
-    pub const ColorSet = pl.UniqueReprArraySet(Color, false);
+    const ColorMap = pl.UniqueReprMap(Ref, Color, 80);
+    const ColorSet = pl.UniqueReprArraySet(Color, false);
 
     pub fn getColor(self: *const ColorGraph, ref: Ref) !Color {
         return self.color_map.get(ref) orelse error.InvalidGraph;
@@ -2726,10 +2727,10 @@ pub const Handler = struct {
     function: *const Function,
 };
 
-pub const BlockMap = pl.UniqueReprMap(*const Block, BlockEdge, 80);
+const BlockMap = pl.UniqueReprMap(*const Block, BlockEdge, 80);
 
-pub const SuccessorMap = pl.UniqueReprArrayMap(*const Block, OutputList, false);
-pub const OutputList = pl.ArrayList(Output);
+const SuccessorMap = pl.UniqueReprArrayMap(*const Block, OutputList, false);
+const OutputList = pl.ArrayList(Output);
 
 pub const BlockEdge = struct {
     /// The successors of this block.

@@ -94,6 +94,12 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const ir2bc_mod = b.createModule(.{
+        .root_source_file = b.path("src/mod/ir2bc.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const isa_mod = b.createModule(.{
         .root_source_file = b.path("src/gen-base/zig/isa.zig"),
         .target = target,
@@ -190,6 +196,7 @@ pub fn build(b: *std.Build) !void {
     const Instruction_test = b.addTest(.{ .root_module = Instruction_mod });
     const interpreter_test = b.addTest(.{ .root_module = interpreter_mod });
     const ir_test = b.addTest(.{ .root_module = ir_mod });
+    const ir2bc_test = b.addTest(.{ .root_module = ir2bc_mod });
     const isa_test = b.addTest(.{ .root_module = isa_mod });
     const machine_test = b.addTest(.{ .root_module = machine_mod });
     const main_test = b.addTest(.{ .root_module = main_mod });
@@ -245,6 +252,11 @@ pub fn build(b: *std.Build) !void {
     ir_mod.addImport("Interner", Interner_mod);
     ir_mod.addImport("Id", Id_mod);
 
+    ir2bc_mod.addImport("platform", platform_mod);
+    ir2bc_mod.addImport("core", core_mod);
+    ir2bc_mod.addImport("bytecode", bytecode_mod);
+    ir2bc_mod.addImport("ir", ir_mod);
+
     isa_mod.addImport("platform", platform_mod);
 
     machine_mod.addImport("platform", platform_mod);
@@ -276,6 +288,7 @@ pub fn build(b: *std.Build) !void {
     ribbon_mod.addImport("bytecode", bytecode_mod);
     ribbon_mod.addImport("interpreter", interpreter_mod);
     ribbon_mod.addImport("ir", ir_mod);
+    ribbon_mod.addImport("ir2bc", ir2bc_mod);
     ribbon_mod.addImport("machine", machine_mod);
     ribbon_mod.addImport("meta_language", meta_language_mod);
     ribbon_mod.addImport("analysis", analysis_mod);
@@ -323,6 +336,7 @@ pub fn build(b: *std.Build) !void {
     check_step.dependOn(&gen_test.step);
     check_step.dependOn(&interpreter_test.step);
     check_step.dependOn(&ir_test.step);
+    check_step.dependOn(&ir2bc_test.step);
     check_step.dependOn(&isa_test.step);
     check_step.dependOn(&machine_test.step);
     check_step.dependOn(&main_test.step);
@@ -339,6 +353,7 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&b.addRunArtifact(Instruction_test).step);
     test_step.dependOn(&b.addRunArtifact(interpreter_test).step);
     test_step.dependOn(&b.addRunArtifact(ir_test).step);
+    test_step.dependOn(&b.addRunArtifact(ir2bc_test).step);
     test_step.dependOn(&b.addRunArtifact(isa_test).step);
     test_step.dependOn(&b.addRunArtifact(machine_test).step);
     test_step.dependOn(&b.addRunArtifact(main_test).step);
