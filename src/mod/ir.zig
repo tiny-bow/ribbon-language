@@ -2012,7 +2012,6 @@ pub const BlockRefMap = pl.UniqueReprMap(BlockRef, BlockRefSet, 80);
 /// Data and control flow graph.
 /// Contains a use->def map, a def->use map, and successor + predecessor maps.
 pub const FlowGraph = struct {
-    allocator: std.mem.Allocator,
     use_def: RefMap,
     def_use: RefMap,
     predecessor: BlockRefMap,
@@ -2022,66 +2021,124 @@ pub const FlowGraph = struct {
 
     /// Creates a flow graph for an ir function.
     pub fn analyze(allocator: std.mem.Allocator, function: *const Function) !FlowGraph {
-        var out = try FlowGraph.init(allocator, 1024, 64);
-        errdefer out.deinit();
+        var flow = FlowGraph{
+            .use_def = .empty,
+            .def_use = .empty,
+            .predecessor = .empty,
+            .successor = .empty,
+        };
+
+        try flow.use_def.ensureTotalCapacity(allocator, 1024);
+        errdefer flow.use_def.deinit(allocator);
+
+        try flow.def_use.ensureTotalCapacity(allocator, 1024);
+        errdefer flow.def_use.deinit(allocator);
+
+        try flow.predecessor.ensureTotalCapacity(allocator, 64);
+        errdefer flow.predecessor.deinit(allocator);
+
+        try flow.successor.ensureTotalCapacity(allocator, 64);
+        errdefer flow.successor.deinit(allocator);
+
+        var analyzer = struct {
+            const Self = @This();
+
+            allocator: std.mem.Allocator,
+            flow: *FlowGraph,
+
+            fn makeRefEdge(self: *Self, use: Ref, def: Ref) !void {
+                const use_def = try self.flow.use_def.getOrPut(self.allocator, use);
+                if (!use_def.found_existing) {
+                    use_def.value_ptr.* = RefSet.empty;
+                }
+
+                try use_def.value_ptr.put(self.allocator, def, {});
+
+                const def_use = try self.flow.def_use.getOrPut(self.allocator, def);
+                if (!def_use.found_existing) {
+                    def_use.value_ptr.* = RefSet.empty;
+                }
+
+                try def_use.value_ptr.put(self.allocator, use, {});
+            }
+
+            fn makeBlockEdge(self: *Self, pred: BlockRef, succ: BlockRef) !void {
+                const pred_edges = try self.flow.predecessor.getOrPut(self.allocator, pred);
+                if (!pred_edges.found_existing) {
+                    pred_edges.value_ptr.* = BlockRefSet.empty;
+                }
+
+                try pred_edges.value_ptr.put(self.allocator, succ, {});
+
+                const succ_edges = try self.flow.successor.getOrPut(self.allocator, succ);
+                if (!succ_edges.found_existing) {
+                    succ_edges.value_ptr.* = BlockRefSet.empty;
+                }
+
+                try succ_edges.value_ptr.put(self.allocator, pred, {});
+            }
+
+            pub fn traverse(self: *Self, visitor: *pl.Visitor(*const Block), block: *const Block) !void {
+                if (!try visitor.visit(block)) return;
+
+                if (self.flow.entry_block == null) {
+                    self.flow.entry_block = block;
+                    self.flow.entry_def = block.instructions.items[0];
+                }
+
+                if (block.function.block_edges.getPtr(block)) |succ_data| {
+                    if (succ_data.terminator) |terminator| {
+                        operands: for (terminator.values.items) |operand| {
+                            switch (operand.tag) {
+                                .input => try self.makeRefEdge(.terminator(succ_data), .{ .tag = .input, .ptr = operand.ptr }),
+                                .instruction => try self.makeRefEdge(.terminator(succ_data), .{ .tag = .instruction, .ptr = operand.ptr }),
+                                .type, .constant => continue :operands,
+                            }
+                        }
+                    }
+
+                    var succ_block_it = succ_data.successors.iterator();
+
+                    while (succ_block_it.next()) |succ_edge_entry| {
+                        const succ: *const Block = succ_edge_entry.key_ptr.*;
+                        const outputs_to_succ: []const Output = succ_edge_entry.value_ptr.items;
+
+                        try self.traverse(visitor, succ);
+
+                        for (outputs_to_succ) |output| {
+                            switch (output.tag) {
+                                .instruction => try self.makeRefEdge(.terminator(succ_data), .{ .tag = .instruction, .ptr = output.ptr }),
+                                .constant => continue,
+                            }
+                        }
+
+                        try self.makeBlockEdge(block, succ);
+                    }
+                }
+
+                instructions: for (block.instructions.items) |instruction| {
+                    const operands = (block.function.instruction_edges.getPtr(instruction) orelse continue :instructions).items;
+
+                    operands: for (operands) |operand| {
+                        switch (operand.tag) {
+                            .input => try self.makeRefEdge(.instruction(instruction), .{ .tag = .input, .ptr = operand.ptr }),
+                            .instruction => try self.makeRefEdge(.instruction(instruction), .{ .tag = .instruction, .ptr = operand.ptr }),
+                            .type, .constant => continue :operands,
+                        }
+                    }
+                }
+            }
+        } {
+            .allocator = allocator,
+            .flow = &flow,
+        };
 
         var visitor = try pl.Visitor(*const Block).init(allocator);
         defer visitor.deinit();
 
-        try out.traverse(&visitor, function.entry);
+        try analyzer.traverse(&visitor, function.entry);
 
-        return out;
-    }
-
-    fn traverse(self: *FlowGraph, visitor: *pl.Visitor(*const Block), block: *const Block) !void {
-        if (!try visitor.visit(block)) return;
-
-        if (self.entry_block == null) {
-            self.entry_block = block;
-            self.entry_def = block.instructions.items[0];
-        }
-
-        if (block.function.block_edges.getPtr(block)) |succ_data| {
-            if (succ_data.terminator) |terminator| {
-                operands: for (terminator.values.items) |operand| {
-                    switch (operand.tag) {
-                        .input => try self.makeRefEdge(.terminator(succ_data), .{ .tag = .input, .ptr = operand.ptr }),
-                        .instruction => try self.makeRefEdge(.terminator(succ_data), .{ .tag = .instruction, .ptr = operand.ptr }),
-                        .type, .constant => continue :operands,
-                    }
-                }
-            }
-
-            var succ_block_it = succ_data.successors.iterator();
-
-            while (succ_block_it.next()) |succ_edge_entry| {
-                const succ: *const Block = succ_edge_entry.key_ptr.*;
-                const outputs_to_succ: []const Output = succ_edge_entry.value_ptr.items;
-
-                try self.traverse(visitor, succ);
-
-                for (outputs_to_succ) |output| {
-                    switch (output.tag) {
-                        .instruction => try self.makeRefEdge(.terminator(succ_data), .{ .tag = .instruction, .ptr = output.ptr }),
-                        .constant => continue,
-                    }
-                }
-
-                try self.makeBlockEdge(block, succ);
-            }
-        }
-
-        instructions: for (block.instructions.items) |instruction| {
-            const operands = (block.function.instruction_edges.getPtr(instruction) orelse continue :instructions).items;
-
-            operands: for (operands) |operand| {
-                switch (operand.tag) {
-                    .input => try self.makeRefEdge(.instruction(instruction), .{ .tag = .input, .ptr = operand.ptr }),
-                    .instruction => try self.makeRefEdge(.instruction(instruction), .{ .tag = .instruction, .ptr = operand.ptr }),
-                    .type, .constant => continue :operands,
-                }
-            }
-        }
+        return flow;
     }
 
     pub fn iterateDefImmediatePredecessors(self: *const FlowGraph, a: Ref) !RefSet.KeyIterator {
@@ -2132,89 +2189,30 @@ pub const FlowGraph = struct {
         return a_succ.contains(b);
     }
 
-    fn makeRefEdge(self: *FlowGraph, use: Ref, def: Ref) !void {
-        const use_def = try self.use_def.getOrPut(self.allocator, use);
-        if (!use_def.found_existing) {
-            use_def.value_ptr.* = RefSet.empty;
-        }
-
-        try use_def.value_ptr.put(self.allocator, def, {});
-
-        const def_use = try self.def_use.getOrPut(self.allocator, def);
-        if (!def_use.found_existing) {
-            def_use.value_ptr.* = RefSet.empty;
-        }
-
-        try def_use.value_ptr.put(self.allocator, use, {});
-    }
-
-    fn makeBlockEdge(self: *FlowGraph, pred: BlockRef, succ: BlockRef) !void {
-        const pred_edges = try self.predecessor.getOrPut(self.allocator, pred);
-        if (!pred_edges.found_existing) {
-            pred_edges.value_ptr.* = BlockRefSet.empty;
-        }
-
-        try pred_edges.value_ptr.put(self.allocator, succ, {});
-
-        const succ_edges = try self.successor.getOrPut(self.allocator, succ);
-        if (!succ_edges.found_existing) {
-            succ_edges.value_ptr.* = BlockRefSet.empty;
-        }
-
-        try succ_edges.value_ptr.put(self.allocator, pred, {});
-    }
-
-    fn init(allocator: std.mem.Allocator, instr_edge_capacity: u32, block_edge_capacity: u32) error{OutOfMemory}!FlowGraph {
-        var self = FlowGraph{
-            .allocator = allocator,
-            .use_def = .empty,
-            .def_use = .empty,
-            .predecessor = .empty,
-            .successor = .empty,
-        };
-
-        try self.use_def.ensureTotalCapacity(allocator, instr_edge_capacity);
-        errdefer self.use_def.deinit(allocator);
-
-        try self.def_use.ensureTotalCapacity(allocator, instr_edge_capacity);
-        errdefer self.def_use.deinit(allocator);
-
-        try self.predecessor.ensureTotalCapacity(allocator, block_edge_capacity);
-        errdefer self.predecessor.deinit(allocator);
-
-        try self.successor.ensureTotalCapacity(allocator, block_edge_capacity);
-        errdefer self.successor.deinit(allocator);
-
-        return self;
-    }
-
     /// Deinitializes the flow graph, freeing all memory it owns.
     /// * does not free the underlying function/instructions/etc
-    pub fn deinit(self: *FlowGraph) void {
+    pub fn deinit(self: *FlowGraph, allocator: std.mem.Allocator) void {
         var use_def_it = self.use_def.valueIterator();
-        while (use_def_it.next()) |x| x.deinit(self.allocator);
+        while (use_def_it.next()) |x| x.deinit(allocator);
 
         var def_use_it = self.def_use.valueIterator();
-        while (def_use_it.next()) |x| x.deinit(self.allocator);
+        while (def_use_it.next()) |x| x.deinit(allocator);
 
         var pred_it = self.predecessor.valueIterator();
-        while (pred_it.next()) |x| x.deinit(self.allocator);
+        while (pred_it.next()) |x| x.deinit(allocator);
 
         var succ_it = self.successor.valueIterator();
-        while (succ_it.next()) |x| x.deinit(self.allocator);
+        while (succ_it.next()) |x| x.deinit(allocator);
 
-        self.use_def.deinit(self.allocator);
-        self.def_use.deinit(self.allocator);
-        self.predecessor.deinit(self.allocator);
-        self.successor.deinit(self.allocator);
+        self.use_def.deinit(allocator);
+        self.def_use.deinit(allocator);
+        self.predecessor.deinit(allocator);
+        self.successor.deinit(allocator);
     }
 };
 
 /// Graph mapping all instructions which may execute before or after another.
 pub const ReachabilityGraph = struct {
-    allocator: std.mem.Allocator,
-    flow: *const FlowGraph,
-
     predecessors: RefMap,
     successors: RefMap,
 
@@ -2225,8 +2223,64 @@ pub const ReachabilityGraph = struct {
     ) error{InvalidGraph, OutOfMemory}!ReachabilityGraph {
         const entry = flow.entry_def orelse return error.InvalidGraph;
 
-        var reachability = try ReachabilityGraph.init(allocator, flow);
-        errdefer reachability.deinit();
+        var reachability = ReachabilityGraph {
+            .predecessors = RefMap.empty,
+            .successors = RefMap.empty,
+        };
+        try reachability.predecessors.ensureTotalCapacity(allocator, 256);
+        try reachability.successors.ensureTotalCapacity(allocator, 256);
+        errdefer reachability.deinit(allocator);
+
+        var analyzer = struct {
+            const Self = @This();
+
+            allocator: std.mem.Allocator,
+            flow: *const FlowGraph,
+            reachability: *ReachabilityGraph,
+
+            pub fn makeReachableEdge(self: *Self, a: Ref, b: Ref) !void {
+                const a_succ = try self.reachability.successors.getOrPut(self.allocator, a);
+                if (!a_succ.found_existing) {
+                    a_succ.value_ptr.* = RefSet.empty;
+                }
+
+                try a_succ.value_ptr.put(self.allocator, b, {});
+
+                const b_pred = try self.reachability.predecessors.getOrPut(self.allocator, b);
+                if (!b_pred.found_existing) {
+                    b_pred.value_ptr.* = RefSet.empty;
+                }
+
+                try b_pred.value_ptr.put(self.allocator, a, {});
+            }
+
+            pub fn traverse(self: *Self, visitor: *pl.Visitor(Ref), predecessors: *RefSet, ref: Ref) !void  {
+                {
+                    var pred_it = predecessors.keyIterator();
+                    while (pred_it.next()) |pred_ref_ptr| {
+                        const pred_ref = pred_ref_ptr.*;
+
+                        try self.makeReachableEdge(pred_ref, ref);
+                    }
+                }
+
+                if (!try visitor.visit(ref)) return;
+
+                _ = try predecessors.getOrPut(self.allocator, ref);
+
+                var use_it = try self.flow.iterateDefImmediateSuccessors(ref);
+
+                while (use_it.next()) |use_ref_ptr| {
+                    const use_ref = use_ref_ptr.*;
+
+                    try self.traverse(visitor, predecessors, use_ref);
+                }
+            }
+        } {
+            .allocator = allocator,
+            .flow = flow,
+            .reachability = &reachability
+        };
 
         var visitor = try pl.Visitor(Ref).init(allocator);
         defer visitor.deinit();
@@ -2235,32 +2289,9 @@ pub const ReachabilityGraph = struct {
         try predecessors.ensureTotalCapacity(allocator, 1024);
         defer predecessors.deinit(allocator);
 
-        try reachability.traverse(&visitor, &predecessors, .instruction(entry));
+        try analyzer.traverse(&visitor, &predecessors, .instruction(entry));
 
         return reachability;
-    }
-
-    fn traverse(self: *ReachabilityGraph, visitor: *pl.Visitor(Ref), predecessors: *RefSet, ref: Ref) !void  {
-        {
-            var pred_it = predecessors.keyIterator();
-            while (pred_it.next()) |pred_ref_ptr| {
-                const pred_ref = pred_ref_ptr.*;
-
-                try self.makeReachableEdge(pred_ref, ref);
-            }
-        }
-
-        if (!try visitor.visit(ref)) return;
-
-        _ = try predecessors.getOrPut(self.allocator, ref);
-
-        var use_it = try self.flow.iterateDefImmediateSuccessors(ref);
-
-        while (use_it.next()) |use_ref_ptr| {
-            const use_ref = use_ref_ptr.*;
-
-            try self.traverse(visitor, predecessors, use_ref);
-        }
     }
 
     /// Get an iterator over the predecessors of a node.
@@ -2298,100 +2329,30 @@ pub const ReachabilityGraph = struct {
         return self.isSuccessor(a, a);
     }
 
-    fn makeReachableEdge(self: *ReachabilityGraph, a: Ref, b: Ref) !void {
-        const a_succ = try self.successors.getOrPut(self.allocator, a);
-        if (!a_succ.found_existing) {
-            a_succ.value_ptr.* = RefSet.empty;
-        }
-
-        try a_succ.value_ptr.put(self.allocator, b, {});
-
-        const b_pred = try self.predecessors.getOrPut(self.allocator, b);
-        if (!b_pred.found_existing) {
-            b_pred.value_ptr.* = RefSet.empty;
-        }
-
-        try b_pred.value_ptr.put(self.allocator, a, {});
-    }
-
-    fn init(allocator: std.mem.Allocator, graph: *const FlowGraph) error{OutOfMemory}!ReachabilityGraph {
-        var self = ReachabilityGraph{
-            .allocator = allocator,
-            .flow = graph,
-            .predecessors = .empty,
-            .successors = .empty,
-        };
-
-        try self.predecessors.ensureTotalCapacity(allocator, 256);
-        try self.successors.ensureTotalCapacity(allocator, 256);
-
-        return self;
-    }
-
     /// Deinitializes the reachability graph, freeing all memory it owns.
     /// * does not free the flow graph
-    pub fn deinit(self: *ReachabilityGraph) void {
+    pub fn deinit(self: *ReachabilityGraph, allocator: std.mem.Allocator) void {
         var pred_it = self.predecessors.valueIterator();
-        while (pred_it.next()) |x| x.deinit(self.allocator);
+        while (pred_it.next()) |x| x.deinit(allocator);
 
         var succ_it = self.successors.valueIterator();
-        while (succ_it.next()) |x| x.deinit(self.allocator);
+        while (succ_it.next()) |x| x.deinit(allocator);
 
-        self.predecessors.deinit(self.allocator);
-        self.successors.deinit(self.allocator);
+        self.predecessors.deinit(allocator);
+        self.successors.deinit(allocator);
     }
 };
+
 
 /// Graph mapping regions that the result of an instruction is used within.
 /// This is different from use->def and reachability, as it maps all reachable instructions
 /// that occur after the def, and before its last use.
 /// This is used to determine when the value is "alive" in the program.
 pub const LivenessGraph = struct {
-    allocator: std.mem.Allocator,
-    flow: *const FlowGraph,
-
     regions: RefMap,
 
-    pub fn analyze(allocator: std.mem.Allocator, flow: *const FlowGraph) error{InvalidGraph, OutOfMemory}!LivenessGraph {
-        var self = try LivenessGraph.init(allocator, flow);
-        errdefer self.deinit();
-
-        var visitor = try pl.Visitor(Ref).init(allocator);
-        defer visitor.deinit();
-
-        var def_it = self.flow.def_use.keyIterator();
-        while (def_it.next()) |def_ptr| {
-            const def = def_ptr.*;
-
-            visitor.clearVisited();
-            _ = try visitor.visit(def);
-
-            var use_it = try self.flow.iterateDefImmediateSuccessors(def);
-            while (use_it.next()) |use_ptr| {
-                const use = use_ptr.*;
-
-                try self.traverse(&visitor, def, use);
-            }
-        }
-
-        return self;
-    }
-
-    fn traverse(self: *LivenessGraph, visitor: *pl.Visitor(Ref), def: Ref, ref: Ref) !void  {
-        if (!try visitor.visit(ref)) return;
-
-        try self.makeRegionEdge(def, ref);
-
-        var pred_it = try self.flow.iterateDefImmediatePredecessors(ref);
-        while (pred_it.next()) |pred_ptr| {
-            const pred = pred_ptr.*;
-
-            try self.traverse(visitor, def, pred);
-        }
-    }
-
     /// Get an iterator over a liveness region for a given value.
-    pub fn interferenceIterator(self: *const LivenessGraph, a: Ref) !RefSet.KeyIterator {
+    pub fn iterateInterferingRefs(self: *const LivenessGraph, a: Ref) !RefSet.KeyIterator {
         const region = self.regions.getPtr(a) orelse return error.InvalidGraph;
 
         return region.keyIterator();
@@ -2404,43 +2365,82 @@ pub const LivenessGraph = struct {
         return region.contains(b);
     }
 
-    fn makeRegionEdge(self: *LivenessGraph, a: Ref, b: Ref) !void {
-        const region = try self.regions.getOrPut(self.allocator, a);
-        if (!region.found_existing) region.value_ptr.* = RefSet.empty;
-
-        try region.value_ptr.put(self.allocator, b, {});
-    }
-
-    fn init(allocator: std.mem.Allocator, flow: *const FlowGraph) error{OutOfMemory}!LivenessGraph {
-        var self = LivenessGraph{
-            .allocator = allocator,
-            .flow = flow,
-            .regions = .empty,
+    /// Creates a liveness graph from a flow graph.
+    pub fn analyze(allocator: std.mem.Allocator, flow: *const FlowGraph) error{InvalidGraph, OutOfMemory}!LivenessGraph {
+        var liveness = LivenessGraph{
+            .regions = RefMap.empty,
         };
 
-        try self.regions.ensureTotalCapacity(allocator, 256);
+        try liveness.regions.ensureTotalCapacity(allocator, 1024);
 
-        return self;
+        errdefer liveness.deinit(allocator);
+
+        var analyzer = struct {
+            const Self = @This();
+
+            allocator: std.mem.Allocator,
+            flow: *const FlowGraph,
+
+            liveness: *LivenessGraph,
+
+            pub fn traverse(self: *Self, visitor: *pl.Visitor(Ref), def: Ref, ref: Ref) !void  {
+                if (!try visitor.visit(ref)) return;
+
+                try self.makeRegionEdge(def, ref);
+
+                var pred_it = try self.flow.iterateDefImmediatePredecessors(ref);
+                while (pred_it.next()) |pred_ptr| {
+                    const pred = pred_ptr.*;
+
+                    try self.traverse(visitor, def, pred);
+                }
+            }
+
+            pub fn makeRegionEdge(self: *Self, a: Ref, b: Ref) !void {
+                const region = try self.liveness.regions.getOrPut(self.allocator, a);
+                if (!region.found_existing) region.value_ptr.* = RefSet.empty;
+
+                try region.value_ptr.put(self.allocator, b, {});
+            }
+        } {
+            .allocator = allocator,
+            .flow = flow,
+            .liveness = &liveness,
+        };
+
+        var visitor = try pl.Visitor(Ref).init(allocator);
+        defer visitor.deinit();
+
+        var def_it = analyzer.flow.def_use.keyIterator();
+        while (def_it.next()) |def_ptr| {
+            const def = def_ptr.*;
+
+            visitor.clearVisited();
+            _ = try visitor.visit(def);
+
+            var use_it = try analyzer.flow.iterateDefImmediateSuccessors(def);
+            while (use_it.next()) |use_ptr| {
+                const use = use_ptr.*;
+
+                try analyzer.traverse(&visitor, def, use);
+            }
+        }
+
+        return liveness;
     }
 
     /// Deinitializes the liveness graph, freeing all memory it owns.
-    /// * does not free the flow graph or reachability graph
-    pub fn deinit(self: *LivenessGraph) void {
+    pub fn deinit(self: *LivenessGraph, allocator: std.mem.Allocator) void {
         var it = self.regions.valueIterator();
-        while (it.next()) |x| x.deinit(self.allocator);
+        while (it.next()) |x| x.deinit(allocator);
 
-        self.regions.deinit(self.allocator);
+        self.regions.deinit(allocator);
     }
 };
 
-/// Using a liveness graph, a color graph is constructed to, in essence,
-/// assign a unique virtual register to each value. Where possible, virtual register "colors" are re-used,
-/// thus the use of the liveness graph.
+/// Graph mapping all values to a color that is non-overlapping in terms of liveness.
+/// This is used to determine which values can be stored in the same register.
 pub const ColorGraph = struct {
-    allocator: std.mem.Allocator,
-    flow: *const FlowGraph,
-    liveness: *const LivenessGraph,
-
     color_map: ColorMap,
     color_set: ColorSet,
 
@@ -2449,83 +2449,64 @@ pub const ColorGraph = struct {
     pub const ColorMap = pl.UniqueReprMap(Ref, Color, 80);
     pub const ColorSet = pl.UniqueReprArraySet(Color, false);
 
-    pub fn analyze(allocator: std.mem.Allocator, flow: *const FlowGraph, liveness: *const LivenessGraph) !ColorGraph {
-        var self = try ColorGraph.init(allocator, flow, liveness);
-        errdefer self.deinit();
+    pub fn getColor(self: *const ColorGraph, ref: Ref) !Color {
+        return self.color_map.get(ref) orelse error.InvalidGraph;
+    }
+
+    pub fn iterateColors(self: *const ColorGraph) ColorMap.Iterator {
+        return self.color_map.iterator();
+    }
+
+    pub fn analyze(allocator: std.mem.Allocator, liveness: *const LivenessGraph) !ColorGraph {
+        var colorization = ColorGraph{
+            .color_map = ColorMap.empty,
+            .color_set = ColorSet.empty,
+        };
+
+        try colorization.color_map.ensureTotalCapacity(allocator, 256);
+        errdefer colorization.color_map.deinit(allocator);
+
+        try colorization.color_set.ensureTotalCapacity(allocator, 256);
+        errdefer colorization.color_set.deinit(allocator);
 
         var interfering_colors = ColorSet.empty;
         try interfering_colors.ensureTotalCapacity(allocator, 256);
         defer interfering_colors.deinit(allocator);
 
-        var def_it = self.liveness.regions.keyIterator();
+        var def_it = liveness.regions.keyIterator();
         while (def_it.next()) |def_ptr| {
             const def = def_ptr.*;
 
             interfering_colors.clearRetainingCapacity();
 
-            var interference_it = try self.liveness.interferenceIterator(def);
+            var interference_it = try liveness.iterateInterferingRefs(def);
             while (interference_it.next()) |interfering_ref_ptr| {
                 const interfering_ref = interfering_ref_ptr.*;
-                const interfering_color = self.color_map.get(interfering_ref) orelse continue;
+                const interfering_color = colorization.color_map.get(interfering_ref) orelse continue;
 
-                try interfering_colors.put(self.allocator, interfering_color, {});
+                try interfering_colors.put(allocator, interfering_color, {});
             }
 
-            if (self.findExistingColor(&interfering_colors)) |color| {
-                try self.color_map.put(self.allocator, def, color);
+            if (find_color: for (colorization.color_set.keys()) |existing_color| {
+                if (!interfering_colors.contains(existing_color)) break :find_color existing_color;
+            } else null) |color| {
+                try colorization.color_map.put(allocator, def, color);
             } else {
-                const color = try self.createNewColor();
-                try self.color_map.put(self.allocator, def, color);
+                const color = colorization.color_set.count();
+                try colorization.color_set.put(allocator, color, {});
+                try colorization.color_map.put(allocator, def, color);
             }
         }
 
-        return self;
+        return colorization;
     }
 
-    pub fn getColor(self: *const ColorGraph, ref: Ref) !Color {
-        return self.color_map.get(ref) orelse error.InvalidGraph;
-    }
-
-    fn createNewColor(self: *ColorGraph) !Color {
-        const color = self.color_set.count();
-        try self.color_set.put(self.allocator, color, {});
-
-        return color;
-    }
-
-    fn findExistingColor(self: *ColorGraph, interfering: *const ColorSet) ?Color {
-        for (self.color_set.keys()) |existing_color| {
-            if (!interfering.contains(existing_color)) return existing_color;
-        }
-
-        return null;
-    }
-
-    fn init(allocator: std.mem.Allocator, flow: *const FlowGraph, liveness: *const LivenessGraph) error{OutOfMemory}!ColorGraph {
-        var self = ColorGraph{
-            .allocator = allocator,
-            .flow = flow,
-            .liveness = liveness,
-            .color_map = .empty,
-            .color_set = .empty,
-        };
-
-        try self.color_map.ensureTotalCapacity(allocator, 256);
-        errdefer self.color_map.deinit(allocator);
-
-        try self.color_set.ensureTotalCapacity(allocator, 256);
-        errdefer self.color_set.deinit(allocator);
-
-        return self;
-    }
-
-    /// Deinitializes the color graph, freeing all memory it owns.
-    /// * does not free the flow graph or liveness graph
-    pub fn deinit(self: *ColorGraph) void {
-        self.color_map.deinit(self.allocator);
-        self.color_set.deinit(self.allocator);
+    pub fn deinit(self: *ColorGraph, allocator: std.mem.Allocator) void {
+        self.color_map.deinit(allocator);
+        self.color_set.deinit(allocator);
     }
 };
+
 
 /// An intermediate representation of functions.
 /// Functions are defined in modules and must be given a name for symbol resolution purposes.
