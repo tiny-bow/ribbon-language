@@ -18,6 +18,8 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
+// TODO: i think we should use nan-tagging instead;
+// integers larger than 2^53 can be stored on the heap.
 
 /// A meta-language value.
 pub const Value = packed struct {
