@@ -2342,7 +2342,7 @@ pub const ReachabilityGraph = struct {
     }
 };
 
-/// Graph mapping regions the result of an instruction is used.
+/// Graph mapping regions that the result of an instruction is used within.
 /// This is different from use->def and reachability, as it maps all reachable instructions
 /// that occur after the def, and before its last use.
 /// This is used to determine when the value is "alive" in the program.
@@ -2430,6 +2430,100 @@ pub const LivenessGraph = struct {
         while (it.next()) |x| x.deinit(self.allocator);
 
         self.regions.deinit(self.allocator);
+    }
+};
+
+/// Using a liveness graph, a color graph is constructed to, in essence,
+/// assign a unique virtual register to each value. Where possible, virtual register "colors" are re-used,
+/// thus the use of the liveness graph.
+pub const ColorGraph = struct {
+    allocator: std.mem.Allocator,
+    flow: *const FlowGraph,
+    liveness: *const LivenessGraph,
+
+    color_map: ColorMap,
+    color_set: ColorSet,
+
+    pub const Color = u64;
+
+    pub const ColorMap = pl.UniqueReprMap(Ref, Color, 80);
+    pub const ColorSet = pl.UniqueReprArraySet(Color, false);
+
+    pub fn analyze(allocator: std.mem.Allocator, flow: *const FlowGraph, liveness: *const LivenessGraph) !ColorGraph {
+        var self = try ColorGraph.init(allocator, flow, liveness);
+        errdefer self.deinit();
+
+        var interfering_colors = ColorSet.empty;
+        try interfering_colors.ensureTotalCapacity(allocator, 256);
+        defer interfering_colors.deinit(allocator);
+
+        var def_it = self.liveness.regions.keyIterator();
+        while (def_it.next()) |def_ptr| {
+            const def = def_ptr.*;
+
+            interfering_colors.clearRetainingCapacity();
+
+            var interference_it = try self.liveness.interferenceIterator(def);
+            while (interference_it.next()) |interfering_ref_ptr| {
+                const interfering_ref = interfering_ref_ptr.*;
+                const interfering_color = self.color_map.get(interfering_ref) orelse continue;
+
+                try interfering_colors.put(self.allocator, interfering_color, {});
+            }
+
+            if (self.findExistingColor(&interfering_colors)) |color| {
+                try self.color_map.put(self.allocator, def, color);
+            } else {
+                const color = try self.createNewColor();
+                try self.color_map.put(self.allocator, def, color);
+            }
+        }
+
+        return self;
+    }
+
+    pub fn getColor(self: *const ColorGraph, ref: Ref) !Color {
+        return self.color_map.get(ref) orelse error.InvalidGraph;
+    }
+
+    fn createNewColor(self: *ColorGraph) !Color {
+        const color = self.color_set.count();
+        try self.color_set.put(self.allocator, color, {});
+
+        return color;
+    }
+
+    fn findExistingColor(self: *ColorGraph, interfering: *const ColorSet) ?Color {
+        for (self.color_set.keys()) |existing_color| {
+            if (!interfering.contains(existing_color)) return existing_color;
+        }
+
+        return null;
+    }
+
+    fn init(allocator: std.mem.Allocator, flow: *const FlowGraph, liveness: *const LivenessGraph) error{OutOfMemory}!ColorGraph {
+        var self = ColorGraph{
+            .allocator = allocator,
+            .flow = flow,
+            .liveness = liveness,
+            .color_map = .empty,
+            .color_set = .empty,
+        };
+
+        try self.color_map.ensureTotalCapacity(allocator, 256);
+        errdefer self.color_map.deinit(allocator);
+
+        try self.color_set.ensureTotalCapacity(allocator, 256);
+        errdefer self.color_set.deinit(allocator);
+
+        return self;
+    }
+
+    /// Deinitializes the color graph, freeing all memory it owns.
+    /// * does not free the flow graph or liveness graph
+    pub fn deinit(self: *ColorGraph) void {
+        self.color_map.deinit(self.allocator);
+        self.color_set.deinit(self.allocator);
     }
 };
 
