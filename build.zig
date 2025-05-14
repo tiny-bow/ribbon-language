@@ -256,6 +256,7 @@ pub fn build(b: *std.Build) !void {
     ir2bc_mod.addImport("core", core_mod);
     ir2bc_mod.addImport("bytecode", bytecode_mod);
     ir2bc_mod.addImport("ir", ir_mod);
+    ir2bc_mod.addImport("Id", Id_mod);
 
     isa_mod.addImport("platform", platform_mod);
 
