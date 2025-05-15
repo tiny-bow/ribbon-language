@@ -21,7 +21,7 @@ pub const Compiler = struct {
     /// the ir for the whole program.
     /// can be appended to, but not (yet, anyway) mutated;
     /// not all IR is necessarily compiled at any given time.
-    ir: *const ir.Builder,
+    ir: *ir.Context,
     /// table for the whole program compiled thus far
     table: bytecode.Table,
 };
@@ -34,5 +34,10 @@ pub const Jit = struct {
     ir: *const ir.Function,
     /// Local table for the function being compiled
     table: bytecode.Table,
-};
 
+    /// Reset the Jit-local state for the compilation of a new function.
+    pub fn reset(self: *Jit, new_function: *const ir.Function) void {
+        self.table.clear();
+        self.ir = new_function;
+    }
+};
