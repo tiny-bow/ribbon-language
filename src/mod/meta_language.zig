@@ -88,7 +88,7 @@ pub const Value = packed struct {
 /// This is a tree structure, where each node is an expression.
 pub const Expr = struct {
     /// The source location of the expression.
-    source: analysis.SourceLocation,
+    source: analysis.Source,
     /// The attributes of the expression.
     /// These are used to store metadata about the expression.
     attributes: pl.StringMap(Expr) = .empty,

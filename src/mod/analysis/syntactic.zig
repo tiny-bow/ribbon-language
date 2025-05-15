@@ -16,7 +16,7 @@ pub const SyntaxError = error {
 /// A concrete syntax tree node yielded by the meta language parser.
 pub const SyntaxTree = struct {
     /// The source location where the expression began.
-    source: analysis.SourceLocation,
+    source: analysis.Source,
     /// The source precedence of this expression.
     precedence: i16,
     /// The type of the expression.
