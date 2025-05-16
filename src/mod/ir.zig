@@ -459,7 +459,7 @@ pub const Source = struct {
     }
 };
 
-pub const Graph = struct {
+pub const Context = struct {
     allocator: std.mem.Allocator,
 
     map: struct {
@@ -505,11 +505,13 @@ pub const Graph = struct {
         }
     } = .{},
 
-    pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !*Graph {
-        const self = try allocator.create(Graph);
+    pub fn init(allocator: std.mem.Allocator) !*Context {
+        const capacity = 1024;
+
+        const self = try allocator.create(Context);
         errdefer allocator.destroy(self);
 
-        self.* = Graph { .allocator = allocator };
+        self.* = Context { .allocator = allocator };
 
         try self.map.name.ensureUnusedCapacity(allocator, capacity);
         errdefer self.map.name.deinit(allocator);
@@ -556,108 +558,9 @@ pub const Graph = struct {
         return self;
     }
 
-    pub fn deinit(self: *Graph) void {
+    pub fn deinit(self: *Context) void {
         self.map.deinit(self.allocator);
         self.table.deinit(self.allocator);
         self.allocator.destroy(self);
-    }
-};
-
-
-pub const Context = struct {
-    id: Id(Context),
-    /// Context can either be a root or a child; this holds state specific to each.
-    mode: Mode,
-
-    /// Contains state specific to a context type.
-    pub const Mode = union(enum) {
-        /// The root context, which is the top-level context for a graph.
-        /// * child contexts may access the shared graph via the rw_lock. See `Context.acquireRead`, etc.
-        root: struct {
-            shared_graph: *Graph,
-            fresh_context_id: u32 = 1,
-            rw_lock: std.Thread.RwLock = .{},
-        },
-        /// A child context, which is a sub-context of a root context, or another child context.
-        /// * care should be taken with child->child context relationships as they are not thread safe
-        child: struct {
-            parent_context: *Context,
-            local_graph: *Graph,
-        },
-    };
-
-    pub fn init(graph: *Graph) Context {
-        return Context{
-            .id = Id(Context).fromInt(0),
-            .mode = .{ .root = .{ .shared_graph = graph } },
-        };
-    }
-
-    pub fn createChildContext(self: *Context, graph: *Graph) Context {
-        switch (self.mode) {
-            .root => |*state| {
-                state.rw_lock.lock();
-                defer state.rw_lock.unlock();
-
-                const id = Id(Context).fromInt(state.fresh_context_id);
-                state.fresh_context_id += 1;
-
-                return Context{
-                    .id = id,
-                    .mode = .{ .child = .{ .parent_context = self, .local_graph = graph } },
-                };
-            },
-            .child => |*state| {
-                const root = self.fetchRoot();
-
-                root.acquireWrite();
-                defer root.releaseWrite();
-
-                const root_state = &root.mode.root;
-
-                const id = Id(Context).fromInt(root_state.fresh_context_id);
-                root_state.fresh_context_id += 1;
-
-                return Context{
-                    .id = id,
-                    .mode = .{ .child = .{ .parent_context = self, .local_graph = state.local_graph } },
-                };
-            },
-        }
-    }
-
-    pub fn fetchRoot(self: *Context) *Context {
-        return switch (self.mode) {
-            .root => self,
-            .child => |*state| state.parent_context.fetchRoot(),
-        };
-    }
-
-    pub fn acquireRead(self: *Context) void {
-        switch (self.mode) {
-            .root => |*state| state.rw_lock.lockShared(),
-            .child => |*state| state.parent_context.acquireRead(),
-        }
-    }
-
-    pub fn acquireWrite(self: *Context) void {
-        switch (self.mode) {
-            .root => |*state| state.rw_lock.lock(),
-            .child => |*state| state.parent_context.acquireWrite(),
-        }
-    }
-
-    pub fn releaseRead(self: *Context) void {
-        switch (self.mode) {
-            .root => |*state| state.rw_lock.unlockShared(),
-            .child => |*state| state.parent_context.releaseRead(),
-        }
-    }
-
-    pub fn releaseWrite(self: *Context) void {
-        switch (self.mode) {
-            .root => |*state| state.rw_lock.unlock(),
-            .child => |*state| state.parent_context.releaseWrite(),
-        }
     }
 };
