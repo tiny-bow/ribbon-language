@@ -574,8 +574,8 @@ pub const Context = struct {
         /// The root context, which is the top-level context for a graph.
         /// * child contexts may access the shared graph via the rw_lock. See `Context.acquireRead`, etc.
         root: struct {
-            child_contexts: pl.ArrayList(*Context) = .{},
             shared_graph: *Graph,
+            fresh_context_id: u32 = 1,
             rw_lock: std.Thread.RwLock = .{},
         },
         /// A child context, which is a sub-context of a root context, or another child context.
@@ -586,16 +586,44 @@ pub const Context = struct {
         },
     };
 
-    pub fn init(graph: *Graph) !*Context {
-        const self = try graph.allocator.create(Context);
-        errdefer graph.allocator.destroy(self);
-
-        self.* = Context{
+    pub fn init(graph: *Graph) Context {
+        return Context{
             .id = Id(Context).fromInt(0),
             .mode = .{ .root = .{ .shared_graph = graph } },
         };
+    }
 
-        return self;
+    pub fn createChildContext(self: *Context, graph: *Graph) Context {
+        switch (self.mode) {
+            .root => |*state| {
+                state.rw_lock.lock();
+                defer state.rw_lock.unlock();
+
+                const id = Id(Context).fromInt(state.fresh_context_id);
+                state.fresh_context_id += 1;
+
+                return Context{
+                    .id = id,
+                    .mode = .{ .child = .{ .parent_context = self, .local_graph = graph } },
+                };
+            },
+            .child => |*state| {
+                const root = self.fetchRoot();
+
+                root.acquireWrite();
+                defer root.releaseWrite();
+
+                const root_state = &root.mode.root;
+
+                const id = Id(Context).fromInt(root_state.fresh_context_id);
+                root_state.fresh_context_id += 1;
+
+                return Context{
+                    .id = id,
+                    .mode = .{ .child = .{ .parent_context = self, .local_graph = state.local_graph } },
+                };
+            },
+        }
     }
 
     pub fn fetchRoot(self: *Context) *Context {
@@ -630,51 +658,6 @@ pub const Context = struct {
         switch (self.mode) {
             .root => |*state| state.rw_lock.unlock(),
             .child => |*state| state.parent_context.releaseWrite(),
-        }
-    }
-
-    pub fn createChildContext(self: *Context, graph: *Graph) !*Context {
-        switch (self.mode) {
-            .root => |*state| {
-                self.acquireWrite();
-                defer self.releaseWrite();
-
-                const id = Id(Context).fromInt(state.child_contexts.items.len);
-
-                const child = try state.shared_graph.allocator.create(Context);
-                errdefer state.shared_graph.allocator.destroy(child);
-
-                try state.child_contexts.append(state.shared_graph.allocator, child);
-
-                child.* = Context{
-                    .id = id,
-                    .mode = .{ .child = .{ .parent_context = self, .local_graph = graph } },
-                };
-
-                return child;
-            },
-            .child => |*state| {
-                const root = self.fetchRoot();
-
-                root.acquireWrite();
-                defer root.releaseWrite();
-
-                const root_state = &root.mode.root;
-
-                const id = Id(Context).fromInt(root.mode.root.child_contexts.items.len);
-
-                const child = try root_state.shared_graph.allocator.create(Context);
-                errdefer root_state.shared_graph.allocator.destroy(child);
-
-                try root.mode.root.child_contexts.append(root.mode.root.shared_graph.allocator, child);
-
-                child.* = Context{
-                    .id = id,
-                    .mode = .{ .child = .{ .parent_context = self, .local_graph = state.local_graph } },
-                };
-
-                return child;
-            },
         }
     }
 };
