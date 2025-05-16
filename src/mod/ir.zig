@@ -15,25 +15,79 @@ const log = std.log.scoped(.Rir);
 
 const pl = @import("platform");
 const common = @import("common");
-const Id = common.Id;
 const Interner = @import("Interner");
 const analysis = @import("analysis");
-const Source = analysis.Source;
 
 test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
+pub fn Id(comptime T: type) type {
+    return common.Id.ofSize(T, 32);
+}
 
-/// the maximum number of operands anything in the ir can have
-pub const max_operands = 255;
+pub fn Table(comptime T: type) type {
+    return struct {
+        const Self = @This();
 
-pub const Name = []const u8;
+        data: pl.MultiArrayList(T) = .empty,
 
-pub const NameTable = struct {
-    name_to_id: pl.StringArrayMap(Id.of(Name)) = .empty,
-    data: pl.ArrayList(Name) = .empty,
-};
+        fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Self {
+            var self = Self.empty;
+
+            try self.data.ensureTotalCapacity(allocator, capacity);
+            errdefer self.data.deinit(allocator);
+
+            return self;
+        }
+
+        fn ensureCapacity(self: *Self, allocator: std.mem.Allocator, capacity: usize) !void {
+            try self.data.ensureUnusedCapacity(allocator, capacity);
+        }
+
+        fn deinitData(self: *Self, allocator: std.mem.Allocator) void {
+            if (comptime pl.hasDecl(T, .deinit)) {
+                for (0..self.data.len) |i| {
+                    var a = self.data.get(i);
+                    a.deinit(allocator);
+                }
+            }
+
+            self.data.len = 0;
+        }
+
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.deinitData(allocator);
+            self.data.deinit(allocator);
+        }
+
+        fn clear(self: *Self) void {
+            self.data.clearRetainingCapacity();
+        }
+
+        pub fn column(self: *Self, comptime name: std.meta.FieldEnum(T)) []const std.meta.FieldType(T, name) {
+            return self.data.items(name);
+        }
+
+        pub fn cell(self: *Self, id: Id(T), comptime name: std.meta.FieldEnum(T)) *const std.meta.FieldType(T, name) {
+            return &self.data.items(name)[id.toInt()];
+        }
+
+        pub fn getRow(self: *Self, id: Id(T)) ?T {
+            if (id == .null) return null;
+
+            return self.data.get(id.toInt());
+        }
+
+        pub fn addRow(self: *Self, allocator: std.mem.Allocator, data: T) !Id(T) {
+            const id = Id(T).fromInt(self.data.len);
+
+            try self.data.append(allocator, data);
+
+            return id;
+        }
+    };
+}
 
 /// Designates the kind of operation, be it data manipulation or control flow, that is performed by an ir `Instruction`.
 pub const Operation = enum {
@@ -133,12 +187,6 @@ pub const Kind = union(enum) {
     /// and can be passed as arguments (via coercion to pointer).
     /// They cannot be stored in memory, and have no size.
     function: void,
-    /// Foreign addresses are pointers to external functions or data, and can be called or
-    /// dereferenced, depending on type.
-    foreign_address: void,
-    /// Builtin addresses are pointers to host functions or data, and can be called or
-    /// dereferenced, depending on type.
-    builtin_address: void,
     /// Effect types represent a side effect that can be performed by a function.
     effect: void,
     /// Handler types represent a function that can handle a side effect.
@@ -152,10 +200,6 @@ pub const Kind = union(enum) {
     /// it will have the type `Block`, which is of this kind.
     /// Size is known, can be used for comparisons.
     block: void,
-    /// in the event a module is referenced as a value, it will have the type `Module`,
-    /// which is of this kind.
-    /// Size is known, can be used for comparisons.
-    module: void,
     /// in the event a local variable is referenced as a value,
     /// it will have the type `Local`, which is of this kind.
     /// Size is known, can be used for comparisons.
@@ -163,225 +207,474 @@ pub const Kind = union(enum) {
     /// in the event a type is referenced as a value, it will have the type `Type`,
     /// which is in turn, of this kind.
     /// Size is known, can be used for comparisons.
-    type: Id.of(Constructor),
+    type: Id(Constructor),
 };
 
 pub const Constructor = struct {
-    id: Id.of(Constructor),
+    id: Id(Constructor),
     /// the type kind this type constructor produces as a result
     output: Kind,
     /// the type kinds this type constructor expects as operands
-    inputs: [max_operands] ?Kind = [1]?Kind{null} ** max_operands,
+    inputs: pl.ArrayList(Kind) = .empty,
+
+    fn deinit(self: *Constructor, allocator: std.mem.Allocator) void {
+        self.inputs.deinit(allocator);
+    }
 };
 
 pub const Type = struct {
-    id: Id.of(Type),
+    id: Id(Type),
     /// the type constructor for this type
-    constructor: Id.of(Constructor),
+    constructor: Id(Constructor),
     /// computed at construction
     kind: Kind,
     /// type parameters for the type constructor
-    operands: [max_operands] ?TypeParameter = [1]?TypeParameter{null} ** max_operands,
+    operands: pl.ArrayList(TypeParameter) = .empty,
+
+    fn deinit(self: *Type, allocator: std.mem.Allocator) void {
+        self.operands.deinit(allocator);
+    }
 };
 
 pub const TypeParameter = union(enum) {
-    type: Id.of(Type),
-    constant: Id.of(Constant),
+    type: Id(Type),
+    constant: Id(Constant),
 };
 
 pub const Constant = struct {
-    id: Id.of(Constant),
-    type: Id.of(Type),
+    id: Id(Constant),
+    /// the type of this constant
+    type: Id(Type),
+    /// the value of this constant
     value: []const u8,
+
+    fn deinit(self: *Constant, allocator: std.mem.Allocator) void {
+        allocator.free(self.value);
+    }
 };
 
 pub const Global = struct {
-    id: Id.of(Global),
-    type: Id.of(Type),
+    id: Id(Global),
+    /// the type of this global
+    type: Id(Type),
     /// optional constant-value initializer for this global
-    init: Id.of(Constant) = .null,
+    initializer: Id(Constant) = .null,
 };
 
 pub const Function = struct {
-    id: Id.of(Function),
-    type: Id.of(Type),
-    entry: Id.of(Block) = .null,
+    id: Id(Function),
+    /// the type of this function
+    type: Id(Type),
+    /// the function's entry block
+    entry: Id(Block) = .null,
+    /// all the blocks in this function
     blocks: pl.ArrayList(Block) = .empty,
+    /// all block->block edges in this function
     edges: pl.ArrayList(BlockEdge) = .empty,
+    /// all the instructions in this function's blocks
+    instructions: pl.ArrayList(Instruction) = .empty,
+
+    fn deinit(self: *Function, allocator: std.mem.Allocator) void {
+        for (self.blocks.items) |block| block.deinit(allocator);
+        for (self.edges.items) |edge| edge.deinit(allocator);
+        for (self.instructions.items) |instruction| instruction.deinit(allocator);
+
+        self.blocks.deinit(allocator);
+        self.edges.deinit(allocator);
+        self.instructions.deinit(allocator);
+    }
 };
 
 pub const Input = struct {
-    type: Id.of(Type),
+    id: Id(Input),
+    /// the type expected for this block operand
+    type: Id(Type),
 };
 
 pub const Block = struct {
-    id: Id.of(Block),
+    id: Id(Block),
     /// the block operand's types
-    inputs: [max_operands] ?Input = [1]?Input{null} ** max_operands,
-    /// the instructions of this block
-    instructions: pl.ArrayList(Instruction) = .empty,
-    /// the destinations for this block's termination
-    edges: [max_edges] ?BlockEdge = [1]?BlockEdge{null} ** max_edges,
+    inputs: pl.ArrayList(Input) = .empty,
+    /// the instructions belonging to this block
+    instructions: pl.ArrayList(Id(Instruction)) = .empty,
     /// the way this block terminates
     termination: ?Termination = null,
     /// handler set for this block, if any
-    handler_set: Id.of(HandlerSet) = .null,
+    handler_set: Id(HandlerSet) = .null,
 
-    /// maximum number of instructions a block can have
-    pub const max_instructions = std.math.maxInt(std.meta.Tag(Id.of(Instruction)));
-
-    /// maximum number of (outbound) edges a block can have
-    /// * currently we only support simple 2-way cond and 1-way uncond branches,
-    /// in addition to an optional cancellation; totalling a max of 3 possible edges
-    pub const max_edges = 3;
+    fn deinit(self: *Block, allocator: std.mem.Allocator) void {
+        self.inputs.deinit(allocator);
+        self.instructions.deinit(allocator);
+    }
 };
 
 pub const BlockEdge = struct {
     /// the block to which this edge points, if any
-    destination: Id.of(Block),
+    destination: Id(Block),
     /// parameters for the termination such as the condition for a conditional branch
-    inputs: [max_operands] ?Operand = [1]?Operand{null} ** max_operands,
+    inputs: pl.ArrayList(Operand) = .empty,
     /// parameters for the destination block
-    outputs: [max_operands] ?Operand = [1]?Operand{null} ** max_operands,
+    outputs: pl.ArrayList(Operand) = .empty,
+
+    fn deinit(self: *BlockEdge, allocator: std.mem.Allocator) void {
+        self.inputs.deinit(allocator);
+        self.outputs.deinit(allocator);
+    }
 };
 
 pub const HandlerSet = struct {
-    id: Id.of(HandlerSet),
+    id: Id(HandlerSet),
     /// cancellation type for this handler set, if allowed
-    cancellation_type: Id.of(Type),
+    cancellation_type: Id(Type),
     /// the parameters for the handler set; upvalue bindings
-    inputs: [max_operands] ?Operand = [1]?Operand{null} ** max_operands,
+    inputs: pl.ArrayList(Operand) = .empty,
     /// the handlers implementing this handler set
-    handlers: [max_handlers] Id.of(Handler) = [1]Id.of(Handler){.null} ** max_handlers,
+    handlers: pl.ArrayList(Id(Handler)) = .empty,
 
     /// maximum number of handlers a handler set can have
     pub const max_handlers = 1024;
+
+    fn deinit(self: *HandlerSet, allocator: std.mem.Allocator) void {
+        self.inputs.deinit(allocator);
+        self.handlers.deinit(allocator);
+    }
 };
 
 pub const Handler = struct {
-    id: Id.of(Handler),
+    id: Id(Handler),
     /// the block implementing this handler
-    block: Id.of(Block),
+    block: Id(Block),
     /// the effect handled by this handler
-    handled_effect_type: Id.of(Type),
+    handled_effect_type: Id(Type),
     /// the function that implements this handler
-    function: Id.of(Function),
+    function: Id(Function),
     /// the cancellation type for this handler, if allowed. must match the type bound by handler set
-    cancellation_type: Id.of(Type) = .null,
+    cancellation_type: Id(Type) = .null,
     /// the parameters for the handler; upvalue bindings. must match the values bound by handler set
-    inputs: [max_operands] ?Input = [1]?Input{null} ** max_operands,
+    inputs: pl.ArrayList(Input) = .empty,
+
+    fn deinit(self: *Handler, allocator: std.mem.Allocator) void {
+        self.inputs.deinit(allocator);
+    }
 };
 
 pub const Instruction = struct {
-    id: Id.of(Instruction),
+    id: Id(Instruction),
     /// type of this instruction
     /// * computed value
-    type: Id.of(Type) = .null,
+    type: Id(Type) = .null,
     /// the instruction's operation
     operation: Operation = .nop,
     /// the instruction's operands
-    operands: [max_operands] ?Operand = [1]?Operand{null} ** max_operands,
+    operands: pl.ArrayList(Operand) = .empty,
+
+    fn deinit(self: *Instruction, allocator: std.mem.Allocator) void {
+        self.operands.deinit(allocator);
+    }
 };
 
 pub const Operand = union(enum) {
-    constant: Id.of(Constant),
-    instruction: Id.of(Instruction),
-    input: Id.of(Input),
-    block: Id.of(Block),
+    constant: Id(Constant),
+    instruction: Id(Instruction),
+    input: Id(Input),
+    block: Id(Block),
 };
 
 pub const ForeignAddress = struct {
-    id: Id.of(ForeignAddress),
+    id: Id(ForeignAddress),
     /// the address of the foreign value
     address: u64,
     /// the type of the foreign value
-    type: Id.of(Type),
+    type: Id(Type),
 };
 
 pub const BuiltinAddress = struct {
-    id: Id.of(BuiltinAddress),
+    id: Id(BuiltinAddress),
     /// the address of the builtin value
     address: u64,
     /// the type of the builtin value
-    type: Id.of(Type),
+    type: Id(Type),
 };
 
-pub const MetaData = struct {
+pub const Effect = struct {
+    id: Id(Effect),
+    /// types handlers bound for this effect must conform to
+    handler_signatures: pl.ArrayList(Id(Type)),
+
+    fn deinit(self: *Effect, allocator: std.mem.Allocator) void {
+        self.handler_signatures.deinit(allocator);
+    }
+};
+
+/// Optional metadata for ir objects.
+pub const Meta = struct {
+    id: Id(Meta),
     /// debug and/or symbol resolution name depending on context
-    name: Id.of(Name) = .null,
+    name: Id(Name) = .null,
     /// the location in the original source code that initiated the creation of this object
-    source: ?Source = null,
+    source: Id(Source) = .null,
+
+    pub const Key = packed struct(u128) {
+        tag: Tag,
+        data: Data,
+
+        pub const Tag: type = pl.FieldEnumOfSize(Data, 32);
+
+        pub const Data = packed union {
+            builtin_address: Id(BuiltinAddress),
+            constant: Id(Constant),
+            constructor: Id(Constructor),
+            foreign_address: Id(ForeignAddress),
+            function: Id(Function),
+            global: Id(Global),
+            handler_set: Id(HandlerSet),
+            handler: Id(Handler),
+            type: Id(Type),
+            effect: Id(Effect),
+            block: packed struct {f: Id(Function), b: Id(Block)},
+            input: packed struct {f: Id(Function), b: Id(Block), i: Id(Input)},
+            instruction: packed struct {f: Id(Function), i: Id(Instruction)},
+            termination: packed struct {f: Id(Function)},
+        };
+    };
+
 };
 
-pub const MetaDataTable = struct {
-    map: pl.UniqueReprMap(Key, MetaData, 80) = .empty,
+pub const Name = struct {
+    id: Id(Name),
+    // all the names of this object, globally
+    aliases: pl.ArrayList([]const u8) = .empty,
 
-    pub const Key = packed struct {
-        tag: enum(u7) {
-            builtin_address,
-            constant,
-            constructor,
-            foreign_address,
-            function,
-            global,
-            handler_set,
-            handler,
-            name,
-            type,
-            block,
-            input,
-            instruction,
-            termination,
-        },
-        data: packed union {
-            builtin_address: Id.of(BuiltinAddress),
-            constant: Id.of(Constant),
-            constructor: Id.of(Constructor),
-            foreign_address: Id.of(ForeignAddress),
-            function: Id.of(Function),
-            global: Id.of(Global),
-            handler_set: Id.of(HandlerSet),
-            handler: Id.of(Handler),
-            name: Id.of(Name),
-            type: Id.of(Type),
-            block: packed struct {f: Id.of(Function), b: Id.of(Block)},
-            input: packed struct {f: Id.of(Function), b: Id.of(Block), i: Id.of(Input)},
-            instruction: packed struct {f: Id.of(Function), b: Id.of(Block), i: Id.of(Instruction)},
-            termination: packed struct {f: Id.of(Function), b: Id.of(Block)},
-        },
-    };
+    fn deinit(self: *Name, allocator: std.mem.Allocator) void {
+        self.aliases.deinit(allocator);
+    }
+};
+
+pub const Source = struct {
+    id: Id(Source),
+    aliases: pl.ArrayList(analysis.Source) = .empty,
+
+    fn deinit(self: *Source, allocator: std.mem.Allocator) void {
+        self.aliases.deinit(allocator);
+    }
 };
 
 pub const Graph = struct {
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex = .{},
-    names: NameTable = .{},
-    meta_data: MetaDataTable = .{},
 
-    builtin_addresses: Id.Table(BuiltinAddress) = .empty,
-    constants: Id.Table(Constant) = .empty,
-    constructors: Id.Table(Constructor) = .empty,
-    foreign_addresses: Id.Table(ForeignAddress) = .empty,
-    functions: Id.Table(Function) = .empty,
-    globals: Id.Table(Global) = .empty,
-    handler_sets: Id.Table(HandlerSet) = .empty,
-    handlers: Id.Table(Handler) = .empty,
-    types: Id.Table(Type) = .empty,
+    map: struct {
+        meta: pl.UniqueReprMap(Meta.Key, Id(Meta), 80) = .{},
+        name: pl.StringArrayMap(Id(Name)) = .{},
+        source: analysis.SourceMap(Id(Source)) = .{},
+
+        fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            self.name.deinit(allocator);
+            self.meta.deinit(allocator);
+            self.source.deinit(allocator);
+        }
+    } = .{},
+
+    table: struct {
+        meta: Table(Meta) = .{},
+        name: Table(Name) = .{},
+        source: Table(Source) = .{},
+        builtin_address: Table(BuiltinAddress) = .{},
+        constant: Table(Constant) = .{},
+        constructor: Table(Constructor) = .{},
+        foreign_address: Table(ForeignAddress) = .{},
+        function: Table(Function) = .{},
+        global: Table(Global) = .{},
+        handler_set: Table(HandlerSet) = .{},
+        handler: Table(Handler) = .{},
+        type: Table(Type) = .{},
+        effect: Table(Effect) = .{},
+
+        fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            self.name.deinit(allocator);
+            self.meta.deinit(allocator);
+            self.builtin_address.deinit(allocator);
+            self.constant.deinit(allocator);
+            self.constructor.deinit(allocator);
+            self.foreign_address.deinit(allocator);
+            self.function.deinit(allocator);
+            self.global.deinit(allocator);
+            self.handler_set.deinit(allocator);
+            self.handler.deinit(allocator);
+            self.type.deinit(allocator);
+            self.effect.deinit(allocator);
+        }
+    } = .{},
+
+    pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !*Graph {
+        const self = try allocator.create(Graph);
+        errdefer allocator.destroy(self);
+
+        self.* = Graph { .allocator = allocator };
+
+        try self.map.name.ensureUnusedCapacity(allocator, capacity);
+        errdefer self.map.name.deinit(allocator);
+
+        try self.map.meta.ensureUnusedCapacity(allocator, @intCast(capacity));
+        errdefer self.map.meta.deinit(allocator);
+
+        try self.table.name.ensureCapacity(allocator, capacity);
+        errdefer self.table.name.deinit(allocator);
+
+        try self.table.meta.ensureCapacity(allocator, capacity);
+        errdefer self.table.meta.deinit(allocator);
+
+        try self.table.builtin_address.ensureCapacity(allocator, capacity);
+        errdefer self.table.builtin_address.deinit(allocator);
+
+        try self.table.constant.ensureCapacity(allocator, capacity);
+        errdefer self.table.constant.deinit(allocator);
+
+        try self.table.constructor.ensureCapacity(allocator, capacity);
+        errdefer self.table.constructor.deinit(allocator);
+
+        try self.table.foreign_address.ensureCapacity(allocator, capacity);
+        errdefer self.table.foreign_address.deinit(allocator);
+
+        try self.table.function.ensureCapacity(allocator, capacity);
+        errdefer self.table.function.deinit(allocator);
+
+        try self.table.global.ensureCapacity(allocator, capacity);
+        errdefer self.table.global.deinit(allocator);
+
+        try self.table.handler_set.ensureCapacity(allocator, capacity);
+        errdefer self.table.handler_set.deinit(allocator);
+
+        try self.table.handler.ensureCapacity(allocator, capacity);
+        errdefer self.table.handler.deinit(allocator);
+
+        try self.table.type.ensureCapacity(allocator, capacity);
+        errdefer self.table.type.deinit(allocator);
+
+        try self.table.effect.ensureCapacity(allocator, capacity);
+        errdefer self.table.effect.deinit(allocator);
+
+        return self;
+    }
+
+    pub fn deinit(self: *Graph) void {
+        self.map.deinit(self.allocator);
+        self.table.deinit(self.allocator);
+        self.allocator.destroy(self);
+    }
 };
 
-pub const Context = struct {
-    id: Id.of(Context),
-    data: Data = .uninit,
 
-    pub const Data = union(enum) {
-        uninit: void,
+pub const Context = struct {
+    id: Id(Context),
+    /// Context can either be a root or a child; this holds state specific to each.
+    mode: Mode,
+
+    /// Contains state specific to a context type.
+    pub const Mode = union(enum) {
+        /// The root context, which is the top-level context for a graph.
+        /// * child contexts may access the shared graph via the rw_lock. See `Context.acquireRead`, etc.
         root: struct {
-            child_contexts: Id.Table(Context) = .empty,
+            child_contexts: pl.ArrayList(*Context) = .{},
             shared_graph: *Graph,
+            rw_lock: std.Thread.RwLock = .{},
         },
+        /// A child context, which is a sub-context of a root context, or another child context.
+        /// * care should be taken with child->child context relationships as they are not thread safe
         child: struct {
             parent_context: *Context,
             local_graph: *Graph,
         },
     };
+
+    pub fn init(graph: *Graph) !*Context {
+        const self = try graph.allocator.create(Context);
+        errdefer graph.allocator.destroy(self);
+
+        self.* = Context{
+            .id = Id(Context).fromInt(0),
+            .mode = .{ .root = .{ .shared_graph = graph } },
+        };
+
+        return self;
+    }
+
+    pub fn fetchRoot(self: *Context) *Context {
+        return switch (self.mode) {
+            .root => self,
+            .child => |*state| state.parent_context.fetchRoot(),
+        };
+    }
+
+    pub fn acquireRead(self: *Context) void {
+        switch (self.mode) {
+            .root => |*state| state.rw_lock.lockShared(),
+            .child => |*state| state.parent_context.acquireRead(),
+        }
+    }
+
+    pub fn acquireWrite(self: *Context) void {
+        switch (self.mode) {
+            .root => |*state| state.rw_lock.lock(),
+            .child => |*state| state.parent_context.acquireWrite(),
+        }
+    }
+
+    pub fn releaseRead(self: *Context) void {
+        switch (self.mode) {
+            .root => |*state| state.rw_lock.unlockShared(),
+            .child => |*state| state.parent_context.releaseRead(),
+        }
+    }
+
+    pub fn releaseWrite(self: *Context) void {
+        switch (self.mode) {
+            .root => |*state| state.rw_lock.unlock(),
+            .child => |*state| state.parent_context.releaseWrite(),
+        }
+    }
+
+    pub fn createChildContext(self: *Context, graph: *Graph) !*Context {
+        switch (self.mode) {
+            .root => |*state| {
+                self.acquireWrite();
+                defer self.releaseWrite();
+
+                const id = Id(Context).fromInt(state.child_contexts.items.len);
+
+                const child = try state.shared_graph.allocator.create(Context);
+                errdefer state.shared_graph.allocator.destroy(child);
+
+                try state.child_contexts.append(state.shared_graph.allocator, child);
+
+                child.* = Context{
+                    .id = id,
+                    .mode = .{ .child = .{ .parent_context = self, .local_graph = graph } },
+                };
+
+                return child;
+            },
+            .child => |*state| {
+                const root = self.fetchRoot();
+
+                root.acquireWrite();
+                defer root.releaseWrite();
+
+                const root_state = &root.mode.root;
+
+                const id = Id(Context).fromInt(root.mode.root.child_contexts.items.len);
+
+                const child = try root_state.shared_graph.allocator.create(Context);
+                errdefer root_state.shared_graph.allocator.destroy(child);
+
+                try root.mode.root.child_contexts.append(root.mode.root.shared_graph.allocator, child);
+
+                child.* = Context{
+                    .id = id,
+                    .mode = .{ .child = .{ .parent_context = self, .local_graph = state.local_graph } },
+                };
+
+                return child;
+            },
+        }
+    }
 };

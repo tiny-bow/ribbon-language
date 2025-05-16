@@ -12,6 +12,7 @@ test {
 
 pub const BufferPosition = source.BufferPosition;
 pub const Source = source.Source;
+pub const SourceMap = source.SourceMap;
 pub const Location = source.Location;
 pub const VisualPosition = source.VisualPosition;
 pub const CodepointIterator = source.CodepointIterator;

@@ -23,6 +23,45 @@ pub const Source = struct {
     }
 };
 
+
+pub fn SourceMap(comptime T: type) type {
+    return std.HashMapUnmanaged(Source, T, SourceContext64, 80);
+}
+
+pub fn SourceArrayMap(comptime T: type) type {
+    return std.ArrayHashMapUnmanaged(Source, T, SourceContext64, true);
+}
+
+pub const SourceContext32 = struct {
+    pub fn hash(_: SourceContext32, source: *const Source) u32 {
+        var hasher = std.hash.Fnv1a_32.init();
+
+        hasher.update(source.name);
+        hasher.update(std.mem.asBytes(&source.location));
+
+        return hasher.final();
+    }
+
+    pub fn eql(_: SourceContext64, source: *const Source, other: *const Source, _: usize) bool {
+        return std.mem.eql(u8, source.name, other.name) and source.location == other.location;
+    }
+};
+
+pub const SourceContext64 = struct {
+    pub fn hash(_: SourceContext64, source: *const Source) u64 {
+        var hasher = std.hash.Fnv1a_64.init();
+
+        hasher.update(source.name);
+        hasher.update(std.mem.asBytes(&source.location));
+
+        return hasher.final();
+    }
+
+    pub fn eql(_: SourceContext64, source: *const Source, other: *const Source) bool {
+        return std.mem.eql(u8, source.name, other.name) and source.location == other.location;
+    }
+};
+
 /// A location in the source code, both buffer-wise and line and column.
 pub const Location = packed struct {
     buffer: BufferPosition = 0,
