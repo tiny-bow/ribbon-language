@@ -7,7 +7,7 @@
 //! * rvm's `core` bytecode (via the `bytecode` module)
 //! * native machine code, in two ways:
 //!    + in house x64 jit (the `machine` module)
-//!    + freestanding (eventually; via llvm, likely)
+//!    + freestanding (eventually)
 const ir = @This();
 
 const std = @import("std");
@@ -17,6 +17,7 @@ const pl = @import("platform");
 const common = @import("common");
 const Interner = @import("Interner");
 const analysis = @import("analysis");
+const bytecode = @import("bytecode");
 const Source = analysis.source;
 
 test {
@@ -30,62 +31,6 @@ pub fn Id(comptime T: type) type {
 pub fn Table(comptime T: type) type {
     return common.Id.Table(T, 32);
 }
-
-/// Builtins that are, or can be thought of as, compiled to primitive instructions.
-pub const Intrinsic = enum(u8) { // TODO: expand mnemonics to instructions; maybe just generate this def?
-// Memory
-    mem_set,
-    mem_copy,
-    mem_swap,
-// Bitwise
-    bit_swap,
-    bit_copy,
-    bit_clz,
-    bit_pop,
-    bit_not,
-    bit_and,
-    bit_or,
-    bit_xor,
-    bit_lshift,
-    bit_rshift,
-// Comparison
-    eq,
-    ne,
-    lt,
-    gt,
-    le,
-    ge,
-// Integer arithmetic
-    i_neg,
-    i_abs,
-    i_add,
-    i_sub,
-    i_mul,
-    i_div,
-    i_rem,
-    i_pow,
-// Floating point arithmetic
-    f_neg,
-    f_abs,
-    f_sqrt,
-    f_floor,
-    f_ceil,
-    f_round,
-    f_trunc,
-    f_whole,
-    f_frac,
-    f_add,
-    f_sub,
-    f_mul,
-    f_div,
-    f_rem,
-    f_pow,
-// Value conversion
-    s_ext,
-    f_to_i,
-    i_to_f,
-    f_to_f,
-};
 
 /// Designates the kind of operation, be it data manipulation or control flow, that is performed by an ir `Instruction`.
 pub const Operation = enum(u8) {
@@ -290,6 +235,30 @@ pub const BuiltinAddress = struct {
     type: Id(Type),
 };
 
+/// Builtins that are, or can be thought of as, compiled to primitive instructions,
+/// and can be used throughout the graph as functions.
+pub const Intrinsic = struct {
+    id: Id(@This()),
+    /// The kind of intrinsic this is.
+    tag: Tag,
+    /// The actual value of the intrinsic.
+    data: Data,
+
+    pub const Tag = enum(u8) {
+        bytecode,
+        _,
+    };
+
+    pub const Data = packed union {
+        /// Embedding the bytecode opcode directly is super convenient because we can
+        /// use this to represent instructions that are not semantically significant to
+        /// analysis, such as simple addition etc; and then also to represent selected
+        /// instructions during the lowering process.
+        bytecode: bytecode.Instruction.OpCode,
+        userdata: *anyopaque,
+    };
+};
+
 /// Binds an effect to a special effect-handling function,
 /// along with a *cancellation type* that may be used in the function,
 /// and the types of any *upvalues* that may be used in the function;
@@ -447,22 +416,24 @@ pub const Key = packed struct(u64) {
     pub const Tag: type = enum(i32) { // must be 32 for abi-aligned packing with 32-bit id
         null = std.math.minInt(i32),
         none = 0,
-        name = 1,
-        kind = 2,
-        constructor = 3,
-        type = 4,
-        effect = 5,
-        constant = 6,
-        global = 7,
-        foreign_address = 8,
-        builtin_address = 9,
-        handler = 10,
-        function = 11,
-        block = 12,
-        dynamic_scope = 13,
-        instruction = 14,
-        buffer = 15,
-        keyset = 16,
+        name,
+        kind,
+        constructor,
+        type,
+        effect,
+        constant,
+        global,
+        foreign_address,
+        builtin_address,
+        intrinsic,
+        handler,
+        function,
+        dynamic_scope,
+        block,
+        edge,
+        instruction,
+        buffer,
+        key_set,
         _,
     };
 };
@@ -501,18 +472,22 @@ pub const Context = struct {
     } = .{},
 
     table: struct {
+        kind: Table(Kind) = .{},
         constructor: Table(Constructor) = .{},
         type: Table(Type) = .{},
+        effect: Table(Effect) = .{},
         constant: Table(Constant) = .{},
         global: Table(Global) = .{},
-        function: Table(Function) = .{},
-        handler: Table(Handler) = .{},
-        instruction: Table(Instruction) = .{},
         foreign_address: Table(ForeignAddress) = .{},
         builtin_address: Table(BuiltinAddress) = .{},
-        effect: Table(Effect) = .{},
-        handler_set: Table(DynamicScope) = .{},
-        buffer: Table(DynamicScope) = .{},
+        intrinsic: Table(Intrinsic) = .{},
+        handler: Table(Handler) = .{},
+        function: Table(Function) = .{},
+        dynamic_scope: Table(DynamicScope) = .{},
+        block: Table(Block) = .{},
+        edge: Table(Edge) = .{},
+        instruction: Table(Instruction) = .{},
+        buffer: Table(Buffer) = .{},
         key_set: Table(KeySet) = .{},
     } = .{},
 
