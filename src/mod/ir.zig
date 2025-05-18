@@ -238,7 +238,7 @@ pub const Kind = struct {
     /// if this kind is an arrow, such as `data -> effect`,
     /// the tag will be `effect`, representing the head of the arrow,
     /// and the inputs here are the tail of the arrow, in the example holding one value, `data`.
-    inputs: Id(KeySet) = .null,
+    inputs: Id(KeyList) = .null,
 
     pub const Tag = enum(u8) {
         /// Data types can be stored anywhere, passed as arguments, etc.
@@ -291,7 +291,7 @@ pub const Type = struct {
     /// the type constructor for this type.
     constructor: Id(Constructor) = .null,
     /// type parameters for the type constructor.
-    inputs: Id(KeySet) = .null,
+    inputs: Id(KeyList) = .null,
 };
 
 /// Binds a set of effect handler signatures, forming an effect,
@@ -299,7 +299,7 @@ pub const Type = struct {
 pub const Effect = struct {
     id: Id(@This()),
     /// types handlers bound for this effect must conform to
-    handler_signatures: Id(KeySet),
+    handler_signatures: Id(KeyList),
 };
 
 /// Binds buffers and constant expressions to a type to form a constant value that can be used anywhere in the graph.
@@ -378,7 +378,7 @@ pub const Handler = struct {
     /// the cancellation type for this handler, if allowed. must match the type bound by DynamicScope
     cancellation_type: Id(Type) = .null,
     /// the parameters for the handler; upvalue bindings. must match the values bound by DynamicScope
-    inputs: Id(KeySet) = .null,
+    inputs: Id(KeyList) = .null,
 };
 
 /// Binds a function type to an entry point instruction to form a function that can be called anywhere in the graph.
@@ -386,8 +386,8 @@ pub const Function = struct {
     id: Id(@This()),
     /// the type of this function
     type: Id(Type) = .null,
-    /// the function's entry block
-    entry: Id(Block) = .null,
+    /// the function's entry
+    entry: Key = .null,
 };
 
 /// Binds a set of effect handlers to a set of operands, forming a dynamic scope in which the bound handlers
@@ -395,9 +395,9 @@ pub const Function = struct {
 pub const DynamicScope = struct {
     id: Id(@This()),
     /// the parameters for the handler set; upvalue bindings
-    inputs: Id(KeySet) = .null,
+    inputs: Id(KeyList) = .null,
     /// the handlers bound by this dynamic scope to handle effects within it
-    handler_set: Id(KeySet) = .null,
+    handler_set: Id(KeyList) = .null,
 };
 
 /// Because Ribbon is a highly expression oriented, but also systems level and side
@@ -438,11 +438,11 @@ pub const DynamicScope = struct {
 pub const Block = struct {
     id: Id(@This()),
     /// local variables bound by this block
-    variables: Id(KeySet) = .null,
+    variables: Id(KeyList) = .null,
     /// dynamic scope for this block, if any
     dynamic_scope: Id(DynamicScope) = .null,
     /// the instructions belonging to this block
-    instructions: Id(KeySet) = .null,
+    instructions: Id(KeyList) = .null,
 };
 
 /// Edges encode the control and data flow of the graph. Data edges specifically are used to
@@ -500,12 +500,12 @@ pub const Buffer = struct {
 };
 
 /// The general collection type for the ir graph.
-pub const KeySet = struct {
+pub const KeyList = struct {
     id: Id(@This()),
     /// the keys in this key set
     keys: pl.ArrayList(Key) = .empty,
 
-    pub fn deinit(self: *KeySet, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *KeyList, allocator: std.mem.Allocator) void {
         self.keys.deinit(allocator);
     }
 };
@@ -575,33 +575,54 @@ pub const Context = struct {
         /// Maps keys to sets of names that have been used to refer to them in the source code,
         /// but that are not used for symbol resolution. Intended for various debugging purposes.
         /// For example, certain instructions may be given a name to make the ir output more readable.
-        alias: pl.UniqueReprBiMap(Key, Id(KeySet), .bucket) = .empty,
+        alias: pl.UniqueReprBiMap(Key, Id(KeyList), .bucket) = .empty,
         /// Maps keys to sets of sources that have contributed to their definition;
         /// for debugging purposes.
-        origin: pl.UniqueReprBiMap(Key, Id(KeySet), .bucket) = .empty,
+        origin: pl.UniqueReprBiMap(Key, Id(KeyList), .bucket) = .empty,
     } = .{},
-
+    /// Storage of standard ir graph types data.
     table: struct {
+        /// Type kinds refer to the general category of a type, be it data, function, etc.
         kind: Table(Kind) = .{},
+        /// Defines a unique type constructor. Types are defined by construction alone, so this is akin to the discriminator of a union.
         constructor: Table(Constructor) = .{},
+        /// Combines a set of type-level arguments with a type constructor to form a concrete type that can be used in the graph.
         type: Table(Type) = .{},
+        /// Binds a set of effect handler signatures, forming an effect.
         effect: Table(Effect) = .{},
+        /// Binds buffers and constant expressions to a type to form a constant value.
         constant: Table(Constant) = .{},
+        /// Binds a type to an optional constant initializer to form a global variable.
         global: Table(Global) = .{},
+        /// Binds a type to a compile-time defined foreign-abi address.
         foreign_address: Table(ForeignAddress) = .{},
+        /// Binds a type to a compile-time defined interpreter address.
         builtin_address: Table(BuiltinAddress) = .{},
+        /// Builtins that are, or can be thought of as, compiled to primitive instructions,
         intrinsic: Table(Intrinsic) = .{},
+        /// Binds a function to an effect type and upvalue environment to form a handler for effects.
         handler: Table(Handler) = .{},
+        /// Binds a type to an entry point to form a function.
         function: Table(Function) = .{},
+        /// Binds a set of effect handlers into a block, creating an effect handling context.
         dynamic_scope: Table(DynamicScope) = .{},
+        /// Binds a set of instructions linearly, creating a sequential block.
         block: Table(Block) = .{},
+        /// Binds an output of one instruction to the input of another, creating a data flow edge.
         data_edge: Table(DataEdge) = .{},
+        /// Binds an edge between two instructions, creating explicit control flow.
         control_edge: Table(ControlEdge) = .{},
+        /// All IR instruction nodes present in the graph.
         instruction: Table(Instruction) = .{},
+        /// Optional type bound to raw memory buffer, for comptime known data.
         buffer: Table(Buffer) = .{},
-        key_set: Table(KeySet) = .{},
+        /// A list of keys, used for various purposes, such as operands to a node.
+        key_list: Table(KeyList) = .{},
     } = .{},
 
+    /// Creates a new context using the given allocator.
+    /// The allocator is used for all* allocations in the context, and the context will own all allocations created with this copy
+    /// * includes the arena allocator within the context
     pub fn init(allocator: std.mem.Allocator) !*Context {
         const capacity = 1024;
 
@@ -625,6 +646,7 @@ pub const Context = struct {
         return self;
     }
 
+    /// Deinitializes the context, freeing all memory that has since been allocated with the provided allocator.
     pub fn deinit(self: *Context) void {
         inline for (comptime std.meta.fieldNames(@FieldType(Context, "map"))) |map_name| {
             @field(self.map, map_name).deinit(self.gpa);
