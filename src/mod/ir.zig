@@ -25,11 +25,116 @@ test {
 }
 
 pub fn Id(comptime T: type) type {
-    return common.Id.ofSize(T, 32);
+    return common.Id.ofSize(T, 64);
 }
 
 pub fn Table(comptime T: type) type {
-    return common.Id.Table(T, 32);
+    return struct {
+        const Self = @This();
+        const Id = ir.Id(T);
+        const Head = common.SlotMap.Head(T, 32, 32);
+
+        head: Head = .empty,
+        data: pl.MultiArrayList(T) = .empty,
+
+        pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Self {
+            var self = Self {};
+
+            try self.head.data.ensureTotalCapacity(allocator, capacity);
+            errdefer self.head.data.deinit(allocator);
+
+            try self.data.ensureTotalCapacity(allocator, capacity);
+            errdefer self.data.deinit(allocator);
+
+            return self;
+        }
+
+        pub fn ensureCapacity(self: *Self, allocator: std.mem.Allocator, capacity: usize) !void {
+            try self.head.data.ensureUnusedCapacity(allocator, capacity);
+            try self.data.ensureUnusedCapacity(allocator, capacity);
+        }
+
+        pub fn deinitData(self: *Self, allocator: std.mem.Allocator) void {
+            if (comptime pl.hasDecl(T, .deinit)) {
+                for (0..self.data.len) |i| {
+                    var a = self.data.get(i);
+                    a.deinit(allocator);
+                }
+            }
+
+            self.data.len = 0;
+
+            self.head.deinit(allocator);
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.deinitData(allocator);
+            self.data.deinit(allocator);
+        }
+
+        pub fn clear(self: *Self) void {
+            self.head.clear();
+            self.data.clearRetainingCapacity();
+        }
+
+        pub fn rowCount(self: *Self) usize {
+            return self.data.len;
+        }
+
+        pub fn column(self: *Self, comptime name: std.meta.FieldEnum(T)) []std.meta.FieldType(T, name) {
+            return self.data.items(name);
+        }
+
+        fn idToRef(id: Self.Id) ?Head.Ref {
+            const bits: u64 = @intFromEnum(id);
+
+            return @bitCast(bits);
+        }
+
+        fn refToId(ref: Head.Ref) Self.Id {
+            return @enumFromInt(@as(u64, @bitCast(ref)));
+        }
+
+        pub fn getIndex(self: *Self, id: Self.Id) ?usize {
+            return self.head.get(idToRef(id));
+        }
+
+        pub fn cell(self: *Self, id: Self.Id, comptime name: std.meta.FieldEnum(T)) *std.meta.FieldType(T, name) {
+            return &self.data.items(name)[self.getIndex(id) orelse return null];
+        }
+
+        pub fn getRow(self: *Self, id: Self.Id) ?T {
+            const index = self.getIndex(@bitCast(id)) orelse return null;
+
+            return self.data.get(index);
+        }
+
+        pub fn addRow(self: *Self, allocator: std.mem.Allocator, data: T) !Self.Id {
+            const ref = try self.head.create(allocator);
+
+            switch (@intFromEnum(ref.generation)) {
+                0 => unreachable,
+                1 => {
+                    std.debug.assert(ref.index == self.data.len);
+                    try self.data.append(allocator, data);
+                },
+                else => {
+                    std.debug.assert(ref.index < self.data.len);
+                    self.data.set(ref.index, data);
+                }
+            }
+
+            return @enumFromInt(@as(u64, @bitCast(ref)));
+        }
+
+        pub fn delRow(self: *Self, id: Self.Id) void {
+            if (self.head.destroy(idToRef(id))) |index| {
+                std.debug.assert(index < self.data.len);
+
+                self.data.swapRemove(index);
+            }
+        }
+    };
 }
 
 /// Designates the kind of operation, be it data manipulation or control flow, that is performed by an ir `Instruction`.
@@ -401,7 +506,7 @@ pub const KeySet = struct {
 };
 
 /// The general reference type for the ir graph.
-pub const Key = packed struct(u64) {
+pub const Key = packed struct(u128) {
     /// discriminator for the `id`.
     tag: Tag,
     id: Id(anyopaque),
@@ -413,8 +518,8 @@ pub const Key = packed struct(u64) {
     };
 
     /// Discriminator for the type of id carried by a `Key`.
-    pub const Tag: type = enum(i32) { // must be 32 for abi-aligned packing with 32-bit id
-        null = std.math.minInt(i32),
+    pub const Tag: type = enum(i64) { // must be 32 for abi-aligned packing with 32-bit id
+        null = std.math.minInt(i64),
         none = 0,
         name,
         kind,
