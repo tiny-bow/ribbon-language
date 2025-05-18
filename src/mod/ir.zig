@@ -445,8 +445,9 @@ pub const Block = struct {
     instructions: Id(KeySet) = .null,
 };
 
-/// Edges encode the control and data flow of the graph.
-pub const Edge = struct {
+/// Edges encode the control and data flow of the graph. Data edges specifically are used to
+/// represent the output of one instruction being used as the input to another instruction.
+pub const DataEdge = struct {
     id: Id(@This()),
     /// the object that this edge is connected from
     source: Key = .none,
@@ -458,15 +459,19 @@ pub const Edge = struct {
     /// the index of this edge relative to the destination;
     /// used to determine the order of operands in the destination.
     destination_index: usize = 0,
-    /// the type of this edge; either control or data.
-    transfer: Transfer = .control,
+};
 
-    pub const Transfer = enum(u8) {
-        /// The edge is a control flow edge.
-        control,
-        /// The edge is a data flow edge.
-        data,
-    };
+/// Edges encode the control and data flow of the graph. Control edges specifically are used to
+/// represent the critical execution orderings of the graph, linking the destinations of jump instructions etc.
+pub const ControlEdge = struct {
+    id: Id(@This()),
+    /// the object that this edge is connected from
+    source: Key = .none,
+    /// the object that this edge is connected to
+    destination: Key = .none,
+    /// the index of this edge relative to the source;
+    /// designates which control edge this is; ie the true or false branch of a conditional.
+    source_index: usize = 0,
 };
 
 /// Binds a type and an operation to form a single instruction in the graph.
@@ -590,7 +595,8 @@ pub const Context = struct {
         function: Table(Function) = .{},
         dynamic_scope: Table(DynamicScope) = .{},
         block: Table(Block) = .{},
-        edge: Table(Edge) = .{},
+        data_edge: Table(DataEdge) = .{},
+        control_edge: Table(ControlEdge) = .{},
         instruction: Table(Instruction) = .{},
         buffer: Table(Buffer) = .{},
         key_set: Table(KeySet) = .{},
