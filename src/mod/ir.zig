@@ -387,7 +387,7 @@ pub const Function = struct {
     /// the type of this function
     type: Id(Type) = .null,
     /// the function's entry
-    entry: Key = .null,
+    entry: Key = .none,
 };
 
 /// Binds a set of effect handlers to a set of operands, forming a dynamic scope in which the bound handlers
