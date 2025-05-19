@@ -15,10 +15,11 @@ const log = std.log.scoped(.Rir);
 
 const pl = @import("platform");
 const common = @import("common");
+const utils = @import("utils");
 const Interner = @import("Interner");
 const analysis = @import("analysis");
 const bytecode = @import("bytecode");
-const Source = analysis.source;
+const Source = analysis.Source;
 
 test {
     std.testing.refAllDeclsRecursive(@This());
@@ -32,39 +33,31 @@ pub fn Table(comptime T: type) type {
     return struct {
         const Self = @This();
         const Id = ir.Id(T);
-        const Head = common.SlotMap.Head(T, 32, 32);
+        const Data = common.SlotMap.MultiArray(T, 32, 32);
 
-        head: Head = .empty,
-        data: pl.MultiArrayList(T) = .empty,
+        data: Data = .empty,
 
         pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Self {
-            var self = Self {};
-
-            try self.head.data.ensureTotalCapacity(allocator, capacity);
-            errdefer self.head.data.deinit(allocator);
-
-            try self.data.ensureTotalCapacity(allocator, capacity);
-            errdefer self.data.deinit(allocator);
-
-            return self;
+            return Self {
+                .data = try Data.initCapacity(allocator, capacity),
+            };
         }
 
         pub fn ensureCapacity(self: *Self, allocator: std.mem.Allocator, capacity: usize) !void {
-            try self.head.data.ensureUnusedCapacity(allocator, capacity);
-            try self.data.ensureUnusedCapacity(allocator, capacity);
+            try self.data.ensureCapacity(allocator, capacity);
         }
 
         pub fn deinitData(self: *Self, allocator: std.mem.Allocator) void {
             if (comptime pl.hasDecl(T, .deinit)) {
-                for (0..self.data.len) |i| {
-                    var a = self.data.get(i);
-                    a.deinit(allocator);
+                for (0..self.data.count()) |i| {
+                    if (self.data.getIndex(@intCast(i))) |a| {
+                        var x = a;
+                        x.deinit(allocator);
+                    }
                 }
             }
 
-            self.data.len = 0;
-
-            self.head.deinit(allocator);
+            self.data.clear();
         }
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
@@ -73,34 +66,37 @@ pub fn Table(comptime T: type) type {
         }
 
         pub fn clear(self: *Self) void {
-            self.head.clear();
-            self.data.clearRetainingCapacity();
+            self.data.clear();
         }
 
         pub fn rowCount(self: *Self) usize {
             return self.data.len;
         }
 
-        pub fn column(self: *Self, comptime name: std.meta.FieldEnum(T)) []std.meta.FieldType(T, name) {
-            return self.data.items(name);
+        pub fn getColumn(self: *Self, comptime name: std.meta.FieldEnum(T)) []std.meta.FieldType(T, name) {
+            return self.data.fields(name);
         }
 
-        fn idToRef(id: Self.Id) ?Head.Ref {
+        fn idToRef(id: Self.Id) Data.Ref {
             const bits: u64 = @intFromEnum(id);
 
             return @bitCast(bits);
         }
 
-        fn refToId(ref: Head.Ref) Self.Id {
+        fn refToId(ref: Data.Ref) Self.Id {
             return @enumFromInt(@as(u64, @bitCast(ref)));
         }
 
         pub fn getIndex(self: *Self, id: Self.Id) ?usize {
-            return self.head.get(idToRef(id));
+            return if (self.data.resolveIndex(idToRef(id))) |i| i else null; // needed because i is u32 not usize
         }
 
-        pub fn cell(self: *Self, id: Self.Id, comptime name: std.meta.FieldEnum(T)) *std.meta.FieldType(T, name) {
-            return &self.data.items(name)[self.getIndex(id) orelse return null];
+        pub fn getCell(self: *Self, id: Self.Id, comptime name: std.meta.FieldEnum(T)) ?*std.meta.FieldType(T, name) {
+            return self.getCellAt(self.getIndex(id) orelse return null, name);
+        }
+
+        pub fn getCellAt(self: *Self, index: usize, comptime name: std.meta.FieldEnum(T)) *std.meta.FieldType(T, name) {
+            return self.data.field(index, name);
         }
 
         pub fn getRow(self: *Self, id: Self.Id) ?T {
@@ -109,29 +105,41 @@ pub fn Table(comptime T: type) type {
             return self.data.get(index);
         }
 
-        pub fn addRow(self: *Self, allocator: std.mem.Allocator, data: T) !Self.Id {
-            const ref = try self.head.create(allocator);
+        pub fn setRow(self: *Self, id: Self.Id, value: T) !void {
+            const index = self.getIndex(@bitCast(id)) orelse return error.InvalidId;
 
-            switch (@intFromEnum(ref.generation)) {
-                0 => unreachable,
-                1 => {
-                    std.debug.assert(ref.index == self.data.len);
-                    try self.data.append(allocator, data);
-                },
-                else => {
-                    std.debug.assert(ref.index < self.data.len);
-                    self.data.set(ref.index, data);
-                }
-            }
-
-            return @enumFromInt(@as(u64, @bitCast(ref)));
+            return self.data.set(index, value);
         }
 
-        pub fn delRow(self: *Self, id: Self.Id) void {
+        pub fn addRow(self: *Self, allocator: std.mem.Allocator, init: anytype) !Self.Id {
+            log.debug(@typeName(Self) ++ " @ {} addRow: {}", .{@intFromPtr(self), init});
+            const I = @TypeOf(init);
+            const ref, const index = try self.data.create(allocator);
+            const id = refToId(ref);
+
+            inline for (comptime std.meta.fields(T)) |field| {
+                const field_enum = @field(std.meta.FieldEnum(T), field.name);
+                if (comptime std.mem.eql(u8, field.name, "id")) {
+                    self.data.field(index, field_enum).* = id;
+                    continue;
+                }
+
+                self.data.field(index, field_enum).* =
+                    if (comptime @hasField(I, field.name)) @field(init, field.name)
+                    else if (comptime @hasField(@TypeOf(field), "default_value_ptr") and field.default_value_ptr != null) @as(*const field.type, @alignCast(@ptrCast(field.default_value_ptr.?))).*
+                    else @compileError("Missing field " ++ field.name ++ " in initialization value for table entry of type " ++ @typeName(T));
+            }
+
+            return id;
+        }
+
+        pub fn delRow(self: *Self, id: Self.Id) !void {
             if (self.head.destroy(idToRef(id))) |index| {
                 std.debug.assert(index < self.data.len);
 
                 self.data.swapRemove(index);
+            } else {
+                return error.InvalidId;
             }
         }
     };
@@ -226,6 +234,15 @@ pub const Operation = enum(u8) {
 
 /// marker type for `Id`; not actually instantiated anywhere
 pub const Name = struct {
+    id: Id(@This()),
+};
+
+/// marker type for `Id`; not actually instantiated anywhere
+pub const Alias = struct {
+    id: Id(@This()),
+};
+
+pub const Origin = struct {
     id: Id(@This()),
 };
 
@@ -540,12 +557,104 @@ pub const Key = packed struct(u128) {
         function,
         dynamic_scope,
         block,
-        edge,
+        data_edge,
+        control_edge,
         instruction,
         buffer,
-        key_set,
+        key_list,
         _,
+
+        pub fn toType(comptime self: Tag) type {
+            comptime return switch (self) {
+                .name => Name,
+                .kind => Kind,
+                .constructor => Constructor,
+                .type => Type,
+                .effect => Effect,
+                .constant => Constant,
+                .global => Global,
+                .foreign_address => ForeignAddress,
+                .builtin_address => BuiltinAddress,
+                .intrinsic => Intrinsic,
+                .handler => Handler,
+                .function => Function,
+                .dynamic_scope => DynamicScope,
+                .block => Block,
+                .data_edge => DataEdge,
+                .control_edge => ControlEdge,
+                .instruction => Instruction,
+                .buffer => Buffer,
+                .key_list => KeyList,
+
+                else => @compileError("Invalid tag for Key: " ++ @typeName(self)),
+            };
+        }
+
+        pub fn getField(self: Tag, data: anytype) @FieldType(@typeInfo(@TypeOf(data)).pointer.child, @tagName(self)) {
+            return &@field(data, @tagName(self));
+        }
+
+        pub fn setField(self: Tag, data: anytype, value: @FieldType(@typeInfo(@TypeOf(data)).pointer.child, @tagName(self))) void {
+            @field(data, @tagName(self)) = value;
+        }
+
+        pub fn fieldPtr(comptime self: Tag, data: anytype) *@FieldType(@typeInfo(@TypeOf(data)).pointer.child, @tagName(self)) {
+            return &@field(data, @tagName(self));
+        }
+
+        pub fn toIdType(comptime self: Tag) type {
+            comptime return Id(self.toType());
+        }
+
+        pub fn fromType(comptime T: type) Tag {
+            comptime return switch (T) {
+                ir.Name => .name,
+                ir.Kind => .kind,
+                ir.Constructor => .constructor,
+                ir.Type => .type,
+                ir.Effect => .effect,
+                ir.Constant => .constant,
+                ir.Global => .global,
+                ir.ForeignAddress => .foreign_address,
+                ir.BuiltinAddress => .builtin_address,
+                ir.Intrinsic => .intrinsic,
+                ir.Handler => .handler,
+                ir.Function => .function,
+                ir.DynamicScope => .dynamic_scope,
+                ir.Block => .block,
+                ir.DataEdge => .data_edge,
+                ir.ControlEdge => .control_edge,
+                ir.Instruction => .instruction,
+                ir.Buffer => .buffer,
+                ir.KeyList => .key_list,
+
+                else => @compileError("Invalid type for Key: " ++ @typeName(T)),
+            };
+        }
+
+        pub fn fromIdType(comptime T: type) Tag {
+            return fromType(T.Value);
+        }
     };
+
+    pub fn fromId(id: anytype) Key {
+        return Key {
+            .tag = comptime Tag.fromIdType(@TypeOf(id)),
+            .id = id.cast(anyopaque),
+        };
+    }
+
+    pub fn toIdUnchecked(self: Key, comptime T: type) Id(T) {
+        return self.id.cast(T);
+    }
+
+    pub fn toId(self: Key, comptime T: type) ?Id(T) {
+        if (self.tag != comptime Tag.fromType(T)) {
+            return null;
+        }
+
+        return self.id.cast(T);
+    }
 };
 
 /// The core of Ribbon's intermediate representation. This is the main data
@@ -569,16 +678,18 @@ pub const Context = struct {
     /// Storage of simple relations, and the name interner.
     map: struct {
         /// Maps interned string names to their unique id.
-        string_to_name: pl.StringArrayMap(Id(Name)) = .empty,
+        string_to_name: pl.StringMap(Id(Name)) = .empty,
+        /// Maps interned sources to their unique id.
+        source: analysis.SourceMap(Id(Source)) = .empty,
         /// Binds keys to names, allowing the generation of symbol tables.
         name: pl.UniqueReprBiMap(Key, Id(Name), .bucket) = .empty,
         /// Maps keys to sets of names that have been used to refer to them in the source code,
         /// but that are not used for symbol resolution. Intended for various debugging purposes.
         /// For example, certain instructions may be given a name to make the ir output more readable.
-        alias: pl.UniqueReprBiMap(Key, Id(KeyList), .bucket) = .empty,
+        alias: pl.UniqueReprBiMap(Key, Id(Alias), .bucket) = .empty,
         /// Maps keys to sets of sources that have contributed to their definition;
         /// for debugging purposes.
-        origin: pl.UniqueReprBiMap(Key, Id(KeyList), .bucket) = .empty,
+        origin: pl.UniqueReprBiMap(Key, Id(Origin), .bucket) = .empty,
     } = .{},
     /// Storage of standard ir graph types data.
     table: struct {
@@ -618,6 +729,16 @@ pub const Context = struct {
         buffer: Table(Buffer) = .{},
         /// A list of keys, used for various purposes, such as operands to a node.
         key_list: Table(KeyList) = .{},
+
+        comptime {
+            const a = std.meta.fieldNames(Key.Tag);
+            const b = std.meta.fieldNames(@This());
+            std.debug.assert(a.len == b.len + 3);
+
+            for (a[3..], b) |a_name, b_name| {
+                std.debug.assert(std.mem.eql(u8, a_name, b_name));
+            }
+        }
     } = .{},
 
     /// Creates a new context using the given allocator.
@@ -640,7 +761,9 @@ pub const Context = struct {
         }
 
         inline for (comptime std.meta.fieldNames(@FieldType(Context, "table"))) |table_name| {
+            std.debug.assert(@field(self.table, table_name).data.freelist_head == null);
             try @field(self.table, table_name).ensureCapacity(allocator, capacity);
+            std.debug.assert(@field(self.table, table_name).data.freelist_head == null);
         }
 
         return self;
@@ -659,4 +782,255 @@ pub const Context = struct {
         self.arena.deinit();
         self.gpa.destroy(self);
     }
+
+    /// Get an id from a source.
+    /// This will intern the source if it is not already interned.
+    pub fn internSource(self: *Context, source: Source) !Id(Source) {
+        const gop = try self.map.source.getOrPut(self.arena.child_allocator, source);
+
+        if (!gop.found_existing) {
+            const id: Id(Source) = @enumFromInt(self.map.source.count());
+
+            gop.key_ptr.* = Source {
+                .name = try self.arena.allocator().dupe(u8, source.name),
+                .location = source.location,
+            };
+            gop.value_ptr.* = id;
+        }
+
+        return gop.value_ptr.*;
+    }
+
+    /// Get an id from a string name.
+    /// This will intern the name if it is not already interned.
+    pub fn internName(self: *Context, name: []const u8) !Id(Name) {
+        const gop = try self.map.string_to_name.getOrPut(self.arena.child_allocator, name);
+
+        if (!gop.found_existing) {
+            const id: Id(Name) = @enumFromInt(self.map.string_to_name.count());
+
+            gop.key_ptr.* = try self.arena.allocator().dupe(u8, name);
+            gop.value_ptr.* = id;
+        }
+
+        return gop.value_ptr.*;
+    }
+
+    /// Get an id from a keylist.
+    /// This will intern the keylist if it is not already interned.
+    pub fn internKeyList(self: *Context, keys: []const Key) !Id(KeyList) {
+        lists: for (self.table.key_list.getColumn(.keys), 0..) |*existing_list, list_index| {
+            for (existing_list.items, 0..) |existing_key, key_index| {
+                if (existing_key != keys[key_index]) {
+                    continue :lists;
+                }
+
+                // found a match
+                if (list_index == keys.len) {
+                    return self.table.key_list.getCellAt(list_index, .id).*;
+                }
+            }
+        }
+
+        const id = try self.addRow(KeyList, .{});
+
+        const array: *pl.ArrayList(Key) = self.table.key_list.getCell(id, .keys) orelse unreachable;
+        try array.appendSlice(self.arena.child_allocator, keys);
+
+        return id;
+    }
+
+    /// Get/create the alias set for a given key.
+    /// This will intern the alias if it is not already interned.
+    pub fn getAliasSet(self: *Context, key: Key) !Id(Alias) {
+        if (self.map.alias.get_b(key)) |id| {
+            return id;
+        }
+
+        const id: Id(Alias) = @enumFromInt(self.map.alias.count());
+
+        try self.map.alias.put(self.arena.child_allocator, key, id);
+
+        return id;
+    }
+
+    /// Get/create the origin set for a given key.
+    /// This will intern the origin if it is not already interned.
+    pub fn getOriginSet(self: *Context, key: Key) !Id(Origin) {
+        if (self.map.origin.get_b(key)) |id| {
+            return id;
+        }
+
+        const id: Id(Origin) = @enumFromInt(self.map.origin.count());
+
+        try self.map.origin.put(self.arena.child_allocator, key, id);
+
+        return id;
+    }
+
+    /// Bind a name to a key, creating a symbol table entry.
+    /// * This will fail if the name is already bound to a different key,
+    /// or if the key is already bound to a different name.
+    pub fn bindName(self: *Context, name: Id(Name), key: Key) !void {
+        if (self.map.name.get_a(name)) |existing| {
+            log.debug("binding {} already bound to name {}", .{name, existing});
+            return error.DuplicateNameBinding;
+        }
+
+        if (self.map.name.get_b(key)) |existing| {
+            log.debug("binding {} already bound to name {}", .{key, existing});
+            return error.DuplicateNameBinding;
+        }
+
+        try self.map.name.put(self.arena.child_allocator, key, name);
+    }
+
+    /// Get the type of a specific cell (data structure field) in a table within this context.
+    /// Equivalent to `@FieldType(id.Value, @tagName(column))`.
+    pub fn CellType(comptime id: type, comptime column: pl.EnumLiteral) type {
+        return pl.FieldType(id.Value, column);
+    }
+
+    /// Set the value of a specific cell (data structure field) in a table within this context.
+    /// For example, to set the type of a function, you would call: `ctx.setCellPtr(function_id, .type)`.
+    /// * This will fail if the id is not bound.
+    pub fn setCell(self: *Context, id: anytype, comptime column: pl.EnumLiteral, value: CellType(@TypeOf(id), column)) !void {
+        const ptr = self.getCellPtr(id, column) orelse return error.InvalidId;
+        ptr.* = value;
+    }
+
+    /// Get a copy of a specific cell (data structure field) in a table within this context.
+    /// For example, to get the type of a function, you would call: `ctx.getCellPtr(function_id, .type)`.
+    pub fn getCell(self: *Context, id: anytype, comptime column: pl.EnumLiteral) ?CellType(@TypeOf(id), column) {
+        return (self.getCellPtr(id, column) orelse return null).*;
+    }
+
+    /// Get a pointer to a specific cell (data structure field) in a table within this context.
+    /// For example, to get the type of a function, you would call: `ctx.getCellPtr(function_id, .type)`.
+    pub fn getCellPtr(self: *Context, id: anytype, comptime column: pl.EnumLiteral) ?*CellType(@TypeOf(id), column) {
+        const tag = comptime Key.Tag.fromIdType(@TypeOf(id));
+        const key = Key.fromId(id);
+        const table: *Table(@TypeOf(Id).Value) = tag.fieldPtr(&self.table);
+
+        return table.getCell(key, column);
+    }
+
+    /// Get a copy of a specific row in the tables within this context.
+    pub fn getRow(self: *Context, id: anytype) ?@TypeOf(id).Value {
+        const tag = comptime Key.Tag.fromIdType(@TypeOf(id));
+        const key = Key.fromId(id);
+        const table: *Table(@TypeOf(Id).Value) = tag.fieldPtr(&self.table);
+
+        return table.getRow(key);
+    }
+
+    /// Set a specific row in the tables within this context.
+    /// * This will fail if the id is not bound.
+    pub fn setRow(self: *Context, id: anytype, row: @TypeOf(id).Value) !void {
+        const tag = comptime Key.Tag.fromIdType(@TypeOf(id));
+        const key = Key.fromId(id);
+        const table: *Table(@TypeOf(Id).Value) = tag.fieldPtr(&self.table);
+
+        return table.setRow(key, row);
+    }
+
+    /// Delete a specific row in the tables within this context.
+    /// * This will fail if the id is not bound.
+    pub fn delRow(self: *Context, id: anytype) !void {
+        const tag = comptime Key.Tag.fromIdType(@TypeOf(id));
+        const key = Key.fromId(id);
+        const table: *Table(@TypeOf(Id).Value) = tag.fieldPtr(&self.table);
+
+        return table.delRow(key);
+    }
+
+    /// Add a new row to the tables within this context.
+    pub fn addRow(self: *Context, comptime T: type, args: anytype) !Id(T) {
+        const tag = comptime Key.Tag.fromType(T);
+        const table: *Table(T) = tag.fieldPtr(&self.table);
+
+        log.debug("adding row to table {} @{x}: {}", .{tag, @intFromPtr(table), table.*});
+
+        const id = try table.addRow(self.arena.child_allocator, args);
+        return id;
+    }
 };
+
+pub fn Handle(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        id: Id(T),
+        context: *Context,
+
+        pub fn asKey(self: Self) Key {
+            return Key.fromId(self.id);
+        }
+
+        pub usingnamespace switch(T) {
+            Name => struct {
+                pub fn init(context: *Context, name: []const u8) !Self {
+                    return .{ .id = try context.internName(name), .context = context };
+                }
+            },
+
+            Source => struct {
+                pub fn init(context: *Context, source: Source) !Self {
+                    return .{ .id = try context.internSource(source), .context = context };
+                }
+            },
+
+            Alias => struct {
+                pub fn init(context: *Context, bound_to: Key) !Self {
+                    return .{ .id = try context.getAliasSet(bound_to), .context = context };
+                }
+            },
+
+            Origin => struct {
+                pub fn init(context: *Context, bound_to: Key) !Self {
+                    return .{ .id = try context.getOriginSet(bound_to), .context = context };
+                }
+            },
+
+            else => struct {
+                pub fn init(context: *Context, args: anytype) !Self {
+                    return .{ .id = try context.addRow(T, args), .context = context };
+                }
+            },
+        };
+
+        pub usingnamespace switch(T) {
+            Name,
+            Source,
+            Alias,
+            Origin,
+            => struct {}, // these are interned types, so no need to deinit
+
+            else => struct {
+                pub fn deinit(self: Self) void {
+                    self.context.delRow(self.id);
+                }
+            },
+        };
+    };
+}
+
+
+test {
+    std.testing.log_level = .debug;
+
+    const context = try Context.init(std.testing.allocator);
+    defer context.deinit();
+
+    const name = try Handle(Name).init(context, "test");
+
+    const con = try Handle(Constructor).init(context, .{});
+
+    const ty = try Handle(Type).init(context, .{
+        .constructor = con.id,
+    });
+
+    try context.bindName(name.id, ty.asKey());
+
+    std.debug.print("{}\n", .{ty});
+}

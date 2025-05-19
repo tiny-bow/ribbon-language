@@ -33,7 +33,7 @@ pub fn SourceArrayMap(comptime T: type) type {
 }
 
 pub const SourceContext32 = struct {
-    pub fn hash(_: SourceContext32, source: *const Source) u32 {
+    pub fn hash(_: SourceContext32, source: Source) u32 {
         var hasher = std.hash.Fnv1a_32.init();
 
         hasher.update(source.name);
@@ -42,13 +42,13 @@ pub const SourceContext32 = struct {
         return hasher.final();
     }
 
-    pub fn eql(_: SourceContext64, source: *const Source, other: *const Source, _: usize) bool {
+    pub fn eql(_: SourceContext64, source: Source, other: Source, _: usize) bool {
         return std.mem.eql(u8, source.name, other.name) and source.location == other.location;
     }
 };
 
 pub const SourceContext64 = struct {
-    pub fn hash(_: SourceContext64, source: *const Source) u64 {
+    pub fn hash(_: SourceContext64, source: Source) u64 {
         var hasher = std.hash.Fnv1a_64.init();
 
         hasher.update(source.name);
@@ -57,7 +57,7 @@ pub const SourceContext64 = struct {
         return hasher.final();
     }
 
-    pub fn eql(_: SourceContext64, source: *const Source, other: *const Source) bool {
+    pub fn eql(_: SourceContext64, source: Source, other: Source) bool {
         return std.mem.eql(u8, source.name, other.name) and source.location == other.location;
     }
 };

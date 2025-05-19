@@ -250,6 +250,7 @@ pub fn build(b: *std.Build) !void {
 
     ir_mod.addImport("platform", platform_mod);
     ir_mod.addImport("common", common_mod);
+    ir_mod.addImport("utils", utils_mod);
     ir_mod.addImport("Interner", Interner_mod);
     ir_mod.addImport("Id", Id_mod);
     ir_mod.addImport("bytecode", bytecode_mod);
