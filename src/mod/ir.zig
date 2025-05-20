@@ -525,6 +525,8 @@ pub const rows = struct {
         data: []const u8 = &.{},
 
         pub fn deinit(self: *rows.Buffer, allocator: std.mem.Allocator) void {
+            if (self.data.ptr != @as([]const u8, &.{}).ptr) return;
+
             allocator.free(self.data);
         }
     };
@@ -555,7 +557,7 @@ pub const Key = packed struct(u128) {
 
     /// Discriminator for the type of id carried by a `Key`.
     pub const Tag: type = enum(i64) { // must be 32 for abi-aligned packing with 32-bit id
-        null = std.math.minInt(i64),
+        untyped = std.math.minInt(i64),
         none = 0,
         name,
         source,
@@ -725,6 +727,9 @@ pub const Context = struct {
         /// Maps keys to sets of sources that have contributed to their definition;
         /// for debugging purposes.
         origin: pl.UniqueReprBiMap(Key, Id(rows.Origin), .bucket) = .empty,
+        /// Maps keys to pl.Mutability values, indicating whether or not they can be mutated.
+        /// This is used for various purposes, such as determining whether or not a value can be destroyed.
+        mutability: pl.UniqueReprMap(Key, pl.Mutability, 80) = .empty,
     } = .{},
     /// Storage of standard ir graph types data.
     table: struct {
@@ -818,6 +823,36 @@ pub const Context = struct {
         self.gpa.destroy(self);
     }
 
+    pub fn isConstant(self: *Context, id: anytype) bool {
+        return (self.map.mutability.get(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return false) == .constant;
+    }
+
+    pub fn isMutable(self: *Context, id: anytype) bool {
+        return (self.map.mutability.get(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return false) == .mutable;
+    }
+
+    pub fn setMutability(self: *Context, id: anytype, mutability: pl.Mutability) !void {
+        const key = Key.fromId(id.cast(RowType(@TypeOf(id))));
+        if (self.map.mutability.get(key)) |existing| {
+            if (existing == mutability) return;
+            log.debug("mutability of {} already set to {}", .{key, existing});
+            return error.InvalidGraphState;
+        }
+
+        try self.map.mutability.put(self.arena.child_allocator, key, mutability);
+    }
+
+    pub fn makeConstant(self: *Context, id: anytype) !void {
+        const key = Key.fromId(id.cast(RowType(@TypeOf(id))));
+        if (self.map.mutability.get(key)) |existing| {
+            if (existing == .constant) return;
+        } else {
+            return error.InvalidGraphState;
+        }
+
+        try self.map.mutability.put(self.arena.child_allocator, key, .constant);
+    }
+
     /// Get an id from a source.
     /// This will intern the source if it is not already interned.
     pub fn internSource(self: *Context, source: analysis.Source) !Id(analysis.Source) {
@@ -846,7 +881,10 @@ pub const Context = struct {
     /// This will intern the keylist if it is not already interned.
     pub fn internKeyList(self: *Context, keys: []const Key) !Id(rows.KeyList) {
         lists: for (self.table.key_list.getColumn(.keys), 0..) |*existing_list, list_index| {
-            if (existing_list.items.len != keys.len) continue :lists;
+            if (self.isMutable(self.table.key_list.getIdFromIndex(@intCast(list_index)))
+            or existing_list.items.len != keys.len) {
+                continue :lists;
+            }
 
             for (existing_list.items, keys) |existing_key, new_key| {
                 if (existing_key != new_key) continue :lists;
@@ -859,7 +897,7 @@ pub const Context = struct {
             }
         }
 
-        const id = try self.addRow(rows.KeyList, .{});
+        const id = try self.addRow(rows.KeyList, .constant , .{});
 
         const array: *pl.ArrayList(Key) = self.table.key_list.getCell(id, .keys) orelse unreachable;
         try array.appendSlice(self.arena.child_allocator, keys);
@@ -867,30 +905,13 @@ pub const Context = struct {
         return id;
     }
 
-    /// Get/create the alias set for a given key.
-    /// This will intern the alias if it is not already interned.
-    pub fn getAliasSet(self: *Context, key: Key) !Id(rows.Alias) {
-        if (self.map.alias.get_b(key)) |id| {
-            return id;
-        }
+    /// Get an id from a keylist.
+    /// This will create a new keylist even if a matching one already exists.
+    pub fn createKeyList(self: *Context, keys: []const Key) !Id(rows.KeyList) {
+        const id = try self.addRow(rows.KeyList, .mutable, .{});
 
-        const id: Id(rows.Alias) = @enumFromInt(self.map.alias.count());
-
-        try self.map.alias.put(self.arena.child_allocator, key, id);
-
-        return id;
-    }
-
-    /// Get/create the origin set for a given key.
-    /// This will intern the origin if it is not already interned.
-    pub fn getOriginSet(self: *Context, key: Key) !Id(rows.Origin) {
-        if (self.map.origin.get_b(key)) |id| {
-            return id;
-        }
-
-        const id: Id(rows.Origin) = @enumFromInt(self.map.origin.count());
-
-        try self.map.origin.put(self.arena.child_allocator, key, id);
+        const array: *pl.ArrayList(Key) = self.table.key_list.getCell(id, .keys) orelse unreachable;
+        try array.appendSlice(self.arena.child_allocator, keys);
 
         return id;
     }
@@ -910,6 +931,40 @@ pub const Context = struct {
         }
 
         try self.map.name.put(self.arena.child_allocator, key, name);
+    }
+
+    /// Bind an alias to a key.
+    /// * This will fail if the alias is already bound to a different key,
+    /// or if the key is already bound to a different alias.
+    pub fn bindAlias(self: *Context, alias: Id(rows.Alias), key: Key) !void {
+        if (self.map.alias.get_a(alias)) |existing| {
+            log.debug("binding {} already bound to alias {}", .{alias, existing});
+            return error.DuplicateNameBinding;
+        }
+
+        if (self.map.alias.get_b(key)) |existing| {
+            log.debug("binding {} already bound to alias {}", .{key, existing});
+            return error.DuplicateNameBinding;
+        }
+
+        try self.map.alias.put(self.arena.child_allocator, key, alias);
+    }
+
+    /// Bind an origin to a key.
+    /// * This will fail if the origin is already bound to a different key,
+    /// or if the key is already bound to a different origin.
+    pub fn bindOrigin(self: *Context, origin: Id(rows.Origin), key: Key) !void {
+        if (self.map.origin.get_a(origin)) |existing| {
+            log.debug("binding {} already bound to origin {}", .{origin, existing});
+            return error.DuplicateNameBinding;
+        }
+
+        if (self.map.origin.get_b(key)) |existing| {
+            log.debug("binding {} already bound to origin {}", .{key, existing});
+            return error.DuplicateNameBinding;
+        }
+
+        try self.map.origin.put(self.arena.child_allocator, key, origin);
     }
 
     /// Get the name bound to a key, if it exists.
@@ -963,32 +1018,70 @@ pub const Context = struct {
     /// * This will fail if the id is not bound.
     pub fn setRow(self: *Context, id: anytype, row: @TypeOf(id).Value) !void {
         const tag = comptime Key.Tag.fromIdType(@TypeOf(id));
-        const key = Key.fromId(id);
         const table = tag.fieldPtr(&self.table);
 
-        return table.setRow(key, row);
+        return table.setRow(id.cast(RowType(@TypeOf(id))), row);
     }
 
     /// Delete a specific row in the tables within this context.
     pub fn delRow(self: *Context, id: anytype) void {
+        std.debug.assert(!self.isConstant(id));
+
         const tag = comptime Key.Tag.fromIdType(@TypeOf(id));
         const table = tag.fieldPtr(&self.table);
 
-        table.delRow(id);
+        table.delRow(id.cast(RowType(@TypeOf(id))));
     }
 
     /// Add a new row to the tables within this context.
-    pub fn addRow(self: *Context, comptime Row: type, args: anytype) !Id(Row) {
+    pub fn addRow(self: *Context, comptime Row: type, mutability: pl.Mutability, args: anytype) !Id(Row) {
         const tag = comptime Key.Tag.fromRowType(Row);
         const table = tag.fieldPtr(&self.table);
 
-        log.debug("adding row to table {} @{x}: {}", .{tag, @intFromPtr(table), table.*});
+        log.debug("adding {s} row to table {} @{x}: {}", .{@tagName(mutability), tag, @intFromPtr(table), table.*});
 
         const id = try table.addRow(self.arena.child_allocator, args);
+        errdefer table.delRow(id);
+
+        try self.setMutability(id, mutability);
+
         return id.cast(Row);
     }
 };
 
+pub inline fn WrappedId(comptime T: type) type {
+    return switch (T.Value) {
+        rows.Name => Name,
+        analysis.Source => Source,
+        rows.Kind => Kind,
+        rows.Constructor => Constructor,
+        rows.Type => Type,
+        rows.KeyList => KeyList,
+        rows.Alias => Alias,
+        rows.Origin => Origin,
+        rows.KindList => KindList,
+        rows.TypeList  => TypeList,
+        // rows.Effect => Effect,
+        // rows.Constant => Constant,
+        // rows.Global => Global,
+        // rows.ForeignAddress => ForeignAddress,
+        // rows.BuiltinAddress => BuiltinAddress,
+        // rows.Intrinsic => Intrinsic,
+        // rows.Handler => Handler,
+        // rows.Function => Function,
+        // rows.DynamicScope => DynamicScope,
+        rows.Block => Block,
+        rows.Buffer => Buffer,
+        // rows.DataEdge => DataEdge,
+        // rows.ControlEdge => ControlEdge,
+        // rows.Instruction => Instruction,
+        else => @compileError("Invalid type for WrappedId: " ++ @typeName(T)),
+    };
+}
+
+pub fn wrapId(context: *Context, id: anytype) WrappedId(@TypeOf(id)) {
+    return .{ .context = context, .id = id };
+}
 
 pub fn HandleBase(comptime Self: type) type {
     return struct {
@@ -1003,101 +1096,84 @@ pub fn HandleBase(comptime Self: type) type {
     };
 }
 
-pub const Name = struct {
-    id: Id(rows.Name),
-    context: *Context,
+pub fn KeyListBase(comptime Self: type, comptime T: type) type {
+    return struct {
+        const Mixin = @This();
 
-    pub usingnamespace HandleBase(@This());
+        const Id = @FieldType(Self, "id");
+        const Row = Mixin.Id.Value;
 
-    pub fn init(context: *Context, name: []const u8) !Name {
-        const id = try context.internName(name);
-        return Name{ .id = id, .context = context };
-    }
+        pub fn intern(context: *Context, ids: []const ir.Id(T)) !Self {
+            const temp = try context.arena.allocator().alloc(Key, ids.len);
+            defer context.arena.allocator().free(temp);
 
-    pub fn getText(self: Name) ![]const u8 {
-        return self.context.map.name_storage.get_a(self.id) orelse return error.InvalidGraphState;
-    }
+            for (ids, 0..) |t, index| {
+                temp[index] = Key.fromId(t);
+            }
 
-    pub fn getValue(self: Name) !Key {
-        return self.context.map.name.get_a(self.id) orelse return error.InvalidGraphState;
-    }
+            const id = try context.internKeyList(temp);
+            return Self{ .id = id.cast(Row), .context = context };
+        }
 
-    pub fn bindValue(self: Name, key: Key) !void {
-        try self.context.bindName(self.id, key);
-    }
+        pub fn create(context: *Context, ids: []const ir.Id(T)) !Self {
+            const temp = try context.arena.allocator().alloc(Key, ids.len);
+            defer context.arena.allocator().free(temp);
 
-    pub fn format(self: Name, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.writeAll(try self.getText());
-    }
-};
+            for (ids, 0..) |t, index| {
+                temp[index] = Key.fromId(t);
+            }
 
-pub const Source = struct {
-    id: Id(analysis.Source),
-    context: *Context,
+            const id = try context.createKeyList(temp);
 
-    pub usingnamespace HandleBase(@This());
+            const alias = Self{ .id = id.cast(Row), .context = context };
 
-    pub fn init(context: *Context, source: analysis.Source) !Source {
-        const id = try context.internSource(source);
-        return Source{ .id = id, .context = context };
-    }
+            return alias;
+        }
 
-    pub fn getValue(self: Source) !analysis.Source {
-        return self.context.map.source_storage.get_a(self.id) orelse return error.InvalidGraphState;
-    }
+        pub fn init(context: *Context) !Self {
+            const id = try context.createKeyList(&.{});
+            return Self{ .id = id.cast(Row), .context = context };
+        }
 
-    pub fn format(self: Source, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("{}", .{try self.getValue()});
-    }
-};
+        pub fn deinit(self: Self) void {
+            self.context.delRow(self.id);
+        }
 
-pub const Alias = struct {
-    id: Id(rows.Alias),
-    context: *Context,
+        pub fn getCount(self: Self) !usize {
+            return (try self.getSlice()).len;
+        }
 
-    pub usingnamespace HandleBase(@This());
+        pub fn getMutSlice(self: Self) ![]Key {
+            return (try self.getMutArrayList()).items;
+        }
 
-    pub fn init(context: *Context, key: Key) !Alias {
-        const id = try context.getAliasSet(key);
-        return Alias{ .id = id, .context = context };
-    }
+        pub fn getMutArrayList(self: Self) !*pl.ArrayList(Key) {
+            std.debug.assert(!self.context.isConstant(self.id));
+            return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys) orelse return error.InvalidGraphState;
+        }
 
-    pub fn getCount(self: Alias) !usize {
-        return (try self.getSlice()).len;
-    }
+        pub fn getSlice(self: Self) ![]const Key {
+            return (try self.getArrayList()).items;
+        }
 
-    pub fn getSlice(self: Alias) ![]Key {
-        return (try self.getArrayList()).items;
-    }
+        pub fn getArrayList(self: Self) !*const pl.ArrayList(Key) {
+            return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys) orelse return error.InvalidGraphState;
+        }
 
-    pub fn getArrayList(self: Alias) !*pl.ArrayList(Key) {
-        return self.context.table.key_list.getCell(self.id.cast(rows.KeyList), .keys) orelse return error.InvalidGraphState;
-    }
-};
+        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            const refs = try self.getSlice();
 
-pub const Origin = struct {
-    id: Id(rows.Origin),
-    context: *Context,
+            try writer.writeAll("[");
 
-    pub usingnamespace HandleBase(@This());
+            for (refs, 0..) |ref, index| {
+                if (index != 0) try writer.writeAll(", ");
+                try writer.print("{}", .{ wrapId(self.context, ref.toId(Row) orelse return error.InvalidGraphState) });
+            }
 
-    pub fn init(context: *Context, key: Key) !Origin {
-        const id = try context.getOriginSet(key);
-        return Origin{ .id = id, .context = context };
-    }
-
-    pub fn getCount(self: Origin) !usize {
-        return (try self.getSlice()).len;
-    }
-
-    pub fn getSlice(self: Origin) ![]Key {
-        return (try self.getArrayList()).items;
-    }
-
-    pub fn getArrayList(self: Origin) !*pl.ArrayList(Key) {
-        return self.context.table.key_list.getCell(self.id.cast(rows.KeyList), .keys) orelse return error.InvalidGraphState;
-    }
-};
+            try writer.writeAll("]");
+        }
+    };
+}
 
 pub const KeyList = struct {
     id: Id(rows.KeyList),
@@ -1105,9 +1181,23 @@ pub const KeyList = struct {
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn init(context: *Context, keys: []const Key) !KeyList {
+    pub fn intern(context: *Context, keys: []const Key) !KeyList {
         const id = try context.internKeyList(keys);
         return KeyList{ .id = id, .context = context };
+    }
+
+    pub fn create(context: *Context, keys: []const Key) !KeyList {
+        const id = try context.createKeyList(keys);
+        return KeyList{ .id = id, .context = context };
+    }
+
+    pub fn init(context: *Context) !KeyList {
+        const id = try context.createKeyList(&.{});
+        return KeyList{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: *KeyList) void {
+        self.context.delRow(self.id);
     }
 
     pub fn getCount(self: KeyList) !usize {
@@ -1136,58 +1226,147 @@ pub const KeyList = struct {
     }
 };
 
+pub const Name = struct {
+    id: Id(rows.Name),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn intern(context: *Context, name: []const u8) !Name {
+        const id = try context.internName(name);
+        return Name{ .id = id, .context = context };
+    }
+
+    pub fn getText(self: Name) ![]const u8 {
+        return self.context.map.name_storage.get_a(self.id) orelse return error.InvalidGraphState;
+    }
+
+    pub fn getValue(self: Name) !Key {
+        return self.context.map.name.get_a(self.id) orelse return error.InvalidGraphState;
+    }
+
+    pub fn bindValue(self: Name, key: Key) !void {
+        try self.context.bindName(self.id, key);
+    }
+
+    pub fn format(self: Name, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.writeAll(try self.getText());
+    }
+};
+
+pub const Source = struct {
+    id: Id(analysis.Source),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn intern(context: *Context, source: analysis.Source) !Source {
+        const id = try context.internSource(source);
+        return Source{ .id = id, .context = context };
+    }
+
+    pub fn getData(self: Source) !analysis.Source {
+        return self.context.map.source_storage.get_a(self.id) orelse return error.InvalidGraphState;
+    }
+
+    pub fn format(self: Source, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{}", .{try self.getData()});
+    }
+};
+
+pub const Alias = struct {
+    id: Id(rows.Alias),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+    pub usingnamespace KeyListBase(@This(), rows.Name);
+
+    pub fn bindValue(self: Alias, key: Key) !void {
+        try self.context.bindAlias(self.id, key);
+    }
+};
+
+pub const Origin = struct {
+    id: Id(rows.Origin),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+    pub usingnamespace KeyListBase(@This(), analysis.Source);
+
+    pub fn bindValue(self: Origin, key: Key) !void {
+        try self.context.bindOrigin(self.id, key);
+    }
+};
+
+
 pub const KindList = struct {
     id: Id(rows.KindList),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
+    pub usingnamespace KeyListBase(@This(), rows.Kind);
+};
 
-    pub fn intern(context: *Context, kinds: []const Id(rows.Kind)) !KindList {
-        const temp = try context.arena.allocator().alloc(Key, kinds.len);
-        defer context.arena.allocator().free(temp);
+pub const TypeList = struct {
+    id: Id(rows.TypeList),
+    context: *Context,
 
-        for (kinds, 0..) |t, index| {
-            temp[index] = Key.fromId(t);
+    pub usingnamespace HandleBase(@This());
+    pub usingnamespace KeyListBase(@This(), rows.Type);
+};
+
+pub const Constructor = struct {
+    id: Id(rows.Constructor),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn init(context: *Context, kind: Id(rows.Kind)) !Constructor {
+        const id = try context.addRow(rows.Constructor, .mutable, .{ .kind = kind });
+        return Constructor{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Constructor) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn getKind(self: Constructor) !Kind {
+        return Kind {
+            .id = self.context.getCell(self.id, .kind) orelse return error.InvalidGraphState,
+            .context = self.context,
+        };
+    }
+
+    pub fn getOutputKindTag(self: Constructor) !rows.Kind.Tag {
+        return (try self.getKind()).getOutputTag();
+    }
+
+    pub fn getInputKindCount(self: Constructor) !usize {
+        return (try self.getInputKinds()).getCount();
+    }
+
+    pub fn getInputKindSlice(self: Constructor) ![]const Key {
+        return (try self.getInputKinds()).getSlice();
+    }
+
+    pub fn getInputKinds(self: Constructor) !KindList {
+        return (try self.getKind()).getInputs();
+    }
+
+    pub fn format(self: Constructor, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        // TODO: should we print aliases here?
+        // usually you would want to sort aliases by their lexical context and only take the most recent;
+        // not sure how to do that here
+        if (self.context.getName(self.id)) |name| {
+            try writer.print("({} {} :: {})", .{name, self.id, try self.getKind()});
+        } else if (self.context.getAlias(self.id)) |alias| {
+            try writer.print("({} {} :: {})", .{alias.id, self.id, try self.getKind()});
+        } else {
+            try writer.print("({} :: {})", .{self.id, try self.getKind()});
         }
-
-        const id = try context.internKeyList(temp);
-        return KindList{ .id = id.cast(rows.KindList), .context = context };
-    }
-
-    pub fn init(context: *Context, kinds: []const Key) !KindList {
-        const id = try context.addRow(rows.KindList, .{});
-
-        const array: *pl.ArrayList(Key) = context.getCellPtr(id.cast(rows.KeyList), .keys) orelse unreachable;
-        try array.appendSlice(context.arena.child_allocator, kinds);
-
-        return KindList{ .id = id.cast(rows.KindList), .context = context };
-    }
-
-    pub fn getCount(self: KindList) !usize {
-        return (try self.getSlice()).len;
-    }
-
-    pub fn getSlice(self: KindList) ![]Key {
-        return (try self.getArrayList()).items;
-    }
-
-    pub fn getArrayList(self: KindList) !*pl.ArrayList(Key) {
-        return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys) orelse return error.InvalidGraphState;
-    }
-
-    pub fn format(self: KindList, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const kinds = try self.getSlice();
-
-        try writer.writeAll("[");
-
-        for (kinds, 0..) |kind, index| {
-            if (index != 0) try writer.writeAll(", ");
-            try writer.print("{}", .{ Kind { .id = kind.toId(rows.Kind) orelse return error.InvalidGraphState, .context = self.context } });
-        }
-
-        try writer.writeAll("]");
     }
 };
+
 
 pub const Kind = struct {
     id: Id(rows.Kind),
@@ -1195,27 +1374,39 @@ pub const Kind = struct {
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn init(context: *Context, tag: rows.Kind.Tag, inputs: Id(rows.KindList)) !Kind {
-        const keys = inputs.cast(rows.KeyList);
-        const tags_arr = context.table.kind.getColumn(.tag);
-        const inputs_arr = context.table.kind.getColumn(.inputs);
-        for (tags_arr, inputs_arr, 0..) |existing_tag, existing_inputs, index| {
+    pub fn intern(context: *Context, tag: rows.Kind.Tag, ids: []const Id(rows.Kind)) !Kind {
+        const kind_list = try KindList.intern(context, ids);
+
+        for (context.table.kind.getColumn(.tag), context.table.kind.getColumn(.inputs), 0..) |existing_tag, existing_inputs, index| {
             if (existing_tag == tag
-            and existing_inputs == keys) {
+            and existing_inputs == kind_list.id.cast(rows.KeyList)) {
                 return Kind{ .id = context.table.kind.getIdFromIndex(@intCast(index)), .context = context };
             }
         }
 
-        const id = try context.addRow(rows.Kind, .{ .tag = tag, .inputs = keys });
+        return Kind.init(context, .constant, tag, kind_list.id);
+    }
 
+    pub fn create(context: *Context, tag: rows.Kind.Tag, ids: []const Id(rows.Kind)) !Kind {
+        const kind_list = try KindList.create(context, ids);
+
+        return Kind.init(context, .mutable, tag, kind_list.id);
+    }
+
+    pub fn init(context: *Context, mutability: pl.Mutability, tag: rows.Kind.Tag, inputs: Id(rows.KindList)) !Kind {
+        const id = try context.addRow(rows.Kind, mutability, .{ .tag = tag, .inputs = inputs.cast(rows.KeyList) });
         return Kind{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Kind) void {
+        self.context.delRow(self.id);
     }
 
     pub fn getInputCount(self: Kind) !usize {
         return (try self.getInputs()).getCount();
     }
 
-    pub fn getInputSlice(self: Kind) ![]Key {
+    pub fn getInputSlice(self: Kind) ![]const Key {
         return (try self.getInputs()).getSlice();
     }
 
@@ -1238,115 +1429,38 @@ pub const Kind = struct {
     }
 };
 
-pub const Constructor = struct {
-    id: Id(rows.Constructor),
-    context: *Context,
-
-    pub usingnamespace HandleBase(@This());
-
-    pub fn init(context: *Context, kind: Id(rows.Kind), inputs: Id(rows.KindList)) !Constructor {
-        const id = try context.addRow(rows.Constructor, .{ .kind = kind, .inputs = inputs });
-        return Constructor{ .id = id, .context = context };
-    }
-
-    pub fn getKind(self: Constructor) !Kind {
-        return Kind {
-            .id = self.context.getCell(self.id, .kind) orelse return error.InvalidGraphState,
-            .context = self.context,
-        };
-    }
-
-    pub fn getOutputKindTag(self: Constructor) !rows.Kind.Tag {
-        return (try self.getKind()).getOutputTag();
-    }
-
-    pub fn getInputKindCount(self: Constructor) !usize {
-        return (try self.getInputKinds()).getCount();
-    }
-
-    pub fn getInputKindSlice(self: Constructor) ![]Key {
-        return (try self.getInputKinds()).getSlice();
-    }
-
-    pub fn getInputKinds(self: Constructor) !KindList {
-        return (try self.getKind()).getInputs();
-    }
-
-    pub fn format(self: Constructor, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        // TODO: should we print aliases here?
-        // usually you would want to sort aliases by their lexical context and only take the most recent;
-        // not sure how to do that here
-        if (self.context.getName(self.id)) |name| {
-            try writer.print("({} {} :: {})", .{name, self.id, try self.getKind()});
-        } else if (self.context.getAlias(self.id)) |alias| {
-            try writer.print("({} {} :: {})", .{alias.id, self.id, try self.getKind()});
-        } else {
-            try writer.print("({} :: {})", .{self.id, try self.getKind()});
-        }
-    }
-
-    pub fn deinit(self: Constructor) void {
-        self.context.delRow(self.id);
-    }
-};
-
-pub const TypeList = struct {
-    id: Id(rows.TypeList),
-    context: *Context,
-
-    pub usingnamespace HandleBase(@This());
-
-    pub fn intern(context: *Context, types: []const Key) !TypeList {
-        const id = try context.internKeyList(types);
-        return TypeList{ .id = id.cast(rows.TypeList), .context = context };
-    }
-
-    pub fn init(context: *Context, types: []const Id(rows.Type)) !TypeList {
-        const temp = try context.arena.allocator().alloc(Key, types.len);
-        defer context.arena.allocator().free(temp);
-
-        for (types, 0..) |t, index| {
-            temp[index] = Key.fromId(t);
-        }
-
-        const id = try context.internKeyList(temp);
-        return TypeList{ .id = id.cast(rows.TypeList), .context = context };
-    }
-
-    pub fn getCount(self: TypeList) !usize {
-        return (try self.getSlice()).len;
-    }
-
-    pub fn getSlice(self: TypeList) ![]Key {
-        return (try self.getArrayList()).items;
-    }
-
-    pub fn getArrayList(self: TypeList) !*pl.ArrayList(Key) {
-        return self.context.getCellPtr(self.id, .keys) orelse return error.InvalidGraphState;
-    }
-
-    pub fn format(self: TypeList, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const types = (self.context.getCell(self.id.cast(rows.TypeList), .keys) orelse return error.InvalidGraphState).items;
-
-        try writer.writeAll("[");
-        for (types, 0..) |type_ref, index| {
-            const type_id = type_ref.toId(rows.Type) orelse return error.InvalidGraphState;
-            if (index != 0) try writer.writeAll(", ");
-            try writer.print("{}", .{ Type { .id = type_id, .context = self.context } });
-        }
-        try writer.writeAll("]");
-    }
-};
-
 pub const Type = struct {
     id: Id(rows.Type),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn init(context: *Context, constructor: Id(rows.Constructor), inputs: Id(rows.TypeList)) !Type {
-        const id = try context.addRow(rows.Type, .{ .constructor = constructor, .inputs = inputs.cast(rows.KeyList) });
+    pub fn intern(context: *Context, constructor: Id(rows.Constructor), inputs: []const Id(rows.Type)) !Type {
+        const type_list = try TypeList.intern(context, inputs);
+
+        for (context.table.type.getColumn(.constructor), context.table.type.getColumn(.inputs), 0..) |existing_constructor, existing_inputs, index| {
+            if (existing_constructor == constructor
+            and existing_inputs == type_list.id.cast(rows.KeyList)) {
+                return Type{ .id = context.table.type.getIdFromIndex(@intCast(index)), .context = context };
+            }
+        }
+
+        return Type.init(context, .constant, constructor, type_list.id);
+    }
+
+    pub fn create(context: *Context, constructor: Id(rows.Constructor), inputs: []const Id(rows.Type)) !Type {
+        const type_list = try TypeList.create(context, inputs);
+
+        return Type.init(context, .mutable, constructor, type_list.id);
+    }
+
+    pub fn init(context: *Context, mutability: pl.Mutability, constructor: Id(rows.Constructor), inputs: Id(rows.TypeList)) !Type {
+        const id = try context.addRow(rows.Type, mutability, .{ .constructor = constructor, .inputs = inputs.cast(rows.KeyList) });
         return Type{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Type) void {
+        self.context.delRow(self.id);
     }
 
     pub fn getConstructor(self: Type) !Constructor {
@@ -1360,7 +1474,7 @@ pub const Type = struct {
         return (try self.getTypeInputs()).getCount();
     }
 
-    pub fn getInputTypeSlice(self: Type) ![]Key {
+    pub fn getInputTypeSlice(self: Type) ![]const Key {
         return (try self.getTypeInputs()).getSlice();
     }
 
@@ -1383,7 +1497,7 @@ pub const Type = struct {
         return (try self.getConstructorInputKinds()).getCount();
     }
 
-    pub fn getConstructorInputKindSlice(self: Type) ![]Key {
+    pub fn getConstructorInputKindSlice(self: Type) ![]const Key {
         return (try self.getConstructorInputKinds()).getSlice();
     }
 
@@ -1396,6 +1510,121 @@ pub const Type = struct {
     }
 };
 
+pub const Constant = struct {
+    id: Id(rows.Constant),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn fromBlock(context: *Context, ty: Id(rows.Type), block: Id(rows.Block)) !Constant {
+        const id = try context.addRow(rows.Constant, .mutable, .{ .type = ty, .block = block });
+        return Constant{ .id = id, .context = context };
+    }
+
+    pub fn fromBuffer(context: *Context, ty: Id(rows.Type), buffer: Id(rows.Buffer)) !Constant {
+        const id = try context.addRow(rows.Constant, .mutable, .{ .type = ty, .buffer = buffer });
+        return Constant{ .id = id, .context = context };
+    }
+
+    pub fn fromOwnedBytes(context: *Context, ty: Id(rows.Type), owned_bytes: []const u8) !Constant {
+        const buffer = try Buffer.fromOwnedBytes(context, owned_bytes);
+        errdefer context.delRow(buffer.id);
+
+        return Constant.fromBuffer(context, ty, buffer.id);
+    }
+
+    pub fn fromUnownedBytes(context: *Context, ty: Id(rows.Type), bytes: []const u8) !Constant {
+        const buffer = try Buffer.create(context, bytes);
+        errdefer context.delRow(buffer.id);
+
+        return Constant.fromBuffer(context, ty, buffer.id);
+    }
+
+    pub fn init(context: *Context) !Constant {
+        const id = try context.addRow(rows.Constant, .mutable, .{ });
+        return Constant{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Constant) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn getData(self: Constant) !Key {
+        const key = (self.context.table.constant.getCell(self.id, .data) orelse return error.InvalidGraphState).*;
+        return key;
+    }
+
+    pub fn format(self: Constant, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        const ty = (self.context.table.constant.getCell(self.id, .type) orelse return error.InvalidGraphState).*;
+        const key = (self.context.table.constant.getCell(self.id, .data) orelse return error.InvalidGraphState).*;
+
+        switch (key.tag) {
+            .none => try writer.print("({} = none)", .{ wrapId(self.context, ty) }),
+            .block => try writer.print("({} = {})", .{ wrapId(self.context, ty), wrapId(self.context, key.toIdUnchecked(rows.Block)) }),
+            .buffer => try writer.print("({} = {})", .{ wrapId(self.context, ty), wrapId(self.context, key.toIdUnchecked(rows.Buffer)) }),
+            else => try writer.print("({} = invalid {})", .{ wrapId(self.context, ty), key }),
+        }
+    }
+};
+
+pub const Block = struct {
+    id: Id(rows.Block),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn init(context: *Context) !Block {
+        const id = try context.addRow(rows.Block, .mutable, .{ });
+        return Block{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Block) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn format(self: Block, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({})", .{ self.id });
+    }
+};
+
+pub const Buffer = struct {
+    id: Id(rows.Buffer),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn fromOwnedBytes(context: *Context, owned_data: []const u8) !Buffer {
+        const id = try context.addRow(rows.Buffer, .mutable, .{ .data = owned_data });
+        return Buffer{ .id = id, .context = context };
+    }
+
+    pub fn create(context: *Context, unowned_data: []const u8) !Buffer {
+        const owned_data = try context.arena.allocator().dupe(u8, unowned_data);
+        errdefer context.arena.allocator().free(owned_data);
+
+        const id = try context.addRow(rows.Buffer, .mutable, .{ .data = owned_data });
+        return Buffer{ .id = id, .context = context };
+    }
+
+    pub fn init(context: *Context) !Buffer {
+        const id = try context.addRow(rows.Buffer, .mutable, .{ });
+        return Buffer{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Buffer) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn getData(self: Buffer) ![]const u8 {
+        const data = (self.context.table.buffer.getCell(self.id, .data) orelse return error.InvalidGraphState).*;
+        return data;
+    }
+
+    pub fn format(self: Buffer, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({})", .{ self.id });
+    }
+};
+
 
 test {
     std.testing.log_level = .debug;
@@ -1403,21 +1632,31 @@ test {
     const context = try Context.init(std.testing.allocator);
     defer context.deinit();
 
-    const name = try Name.init(context, "test");
+    const no_kinds = try KindList.intern(context, &.{});
+    const no_types = try TypeList.intern(context, &.{});
+    const no_alias = try Alias.intern(context, &.{});
+    const no_origin = try Origin.intern(context, &.{});
+    _ = .{ no_kinds, no_types, no_alias, no_origin };
+
+    const name = try Name.intern(context, "test");
 
     std.debug.print("{}\n", .{name});
 
-    const no_kinds = try KindList.intern(context, &.{});
-    const no_types = try TypeList.init(context, &.{});
+    const kind = try Kind.intern(context, .data, &.{});
 
-    const kind = try Kind.init(context, .data, no_kinds.id);
-
-    const constructor = try Constructor.init(context, kind.id, no_kinds.id);
+    const constructor = try Constructor.init(context, kind.id);
     defer constructor.deinit();
 
     try name.bindValue(constructor.getKey());
+    try no_alias.bindValue(constructor.getKey());
+    try no_origin.bindValue(constructor.getKey());
 
-    const ty = try Type.init(context, constructor.id, no_types.id);
+    const ty = try Type.intern(context, constructor.id, &.{});
 
     std.debug.print("{}\n", .{ty});
+
+    const constant = try Constant.fromUnownedBytes(context, ty.id, "test");
+    defer constant.deinit();
+
+    std.debug.print("{}\n", .{constant});
 }
