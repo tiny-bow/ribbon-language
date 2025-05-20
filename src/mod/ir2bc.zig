@@ -31,13 +31,13 @@ pub const Jit = struct {
     /// The root compiler storing common state between jit jobs
     root: *const Compiler,
     /// The ir for the function being compiled
-    ir: *const ir.Function,
+    // ir: *const ir.Function,
     /// Local table for the function being compiled
     table: bytecode.Table,
 
-    /// Reset the Jit-local state for the compilation of a new function.
-    pub fn reset(self: *Jit, new_function: *const ir.Function) void {
-        self.table.clear();
-        self.ir = new_function;
-    }
+    // /// Reset the Jit-local state for the compilation of a new function.
+    // pub fn reset(self: *Jit, new_function: *const ir.Function) void {
+    //     self.table.clear();
+    //     self.ir = new_function;
+    // }
 };

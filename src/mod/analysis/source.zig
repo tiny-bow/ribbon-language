@@ -1,4 +1,5 @@
 const std = @import("std");
+const pl = @import("platform");
 
 const Id = @import("Id");
 
@@ -21,14 +22,28 @@ pub const Source = struct {
     pub fn format(self: *const Source, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("[{}:{}:{}]", .{ self.name, self.location.visual.line, self.location.visual.column });
     }
+
+    pub fn dupe(self: *const Source, allocator: std.mem.Allocator) !Source {
+        return Source{
+            .name = try allocator.dupe(u8, self.name),
+            .location = self.location,
+        };
+    }
 };
 
-
-pub fn SourceMap(comptime T: type) type {
-    return std.HashMapUnmanaged(Source, T, SourceContext64, 80);
+pub inline fn SourceBiMap(comptime T: type, comptime Ctx: type, comptime style: pl.MapStyle) type {
+    comptime return pl.BiMap(Source, T, if (style == .array) SourceContext32 else SourceContext64, Ctx, style);
 }
 
-pub fn SourceArrayMap(comptime T: type) type {
+pub inline fn UniqueReprSourceBiMap(comptime T: type, comptime style: pl.MapStyle) type {
+    comptime return SourceBiMap(T, if (style == .array) pl.UniqueReprHashContext32(T) else pl.UniqueReprHashContext64(T), style);
+}
+
+pub inline fn SourceMap(comptime T: type) type {
+    comptime return std.HashMapUnmanaged(Source, T, SourceContext64, 80);
+}
+
+pub inline fn SourceArrayMap(comptime T: type) type {
     return std.ArrayHashMapUnmanaged(Source, T, SourceContext64, true);
 }
 
