@@ -247,11 +247,6 @@ pub const rows = struct {
     };
 
     /// marker type for `Id`; not actually instantiated anywhere, keylist is used instead
-    pub const Alias = struct {
-        id: Id(@This()),
-    };
-
-    /// marker type for `Id`; not actually instantiated anywhere, keylist is used instead
     pub const Origin = struct {
         id: Id(@This()),
     };
@@ -274,6 +269,11 @@ pub const rows = struct {
     /// marker type for `Id`; not actually instantiated anywhere, type is used instead
     pub const Variable = struct {
         id: Id(@This()),
+
+        pub fn makeId(block: Id(rows.Block), index: usize) Id(@This()) { // TODO: this is kind of hacky; probably could find a better way
+            if (block == .null) return .null;
+            return @enumFromInt(@intFromEnum(block) << 32 | index);
+        }
     };
 
     /// Type kinds refer to the general category of a type, be it data, function, etc.
@@ -319,6 +319,8 @@ pub const rows = struct {
             /// which is in turn, of this kind.
             /// Size is known, can be used for comparisons.
             type,
+            /// in the event a set of types is required, this is how it is encoded.
+            type_set,
         };
     };
 
@@ -577,6 +579,7 @@ pub const Key = packed struct(u128) {
         untyped = std.math.minInt(i64),
         none = 0,
         name,
+        variable,
         source,
         kind,
         constructor,
@@ -619,6 +622,7 @@ pub const Key = packed struct(u128) {
                 .control_edge => rows.ControlEdge,
                 .instruction => rows.Instruction,
                 .buffer => rows.Buffer,
+                .variable => rows.Variable,
                 .key_list => rows.KeyList,
 
                 else => @compileError("Invalid tag for Key: " ++ @typeName(self)),
@@ -666,8 +670,8 @@ pub const Key = packed struct(u128) {
                 rows.ControlEdge => .control_edge,
                 rows.Instruction => .instruction,
                 rows.Buffer => .buffer,
+                rows.Variable => .variable,
                 rows.KeyList => .key_list,
-                rows.Alias,
                 rows.Origin,
                 rows.KindList,
                 rows.TypeList,
@@ -712,6 +716,54 @@ pub fn CellType(comptime id: type, comptime column: pl.EnumLiteral) type {
     return pl.FieldType(RowType(id), column);
 }
 
+/// Identifier for built-in values.
+pub const Builtin = enum {
+    function_constructor,
+    product_constructor,
+};
+
+pub fn BuiltinType(comptime builtin: Builtin) type {
+    return WrappedId(BuiltinId(builtin));
+}
+
+pub fn BuiltinId(comptime builtin: Builtin) type {
+    return Id(BuiltinRowType(builtin));
+}
+
+pub fn BuiltinRowType(comptime builtin: Builtin) type {
+    return switch (builtin) {
+        .function_constructor => rows.Constructor,
+        .product_constructor => rows.Constructor,
+    };
+}
+
+pub const builtin_initializers = struct {
+    pub fn function_constructor(context: *Context) !Key {
+        const data = try Kind.intern(context, .data, &.{});
+
+        const effect = try Kind.intern(context, .effect, &.{});
+
+        const kind = try Kind.create(context, .function, &.{data, effect, data});
+        errdefer kind.deinit();
+
+        const constructor = try Constructor.init(context, kind);
+
+        return constructor.getKey();
+    }
+
+    pub fn product_constructor(context: *Context) !Key {
+        const data = try Kind.intern(context, .data, &.{});
+
+        const type_set = try Kind.create(context, .type_set, &.{data});
+
+        const kind = try Kind.create(context, .data, &.{type_set});
+
+        const constructor = try Constructor.init(context, kind);
+
+        return constructor.getKey();
+    }
+};
+
 /// The core of Ribbon's intermediate representation. This is the main data
 /// structure used to represent Ribbon programs in the intermediate phase of
 /// compilation; ie, after the frontend has performed semantic analysis, and before
@@ -736,18 +788,18 @@ pub const Context = struct {
         name_storage: pl.UniqueReprStringBiMap(Id(rows.Name), .bucket) = .empty,
         /// Maps interned sources to their unique id.
         source_storage: analysis.source.UniqueReprSourceBiMap(Id(analysis.Source), .bucket) = .empty,
-        /// Binds keys to names, allowing the generation of symbol tables.
-        name: pl.UniqueReprBiMap(Key, Id(rows.Name), .bucket) = .empty,
-        /// Maps keys to sets of names that have been used to refer to them in the source code,
-        /// but that are not used for symbol resolution. Intended for various debugging purposes.
-        /// For example, certain instructions may be given a name to make the ir output more readable.
-        alias: pl.UniqueReprBiMap(Key, Id(rows.Alias), .bucket) = .empty,
+        /// Binds keys to names, allowing the generation of debug information.
+        key_to_name: pl.UniqueReprMap(Key, Id(rows.Name), 80) = .empty,
+        /// binds names to keys, allowing the generation of symbol tables.
+        name_to_key: pl.UniqueReprMap(Id(rows.Name), Key, 80) = .empty,
         /// Maps keys to sets of sources that have contributed to their definition;
         /// for debugging purposes.
         origin: pl.UniqueReprBiMap(Key, Id(rows.Origin), .bucket) = .empty,
         /// Maps keys to pl.Mutability values, indicating whether or not they can be mutated.
         /// This is used for various purposes, such as determining whether or not a value can be destroyed.
         mutability: pl.UniqueReprMap(Key, pl.Mutability, 80) = .empty,
+        /// Builtin values.
+        builtin: pl.UniqueReprBiMap(Builtin, Key, .bucket) = .empty,
     } = .{},
     /// Storage of standard ir graph types data.
     table: struct {
@@ -791,9 +843,9 @@ pub const Context = struct {
         comptime {
             const a = std.meta.fieldNames(Key.Tag);
             const b = std.meta.fieldNames(@This());
-            std.debug.assert(a.len == b.len + 4);
+            std.debug.assert(a.len == b.len + 5);
 
-            for (a[4..], b) |a_name, b_name| {
+            for (a[5..], b) |a_name, b_name| {
                 std.debug.assert(std.mem.eql(u8, a_name, b_name));
             }
         }
@@ -937,36 +989,17 @@ pub const Context = struct {
     /// Bind a name to a key, creating a symbol table entry.
     /// * This will fail if the name is already bound to a different key,
     /// or if the key is already bound to a different name.
-    pub fn bindName(self: *Context, name: Id(rows.Name), key: Key) !void {
-        if (self.map.name.get_a(name)) |existing| {
-            log.debug("binding {} already bound to name {}", .{name, existing});
-            return error.DuplicateNameBinding;
-        }
-
-        if (self.map.name.get_b(key)) |existing| {
-            log.debug("binding {} already bound to name {}", .{key, existing});
-            return error.DuplicateNameBinding;
-        }
-
-        try self.map.name.put(self.arena.child_allocator, key, name);
+    pub fn bindSymbolName(self: *Context, name: Id(rows.Name), key: Key) !void {
+        try self.map.name_to_key.put(self.arena.child_allocator, name, key);
+        try self.map.key_to_name.put(self.arena.child_allocator, key, name);
     }
 
-    /// Bind an alias to a key.
-    /// * This will fail if the alias is already bound to a different key,
-    /// or if the key is already bound to a different alias.
-    pub fn bindAlias(self: *Context, alias: Id(rows.Alias), key: Key) !void {
-        if (self.map.alias.get_a(alias)) |existing| {
-            log.debug("binding {} already bound to alias {}", .{alias, existing});
-            return error.DuplicateNameBinding;
-        }
-
-        if (self.map.alias.get_b(key)) |existing| {
-            log.debug("binding {} already bound to alias {}", .{key, existing});
-            return error.DuplicateNameBinding;
-        }
-
-        try self.map.alias.put(self.arena.child_allocator, key, alias);
+    /// Bind a key to a name, allowing the generation of debug information.
+    /// * overrides any existing binding for the key; does not clobber symbol-table entry.
+    pub fn bindDebugName(self: *Context, name: Id(rows.Name), id: anytype) !void {
+        try self.map.key_to_name.put(self.arena.child_allocator, Key.fromId(id), name);
     }
+
 
     /// Bind an origin to a key.
     /// * This will fail if the origin is already bound to a different key,
@@ -985,19 +1018,14 @@ pub const Context = struct {
         try self.map.origin.put(self.arena.child_allocator, key, origin);
     }
 
-    /// Get the name bound to a key, if it exists.
+    /// Get the last name bound to a key, if any.
     pub fn getName(self: *Context, id: anytype) ?Name {
-        return Name { .id = self.map.name.get_b(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return null, .context = self };
-    }
-
-    /// Get the extra name set bound to a key, if it exists.
-    pub fn getAlias(self: *Context, id: anytype) ?Alias {
-        return Alias { .id = self.map.alias.get_b(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return null, .context = self };
+        return wrapId(self, self.map.key_to_name.get(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return null);
     }
 
     /// Get the source set bound to a key, if it exists.
     pub fn getOrigin(self: *Context, id: anytype) ?Origin {
-        return Origin { .id = self.map.origin.get_b(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return null, .context = self };
+        return wrapId(self, self.map.origin.get_b(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return null);
     }
 
     /// Set the value of a specific cell (data structure field) in a table within this context.
@@ -1065,6 +1093,29 @@ pub const Context = struct {
 
         return id.cast(Row);
     }
+
+    pub fn getBuiltin(self: *Context, comptime id: Builtin) !BuiltinType(id) {
+        const IdT = @FieldType(BuiltinType(id), "id");
+        const Row = IdT.Value;
+
+        if (self.map.builtin.get_b(id)) |existing| {
+            return wrapId(self, existing.toIdUnchecked(Row));
+        }
+
+        const key = try @field(builtin_initializers, @tagName(id))(self);
+
+        try self.map.builtin.put(self.arena.child_allocator, id, key);
+
+        return wrapId(self, key.toIdUnchecked(Row));
+    }
+
+    pub fn isBuiltin(self: *Context, id: anytype) bool {
+        return self.getBuiltinIdentity(id.getRef()) != null;
+    }
+
+    pub fn getBuiltinIdentity(self: *Context, id: Key) ?Builtin {
+        return self.map.builtin.get_a(id);
+    }
 };
 
 pub inline fn WrappedId(comptime T: type) type {
@@ -1075,24 +1126,24 @@ pub inline fn WrappedId(comptime T: type) type {
         rows.Constructor => Constructor,
         rows.Type => Type,
         rows.KeyList => KeyList,
-        rows.Alias => Alias,
         rows.Origin => Origin,
         rows.KindList => KindList,
         rows.TypeList  => TypeList,
+        rows.HandlerList  => HandlerList,
         // rows.Effect => Effect,
-        // rows.Constant => Constant,
+        rows.Constant => Constant,
         // rows.Global => Global,
         // rows.ForeignAddress => ForeignAddress,
         // rows.BuiltinAddress => BuiltinAddress,
         // rows.Intrinsic => Intrinsic,
         // rows.Handler => Handler,
         // rows.Function => Function,
-        // rows.DynamicScope => DynamicScope,
+        rows.DynamicScope => DynamicScope,
         rows.Block => Block,
         rows.Buffer => Buffer,
-        // rows.DataEdge => DataEdge,
-        // rows.ControlEdge => ControlEdge,
-        // rows.Instruction => Instruction,
+        rows.DataEdge => DataEdge,
+        rows.ControlEdge => ControlEdge,
+        rows.Instruction => Instruction,
         else => @compileError("Invalid type for WrappedId: " ++ @typeName(T)),
     };
 }
@@ -1133,14 +1184,12 @@ pub fn KeyListBase(comptime Self: type, comptime T: type) type {
 
             const id = try context.createKeyList(temp);
 
-            const alias = Self{ .id = id.cast(Row), .context = context };
-
-            return alias;
+            return wrapId(context, id.cast(Row));
         }
 
         pub fn init(context: *Context) !Self {
             const id = try context.createKeyList(&.{});
-            return Self{ .id = id.cast(Row), .context = context };
+            return wrapId(context, id.cast(Row));
         }
 
         pub fn deinit(self: Self) void {
@@ -1180,7 +1229,7 @@ pub fn KeyListBase(comptime Self: type, comptime T: type) type {
 
             for (refs, 0..) |ref, index| {
                 if (index != 0) try writer.writeAll(", ");
-                try writer.print("{}", .{ wrapId(self.context, ref.toId(Row) orelse return error.InvalidGraphState) });
+                try writer.print("{}", .{ wrapId(self.context, ref.toIdUnchecked(Row)) });
             }
 
             try writer.writeAll("]");
@@ -1254,12 +1303,16 @@ pub const Name = struct {
         return self.context.map.name_storage.get_a(self.id) orelse return error.InvalidGraphState;
     }
 
-    pub fn getValue(self: Name) !Key {
-        return self.context.map.name.get_a(self.id) orelse return error.InvalidGraphState;
+    pub fn getSymbolBinding(self: Name) !Key {
+        return self.context.map.name_to_key.get(self.id) orelse return error.InvalidGraphState;
     }
 
-    pub fn bindValue(self: Name, value: anytype) !void {
-        try self.context.bindName(self.id, Key.fromId(value.id));
+    pub fn bindSymbol(self: Name, value: anytype) !void {
+        try self.context.bindSymbolName(self.id, Key.fromId(value.id));
+    }
+
+    pub fn bindDebug(self: Name, value: anytype) !void {
+        try self.context.bindDebugName(self.id, Key.fromId(value.id));
     }
 
     pub fn format(self: Name, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -1287,17 +1340,6 @@ pub const Source = struct {
     }
 };
 
-pub const Alias = struct {
-    id: Id(rows.Alias),
-    context: *Context,
-
-    pub usingnamespace HandleBase(@This());
-    pub usingnamespace KeyListBase(@This(), rows.Name);
-
-    pub fn bindValue(self: Alias, value: anytype) !void {
-        try self.context.bindAlias(self.id, value.id);
-    }
-};
 
 pub const Origin = struct {
     id: Id(rows.Origin),
@@ -1402,13 +1444,8 @@ pub const Constructor = struct {
     }
 
     pub fn format(self: Constructor, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        // TODO: should we print aliases here?
-        // usually you would want to sort aliases by their lexical context and only take the most recent;
-        // not sure how to do that here
         if (self.context.getName(self.id)) |name| {
             try writer.print("({} {} :: {})", .{name, self.id, try self.getKind()});
-        } else if (self.context.getAlias(self.id)) |alias| {
-            try writer.print("({} {} :: {})", .{alias.id, self.id, try self.getKind()});
         } else {
             try writer.print("({} :: {})", .{self.id, try self.getKind()});
         }
@@ -1505,6 +1542,15 @@ pub const Type = struct {
         return Type.init(context, .constant, constructor, type_list);
     }
 
+    pub fn createFunction(context: *Context, inputs: []const Type, effect: Type, result: Type) !Type {
+        const type_list = try TypeList.create(context, inputs);
+        errdefer type_list.deinit();
+
+        const input_product = try Type.intern(context, try context.getBuiltin(.product_constructor), inputs);
+
+        return Type.create(context, try context.getBuiltin(.function_constructor), &.{ input_product, effect, result });
+    }
+
     pub fn create(context: *Context, constructor: Constructor, inputs: []const Type) !Type {
         const type_list = try TypeList.create(context, inputs);
         errdefer type_list.deinit();
@@ -1519,6 +1565,10 @@ pub const Type = struct {
 
     pub fn deinit(self: Type) void {
         self.context.delRow(self.id);
+    }
+
+    pub fn format(self: Type, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({} {})", .{ try self.getConstructor(), try self.getTypeInputs() });
     }
 
     pub fn setConstructor(self: Type, constructor: Constructor) !void {
@@ -1538,6 +1588,14 @@ pub const Type = struct {
 
     pub fn getInputTypeSlice(self: Type) ![]const Key {
         return (try self.getTypeInputs()).getSlice();
+    }
+
+    pub fn getInputTypeIndex(self: Type, index: usize) !Type {
+        const slice = try self.getInputTypeSlice();
+
+        if (index >= slice.len) return error.InvalidGraphState;
+
+        return wrapId(self.context, slice[index].toIdUnchecked(rows.Type));
     }
 
     pub fn setTypeInputs(self: Type, inputs: Id(rows.TypeList)) !void {
@@ -1569,10 +1627,6 @@ pub const Type = struct {
 
     pub fn getConstructorInputKinds(self: Type) !KindList {
         return (try self.getConstructorKind()).getInputs();
-    }
-
-    pub fn format(self: Type, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("({} {})", .{ try self.getConstructor(), try self.getTypeInputs() });
     }
 };
 
@@ -1678,21 +1732,39 @@ pub const Buffer = struct {
     }
 };
 
+
 pub const Function = struct {
     id: Id(rows.Function),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn create(context: *Context) !Function {
-        const body = try Block.create(context);
+    pub fn create(context: *Context, ty: Type) !Function {
+        const builtin_func_con = try context.getBuiltin(.function_constructor);
+        const builtin_product_con = try context.getBuiltin(.product_constructor);
+
+        const constructor = try ty.getConstructor();
+
+        if (constructor.id != builtin_func_con.id) return error.InvalidGraphState;
+
+        const input_type = try ty.getInputTypeIndex(0);
+        const input_constructor = try input_type.getConstructor();
+
+        if (input_constructor.id != builtin_product_con.id) return error.InvalidGraphState;
+
+        const input_types = try input_type.getTypeInputs();
+
+        const contents = try KeyList.init(context);
+        errdefer contents.deinit();
+
+        const body = try Block.init(context, input_types, null, contents);
         errdefer body.deinit();
 
-        return Function.init(context, .null, body.id);
+        return Function.init(context, ty, body);
     }
 
-    pub fn init(context: *Context, ty: Id(rows.Type), body: Id(rows.Block)) !Function {
-        const id = try context.addRow(rows.Function, .mutable, .{ .type = ty, .body = body });
+    pub fn init(context: *Context, ty: ?Type, body: ?Block) !Function {
+        const id = try context.addRow(rows.Function, .mutable, .{ .type = if (ty) |x| x.id else .null, .body = if (body) |x| x.id else (try Block.new(context)).id });
         return Function{ .id = id, .context = context };
     }
 
@@ -1701,11 +1773,17 @@ pub const Function = struct {
     }
 
     pub fn format(self: Function, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("({})", .{ self.id });
+        const body = try self.getBody();
+
+        if (self.context.getName(self.id)) |name| {
+            try writer.print("({} {} = {})", .{name, self.id, body});
+        } else {
+            try writer.print("({} = {})", .{self.id, body});
+        }
     }
 
-    pub fn setType(self: Function, ty: Id(rows.Type)) !void {
-        try self.context.setCell(self.id, .type, ty);
+    pub fn setType(self: Function, ty: Type) !void {
+        try self.context.setCell(self.id, .type, ty.id);
     }
 
     pub fn getType(self: Function) !Type {
@@ -1715,6 +1793,10 @@ pub const Function = struct {
         };
     }
 
+    pub fn setBody(self: Function, body: Block) !void {
+        try self.context.setCell(self.id, .body, body.id);
+    }
+
     pub fn getBody(self: Function) !Block {
         return Block {
             .id = self.context.getCell(self.id, .body) orelse return error.InvalidGraphState,
@@ -1722,8 +1804,9 @@ pub const Function = struct {
         };
     }
 
-    pub fn setBody(self: Function, body: Id(rows.Block)) !void {
-        try self.context.setCell(self.id, .body, body);
+    pub fn setVariables(self: Function, variables: []const Type) !void {
+        const block = try self.getBody();
+        try block.setVariables(try TypeList.create(self.context, variables));
     }
 
     pub fn getVariables(self: Function) !TypeList {
@@ -1735,6 +1818,16 @@ pub const Function = struct {
         const block = try self.getBody();
         return block.getContents();
     }
+
+    pub fn getContentCount(self: Function) !usize {
+        const block = try self.getBody();
+        return block.getContentCount();
+    }
+
+    pub fn getContentSlice(self: Function) ![]const Key {
+        const block = try self.getBody();
+        return block.getContentSlice();
+    }
 };
 
 pub const DynamicScope = struct {
@@ -1743,7 +1836,7 @@ pub const DynamicScope = struct {
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn create(context: *Context) !DynamicScope {
+    pub fn new(context: *Context) !DynamicScope {
         const inputs = try KeyList.init(context);
         errdefer inputs.deinit();
 
@@ -1799,25 +1892,35 @@ pub const Block = struct {
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn create(context: *Context) !Block {
-        const variables = try TypeList.init(context);
-        errdefer variables.deinit();
+    pub fn create(context: *Context, variables: []const Type, dynamic_scope: ?DynamicScope) !Block {
+        const block = try Block.new(context);
+        errdefer block.deinit();
 
-        const instructions = try KeyList.init(context);
-        errdefer instructions.deinit();
+        const type_list = try TypeList.create(context, variables);
+        errdefer type_list.deinit();
 
-        return Block.init(context, variables.id, .null, instructions.id);
+        if (dynamic_scope) |scope| {
+            try block.setDynamicScope(scope);
+        }
+
+        try block.setVariables(type_list);
+
+        return block;
+    }
+
+    pub fn new(context: *Context) !Block {
+        return Block.init(context, null, null, null);
     }
 
     pub fn init(context: *Context,
-        variables: Id(rows.TypeList),
-        dynamic_scope: Id(rows.DynamicScope),
-        contents: Id(rows.KeyList),
+        variables: ?TypeList,
+        dynamic_scope: ?DynamicScope,
+        contents: ?KeyList,
     ) !Block {
         const id = try context.addRow(rows.Block, .mutable, .{
-            .variables = variables,
-            .dynamic_scope = dynamic_scope,
-            .contents = contents,
+            .variables = if (variables) |x| x.id else (try TypeList.init(context)).id,
+            .dynamic_scope = if (dynamic_scope) |x| x.id else .null,
+            .contents = if (contents) |x| x.id else (try KeyList.init(context)).id,
         });
         return Block{ .id = id, .context = context };
     }
@@ -1827,11 +1930,47 @@ pub const Block = struct {
     }
 
     pub fn format(self: Block, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("({})", .{ self.id });
+        if (self.context.getName(self.id)) |alias| {
+            try writer.print(":: {} {}\n", .{alias, self.id});
+        } else {
+            try writer.print(":: {}\n", .{self.id});
+        }
+
+        const variables = try self.getVariableSlice();
+
+        for (variables, 0..) |variable_key, index| {
+            const variable_id = rows.Variable.makeId(self.id, index);
+            const variable_type = wrapId(self.context, variable_key.toIdUnchecked(rows.Type));
+            if (self.context.getName(variable_id)) |variable_name| {
+                try writer.print("  {} {}: {};\n", .{variable_name, variable_id, variable_type});
+            } else {
+                try writer.print("  {}: {};\n", .{variable_id, variable_type});
+            }
+        }
+
+        if (self.getDynamicScope()) |scope| {
+            try writer.print("  with {}\n", .{scope});
+        }
+
+        const contents = try self.getContentSlice();
+
+        for (contents) |content_key| {
+            switch (content_key.tag) {
+                .instruction => {
+                    const content = wrapId(self.context, content_key.toIdUnchecked(rows.Instruction));
+                    try writer.print("{};\n", .{content});
+                },
+                .block => {
+                    const content = wrapId(self.context, content_key.toIdUnchecked(rows.Block));
+                    try writer.print("{}", .{content});
+                },
+                else => return error.InvalidGraphState,
+            }
+        }
     }
 
-    pub fn setVariables(self: Block, variables: Id(rows.TypeList)) !void {
-        try self.context.setCell(self.id, .variables, variables);
+    pub fn setVariables(self: Block, variables: TypeList) !void {
+        try self.context.setCell(self.id, .variables, variables.id);
     }
 
     pub fn getVariables(self: Block) !TypeList {
@@ -1839,17 +1978,17 @@ pub const Block = struct {
         return TypeList{ .id = variables.cast(rows.TypeList), .context = self.context };
     }
 
-    pub fn setDynamicScope(self: Block, dynamic_scope: Id(rows.DynamicScope)) !void {
-        try self.context.setCell(self.id, .dynamic_scope, dynamic_scope);
+    pub fn setDynamicScope(self: Block, dynamic_scope: DynamicScope) !void {
+        try self.context.setCell(self.id, .dynamic_scope, dynamic_scope.id);
     }
 
-    pub fn getDynamicScope(self: Block) !DynamicScope {
-        const dynamic_scope = (self.context.table.block.getCell(self.id, .dynamic_scope) orelse return error.InvalidGraphState).*;
+    pub fn getDynamicScope(self: Block) ?DynamicScope {
+        const dynamic_scope = (self.context.table.block.getCell(self.id, .dynamic_scope) orelse return null).*;
         return DynamicScope{ .id = dynamic_scope.cast(rows.DynamicScope), .context = self.context };
     }
 
-    pub fn setContents(self: Block, instructions: Id(rows.KeyList)) !void {
-        try self.context.setCell(self.id, .contents, instructions);
+    pub fn setContents(self: Block, contents: KeyList) !void {
+        try self.context.setCell(self.id, .contents, contents.id);
     }
 
     pub fn getContents(self: Block) !KeyList {
@@ -1861,8 +2000,16 @@ pub const Block = struct {
         return (try self.getVariables()).getCount();
     }
 
+    pub fn getVariableSlice(self: Block) ![]const Key {
+        return (try self.getVariables()).getSlice();
+    }
+
     pub fn getContentCount(self: Block) !usize {
         return (try self.getContents()).getCount();
+    }
+
+    pub fn getContentSlice(self: Block) ![]const Key {
+        return (try self.getContents()).getSlice();
     }
 
     pub fn append(self: Block, key: Key) !void {
@@ -1872,7 +2019,7 @@ pub const Block = struct {
 
     pub fn bindVariable(self: Block, ty: Type) !Id(rows.Variable) {
         const variables = try self.getVariables();
-        const id = Id(rows.Variable).fromInt(try variables.getCount());
+        const id = rows.Variable.makeId(self.id, try variables.getCount());
         try variables.append(ty);
 
         return id;
@@ -1885,12 +2032,12 @@ pub const Instruction = struct {
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn create(context: *Context) !Instruction {
+    pub fn init(context: *Context) !Instruction {
         const id = try context.addRow(rows.Instruction, .mutable, .{ });
         return Instruction{ .id = id, .context = context };
     }
 
-    pub fn init(context: *Context, ty: Type, operation: Operation) !Instruction {
+    pub fn create(context: *Context, ty: Type, operation: Operation) !Instruction {
         const id = try context.addRow(rows.Instruction, .mutable, .{ .type = ty.id, .operation = operation });
         return Instruction{ .id = id, .context = context };
     }
@@ -1923,10 +2070,118 @@ pub const Instruction = struct {
     }
 };
 
+pub const ControlEdge = struct {
+    id: Id(rows.ControlEdge),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn init(context: *Context) !ControlEdge {
+        const id = try context.addRow(rows.ControlEdge, .mutable, .{ });
+        return ControlEdge{ .id = id, .context = context };
+    }
+
+    pub fn create(context: *Context, source: Key, destination: Key, source_index: usize) !ControlEdge {
+        const id = try context.addRow(rows.ControlEdge, .mutable, .{ .source = source, .destination = destination, .source_index = source_index });
+        return ControlEdge{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: ControlEdge) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn format(self: ControlEdge, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({})", .{ self.id });
+    }
+
+    pub fn setSource(self: ControlEdge, source: Key) !void {
+        try self.context.setCell(self.id, .source, source);
+    }
+
+    pub fn getSource(self: ControlEdge) !Key {
+        return self.context.getCell(self.id, .source) orelse error.InvalidGraphState;
+    }
+
+    pub fn setDestination(self: ControlEdge, destination: Key) !void {
+        try self.context.setCell(self.id, .destination, destination);
+    }
+
+    pub fn getDestination(self: ControlEdge) !Key {
+        return self.context.getCell(self.id, .destination) orelse error.InvalidGraphState;
+    }
+
+    pub fn setSourceIndex(self: ControlEdge, index: usize) !void {
+        try self.context.setCell(self.id, .source_index, index);
+    }
+
+    pub fn getSourceIndex(self: ControlEdge) !usize {
+        return self.context.getCell(self.id, .source_index) orelse return error.InvalidGraphState;
+    }
+};
+
+pub const DataEdge = struct {
+    id: Id(rows.DataEdge),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn init(context: *Context) !DataEdge {
+        const id = try context.addRow(rows.DataEdge, .mutable, .{ });
+        return DataEdge{ .id = id, .context = context };
+    }
+
+    pub fn create(context: *Context, source: Key, destination: Key) !DataEdge {
+        const id = try context.addRow(rows.DataEdge, .mutable, .{ .source = source, .destination = destination });
+        return DataEdge{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: DataEdge) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn format(self: DataEdge, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({})", .{ self.id });
+    }
+
+    pub fn setSource(self: DataEdge, source: Key) !void {
+        try self.context.setCell(self.id, .source, source);
+    }
+
+    pub fn getSource(self: DataEdge) !Key {
+        return self.context.getCell(self.id, .source) orelse error.InvalidGraphState;
+    }
+
+    pub fn setDestination(self: DataEdge, destination: Key) !void {
+        try self.context.setCell(self.id, .destination, destination);
+    }
+
+    pub fn getDestination(self: DataEdge) !Key {
+        return self.context.getCell(self.id, .destination) orelse error.InvalidGraphState;
+    }
+
+    pub fn setSourceIndex(self: DataEdge, index: usize) !void {
+        try self.context.setCell(self.id, .source_index, index);
+    }
+
+    pub fn getSourceIndex(self: DataEdge) !usize {
+        return self.context.getCell(self.id, .source_index) orelse return error.InvalidGraphState;
+    }
+
+    pub fn setDestinationIndex(self: DataEdge, index: usize) !void {
+        try self.context.setCell(self.id, .destination_index, index);
+    }
+
+    pub fn getDestinationIndex(self: DataEdge) !usize {
+        return self.context.getCell(self.id, .destination_index) orelse return error.InvalidGraphState;
+    }
+};
+
 
 test {
     const context = try Context.init(std.testing.allocator);
     defer context.deinit();
+
+    const stderr = std.io.getStdErr().writer();
 
     const empty_origin = try Origin.create(context, &.{});
 
@@ -1939,7 +2194,7 @@ test {
     const constructor = try Constructor.init(context, kind);
     defer constructor.deinit();
 
-    try name.bindValue(constructor);
+    try name.bindSymbol(constructor);
     try empty_origin.bindValue(constructor);
 
     const ty = try Type.intern(context, constructor, &.{});
@@ -1950,4 +2205,11 @@ test {
     defer constant.deinit();
 
     std.debug.print("{}\n", .{constant});
+
+
+    const function_ty = try Type.createFunction(context, &.{ty, ty}, ty, ty);
+
+    try (try Name.intern(context, "test_func_ty")).bindSymbol(function_ty);
+
+    try function_ty.format("", undefined, stderr.any());
 }
