@@ -138,6 +138,13 @@ pub fn Table(comptime T: type) type {
                     else @compileError("Missing field " ++ field.name ++ " in initialization value for table entry of type " ++ @typeName(T));
             }
 
+            inline for (comptime std.meta.fieldNames(I)) |input_field| {
+                if (comptime !@hasField(T, input_field)) {
+                    @compileError(std.fmt.comptimePrint("Invalid initialization argument {s} for row of type {s}, valid fields are: {s}",
+                        .{input_field, @typeName(T), std.meta.fieldNames(T)}));
+                }
+            }
+
             return id;
         }
 
@@ -256,6 +263,16 @@ pub const rows = struct {
 
     /// marker type for `Id`; not actually instantiated anywhere, keylist is used instead
     pub const TypeList = struct {
+        id: Id(@This()),
+    };
+
+    /// marker type for `Id`; not actually instantiated anywhere, keylist is used instead
+    pub const HandlerList = struct {
+        id: Id(@This()),
+    };
+
+    /// marker type for `Id`; not actually instantiated anywhere, type is used instead
+    pub const Variable = struct {
         id: Id(@This()),
     };
 
@@ -411,13 +428,13 @@ pub const rows = struct {
         inputs: Id(rows.KeyList) = .null,
     };
 
-    /// Binds a function type to an entry point instruction to form a function that can be called anywhere in the graph.
+    /// Binds a type to a block to form a function that can be called anywhere in the graph.
     pub const Function = struct {
         id: Id(@This()),
         /// the type of this function
         type: Id(rows.Type) = .null,
-        /// the function's entry
-        entry: Key = .none,
+        /// the function's entry block
+        body: Id(rows.Block) = .null,
     };
 
     /// Binds a set of effect handlers to a set of operands, forming a dynamic scope in which the bound handlers
@@ -427,7 +444,7 @@ pub const rows = struct {
         /// the parameters for the handler set; upvalue bindings
         inputs: Id(rows.KeyList) = .null,
         /// the handlers bound by this dynamic scope to handle effects within it
-        handler_set: Id(rows.KeyList) = .null,
+        handler_list: Id(rows.HandlerList) = .null,
     };
 
     /// Because Ribbon is a highly expression oriented, but also systems level and side
@@ -468,11 +485,11 @@ pub const rows = struct {
     pub const Block = struct {
         id: Id(@This()),
         /// local variables bound by this block
-        variables: Id(rows.KeyList) = .null,
+        variables: Id(rows.TypeList) = .null,
         /// dynamic scope for this block, if any
         dynamic_scope: Id(rows.DynamicScope) = .null,
-        /// the instructions belonging to this block
-        instructions: Id(rows.KeyList) = .null,
+        /// the instructions and blocks belonging to this block, in order of execution
+        contents: Id(rows.KeyList) = .null,
     };
 
     /// Edges encode the control and data flow of the graph. Data edges specifically are used to
@@ -654,6 +671,7 @@ pub const Key = packed struct(u128) {
                 rows.Origin,
                 rows.KindList,
                 rows.TypeList,
+                rows.HandlerList,
                 => .key_list,
 
                 else => @compileError("Invalid type for Key: " ++ @typeName(T)),
@@ -1102,25 +1120,15 @@ pub fn KeyListBase(comptime Self: type, comptime T: type) type {
 
         const Id = @FieldType(Self, "id");
         const Row = Mixin.Id.Value;
+        const ValueId = ir.Id(T);
+        const Value = WrappedId(ValueId);
 
-        pub fn intern(context: *Context, ids: []const ir.Id(T)) !Self {
-            const temp = try context.arena.allocator().alloc(Key, ids.len);
+        pub fn create(context: *Context, values: []const Value) !Self {
+            const temp = try context.arena.allocator().alloc(Key, values.len);
             defer context.arena.allocator().free(temp);
 
-            for (ids, 0..) |t, index| {
-                temp[index] = Key.fromId(t);
-            }
-
-            const id = try context.internKeyList(temp);
-            return Self{ .id = id.cast(Row), .context = context };
-        }
-
-        pub fn create(context: *Context, ids: []const ir.Id(T)) !Self {
-            const temp = try context.arena.allocator().alloc(Key, ids.len);
-            defer context.arena.allocator().free(temp);
-
-            for (ids, 0..) |t, index| {
-                temp[index] = Key.fromId(t);
+            for (values, 0..) |value, index| {
+                temp[index] = Key.fromId(value.id);
             }
 
             const id = try context.createKeyList(temp);
@@ -1160,6 +1168,11 @@ pub fn KeyListBase(comptime Self: type, comptime T: type) type {
             return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys) orelse return error.InvalidGraphState;
         }
 
+        pub fn append(self: Self, value: Value) !void {
+            const array = try self.getMutArrayList();
+            try array.append(self.context.arena.child_allocator, Key.fromId(value.id));
+        }
+
         pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
             const refs = try self.getSlice();
 
@@ -1181,11 +1194,6 @@ pub const KeyList = struct {
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn intern(context: *Context, keys: []const Key) !KeyList {
-        const id = try context.internKeyList(keys);
-        return KeyList{ .id = id, .context = context };
-    }
-
     pub fn create(context: *Context, keys: []const Key) !KeyList {
         const id = try context.createKeyList(keys);
         return KeyList{ .id = id, .context = context };
@@ -1196,7 +1204,7 @@ pub const KeyList = struct {
         return KeyList{ .id = id, .context = context };
     }
 
-    pub fn deinit(self: *KeyList) void {
+    pub fn deinit(self: KeyList) void {
         self.context.delRow(self.id);
     }
 
@@ -1210,6 +1218,11 @@ pub const KeyList = struct {
 
     pub fn getArrayList(self: KeyList) !*pl.ArrayList(Key) {
         return self.context.table.key_list.getCell(self.id.cast(rows.KeyList), .keys) orelse return error.InvalidGraphState;
+    }
+
+    pub fn append(self: KeyList, key: Key) !void {
+        const array = try self.getArrayList();
+        try array.append(self.context.arena.child_allocator, key);
     }
 
     pub fn format(self: KeyList, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -1245,8 +1258,8 @@ pub const Name = struct {
         return self.context.map.name.get_a(self.id) orelse return error.InvalidGraphState;
     }
 
-    pub fn bindValue(self: Name, key: Key) !void {
-        try self.context.bindName(self.id, key);
+    pub fn bindValue(self: Name, value: anytype) !void {
+        try self.context.bindName(self.id, Key.fromId(value.id));
     }
 
     pub fn format(self: Name, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -1281,8 +1294,8 @@ pub const Alias = struct {
     pub usingnamespace HandleBase(@This());
     pub usingnamespace KeyListBase(@This(), rows.Name);
 
-    pub fn bindValue(self: Alias, key: Key) !void {
-        try self.context.bindAlias(self.id, key);
+    pub fn bindValue(self: Alias, value: anytype) !void {
+        try self.context.bindAlias(self.id, value.id);
     }
 };
 
@@ -1293,11 +1306,18 @@ pub const Origin = struct {
     pub usingnamespace HandleBase(@This());
     pub usingnamespace KeyListBase(@This(), analysis.Source);
 
-    pub fn bindValue(self: Origin, key: Key) !void {
-        try self.context.bindOrigin(self.id, key);
+    pub fn bindValue(self: Origin, value: anytype) !void {
+        try self.context.bindOrigin(self.id, Key.fromId(value.id));
     }
 };
 
+pub const HandlerList = struct {
+    id: Id(rows.HandlerList),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+    pub usingnamespace KeyListBase(@This(), analysis.Source);
+};
 
 pub const KindList = struct {
     id: Id(rows.KindList),
@@ -1305,6 +1325,18 @@ pub const KindList = struct {
 
     pub usingnamespace HandleBase(@This());
     pub usingnamespace KeyListBase(@This(), rows.Kind);
+
+    pub fn intern(context: *Context, kinds: []const Kind) !KindList {
+        const temp = try context.arena.allocator().alloc(Key, kinds.len);
+        defer context.arena.allocator().free(temp);
+
+        for (kinds, 0..) |kind, index| {
+            temp[index] = Key.fromId(kind.id);
+        }
+
+        const id = try context.internKeyList(temp);
+        return KindList { .id = id.cast(rows.KindList), .context = context };
+    }
 };
 
 pub const TypeList = struct {
@@ -1313,6 +1345,18 @@ pub const TypeList = struct {
 
     pub usingnamespace HandleBase(@This());
     pub usingnamespace KeyListBase(@This(), rows.Type);
+
+    pub fn intern(context: *Context, types: []const Type) !TypeList {
+        const temp = try context.arena.allocator().alloc(Key, types.len);
+        defer context.arena.allocator().free(temp);
+
+        for (types, 0..) |ty, index| {
+            temp[index] = Key.fromId(ty.id);
+        }
+
+        const id = try context.internKeyList(temp);
+        return TypeList { .id = id.cast(rows.TypeList), .context = context };
+    }
 };
 
 pub const Constructor = struct {
@@ -1321,13 +1365,17 @@ pub const Constructor = struct {
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn init(context: *Context, kind: Id(rows.Kind)) !Constructor {
-        const id = try context.addRow(rows.Constructor, .mutable, .{ .kind = kind });
+    pub fn init(context: *Context, kind: Kind) !Constructor {
+        const id = try context.addRow(rows.Constructor, .mutable, .{ .kind = kind.id });
         return Constructor{ .id = id, .context = context };
     }
 
     pub fn deinit(self: Constructor) void {
         self.context.delRow(self.id);
+    }
+
+    pub fn setKind(self: Constructor, kind: Kind) !void {
+        try self.context.setCell(self.id, .kind, kind.id);
     }
 
     pub fn getKind(self: Constructor) !Kind {
@@ -1374,8 +1422,8 @@ pub const Kind = struct {
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn intern(context: *Context, tag: rows.Kind.Tag, ids: []const Id(rows.Kind)) !Kind {
-        const kind_list = try KindList.intern(context, ids);
+    pub fn intern(context: *Context, tag: rows.Kind.Tag, inputs: []const Kind) !Kind {
+        const kind_list = try KindList.intern(context, inputs);
 
         for (context.table.kind.getColumn(.tag), context.table.kind.getColumn(.inputs), 0..) |existing_tag, existing_inputs, index| {
             if (existing_tag == tag
@@ -1387,7 +1435,7 @@ pub const Kind = struct {
         return Kind.init(context, .constant, tag, kind_list.id);
     }
 
-    pub fn create(context: *Context, tag: rows.Kind.Tag, ids: []const Id(rows.Kind)) !Kind {
+    pub fn create(context: *Context, tag: rows.Kind.Tag, ids: []const Kind) !Kind {
         const kind_list = try KindList.create(context, ids);
 
         return Kind.init(context, .mutable, tag, kind_list.id);
@@ -1410,8 +1458,16 @@ pub const Kind = struct {
         return (try self.getInputs()).getSlice();
     }
 
+    pub fn setOutputTag(self: Kind, tag: rows.Kind.Tag) !void {
+        try self.context.setCell(self.id, .tag, tag);
+    }
+
     pub fn getOutputTag(self: Kind) !rows.Kind.Tag {
         return (self.context.table.kind.getCell(self.id, .tag) orelse return error.InvalidGraphState).*;
+    }
+
+    pub fn setInputs(self: Kind, inputs: Id(rows.KindList)) !void {
+        try self.context.setCell(self.id, .inputs, inputs.cast(rows.KeyList));
     }
 
     pub fn getInputs(self: Kind) !KindList {
@@ -1435,32 +1491,38 @@ pub const Type = struct {
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn intern(context: *Context, constructor: Id(rows.Constructor), inputs: []const Id(rows.Type)) !Type {
+    pub fn intern(context: *Context, constructor: Constructor, inputs: []const Type) !Type {
         const type_list = try TypeList.intern(context, inputs);
+        errdefer type_list.deinit();
 
         for (context.table.type.getColumn(.constructor), context.table.type.getColumn(.inputs), 0..) |existing_constructor, existing_inputs, index| {
-            if (existing_constructor == constructor
+            if (existing_constructor == constructor.id
             and existing_inputs == type_list.id.cast(rows.KeyList)) {
                 return Type{ .id = context.table.type.getIdFromIndex(@intCast(index)), .context = context };
             }
         }
 
-        return Type.init(context, .constant, constructor, type_list.id);
+        return Type.init(context, .constant, constructor, type_list);
     }
 
-    pub fn create(context: *Context, constructor: Id(rows.Constructor), inputs: []const Id(rows.Type)) !Type {
+    pub fn create(context: *Context, constructor: Constructor, inputs: []const Type) !Type {
         const type_list = try TypeList.create(context, inputs);
+        errdefer type_list.deinit();
 
-        return Type.init(context, .mutable, constructor, type_list.id);
+        return Type.init(context, .mutable, constructor, type_list);
     }
 
-    pub fn init(context: *Context, mutability: pl.Mutability, constructor: Id(rows.Constructor), inputs: Id(rows.TypeList)) !Type {
-        const id = try context.addRow(rows.Type, mutability, .{ .constructor = constructor, .inputs = inputs.cast(rows.KeyList) });
+    pub fn init(context: *Context, mutability: pl.Mutability, constructor: Constructor, inputs: TypeList) !Type {
+        const id = try context.addRow(rows.Type, mutability, .{ .constructor = constructor.id, .inputs = inputs.id.cast(rows.KeyList) });
         return Type{ .id = id, .context = context };
     }
 
     pub fn deinit(self: Type) void {
         self.context.delRow(self.id);
+    }
+
+    pub fn setConstructor(self: Type, constructor: Constructor) !void {
+        try self.context.setCell(self.id, .constructor, constructor.id);
     }
 
     pub fn getConstructor(self: Type) !Constructor {
@@ -1476,6 +1538,10 @@ pub const Type = struct {
 
     pub fn getInputTypeSlice(self: Type) ![]const Key {
         return (try self.getTypeInputs()).getSlice();
+    }
+
+    pub fn setTypeInputs(self: Type, inputs: Id(rows.TypeList)) !void {
+        try self.context.setCell(self.id, .inputs, inputs.cast(rows.KeyList));
     }
 
     pub fn getTypeInputs(self: Type) !TypeList {
@@ -1516,28 +1582,28 @@ pub const Constant = struct {
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn fromBlock(context: *Context, ty: Id(rows.Type), block: Id(rows.Block)) !Constant {
-        const id = try context.addRow(rows.Constant, .mutable, .{ .type = ty, .block = block });
+    pub fn fromBlock(context: *Context, ty: Type, block: Block) !Constant {
+        const id = try context.addRow(rows.Constant, .mutable, .{ .type = ty.id, .data = Key.fromId(block.id) });
         return Constant{ .id = id, .context = context };
     }
 
-    pub fn fromBuffer(context: *Context, ty: Id(rows.Type), buffer: Id(rows.Buffer)) !Constant {
-        const id = try context.addRow(rows.Constant, .mutable, .{ .type = ty, .buffer = buffer });
+    pub fn fromBuffer(context: *Context, ty: Type, buffer: Buffer) !Constant {
+        const id = try context.addRow(rows.Constant, .mutable, .{ .type = ty.id, .data = Key.fromId(buffer.id) });
         return Constant{ .id = id, .context = context };
     }
 
-    pub fn fromOwnedBytes(context: *Context, ty: Id(rows.Type), owned_bytes: []const u8) !Constant {
+    pub fn fromOwnedBytes(context: *Context, ty: Type, owned_bytes: []const u8) !Constant {
         const buffer = try Buffer.fromOwnedBytes(context, owned_bytes);
         errdefer context.delRow(buffer.id);
 
-        return Constant.fromBuffer(context, ty, buffer.id);
+        return Constant.fromBuffer(context, ty, buffer);
     }
 
-    pub fn fromUnownedBytes(context: *Context, ty: Id(rows.Type), bytes: []const u8) !Constant {
+    pub fn fromUnownedBytes(context: *Context, ty: Type, bytes: []const u8) !Constant {
         const buffer = try Buffer.create(context, bytes);
         errdefer context.delRow(buffer.id);
 
-        return Constant.fromBuffer(context, ty, buffer.id);
+        return Constant.fromBuffer(context, ty, buffer);
     }
 
     pub fn init(context: *Context) !Constant {
@@ -1554,6 +1620,10 @@ pub const Constant = struct {
         return key;
     }
 
+    pub fn setData(self: Constant, key: Key) !void {
+        try self.context.setCell(self.id, .data, key);
+    }
+
     pub fn format(self: Constant, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const ty = (self.context.table.constant.getCell(self.id, .type) orelse return error.InvalidGraphState).*;
         const key = (self.context.table.constant.getCell(self.id, .data) orelse return error.InvalidGraphState).*;
@@ -1564,26 +1634,6 @@ pub const Constant = struct {
             .buffer => try writer.print("({} = {})", .{ wrapId(self.context, ty), wrapId(self.context, key.toIdUnchecked(rows.Buffer)) }),
             else => try writer.print("({} = invalid {})", .{ wrapId(self.context, ty), key }),
         }
-    }
-};
-
-pub const Block = struct {
-    id: Id(rows.Block),
-    context: *Context,
-
-    pub usingnamespace HandleBase(@This());
-
-    pub fn init(context: *Context) !Block {
-        const id = try context.addRow(rows.Block, .mutable, .{ });
-        return Block{ .id = id, .context = context };
-    }
-
-    pub fn deinit(self: Block) void {
-        self.context.delRow(self.id);
-    }
-
-    pub fn format(self: Block, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("({})", .{ self.id });
     }
 };
 
@@ -1615,9 +1665,12 @@ pub const Buffer = struct {
         self.context.delRow(self.id);
     }
 
+    pub fn setData(self: Buffer, data: []const u8) !void {
+        return self.context.setCell(self.id, .data, data);
+    }
+
     pub fn getData(self: Buffer) ![]const u8 {
-        const data = (self.context.table.buffer.getCell(self.id, .data) orelse return error.InvalidGraphState).*;
-        return data;
+        return self.context.getCell(self.id, .data) orelse error.InvalidGraphState;
     }
 
     pub fn format(self: Buffer, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -1625,18 +1678,257 @@ pub const Buffer = struct {
     }
 };
 
+pub const Function = struct {
+    id: Id(rows.Function),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn create(context: *Context) !Function {
+        const body = try Block.create(context);
+        errdefer body.deinit();
+
+        return Function.init(context, .null, body.id);
+    }
+
+    pub fn init(context: *Context, ty: Id(rows.Type), body: Id(rows.Block)) !Function {
+        const id = try context.addRow(rows.Function, .mutable, .{ .type = ty, .body = body });
+        return Function{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Function) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn format(self: Function, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({})", .{ self.id });
+    }
+
+    pub fn setType(self: Function, ty: Id(rows.Type)) !void {
+        try self.context.setCell(self.id, .type, ty);
+    }
+
+    pub fn getType(self: Function) !Type {
+        return Type {
+            .id = self.context.getCell(self.id, .type) orelse return error.InvalidGraphState,
+            .context = self.context,
+        };
+    }
+
+    pub fn getBody(self: Function) !Block {
+        return Block {
+            .id = self.context.getCell(self.id, .body) orelse return error.InvalidGraphState,
+            .context = self.context,
+        };
+    }
+
+    pub fn setBody(self: Function, body: Id(rows.Block)) !void {
+        try self.context.setCell(self.id, .body, body);
+    }
+
+    pub fn getVariables(self: Function) !TypeList {
+        const block = try self.getBody();
+        return block.getVariables();
+    }
+
+    pub fn getContents(self: Function) !KeyList {
+        const block = try self.getBody();
+        return block.getContents();
+    }
+};
+
+pub const DynamicScope = struct {
+    id: Id(rows.DynamicScope),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn create(context: *Context) !DynamicScope {
+        const inputs = try KeyList.init(context);
+        errdefer inputs.deinit();
+
+        const handler_list = try HandlerList.init(context);
+        errdefer handler_list.deinit();
+
+        return DynamicScope.init(context, inputs.id, handler_list.id);
+    }
+
+    pub fn init(context: *Context, inputs: Id(rows.KeyList), handler_list: Id(rows.HandlerList)) !DynamicScope {
+        const id = try context.addRow(rows.DynamicScope, .mutable, .{ .inputs = inputs, .handler_list = handler_list });
+        return DynamicScope{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: DynamicScope) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn format(self: DynamicScope, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({})", .{ self.id });
+    }
+
+    pub fn setInputs(self: DynamicScope, inputs: Id(rows.KeyList)) !void {
+        try self.context.setCell(self.id, .inputs, inputs);
+    }
+
+    pub fn getInputs(self: DynamicScope) !KeyList {
+        const inputs = (self.context.table.dynamic_scope.getCell(self.id, .inputs) orelse return error.InvalidGraphState).*;
+        return KeyList{ .id = inputs.cast(rows.KeyList), .context = self.context };
+    }
+
+    pub fn setHandlerList(self: DynamicScope, handler_list: Id(rows.HandlerList)) !void {
+        try self.context.setCell(self.id, .handler_list, handler_list);
+    }
+
+    pub fn getHandlerList(self: DynamicScope) !HandlerList {
+        const handler_list = (self.context.table.dynamic_scope.getCell(self.id, .handler_list) orelse return error.InvalidGraphState).*;
+        return HandlerList{ .id = handler_list.cast(rows.HandlerList), .context = self.context };
+    }
+
+    pub fn getInputCount(self: DynamicScope) !usize {
+        return (try self.getInputs()).getCount();
+    }
+
+    pub fn getHandlerCount(self: DynamicScope) !usize {
+        return (try self.getHandlerList()).getCount();
+    }
+};
+
+pub const Block = struct {
+    id: Id(rows.Block),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn create(context: *Context) !Block {
+        const variables = try TypeList.init(context);
+        errdefer variables.deinit();
+
+        const instructions = try KeyList.init(context);
+        errdefer instructions.deinit();
+
+        return Block.init(context, variables.id, .null, instructions.id);
+    }
+
+    pub fn init(context: *Context,
+        variables: Id(rows.TypeList),
+        dynamic_scope: Id(rows.DynamicScope),
+        contents: Id(rows.KeyList),
+    ) !Block {
+        const id = try context.addRow(rows.Block, .mutable, .{
+            .variables = variables,
+            .dynamic_scope = dynamic_scope,
+            .contents = contents,
+        });
+        return Block{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Block) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn format(self: Block, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({})", .{ self.id });
+    }
+
+    pub fn setVariables(self: Block, variables: Id(rows.TypeList)) !void {
+        try self.context.setCell(self.id, .variables, variables);
+    }
+
+    pub fn getVariables(self: Block) !TypeList {
+        const variables = (self.context.table.block.getCell(self.id, .variables) orelse return error.InvalidGraphState).*;
+        return TypeList{ .id = variables.cast(rows.TypeList), .context = self.context };
+    }
+
+    pub fn setDynamicScope(self: Block, dynamic_scope: Id(rows.DynamicScope)) !void {
+        try self.context.setCell(self.id, .dynamic_scope, dynamic_scope);
+    }
+
+    pub fn getDynamicScope(self: Block) !DynamicScope {
+        const dynamic_scope = (self.context.table.block.getCell(self.id, .dynamic_scope) orelse return error.InvalidGraphState).*;
+        return DynamicScope{ .id = dynamic_scope.cast(rows.DynamicScope), .context = self.context };
+    }
+
+    pub fn setContents(self: Block, instructions: Id(rows.KeyList)) !void {
+        try self.context.setCell(self.id, .contents, instructions);
+    }
+
+    pub fn getContents(self: Block) !KeyList {
+        const instructions = (self.context.table.block.getCell(self.id, .contents) orelse return error.InvalidGraphState).*;
+        return KeyList{ .id = instructions.cast(rows.KeyList), .context = self.context };
+    }
+
+    pub fn getVariableCount(self: Block) !usize {
+        return (try self.getVariables()).getCount();
+    }
+
+    pub fn getContentCount(self: Block) !usize {
+        return (try self.getContents()).getCount();
+    }
+
+    pub fn append(self: Block, key: Key) !void {
+        const contents = try self.getContents();
+        try contents.append(key);
+    }
+
+    pub fn bindVariable(self: Block, ty: Type) !Id(rows.Variable) {
+        const variables = try self.getVariables();
+        const id = Id(rows.Variable).fromInt(try variables.getCount());
+        try variables.append(ty);
+
+        return id;
+    }
+};
+
+pub const Instruction = struct {
+    id: Id(rows.Instruction),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn create(context: *Context) !Instruction {
+        const id = try context.addRow(rows.Instruction, .mutable, .{ });
+        return Instruction{ .id = id, .context = context };
+    }
+
+    pub fn init(context: *Context, ty: Type, operation: Operation) !Instruction {
+        const id = try context.addRow(rows.Instruction, .mutable, .{ .type = ty.id, .operation = operation });
+        return Instruction{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Instruction) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn format(self: Instruction, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({})", .{ self.id });
+    }
+
+    pub fn setType(self: Instruction, ty: Type) !void {
+        try self.context.setCell(self.id, .type, ty.id);
+    }
+
+    pub fn getType(self: Instruction) !Type {
+        return Type {
+            .id = self.context.getCell(self.id, .type) orelse return error.InvalidGraphState,
+            .context = self.context,
+        };
+    }
+
+    pub fn setOperation(self: Instruction, operation: Operation) !void {
+        try self.context.setCell(self.id, .operation, operation);
+    }
+
+    pub fn getOperation(self: Instruction) !Operation {
+        return self.context.getCell(self.id, .operation) orelse return error.InvalidGraphState;
+    }
+};
+
 
 test {
-    std.testing.log_level = .debug;
-
     const context = try Context.init(std.testing.allocator);
     defer context.deinit();
 
-    const no_kinds = try KindList.intern(context, &.{});
-    const no_types = try TypeList.intern(context, &.{});
-    const no_alias = try Alias.intern(context, &.{});
-    const no_origin = try Origin.intern(context, &.{});
-    _ = .{ no_kinds, no_types, no_alias, no_origin };
+    const empty_origin = try Origin.create(context, &.{});
 
     const name = try Name.intern(context, "test");
 
@@ -1644,18 +1936,17 @@ test {
 
     const kind = try Kind.intern(context, .data, &.{});
 
-    const constructor = try Constructor.init(context, kind.id);
+    const constructor = try Constructor.init(context, kind);
     defer constructor.deinit();
 
-    try name.bindValue(constructor.getKey());
-    try no_alias.bindValue(constructor.getKey());
-    try no_origin.bindValue(constructor.getKey());
+    try name.bindValue(constructor);
+    try empty_origin.bindValue(constructor);
 
-    const ty = try Type.intern(context, constructor.id, &.{});
+    const ty = try Type.intern(context, constructor, &.{});
 
     std.debug.print("{}\n", .{ty});
 
-    const constant = try Constant.fromUnownedBytes(context, ty.id, "test");
+    const constant = try Constant.fromUnownedBytes(context, ty, "test");
     defer constant.deinit();
 
     std.debug.print("{}\n", .{constant});
