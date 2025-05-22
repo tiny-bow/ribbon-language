@@ -348,7 +348,7 @@ pub const rows = struct {
     pub const Effect = struct {
         id: Id(@This()),
         /// types handlers bound for this effect must conform to
-        handler_signatures: Id(rows.KeyList),
+        handler_list: Id(rows.HandlerList),
     };
 
     /// Binds buffers and constant expressions to a type to form a constant value that can be used anywhere in the graph.
@@ -426,8 +426,8 @@ pub const rows = struct {
         function: Id(rows.Function) = .null,
         /// the cancellation type for this handler, if allowed. must match the type bound by DynamicScope
         cancellation_type: Id(rows.Type) = .null,
-        /// the parameters for the handler; upvalue bindings. must match the values bound by DynamicScope
-        inputs: Id(rows.KeyList) = .null,
+        /// the parameters for the handler; upvalue bindings. must match the inputs bound by DynamicScope
+        upvalues: Id(rows.KeyList) = .null,
     };
 
     /// Binds a type to a block to form a function that can be called anywhere in the graph.
@@ -1130,14 +1130,14 @@ pub inline fn WrappedId(comptime T: type) type {
         rows.KindList => KindList,
         rows.TypeList  => TypeList,
         rows.HandlerList  => HandlerList,
-        // rows.Effect => Effect,
+        rows.Effect => Effect,
         rows.Constant => Constant,
-        // rows.Global => Global,
-        // rows.ForeignAddress => ForeignAddress,
-        // rows.BuiltinAddress => BuiltinAddress,
+        rows.Global => Global,
+        rows.ForeignAddress => ForeignAddress,
+        rows.BuiltinAddress => BuiltinAddress,
         // rows.Intrinsic => Intrinsic,
-        // rows.Handler => Handler,
-        // rows.Function => Function,
+        rows.Handler => Handler,
+        rows.Function => Function,
         rows.DynamicScope => DynamicScope,
         rows.Block => Block,
         rows.Buffer => Buffer,
@@ -1630,6 +1630,107 @@ pub const Type = struct {
     }
 };
 
+pub const Effect = struct {
+    id: Id(rows.Effect),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn init(context: *Context, handler_list: ?HandlerList) !Effect {
+        const id = try context.addRow(rows.Effect, .mutable, .{ .handler_list = if (handler_list) |x| x.id else .null });
+        return Effect{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Effect) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn getHandlerList(self: Effect) ?HandlerList {
+        const id = (self.context.table.effect.getCell(self.id, .handler_list) orelse return null).*;
+        return wrapId(self.context, id);
+    }
+
+    pub fn setHandlerList(self: Effect, handler_list: HandlerList) !void {
+        try self.context.setCell(self.id, .handler_list, handler_list.id);
+    }
+
+    pub fn format(self: Effect, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        const handler_list = (self.context.table.effect.getCell(self.id, .handler_list) orelse return error.InvalidGraphState).*;
+
+        if (self.context.getName(self.id)) |name| {
+            try writer.print("({} {} : {})", .{name, self.id, handler_list});
+        } else {
+            try writer.print("({} : {})", .{self.id, handler_list});
+        }
+    }
+};
+
+pub const Handler = struct {
+    id: Id(rows.Handler),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn init(context: *Context, effect: ?Effect, function: ?Function, cancellation_type: ?Type, upvalues: ?KeyList) !Handler {
+        const id = try context.addRow(rows.Handler, .mutable, .{
+            .effect = if (effect) |x| x.id else .null,
+            .function = if (function) |x| x.id else .null,
+            .cancellation_type = if (cancellation_type) |x| x.id else .null,
+            .upvalues = if (upvalues) |x| x.id else .null,
+        });
+
+        return Handler{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Handler) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn getEffect(self: Handler) ?Effect {
+        const id = (self.context.table.handler.getCell(self.id, .effect) orelse return null).*;
+        return wrapId(self.context, id);
+    }
+
+    pub fn setEffect(self: Handler, effect: Effect) !void {
+        try self.context.setCell(self.id, .effect, effect.id);
+    }
+
+    pub fn getFunction(self: Handler) ?Function {
+        const id = (self.context.table.handler.getCell(self.id, .function) orelse return null).*;
+        return wrapId(self.context, id);
+    }
+
+    pub fn setFunction(self: Handler, func: Function) !void {
+        try self.context.setCell(self.id, .function, func.id);
+    }
+
+    pub fn getCancellationType(self: Handler) ?Type {
+        const id = (self.context.table.handler.getCell(self.id, .cancellation_type) orelse return null).*;
+        return wrapId(self.context, id);
+    }
+
+    pub fn setCancellationType(self: Handler, ty: Type) !void {
+        try self.context.setCell(self.id, .cancellation_type, ty.id);
+    }
+
+    pub fn getUpvalues(self: Handler) ?KeyList {
+        const id = (self.context.table.handler.getCell(self.id, .upvalues) orelse return null).*;
+        return wrapId(self.context, id);
+    }
+
+    pub fn setUpvalues(self: Handler, upvalues: KeyList) !void {
+        try self.context.setCell(self.id, .upvalues, upvalues.id);
+    }
+
+    pub fn format(self: Handler, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        if (self.context.getName(self.id)) |name| {
+            try writer.print("({} {} :: {})", .{name, self.id, try self.getKind()});
+        } else {
+            try writer.print("({} :: {})", .{self.id, try self.getKind()});
+        }
+    }
+};
+
 pub const Constant = struct {
     id: Id(rows.Constant),
     context: *Context,
@@ -1688,6 +1789,91 @@ pub const Constant = struct {
             .buffer => try writer.print("({} = {})", .{ wrapId(self.context, ty), wrapId(self.context, key.toIdUnchecked(rows.Buffer)) }),
             else => try writer.print("({} = invalid {})", .{ wrapId(self.context, ty), key }),
         }
+    }
+};
+
+pub const Global = struct {
+    id: Id(rows.Global),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn init(context: *Context, ty: ?Type, initializer: ?Constant) !Global {
+        const id = try context.addRow(rows.Global, .mutable, .{ .type = if (ty) |x| x.id else .null, .initializer = if (initializer) |x| x.id else .null });
+        return Global{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: Global) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn getType(self: Global) ?Type {
+        const id = (self.context.table.global.getCell(self.id, .type) orelse return null).*;
+        return wrapId(self.context, id);
+    }
+
+    pub fn setType(self: Global, ty: Type) !void {
+        try self.context.setCell(self.id, .type, ty.id);
+    }
+
+    pub fn getInitializer(self: Global) ?Constant {
+        const id = (self.context.table.global.getCell(self.id, .initializer) orelse return null).*;
+        return wrapId(self.context, id);
+    }
+
+    pub fn setInitializer(self: Global, initializer: Constant) !void {
+        try self.context.setCell(self.id, .initializer, initializer.id);
+    }
+
+    pub fn format(self: Global, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        const ty = self.getType();
+        const initializer = self.getInitializer();
+
+        if (self.context.getName(self.id)) |name| {
+            try writer.print("({} {} : {?} = {?})", .{name, self.id, ty, initializer});
+        } else {
+            try writer.print("({} : {?} = {?})", .{self.id, ty, initializer});
+        }
+    }
+};
+
+pub const ForeignAddress = struct {
+    id: Id(rows.ForeignAddress),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn init(context: *Context, address: ?u64, ty: ?Type) !ForeignAddress {
+        const id = try context.addRow(rows.ForeignAddress, .mutable, .{ .address = if (address) |x| x else 0, .type = if (ty) |x| x.id else .null });
+        return ForeignAddress{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: ForeignAddress) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn format(self: ForeignAddress, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({})", .{ self.id });
+    }
+};
+
+pub const BuiltinAddress = struct {
+    id: Id(rows.BuiltinAddress),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn init(context: *Context, address: ?u64, ty: ?Type) !BuiltinAddress {
+        const id = try context.addRow(rows.BuiltinAddress, .mutable, .{ .address = if (address) |x| x else 0, .type = if (ty) |x| x.id else .null });
+        return BuiltinAddress{ .id = id, .context = context };
+    }
+
+    pub fn deinit(self: BuiltinAddress) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn format(self: BuiltinAddress, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("({})", .{ self.id });
     }
 };
 
@@ -1764,7 +1950,7 @@ pub const Function = struct {
     }
 
     pub fn init(context: *Context, ty: ?Type, body: ?Block) !Function {
-        const id = try context.addRow(rows.Function, .mutable, .{ .type = if (ty) |x| x.id else .null, .body = if (body) |x| x.id else (try Block.new(context)).id });
+        const id = try context.addRow(rows.Function, .mutable, .{ .type = if (ty) |x| x.id else .null, .body = if (body) |x| x.id else (try Block.init(context, null, null, null)).id });
         return Function{ .id = id, .context = context };
     }
 
@@ -1843,11 +2029,11 @@ pub const DynamicScope = struct {
         const handler_list = try HandlerList.init(context);
         errdefer handler_list.deinit();
 
-        return DynamicScope.init(context, inputs.id, handler_list.id);
+        return DynamicScope.init(context, inputs, handler_list);
     }
 
-    pub fn init(context: *Context, inputs: Id(rows.KeyList), handler_list: Id(rows.HandlerList)) !DynamicScope {
-        const id = try context.addRow(rows.DynamicScope, .mutable, .{ .inputs = inputs, .handler_list = handler_list });
+    pub fn init(context: *Context, inputs: KeyList, handler_list: HandlerList) !DynamicScope {
+        const id = try context.addRow(rows.DynamicScope, .mutable, .{ .inputs = inputs.id, .handler_list = handler_list.id });
         return DynamicScope{ .id = id, .context = context };
     }
 
@@ -1893,7 +2079,7 @@ pub const Block = struct {
     pub usingnamespace HandleBase(@This());
 
     pub fn create(context: *Context, variables: []const Type, dynamic_scope: ?DynamicScope) !Block {
-        const block = try Block.new(context);
+        const block = try Block.init(context, null, dynamic_scope, null);
         errdefer block.deinit();
 
         const type_list = try TypeList.create(context, variables);
@@ -1906,10 +2092,6 @@ pub const Block = struct {
         try block.setVariables(type_list);
 
         return block;
-    }
-
-    pub fn new(context: *Context) !Block {
-        return Block.init(context, null, null, null);
     }
 
     pub fn init(context: *Context,
