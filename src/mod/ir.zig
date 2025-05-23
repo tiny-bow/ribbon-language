@@ -1234,19 +1234,8 @@ pub fn KeyListBase(comptime Self: type, comptime T: type) type {
             try array.append(self.context.arena.child_allocator, Key.fromId(value.id));
         }
 
-        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-            if (self.getSlice()) |refs| {
-                try writer.writeAll("[");
-
-                for (refs, 0..) |ref, index| {
-                    if (index != 0) try writer.writeAll(", ");
-                    try writer.print("{}", .{ wrapId(self.context, ref.toIdUnchecked(Row)) });
-                }
-
-                try writer.writeAll("]");
-            } else {
-                try writer.writeAll("[]");
-            }
+        pub fn format(self: Self, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
+            try wrapId(self.context, self.id.cast(rows.KeyList)).format(fmt, opts, writer);
         }
     };
 }
@@ -1294,7 +1283,30 @@ pub const KeyList = struct {
 
             for (keys, 0..) |key, index| {
                 if (index != 0) try writer.writeAll(", ");
-                try writer.print("{}", .{ key });
+
+                switch (key.tag) {
+                    .name => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Name)) }),
+                    .source => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(analysis.Source)) }),
+                    .kind => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Kind)) }),
+                    .constructor => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Constructor)) }),
+                    .type => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Type)) }),
+                    .function => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Function)) }),
+                    .effect => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Effect)) }),
+                    .constant => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Constant)) }),
+                    .global => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Global)) }),
+                    .foreign_address => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.ForeignAddress)) }),
+                    .builtin_address => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.BuiltinAddress)) }),
+                    // .intrinsic => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Intrinsic)) }),
+                    .handler => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Handler)) }),
+                    .dynamic_scope => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.DynamicScope)) }),
+                    .block => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Block)) }),
+                    .data_edge => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.DataEdge)) }),
+                    .control_edge => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.ControlEdge)) }),
+                    .instruction => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Instruction)) }),
+                    .buffer => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Buffer)) }),
+                    .key_list => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.KeyList)) }),
+                    else => try writer.print("{}", .{ key }),
+                }
             }
 
             try writer.writeAll("]");
@@ -1463,7 +1475,7 @@ pub const Constructor = struct {
         const kind = self.getKind();
         const name = self.context.getName(self.id);
 
-        try writer.print("({} {?s} :: {?})", .{self.id, name, kind});
+        try writer.print("(𝓬𝓸𝓷 {} {?s} :: {?})", .{self.id, name, kind});
     }
 };
 
@@ -1531,7 +1543,7 @@ pub const Kind = struct {
         const tag = self.context.getCell(self.id, .tag);
         const inputs = self.context.getCell(self.id, .inputs);
 
-        try writer.print("({?} => {?s})", .{ if (inputs) |id| wrapId(self.context, id) else null, if (tag) |t| @tagName(t) else null });
+        try writer.print("(𝓴𝓲𝓷𝓭 {?} => {?s})", .{ if (inputs) |id| wrapId(self.context, id) else null, if (tag) |t| @tagName(t) else null });
     }
 };
 
@@ -1581,7 +1593,7 @@ pub const Type = struct {
     }
 
     pub fn format(self: Type, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("({?} {?})", .{ self.getConstructor(), self.getTypeInputs() });
+        try writer.print("(𝓽𝔂𝓹𝓮 {} {?} :: {?} {?})", .{ self.id, self.getName(), self.getConstructor(), self.getTypeInputs() });
     }
 
     pub fn setConstructor(self: Type, constructor: Constructor) !void {
@@ -1735,11 +1747,9 @@ pub const Handler = struct {
     }
 
     pub fn format(self: Handler, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        if (self.context.getName(self.id)) |name| {
-            try writer.print("({} {} :: {})", .{name, self.id, try self.getKind()});
-        } else {
-            try writer.print("({} :: {})", .{self.id, try self.getKind()});
-        }
+        const name = self.context.getName(self.id);
+        const effect = self.getEffect();
+        try writer.print("({} {?} : {?})", .{self.id, name, effect});
     }
 };
 
@@ -1783,7 +1793,7 @@ pub const Constant = struct {
     }
 
     pub fn getData(self: Constant) !Key {
-        const key = (self.context.table.constant.getCell(self.id, .data) orelse return error.InvalidGraphState).*;
+        const key = self.context.getCell(self.id, .data) orelse return error.InvalidGraphState;
         return key;
     }
 
@@ -1792,14 +1802,14 @@ pub const Constant = struct {
     }
 
     pub fn format(self: Constant, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const ty = (self.context.table.constant.getCell(self.id, .type) orelse return error.InvalidGraphState).*;
-        const key = (self.context.table.constant.getCell(self.id, .data) orelse return error.InvalidGraphState).*;
+        const ty = self.context.getCell(self.id, .type) orelse return error.InvalidGraphState;
+        const key = self.context.getCell(self.id, .data) orelse return error.InvalidGraphState;
 
         switch (key.tag) {
-            .none => try writer.print("({} = none)", .{ wrapId(self.context, ty) }),
-            .block => try writer.print("({} = {})", .{ wrapId(self.context, ty), wrapId(self.context, key.toIdUnchecked(rows.Block)) }),
-            .buffer => try writer.print("({} = {})", .{ wrapId(self.context, ty), wrapId(self.context, key.toIdUnchecked(rows.Buffer)) }),
-            else => try writer.print("({} = invalid {})", .{ wrapId(self.context, ty), key }),
+            .none => try writer.print("(𝓬𝓸𝓷𝓼𝓽 {} = none)", .{ wrapId(self.context, ty) }),
+            .block => try writer.print("(𝓬𝓸𝓷𝓼𝓽 {} = {})", .{ wrapId(self.context, ty), wrapId(self.context, key.toIdUnchecked(rows.Block)) }),
+            .buffer => try writer.print("(𝓬𝓸𝓷𝓼𝓽 {} = {})", .{ wrapId(self.context, ty), wrapId(self.context, key.toIdUnchecked(rows.Buffer)) }),
+            else => try writer.print("(𝓬𝓸𝓷𝓼𝓽 {} = invalid {})", .{ wrapId(self.context, ty), key }),
         }
     }
 };
@@ -1820,7 +1830,7 @@ pub const Global = struct {
     }
 
     pub fn getType(self: Global) ?Type {
-        const id = (self.context.table.global.getCell(self.id, .type) orelse return null).*;
+        const id = self.context.getCell(self.id, .type) orelse return null;
         return wrapId(self.context, id);
     }
 
@@ -1829,7 +1839,7 @@ pub const Global = struct {
     }
 
     pub fn getInitializer(self: Global) ?Constant {
-        const id = (self.context.table.global.getCell(self.id, .initializer) orelse return null).*;
+        const id = self.context.getCell(self.id, .initializer) orelse return null;
         return wrapId(self.context, id);
     }
 
@@ -1838,14 +1848,11 @@ pub const Global = struct {
     }
 
     pub fn format(self: Global, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        const name = self.getName();
         const ty = self.getType();
         const initializer = self.getInitializer();
 
-        if (self.context.getName(self.id)) |name| {
-            try writer.print("({} {} : {?} = {?})", .{name, self.id, ty, initializer});
-        } else {
-            try writer.print("({} : {?} = {?})", .{self.id, ty, initializer});
-        }
+        try writer.print("(𝓰𝓵𝓸𝓫𝓪𝓵 {} {?} : {?} = {?})", .{self.id, name, ty, initializer});
     }
 };
 
@@ -1864,8 +1871,8 @@ pub const ForeignAddress = struct {
         self.context.delRow(self.id);
     }
 
-    pub fn format(self: ForeignAddress, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("({})", .{ self.id });
+    pub fn format(self: ForeignAddress, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
+        try self.id.format(fmt, opts, writer);
     }
 };
 
@@ -1884,8 +1891,8 @@ pub const BuiltinAddress = struct {
         self.context.delRow(self.id);
     }
 
-    pub fn format(self: BuiltinAddress, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("({})", .{ self.id });
+    pub fn format(self: BuiltinAddress, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
+        try self.id.format(fmt, opts, writer);
     }
 };
 
@@ -1897,7 +1904,7 @@ pub const Buffer = struct {
 
     pub fn fromOwnedBytes(context: *Context, owned_data: []const u8) !Buffer {
         const id = try context.addRow(rows.Buffer, .mutable, .{ .data = owned_data });
-        return Buffer{ .id = id, .context = context };
+        return wrapId(context, id);
     }
 
     pub fn create(context: *Context, unowned_data: []const u8) !Buffer {
@@ -1905,12 +1912,12 @@ pub const Buffer = struct {
         errdefer context.arena.allocator().free(owned_data);
 
         const id = try context.addRow(rows.Buffer, .mutable, .{ .data = owned_data });
-        return Buffer{ .id = id, .context = context };
+        return wrapId(context, id);
     }
 
     pub fn init(context: *Context) !Buffer {
         const id = try context.addRow(rows.Buffer, .mutable, .{ });
-        return Buffer{ .id = id, .context = context };
+        return wrapId(context, id);
     }
 
     pub fn deinit(self: Buffer) void {
@@ -1925,8 +1932,8 @@ pub const Buffer = struct {
         return self.context.getCell(self.id, .data) orelse error.InvalidGraphState;
     }
 
-    pub fn format(self: Buffer, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("({})", .{ self.id });
+    pub fn format(self: Buffer, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
+        try self.id.format(fmt, opts, writer);
     }
 };
 
@@ -2374,31 +2381,33 @@ test {
 
     const empty_origin = try Origin.create(context, &.{});
 
-    const name = try Name.intern(context, "test");
+    const test_name = try Name.intern(context, "test");
 
-    std.debug.print("{}\n", .{name});
+    std.debug.print("{}\n", .{test_name});
 
-    const kind = try Kind.intern(context, .data, &.{});
+    const kdata = try Kind.intern(context, .data, &.{});
+    const keffect = try Kind.intern(context, .effect, &.{});
 
-    const constructor = try Constructor.init(context, kind);
-    defer constructor.deinit();
+    const cdata = try Constructor.init(context, kdata);
+    const ceffect = try Constructor.init(context, keffect);
 
-    try name.bindSymbol(constructor);
-    try empty_origin.bindValue(constructor);
+    try test_name.bindSymbol(cdata);
+    try empty_origin.bindValue(cdata);
 
-    const ty = try Type.intern(context, constructor, &.{});
+    const tdata = try Type.intern(context, cdata, &.{});
+    const teffect = try Type.intern(context, ceffect, &.{});
 
-    std.debug.print("{}\n", .{ty});
+    std.debug.print("{}\n", .{tdata});
 
-    const constant = try Constant.fromUnownedBytes(context, ty, "test");
+    const constant = try Constant.fromUnownedBytes(context, tdata, "test");
     defer constant.deinit();
 
     std.debug.print("{}\n", .{constant});
 
+    const test_func_name = try Name.intern(context, "test_func_ty");
+    const function_ty = try Type.createFunction(context, &.{tdata, tdata}, teffect, tdata);
 
-    const function_ty = try Type.createFunction(context, &.{ty, ty}, ty, ty);
-
-    try (try Name.intern(context, "test_func_ty")).bindSymbol(function_ty);
+    try test_func_name.bindSymbol(function_ty);
 
     try function_ty.format("", undefined, stderr.any());
 }
