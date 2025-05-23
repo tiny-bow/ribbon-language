@@ -20,7 +20,7 @@ pub const Source = struct {
     location: Location = .{},
 
     pub fn format(self: *const Source, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("[{}:{}:{}]", .{ self.name, self.location.visual.line, self.location.visual.column });
+        try writer.print("[{s}:{}:{}]", .{ self.name, self.location.visual.line, self.location.visual.column });
     }
 
     pub fn dupe(self: *const Source, allocator: std.mem.Allocator) !Source {
