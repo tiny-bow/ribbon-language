@@ -262,18 +262,19 @@ pub const rows = struct {
     };
 
     /// marker type for `Id`; not actually instantiated anywhere, keylist is used instead
+    pub const VariableList = struct {
+        id: Id(@This()),
+    };
+
+    /// marker type for `Id`; not actually instantiated anywhere, keylist is used instead
     pub const HandlerList = struct {
         id: Id(@This()),
     };
 
-    /// marker type for `Id`; not actually instantiated anywhere, type is used instead
+    /// Simple wrapper binding an identity to a type, for variables and other inputs.
     pub const Variable = struct {
         id: Id(@This()),
-
-        pub fn makeId(block: Id(rows.Block), index: usize) Id(@This()) { // TODO: this is kind of hacky; probably could find a better way
-            if (block == .null) return .null;
-            return @enumFromInt(@intFromEnum(block) << 32 | index);
-        }
+        type: Id(rows.Type) = .null,
     };
 
     /// Type kinds refer to the general category of a type, be it data, function, etc.
@@ -487,7 +488,7 @@ pub const rows = struct {
     pub const Block = struct {
         id: Id(@This()),
         /// local variables bound by this block
-        variables: Id(rows.TypeList) = .null,
+        variables: Id(rows.VariableList) = .null,
         /// dynamic scope for this block, if any
         dynamic_scope: Id(rows.DynamicScope) = .null,
         /// the instructions and blocks belonging to this block, in order of execution
@@ -579,7 +580,6 @@ pub const Key = packed struct(u128) {
         untyped = std.math.minInt(i64),
         none = 0,
         name,
-        variable,
         source,
         kind,
         constructor,
@@ -594,6 +594,7 @@ pub const Key = packed struct(u128) {
         function,
         dynamic_scope,
         block,
+        variable,
         data_edge,
         control_edge,
         instruction,
@@ -666,15 +667,16 @@ pub const Key = packed struct(u128) {
                 rows.Function => .function,
                 rows.DynamicScope => .dynamic_scope,
                 rows.Block => .block,
+                rows.Variable => .variable,
                 rows.DataEdge => .data_edge,
                 rows.ControlEdge => .control_edge,
                 rows.Instruction => .instruction,
                 rows.Buffer => .buffer,
-                rows.Variable => .variable,
                 rows.KeyList => .key_list,
                 rows.Origin,
                 rows.KindList,
                 rows.TypeList,
+                rows.VariableList,
                 rows.HandlerList,
                 => .key_list,
 
@@ -829,6 +831,8 @@ pub const Context = struct {
         dynamic_scope: Table(rows.DynamicScope) = .{},
         /// Binds a set of instructions linearly, creating a sequential block.
         block: Table(rows.Block) = .{},
+        /// Value -> type bindings for various structures in the ir.
+        variable: Table(rows.Variable) = .{},
         /// Binds an output of one instruction to the input of another, creating a data flow edge.
         data_edge: Table(rows.DataEdge) = .{},
         /// Binds an edge between two instructions, creating explicit control flow.
@@ -843,9 +847,11 @@ pub const Context = struct {
         comptime {
             const a = std.meta.fieldNames(Key.Tag);
             const b = std.meta.fieldNames(@This());
-            std.debug.assert(a.len == b.len + 5);
+            if(a.len != b.len + 4) {
+                @compileError(std.fmt.comptimePrint("Key and table field names do not match: {} {s} vs {} {s}", .{a.len, a, b.len, b}));
+            }
 
-            for (a[5..], b) |a_name, b_name| {
+            for (a[4..], b) |a_name, b_name| {
                 std.debug.assert(std.mem.eql(u8, a_name, b_name));
             }
         }
@@ -1130,6 +1136,7 @@ pub inline fn WrappedId(comptime T: type) type {
         rows.KindList => KindList,
         rows.TypeList  => TypeList,
         rows.HandlerList  => HandlerList,
+        rows.VariableList  => VariableList,
         rows.Effect => Effect,
         rows.Constant => Constant,
         rows.Global => Global,
@@ -1140,6 +1147,7 @@ pub inline fn WrappedId(comptime T: type) type {
         rows.Function => Function,
         rows.DynamicScope => DynamicScope,
         rows.Block => Block,
+        rows.Variable => Variable,
         rows.Buffer => Buffer,
         rows.DataEdge => DataEdge,
         rows.ControlEdge => ControlEdge,
@@ -1386,7 +1394,7 @@ pub const HandlerList = struct {
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
-    pub usingnamespace KeyListBase(@This(), analysis.Source);
+    pub usingnamespace KeyListBase(@This(), rows.Handler);
 };
 
 pub const KindList = struct {
@@ -1426,6 +1434,26 @@ pub const TypeList = struct {
 
         const id = try context.internKeyList(temp);
         return TypeList { .id = id.cast(rows.TypeList), .context = context };
+    }
+};
+
+pub const VariableList = struct {
+    id: Id(rows.VariableList),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+    pub usingnamespace KeyListBase(@This(), rows.Variable);
+
+    pub fn intern(context: *Context, variables: []const Variable) !VariableList {
+        const temp = try context.arena.allocator().alloc(Key, variables.len);
+        defer context.arena.allocator().free(temp);
+
+        for (variables, 0..) |v, index| {
+            temp[index] = Key.fromId(v.id);
+        }
+
+        const id = try context.internKeyList(temp);
+        return VariableList { .id = id.cast(rows.VariableList), .context = context };
     }
 };
 
@@ -1957,11 +1985,20 @@ pub const Function = struct {
         if (input_constructor.id != builtin_product_con.id) return error.InvalidGraphState;
 
         const input_types = input_type.getTypeInputs() orelse return error.InvalidGraphState;
+        const variables = try VariableList.init(context);
+        errdefer variables.deinit();
+
+        for (input_types.getSlice() orelse &.{}) |input_type_key| {
+            const variable = try Variable.create(context, wrapId(context, input_type_key.toIdUnchecked(rows.Type)));
+            errdefer variable.deinit();
+
+            try variables.append(variable);
+        }
 
         const contents = try KeyList.init(context);
         errdefer contents.deinit();
 
-        const body = try Block.init(context, input_types, null, contents);
+        const body = try Block.init(context, variables, null, contents);
         errdefer body.deinit();
 
         return Function.init(context, ty, body);
@@ -2006,12 +2043,12 @@ pub const Function = struct {
         };
     }
 
-    pub fn setVariables(self: Function, variables: []const Type) !void {
+    pub fn setVariables(self: Function, variables: []const Variable) !void {
         const block = self.getBody() orelse return error.InvalidGraphState;
-        try block.setVariables(try TypeList.create(self.context, variables));
+        try block.setVariables(try VariableList.create(self.context, variables));
     }
 
-    pub fn getVariables(self: Function) ?TypeList {
+    pub fn getVariables(self: Function) ?VariableList {
         const block = self.getBody() orelse return null;
         return block.getVariables();
     }
@@ -2088,35 +2125,71 @@ pub const DynamicScope = struct {
     }
 };
 
+pub const Variable = struct {
+    id: Id(rows.Variable),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn create(context: *Context, ty: Type) !Variable {
+        return Variable.init(context, ty);
+    }
+
+    pub fn init(context: *Context, ty: ?Type) !Variable {
+        const id = try context.addRow(rows.Variable, .mutable, .{ .type = if (ty) |t| t.id else .null });
+        return wrapId(context, id);
+    }
+
+    pub fn deinit(self: Variable) void {
+        self.context.delRow(self.id);
+    }
+
+    pub fn format(self: Variable, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        const name = self.context.getName(self.id);
+        const ty = self.getType();
+
+        try writer.print("(𝓿𝓪𝓻 {} {?s} : {?})", .{self.id, name, ty});
+    }
+
+    pub fn setType(self: Variable, ty: Type) !void {
+        try self.context.setCell(self.id, .type, ty.id);
+    }
+
+    pub fn getType(self: Variable) ?Type {
+        const id = self.context.getCell(self.id, .type) orelse return null;
+        return wrapId(self.context, id);
+    }
+};
+
 pub const Block = struct {
     id: Id(rows.Block),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn create(context: *Context, variables: []const Type, dynamic_scope: ?DynamicScope) !Block {
+    pub fn create(context: *Context, variables: []const Variable, dynamic_scope: ?DynamicScope) !Block {
         const block = try Block.init(context, null, dynamic_scope, null);
         errdefer block.deinit();
 
-        const type_list = try TypeList.create(context, variables);
-        errdefer type_list.deinit();
+        const variable_list = try VariableList.create(context, variables);
+        errdefer variable_list.deinit();
 
         if (dynamic_scope) |scope| {
             try block.setDynamicScope(scope);
         }
 
-        try block.setVariables(type_list);
+        try block.setVariables(variable_list);
 
         return block;
     }
 
     pub fn init(context: *Context,
-        variables: ?TypeList,
+        variables: ?VariableList,
         dynamic_scope: ?DynamicScope,
         contents: ?KeyList,
     ) !Block {
         const id = try context.addRow(rows.Block, .mutable, .{
-            .variables = if (variables) |x| x.id else (try TypeList.init(context)).id,
+            .variables = if (variables) |x| x.id else (try VariableList.init(context)).id,
             .dynamic_scope = if (dynamic_scope) |x| x.id else .null,
             .contents = if (contents) |x| x.id else (try KeyList.init(context)).id,
         });
@@ -2135,19 +2208,16 @@ pub const Block = struct {
         }
 
         if (self.getVariableSlice()) |variables| {
-            for (variables, 0..) |variable_key, index| {
-                const variable_id = rows.Variable.makeId(self.id, index);
-                const variable_type = wrapId(self.context, variable_key.toIdUnchecked(rows.Type));
-                if (self.context.getName(variable_id)) |variable_name| {
-                    try writer.print("  {} {}: {};\n", .{variable_name, variable_id, variable_type});
-                } else {
-                    try writer.print("  {}: {};\n", .{variable_id, variable_type});
-                }
+            for (variables) |variable_key| {
+                const variable: Variable = wrapId(self.context, variable_key.toIdUnchecked(rows.Variable));
+                const variable_type = variable.getType();
+                const variable_name = self.context.getName(variable.id);
+                try writer.print("  𝓿𝓪𝓻 {} {?}: {?};\n", .{variable.id, variable_name, variable_type});
             }
         }
 
         if (self.getDynamicScope()) |scope| {
-            try writer.print("  with {}\n", .{scope});
+            try writer.print("  𝔀𝓲𝓽𝓱 {}\n", .{scope});
         }
 
         if (self.getContentSlice()) |contents| {
@@ -2167,13 +2237,13 @@ pub const Block = struct {
         }
     }
 
-    pub fn setVariables(self: Block, variables: TypeList) !void {
+    pub fn setVariables(self: Block, variables: VariableList) !void {
         try self.context.setCell(self.id, .variables, variables.id);
     }
 
-    pub fn getVariables(self: Block) ?TypeList {
+    pub fn getVariables(self: Block) ?VariableList {
         const variables = (self.context.table.block.getCell(self.id, .variables) orelse return null).*;
-        return TypeList{ .id = variables.cast(rows.TypeList), .context = self.context };
+        return wrapId(self.context, variables.cast(rows.VariableList));
     }
 
     pub fn setDynamicScope(self: Block, dynamic_scope: DynamicScope) !void {
@@ -2210,17 +2280,18 @@ pub const Block = struct {
         return (self.getContents() orelse return null).getSlice();
     }
 
-    pub fn append(self: Block, key: Key) !void {
+    pub fn append(self: Block, value: anytype) !void {
         const contents = self.getContents() orelse return error.InvalidGraphState;
-        try contents.append(key);
+        try contents.append(Key.fromId(value.id));
     }
 
-    pub fn bindVariable(self: Block, ty: Type) !Id(rows.Variable) {
+    pub fn bindVariable(self: Block, ty: Type) !Variable {
         const variables = self.getVariables() orelse return error.InvalidGraphState;
-        const id = rows.Variable.makeId(self.id, variables.getCount());
-        try variables.append(ty);
+        const variable = try Variable.create(self.context, ty);
 
-        return id;
+        try variables.append(variable);
+
+        return variable;
     }
 };
 
@@ -2230,14 +2301,13 @@ pub const Instruction = struct {
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn init(context: *Context) !Instruction {
-        const id = try context.addRow(rows.Instruction, .mutable, .{ });
-        return Instruction{ .id = id, .context = context };
+    pub fn create(context: *Context, operation: Operation) !Instruction {
+        return Instruction.init(context, null, operation);
     }
 
-    pub fn create(context: *Context, ty: Type, operation: Operation) !Instruction {
-        const id = try context.addRow(rows.Instruction, .mutable, .{ .type = ty.id, .operation = operation });
-        return Instruction{ .id = id, .context = context };
+    pub fn init(context: *Context, ty: ?Type, operation: ?Operation) !Instruction {
+        const id = try context.addRow(rows.Instruction, .mutable, .{ .type = if (ty) |t| t.id else .null, .operation = operation orelse .@"unreachable" });
+        return wrapId(context, id);
     }
 
     pub fn deinit(self: Instruction) void {
@@ -2377,13 +2447,12 @@ test {
     const context = try Context.init(std.testing.allocator);
     defer context.deinit();
 
-    const stderr = std.io.getStdErr().writer();
 
     const empty_origin = try Origin.create(context, &.{});
 
     const test_name = try Name.intern(context, "test");
 
-    std.debug.print("{}\n", .{test_name});
+    // std.debug.print("{}\n", .{test_name});
 
     const kdata = try Kind.intern(context, .data, &.{});
     const keffect = try Kind.intern(context, .effect, &.{});
@@ -2397,17 +2466,25 @@ test {
     const tdata = try Type.intern(context, cdata, &.{});
     const teffect = try Type.intern(context, ceffect, &.{});
 
-    std.debug.print("{}\n", .{tdata});
+    // std.debug.print("{}\n", .{tdata});
 
     const constant = try Constant.fromUnownedBytes(context, tdata, "test");
     defer constant.deinit();
 
-    std.debug.print("{}\n", .{constant});
+    // std.debug.print("{}\n", .{constant});
 
     const test_func_name = try Name.intern(context, "test_func_ty");
     const function_ty = try Type.createFunction(context, &.{tdata, tdata}, teffect, tdata);
 
     try test_func_name.bindSymbol(function_ty);
 
-    try function_ty.format("", undefined, stderr.any());
+    // std.debug.print("{}",.{function_ty});
+
+    const function = try Function.create(context, function_ty);
+
+    const body = function.getBody().?;
+
+    try body.append(try Instruction.create(context, .nop));
+
+    std.debug.print("{}", .{function});
 }
