@@ -1162,6 +1162,18 @@ pub fn HandleBase(comptime Self: type) type {
         pub fn getKey(self: Self) Key {
             return Key.fromId(self.id);
         }
+
+        pub fn isMutable(self: Self) bool {
+            return self.context.isMutable(self.id);
+        }
+
+        pub fn isConstant(self: Self) bool {
+            return self.context.isConstant(self.id);
+        }
+
+        pub fn getName(self: Self) ?Name {
+            return self.context.getName(self.id);
+        }
     };
 }
 
@@ -1196,43 +1208,45 @@ pub fn KeyListBase(comptime Self: type, comptime T: type) type {
             self.context.delRow(self.id);
         }
 
-        pub fn getCount(self: Self) !usize {
-            return (try self.getSlice()).len;
+        pub fn getCount(self: Self) usize {
+            return (self.getSlice() orelse return 0).len;
         }
 
-        pub fn getMutSlice(self: Self) ![]Key {
-            return (try self.getMutArrayList()).items;
+        pub fn getMutSlice(self: Self) ?[]Key {
+            return (self.getMutArrayList() orelse return null).items;
         }
 
-        pub fn getMutArrayList(self: Self) !*pl.ArrayList(Key) {
+        pub fn getMutArrayList(self: Self) ?*pl.ArrayList(Key) {
             std.debug.assert(!self.context.isConstant(self.id));
-            return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys) orelse return error.InvalidGraphState;
+            return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys);
         }
 
-        pub fn getSlice(self: Self) ![]const Key {
-            return (try self.getArrayList()).items;
+        pub fn getSlice(self: Self) ?[]const Key {
+            return (self.getArrayList() orelse return null).items;
         }
 
-        pub fn getArrayList(self: Self) !*const pl.ArrayList(Key) {
-            return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys) orelse return error.InvalidGraphState;
+        pub fn getArrayList(self: Self) ?*const pl.ArrayList(Key) {
+            return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys);
         }
 
         pub fn append(self: Self, value: Value) !void {
-            const array = try self.getMutArrayList();
+            const array = self.getMutArrayList() orelse return error.InvalidGraphState;
             try array.append(self.context.arena.child_allocator, Key.fromId(value.id));
         }
 
         pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-            const refs = try self.getSlice();
+            if (self.getSlice()) |refs| {
+                try writer.writeAll("[");
 
-            try writer.writeAll("[");
+                for (refs, 0..) |ref, index| {
+                    if (index != 0) try writer.writeAll(", ");
+                    try writer.print("{}", .{ wrapId(self.context, ref.toIdUnchecked(Row)) });
+                }
 
-            for (refs, 0..) |ref, index| {
-                if (index != 0) try writer.writeAll(", ");
-                try writer.print("{}", .{ wrapId(self.context, ref.toIdUnchecked(Row)) });
+                try writer.writeAll("]");
+            } else {
+                try writer.writeAll("[]");
             }
-
-            try writer.writeAll("]");
         }
     };
 }
@@ -1257,34 +1271,36 @@ pub const KeyList = struct {
         self.context.delRow(self.id);
     }
 
-    pub fn getCount(self: KeyList) !usize {
-        return (try self.getSlice()).len;
+    pub fn getCount(self: KeyList) usize {
+        return (self.getSlice() orelse return 0).len;
     }
 
-    pub fn getSlice(self: KeyList) ![]Key {
-        return (try self.getArrayList()).items;
+    pub fn getSlice(self: KeyList) ?[]Key {
+        return (self.getArrayList() orelse return null).items;
     }
 
-    pub fn getArrayList(self: KeyList) !*pl.ArrayList(Key) {
-        return self.context.table.key_list.getCell(self.id.cast(rows.KeyList), .keys) orelse return error.InvalidGraphState;
+    pub fn getArrayList(self: KeyList) ?*pl.ArrayList(Key) {
+        return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys);
     }
 
     pub fn append(self: KeyList, key: Key) !void {
-        const array = try self.getArrayList();
+        const array = self.getArrayList() orelse return error.InvalidGraphState;
         try array.append(self.context.arena.child_allocator, key);
     }
 
     pub fn format(self: KeyList, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const keys = try self.getSlice();
+        if (self.getSlice()) |keys| {
+            try writer.writeAll("[");
 
-        try writer.writeAll("[");
+            for (keys, 0..) |key, index| {
+                if (index != 0) try writer.writeAll(", ");
+                try writer.print("{}", .{ key });
+            }
 
-        for (keys, 0..) |key, index| {
-            if (index != 0) try writer.writeAll(", ");
-            try writer.print("{}", .{ key });
+            try writer.writeAll("]");
+        } else {
+            try writer.writeAll("[]");
         }
-
-        try writer.writeAll("]");
     }
 };
 
@@ -1420,35 +1436,34 @@ pub const Constructor = struct {
         try self.context.setCell(self.id, .kind, kind.id);
     }
 
-    pub fn getKind(self: Constructor) !Kind {
+    pub fn getKind(self: Constructor) ?Kind {
         return Kind {
-            .id = self.context.getCell(self.id, .kind) orelse return error.InvalidGraphState,
+            .id = self.context.getCell(self.id, .kind) orelse return null,
             .context = self.context,
         };
     }
 
-    pub fn getOutputKindTag(self: Constructor) !rows.Kind.Tag {
-        return (try self.getKind()).getOutputTag();
+    pub fn getOutputKindTag(self: Constructor) ?rows.Kind.Tag {
+        return (self.getKind() orelse return null).getOutputTag();
     }
 
-    pub fn getInputKindCount(self: Constructor) !usize {
-        return (try self.getInputKinds()).getCount();
+    pub fn getInputKindCount(self: Constructor) usize {
+        return (self.getInputKinds() orelse return 0).getCount();
     }
 
-    pub fn getInputKindSlice(self: Constructor) ![]const Key {
-        return (try self.getInputKinds()).getSlice();
+    pub fn getInputKindSlice(self: Constructor) ?[]const Key {
+        return (self.getInputKinds() orelse return null).getSlice();
     }
 
-    pub fn getInputKinds(self: Constructor) !KindList {
-        return (try self.getKind()).getInputs();
+    pub fn getInputKinds(self: Constructor) ?KindList {
+        return (self.getKind() orelse return null).getInputs();
     }
 
     pub fn format(self: Constructor, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        if (self.context.getName(self.id)) |name| {
-            try writer.print("({} {} :: {})", .{name, self.id, try self.getKind()});
-        } else {
-            try writer.print("({} :: {})", .{self.id, try self.getKind()});
-        }
+        const kind = self.getKind();
+        const name = self.context.getName(self.id);
+
+        try writer.print("({} {?s} :: {?})", .{self.id, name, kind});
     }
 };
 
@@ -1487,38 +1502,36 @@ pub const Kind = struct {
         self.context.delRow(self.id);
     }
 
-    pub fn getInputCount(self: Kind) !usize {
-        return (try self.getInputs()).getCount();
+    pub fn getInputCount(self: Kind) usize {
+        return (self.getInputs() orelse return 0).getCount();
     }
 
-    pub fn getInputSlice(self: Kind) ![]const Key {
-        return (try self.getInputs()).getSlice();
+    pub fn getInputSlice(self: Kind) ?[]const Key {
+        return (self.getInputs() orelse return null).getSlice();
     }
 
     pub fn setOutputTag(self: Kind, tag: rows.Kind.Tag) !void {
         try self.context.setCell(self.id, .tag, tag);
     }
 
-    pub fn getOutputTag(self: Kind) !rows.Kind.Tag {
-        return (self.context.table.kind.getCell(self.id, .tag) orelse return error.InvalidGraphState).*;
+    pub fn getOutputTag(self: Kind) ?rows.Kind.Tag {
+        return (self.context.table.kind.getCell(self.id, .tag) orelse return null).*;
     }
 
     pub fn setInputs(self: Kind, inputs: Id(rows.KindList)) !void {
         try self.context.setCell(self.id, .inputs, inputs.cast(rows.KeyList));
     }
 
-    pub fn getInputs(self: Kind) !KindList {
-        const inputs = (self.context.getCellPtr(self.id, .inputs) orelse return error.InvalidGraphState).*;
+    pub fn getInputs(self: Kind) ?KindList {
+        const inputs = (self.context.getCellPtr(self.id, .inputs) orelse return null).*;
         return KindList{ .id = inputs.cast(rows.KindList), .context = self.context };
     }
 
     pub fn format(self: Kind, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const tag = (self.context.table.kind.getCell(self.id, .tag) orelse return error.InvalidGraphState).*;
-        const inputs = (self.context.table.kind.getCell(self.id, .inputs) orelse return error.InvalidGraphState).*;
+        const tag = self.context.getCell(self.id, .tag);
+        const inputs = self.context.getCell(self.id, .inputs);
 
-        const kind_list = KindList { .id = inputs.cast(rows.KindList), .context = self.context };
-
-        try writer.print("({} => {s})", .{ kind_list, @tagName(tag)});
+        try writer.print("({?} => {?s})", .{ if (inputs) |id| wrapId(self.context, id) else null, if (tag) |t| @tagName(t) else null });
     }
 };
 
@@ -1568,32 +1581,31 @@ pub const Type = struct {
     }
 
     pub fn format(self: Type, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("({} {})", .{ try self.getConstructor(), try self.getTypeInputs() });
+        try writer.print("({?} {?})", .{ self.getConstructor(), self.getTypeInputs() });
     }
 
     pub fn setConstructor(self: Type, constructor: Constructor) !void {
         try self.context.setCell(self.id, .constructor, constructor.id);
     }
 
-    pub fn getConstructor(self: Type) !Constructor {
-        return Constructor {
-            .id = self.context.getCell(self.id, .constructor) orelse return error.InvalidGraphState,
-            .context = self.context,
-        };
+    pub fn getConstructor(self: Type) ?Constructor {
+        const id = self.context.getCell(self.id, .constructor) orelse return null;
+
+        return wrapId(self.context, id);
     }
 
-    pub fn getInputTypeCount(self: Type) !usize {
-        return (try self.getTypeInputs()).getCount();
+    pub fn getInputTypeCount(self: Type) usize {
+        return (self.getTypeInputs() orelse return 0).getCount();
     }
 
-    pub fn getInputTypeSlice(self: Type) ![]const Key {
-        return (try self.getTypeInputs()).getSlice();
+    pub fn getInputTypeSlice(self: Type) ?[]const Key {
+        return (self.getTypeInputs() orelse return null).getSlice();
     }
 
-    pub fn getInputTypeIndex(self: Type, index: usize) !Type {
-        const slice = try self.getInputTypeSlice();
+    pub fn getInputTypeIndex(self: Type, index: usize) ?Type {
+        const slice = self.getInputTypeSlice() orelse return null;
 
-        if (index >= slice.len) return error.InvalidGraphState;
+        if (index >= slice.len) return null;
 
         return wrapId(self.context, slice[index].toIdUnchecked(rows.Type));
     }
@@ -1602,31 +1614,31 @@ pub const Type = struct {
         try self.context.setCell(self.id, .inputs, inputs.cast(rows.KeyList));
     }
 
-    pub fn getTypeInputs(self: Type) !TypeList {
-        const inputs = self.context.getCell(self.id, .inputs) orelse return error.InvalidGraphState;
-        return TypeList{ .id = inputs.cast(rows.TypeList), .context = self.context };
+    pub fn getTypeInputs(self: Type) ?TypeList {
+        const inputs = self.context.getCell(self.id, .inputs) orelse return null;
+        return wrapId(self.context, inputs.cast(rows.TypeList));
     }
 
-    pub fn getConstructorKind(self: Type) !Kind {
-        const constructor = try self.getConstructor();
+    pub fn getConstructorKind(self: Type) ?Kind {
+        const constructor = self.getConstructor() orelse return null;
 
         return constructor.getKind();
     }
 
-    pub fn getConstructorOutputKindTag(self: Type) !rows.Kind.Tag {
-        return (try self.getConstructorKind()).getOutputTag();
+    pub fn getConstructorOutputKindTag(self: Type) ?rows.Kind.Tag {
+        return (self.getConstructorKind() orelse return null).getOutputTag();
     }
 
-    pub fn getConstructorInputKindCount(self: Type) !usize {
-        return (try self.getConstructorInputKinds()).getCount();
+    pub fn getConstructorInputKindCount(self: Type) ?usize {
+        return (self.getConstructorInputKinds() orelse return null).getCount();
     }
 
-    pub fn getConstructorInputKindSlice(self: Type) ![]const Key {
-        return (try self.getConstructorInputKinds()).getSlice();
+    pub fn getConstructorInputKindSlice(self: Type) ?[]const Key {
+        return (self.getConstructorInputKinds() orelse return null).getSlice();
     }
 
-    pub fn getConstructorInputKinds(self: Type) !KindList {
-        return (try self.getConstructorKind()).getInputs();
+    pub fn getConstructorInputKinds(self: Type) ?KindList {
+        return (self.getConstructorKind() orelse return null).getInputs();
     }
 };
 
@@ -1918,7 +1930,6 @@ pub const Buffer = struct {
     }
 };
 
-
 pub const Function = struct {
     id: Id(rows.Function),
     context: *Context,
@@ -1929,16 +1940,16 @@ pub const Function = struct {
         const builtin_func_con = try context.getBuiltin(.function_constructor);
         const builtin_product_con = try context.getBuiltin(.product_constructor);
 
-        const constructor = try ty.getConstructor();
+        const constructor = ty.getConstructor() orelse return error.InvalidGraphState;
 
         if (constructor.id != builtin_func_con.id) return error.InvalidGraphState;
 
-        const input_type = try ty.getInputTypeIndex(0);
-        const input_constructor = try input_type.getConstructor();
+        const input_type = ty.getInputTypeIndex(0) orelse return error.InvalidGraphState;
+        const input_constructor = input_type.getConstructor() orelse return error.InvalidGraphState;
 
         if (input_constructor.id != builtin_product_con.id) return error.InvalidGraphState;
 
-        const input_types = try input_type.getTypeInputs();
+        const input_types = input_type.getTypeInputs() orelse return error.InvalidGraphState;
 
         const contents = try KeyList.init(context);
         errdefer contents.deinit();
@@ -1951,7 +1962,7 @@ pub const Function = struct {
 
     pub fn init(context: *Context, ty: ?Type, body: ?Block) !Function {
         const id = try context.addRow(rows.Function, .mutable, .{ .type = if (ty) |x| x.id else .null, .body = if (body) |x| x.id else (try Block.init(context, null, null, null)).id });
-        return Function{ .id = id, .context = context };
+        return wrapId(context, id);
     }
 
     pub fn deinit(self: Function) void {
@@ -1959,22 +1970,20 @@ pub const Function = struct {
     }
 
     pub fn format(self: Function, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const body = try self.getBody();
+        const name = self.context.getName(self.id);
+        const ty = self.getType();
+        const body = self.getBody();
 
-        if (self.context.getName(self.id)) |name| {
-            try writer.print("({} {} = {})", .{name, self.id, body});
-        } else {
-            try writer.print("({} = {})", .{self.id, body});
-        }
+        try writer.print("({} {?s} : {?} = {?})", .{self.id, name, ty, body});
     }
 
     pub fn setType(self: Function, ty: Type) !void {
         try self.context.setCell(self.id, .type, ty.id);
     }
 
-    pub fn getType(self: Function) !Type {
+    pub fn getType(self: Function) ?Type {
         return Type {
-            .id = self.context.getCell(self.id, .type) orelse return error.InvalidGraphState,
+            .id = self.context.getCell(self.id, .type) orelse return null,
             .context = self.context,
         };
     }
@@ -1983,35 +1992,35 @@ pub const Function = struct {
         try self.context.setCell(self.id, .body, body.id);
     }
 
-    pub fn getBody(self: Function) !Block {
+    pub fn getBody(self: Function) ?Block {
         return Block {
-            .id = self.context.getCell(self.id, .body) orelse return error.InvalidGraphState,
+            .id = self.context.getCell(self.id, .body) orelse return null,
             .context = self.context,
         };
     }
 
     pub fn setVariables(self: Function, variables: []const Type) !void {
-        const block = try self.getBody();
+        const block = self.getBody() orelse return error.InvalidGraphState;
         try block.setVariables(try TypeList.create(self.context, variables));
     }
 
-    pub fn getVariables(self: Function) !TypeList {
-        const block = try self.getBody();
+    pub fn getVariables(self: Function) ?TypeList {
+        const block = self.getBody() orelse return null;
         return block.getVariables();
     }
 
-    pub fn getContents(self: Function) !KeyList {
-        const block = try self.getBody();
+    pub fn getContents(self: Function) ?KeyList {
+        const block = self.getBody() orelse return null;
         return block.getContents();
     }
 
-    pub fn getContentCount(self: Function) !usize {
-        const block = try self.getBody();
+    pub fn getContentCount(self: Function) ?usize {
+        const block = self.getBody() orelse return null;
         return block.getContentCount();
     }
 
-    pub fn getContentSlice(self: Function) ![]const Key {
-        const block = try self.getBody();
+    pub fn getContentSlice(self: Function) ?[]const Key {
+        const block = self.getBody() orelse return null;
         return block.getContentSlice();
     }
 };
@@ -2045,30 +2054,30 @@ pub const DynamicScope = struct {
         try writer.print("({})", .{ self.id });
     }
 
-    pub fn setInputs(self: DynamicScope, inputs: Id(rows.KeyList)) !void {
-        try self.context.setCell(self.id, .inputs, inputs);
+    pub fn setInputs(self: DynamicScope, inputs: KeyList) !void {
+        try self.context.setCell(self.id, .inputs, inputs.id);
     }
 
-    pub fn getInputs(self: DynamicScope) !KeyList {
-        const inputs = (self.context.table.dynamic_scope.getCell(self.id, .inputs) orelse return error.InvalidGraphState).*;
-        return KeyList{ .id = inputs.cast(rows.KeyList), .context = self.context };
+    pub fn getInputs(self: DynamicScope) ?KeyList {
+        const inputs = self.context.getCell(self.id, .inputs) orelse return null;
+        return wrapId(self.context, inputs);
     }
 
-    pub fn setHandlerList(self: DynamicScope, handler_list: Id(rows.HandlerList)) !void {
-        try self.context.setCell(self.id, .handler_list, handler_list);
+    pub fn setHandlerList(self: DynamicScope, handler_list: HandlerList) !void {
+        try self.context.setCell(self.id, .handler_list, handler_list.id);
     }
 
-    pub fn getHandlerList(self: DynamicScope) !HandlerList {
-        const handler_list = (self.context.table.dynamic_scope.getCell(self.id, .handler_list) orelse return error.InvalidGraphState).*;
-        return HandlerList{ .id = handler_list.cast(rows.HandlerList), .context = self.context };
+    pub fn getHandlerList(self: DynamicScope) ?HandlerList {
+        const handler_list = self.context.getCell(self.id, .handler_list) orelse return null;
+        return wrapId(self.context, handler_list);
     }
 
-    pub fn getInputCount(self: DynamicScope) !usize {
-        return (try self.getInputs()).getCount();
+    pub fn getInputCount(self: DynamicScope) usize {
+        return (self.getInputs() orelse return 0).getCount();
     }
 
-    pub fn getHandlerCount(self: DynamicScope) !usize {
-        return (try self.getHandlerList()).getCount();
+    pub fn getHandlerCount(self: DynamicScope) usize {
+        return (self.getHandlerList() orelse return 0).getCount();
     }
 };
 
@@ -2104,7 +2113,7 @@ pub const Block = struct {
             .dynamic_scope = if (dynamic_scope) |x| x.id else .null,
             .contents = if (contents) |x| x.id else (try KeyList.init(context)).id,
         });
-        return Block{ .id = id, .context = context };
+        return wrapId(context, id);
     }
 
     pub fn deinit(self: Block) void {
@@ -2118,15 +2127,15 @@ pub const Block = struct {
             try writer.print(":: {}\n", .{self.id});
         }
 
-        const variables = try self.getVariableSlice();
-
-        for (variables, 0..) |variable_key, index| {
-            const variable_id = rows.Variable.makeId(self.id, index);
-            const variable_type = wrapId(self.context, variable_key.toIdUnchecked(rows.Type));
-            if (self.context.getName(variable_id)) |variable_name| {
-                try writer.print("  {} {}: {};\n", .{variable_name, variable_id, variable_type});
-            } else {
-                try writer.print("  {}: {};\n", .{variable_id, variable_type});
+        if (self.getVariableSlice()) |variables| {
+            for (variables, 0..) |variable_key, index| {
+                const variable_id = rows.Variable.makeId(self.id, index);
+                const variable_type = wrapId(self.context, variable_key.toIdUnchecked(rows.Type));
+                if (self.context.getName(variable_id)) |variable_name| {
+                    try writer.print("  {} {}: {};\n", .{variable_name, variable_id, variable_type});
+                } else {
+                    try writer.print("  {}: {};\n", .{variable_id, variable_type});
+                }
             }
         }
 
@@ -2134,19 +2143,19 @@ pub const Block = struct {
             try writer.print("  with {}\n", .{scope});
         }
 
-        const contents = try self.getContentSlice();
-
-        for (contents) |content_key| {
-            switch (content_key.tag) {
-                .instruction => {
-                    const content = wrapId(self.context, content_key.toIdUnchecked(rows.Instruction));
-                    try writer.print("{};\n", .{content});
-                },
-                .block => {
-                    const content = wrapId(self.context, content_key.toIdUnchecked(rows.Block));
-                    try writer.print("{}", .{content});
-                },
-                else => return error.InvalidGraphState,
+        if (self.getContentSlice()) |contents| {
+            for (contents) |content_key| {
+                switch (content_key.tag) {
+                    .instruction => {
+                        const content = wrapId(self.context, content_key.toIdUnchecked(rows.Instruction));
+                        try writer.print("{};\n", .{content});
+                    },
+                    .block => {
+                        const content = wrapId(self.context, content_key.toIdUnchecked(rows.Block));
+                        try writer.print("{}", .{content});
+                    },
+                    else => return error.InvalidGraphState,
+                }
             }
         }
     }
@@ -2155,8 +2164,8 @@ pub const Block = struct {
         try self.context.setCell(self.id, .variables, variables.id);
     }
 
-    pub fn getVariables(self: Block) !TypeList {
-        const variables = (self.context.table.block.getCell(self.id, .variables) orelse return error.InvalidGraphState).*;
+    pub fn getVariables(self: Block) ?TypeList {
+        const variables = (self.context.table.block.getCell(self.id, .variables) orelse return null).*;
         return TypeList{ .id = variables.cast(rows.TypeList), .context = self.context };
     }
 
@@ -2173,35 +2182,35 @@ pub const Block = struct {
         try self.context.setCell(self.id, .contents, contents.id);
     }
 
-    pub fn getContents(self: Block) !KeyList {
-        const instructions = (self.context.table.block.getCell(self.id, .contents) orelse return error.InvalidGraphState).*;
+    pub fn getContents(self: Block) ?KeyList {
+        const instructions = (self.context.table.block.getCell(self.id, .contents) orelse return null).*;
         return KeyList{ .id = instructions.cast(rows.KeyList), .context = self.context };
     }
 
-    pub fn getVariableCount(self: Block) !usize {
-        return (try self.getVariables()).getCount();
+    pub fn getVariableCount(self: Block) usize {
+        return (self.getVariables() orelse return 0).getCount();
     }
 
-    pub fn getVariableSlice(self: Block) ![]const Key {
-        return (try self.getVariables()).getSlice();
+    pub fn getVariableSlice(self: Block) ?[]const Key {
+        return (self.getVariables() orelse return null).getSlice();
     }
 
-    pub fn getContentCount(self: Block) !usize {
-        return (try self.getContents()).getCount();
+    pub fn getContentCount(self: Block) ?usize {
+        return (self.getContents() orelse return null).getCount();
     }
 
-    pub fn getContentSlice(self: Block) ![]const Key {
-        return (try self.getContents()).getSlice();
+    pub fn getContentSlice(self: Block) ?[]const Key {
+        return (self.getContents() orelse return null).getSlice();
     }
 
     pub fn append(self: Block, key: Key) !void {
-        const contents = try self.getContents();
+        const contents = self.getContents() orelse return error.InvalidGraphState;
         try contents.append(key);
     }
 
     pub fn bindVariable(self: Block, ty: Type) !Id(rows.Variable) {
-        const variables = try self.getVariables();
-        const id = rows.Variable.makeId(self.id, try variables.getCount());
+        const variables = self.getVariables() orelse return error.InvalidGraphState;
+        const id = rows.Variable.makeId(self.id, variables.getCount());
         try variables.append(ty);
 
         return id;
@@ -2229,26 +2238,24 @@ pub const Instruction = struct {
     }
 
     pub fn format(self: Instruction, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("({})", .{ self.id });
+        try writer.print("{s}", .{ @tagName(self.getOperation()) });
     }
 
     pub fn setType(self: Instruction, ty: Type) !void {
         try self.context.setCell(self.id, .type, ty.id);
     }
 
-    pub fn getType(self: Instruction) !Type {
-        return Type {
-            .id = self.context.getCell(self.id, .type) orelse return error.InvalidGraphState,
-            .context = self.context,
-        };
+    pub fn getType(self: Instruction) ?Type {
+        const id = self.context.getCell(self.id, .type) orelse return null;
+        return wrapId(self.context, id);
     }
 
     pub fn setOperation(self: Instruction, operation: Operation) !void {
         try self.context.setCell(self.id, .operation, operation);
     }
 
-    pub fn getOperation(self: Instruction) !Operation {
-        return self.context.getCell(self.id, .operation) orelse return error.InvalidGraphState;
+    pub fn getOperation(self: Instruction) Operation {
+        return self.context.getCell(self.id, .operation) orelse return .@"unreachable";
     }
 };
 
@@ -2280,24 +2287,24 @@ pub const ControlEdge = struct {
         try self.context.setCell(self.id, .source, source);
     }
 
-    pub fn getSource(self: ControlEdge) !Key {
-        return self.context.getCell(self.id, .source) orelse error.InvalidGraphState;
+    pub fn getSource(self: ControlEdge) ?Key {
+        return self.context.getCell(self.id, .source);
     }
 
     pub fn setDestination(self: ControlEdge, destination: Key) !void {
         try self.context.setCell(self.id, .destination, destination);
     }
 
-    pub fn getDestination(self: ControlEdge) !Key {
-        return self.context.getCell(self.id, .destination) orelse error.InvalidGraphState;
+    pub fn getDestination(self: ControlEdge) ?Key {
+        return self.context.getCell(self.id, .destination);
     }
 
     pub fn setSourceIndex(self: ControlEdge, index: usize) !void {
         try self.context.setCell(self.id, .source_index, index);
     }
 
-    pub fn getSourceIndex(self: ControlEdge) !usize {
-        return self.context.getCell(self.id, .source_index) orelse return error.InvalidGraphState;
+    pub fn getSourceIndex(self: ControlEdge) usize {
+        return self.context.getCell(self.id, .source_index) orelse 0;
     }
 };
 
@@ -2309,12 +2316,12 @@ pub const DataEdge = struct {
 
     pub fn init(context: *Context) !DataEdge {
         const id = try context.addRow(rows.DataEdge, .mutable, .{ });
-        return DataEdge{ .id = id, .context = context };
+        return wrapId(context, id);
     }
 
     pub fn create(context: *Context, source: Key, destination: Key) !DataEdge {
         const id = try context.addRow(rows.DataEdge, .mutable, .{ .source = source, .destination = destination });
-        return DataEdge{ .id = id, .context = context };
+        return wrapId(context, id);
     }
 
     pub fn deinit(self: DataEdge) void {
@@ -2329,32 +2336,32 @@ pub const DataEdge = struct {
         try self.context.setCell(self.id, .source, source);
     }
 
-    pub fn getSource(self: DataEdge) !Key {
-        return self.context.getCell(self.id, .source) orelse error.InvalidGraphState;
+    pub fn getSource(self: DataEdge) ?Key {
+        return self.context.getCell(self.id, .source);
     }
 
     pub fn setDestination(self: DataEdge, destination: Key) !void {
         try self.context.setCell(self.id, .destination, destination);
     }
 
-    pub fn getDestination(self: DataEdge) !Key {
-        return self.context.getCell(self.id, .destination) orelse error.InvalidGraphState;
+    pub fn getDestination(self: DataEdge) ?Key {
+        return self.context.getCell(self.id, .destination);
     }
 
     pub fn setSourceIndex(self: DataEdge, index: usize) !void {
         try self.context.setCell(self.id, .source_index, index);
     }
 
-    pub fn getSourceIndex(self: DataEdge) !usize {
-        return self.context.getCell(self.id, .source_index) orelse return error.InvalidGraphState;
+    pub fn getSourceIndex(self: DataEdge) usize {
+        return self.context.getCell(self.id, .source_index) orelse 0;
     }
 
     pub fn setDestinationIndex(self: DataEdge, index: usize) !void {
         try self.context.setCell(self.id, .destination_index, index);
     }
 
-    pub fn getDestinationIndex(self: DataEdge) !usize {
-        return self.context.getCell(self.id, .destination_index) orelse return error.InvalidGraphState;
+    pub fn getDestinationIndex(self: DataEdge) usize {
+        return self.context.getCell(self.id, .destination_index) orelse 0;
     }
 };
 
