@@ -2442,6 +2442,63 @@ pub const DataEdge = struct {
     }
 };
 
+pub const Visitor = struct {
+    context: *Context,
+    visited: pl.UniqueReprSet(Key, 80),
+
+    pub fn init(context: *Context) Visitor {
+        return .{
+            .context = context,
+            .visited = .empty,
+        };
+    }
+
+    pub fn deinit(self: *Visitor) void {
+        self.visited.deinit(self.context.arena.child_allocator);
+    }
+
+    pub fn clear(self: *Visitor) void {
+        self.visited.clearRetainingCapacity();
+    }
+
+    pub fn alreadyVisited(self: *Visitor, key: Key) !bool {
+        return (try self.visited.getOrPut(self.context.arena.child_allocator, key)).found_existing;
+    }
+
+    pub fn reachable(self: *Visitor, key: Key) !void {
+        if (try self.alreadyVisited(key)) return;
+
+        const control_sources: []Key = self.context.table.control_edge.getColumn(.source);
+        for (control_sources, 0..) |source_key, edge_index| {
+            if (source_key != key) continue;
+
+            const destination_key = self.context.table.control_edge.getCellAt(edge_index, .destination).*;
+
+            try self.reachable(destination_key);
+        }
+
+        const data_key: []Key = self.context.table.data_edge.getColumn(.source);
+        for (data_key, 0..) |source_key, edge_index| {
+            if (source_key != key) continue;
+
+            const destination_key = self.context.table.data_edge.getCellAt(edge_index, .destination).*;
+
+            try self.reachable(destination_key);
+        }
+
+        if (key.tag == .block) {
+            const block = wrapId(self.context, key.toIdUnchecked(rows.Block));
+            const contents = block.getContents() orelse return error.InvalidGraphState;
+
+            for (contents.getSlice() orelse &.{}) |content_key| {
+                try self.reachable(content_key);
+            }
+        }
+    }
+};
+
+
+
 
 test {
     const context = try Context.init(std.testing.allocator);
