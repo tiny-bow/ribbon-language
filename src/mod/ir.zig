@@ -292,6 +292,14 @@ pub const rows = struct {
             /// Data types can be stored anywhere, passed as arguments, etc.
             /// Size is known, some can be used in arithmetic or comparisons.
             data,
+            /// Integer types can be stored anywhere, passed as arguments, etc.
+            /// Size is known, some can be used in arithmetic or comparisons.
+            /// Unlike other data, integers may be used in type expressions.
+            int,
+            /// Symbol types can be stored anywhere, passed as arguments, etc.
+            /// Size is known, can be used for comparisons.
+            /// Unlike other data, symbols may be used in type expressions.
+            sym,
             /// Opaque types cannot be values, only the destination of a pointer.
             /// Size is unknown, and they cannot be used in arithmetic or comparisons.
             @"opaque",
@@ -703,6 +711,44 @@ pub const Key = packed struct(u128) {
 
         return self.id.cast(T);
     }
+
+    pub const KeyFormatter = struct {
+        key: Key,
+        context: *Context,
+
+        pub fn format(self: KeyFormatter, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            switch (self.key.tag) {
+                .name => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Name)) }),
+                .source => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(source.Source)) }),
+                .kind => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Kind)) }),
+                .constructor => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Constructor)) }),
+                .type => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Type)) }),
+                .function => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Function)) }),
+                .effect => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Effect)) }),
+                .constant => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Constant)) }),
+                .global => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Global)) }),
+                .foreign_address => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.ForeignAddress)) }),
+                .builtin_address => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.BuiltinAddress)) }),
+                .intrinsic => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Intrinsic)) }),
+                .handler => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Handler)) }),
+                .dynamic_scope => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.DynamicScope)) }),
+                .block => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Block)) }),
+                .data_edge => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.DataEdge)) }),
+                .control_edge => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.ControlEdge)) }),
+                .instruction => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Instruction)) }),
+                .buffer => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.Buffer)) }),
+                .key_list => try writer.print("{}", .{ wrapId(self.context, self.key.toIdUnchecked(rows.KeyList)) }),
+                else => try writer.print("{}", .{ self.key }),
+            }
+        }
+    };
+
+    pub fn formatter(self: Key, context: *Context) KeyFormatter {
+        return KeyFormatter {
+            .key = self,
+            .context = context,
+        };
+    }
 };
 
 
@@ -720,8 +766,18 @@ pub fn CellType(comptime id: type, comptime column: pl.EnumLiteral) type {
 
 /// Identifier for built-in values.
 pub const Builtin = enum {
+    data_kind,
+    effect_kind,
+    int_kind,
+    sym_kind,
+    function_kind,
     function_constructor,
     product_constructor,
+    int_constructor,
+    sym_constructor,
+    signed_integer_constructor,
+    unsigned_integer_constructor,
+    no_effect_type,
 };
 
 pub fn BuiltinType(comptime builtin: Builtin) type {
@@ -734,37 +790,167 @@ pub fn BuiltinId(comptime builtin: Builtin) type {
 
 pub fn BuiltinRowType(comptime builtin: Builtin) type {
     return switch (builtin) {
+        .data_kind => rows.Kind,
+        .effect_kind => rows.Kind,
+        .int_kind => rows.Kind,
+        .sym_kind => rows.Kind,
+        .function_kind => rows.Kind,
         .function_constructor => rows.Constructor,
         .product_constructor => rows.Constructor,
+        .int_constructor => rows.Constructor,
+        .sym_constructor => rows.Constructor,
+        .signed_integer_constructor => rows.Constructor,
+        .unsigned_integer_constructor => rows.Constructor,
+        .no_effect_type => rows.Type,
     };
 }
 
 pub const builtin_initializers = struct {
+    pub fn data_kind(context: *Context) !Key {
+        const kind = try Kind.intern(context, .data, &.{});
+
+        return kind.getKey();
+    }
+
+    pub fn effect_kind(context: *Context) !Key {
+        const kind = try Kind.intern(context, .effect, &.{});
+
+        return kind.getKey();
+    }
+
+    pub fn int_kind(context: *Context) !Key {
+        const kind = try Kind.intern(context, .int, &.{});
+
+        return kind.getKey();
+    }
+
+    pub fn sym_kind(context: *Context) !Key {
+        const kind = try Kind.intern(context, .sym, &.{});
+
+        return kind.getKey();
+    }
+
+    pub fn function_kind(context: *Context) !Key {
+        const data = try Kind.intern(context, .data, &.{});
+        const effect = try Kind.intern(context, .effect, &.{});
+        const kind = try Kind.intern(context, .function, &.{data, data, effect});
+
+        return kind.getKey();
+    }
+
     pub fn function_constructor(context: *Context) !Key {
         const data = try Kind.intern(context, .data, &.{});
-
         const effect = try Kind.intern(context, .effect, &.{});
-
-        const kind = try Kind.create(context, .function, &.{data, effect, data});
-        errdefer kind.deinit();
-
+        const kind = try Kind.intern(context, .function, &.{data, data, effect});
         const constructor = try Constructor.init(context, kind);
 
-        return constructor.getKey();
+        const key = constructor.getKey();
+
+        try context.bindFormatter(key, &struct {
+            pub fn format_function_type(ctx: *Context, value: Key, writer: std.io.AnyWriter) anyerror!void {
+                const function_type: Type = wrapId(ctx, value.toIdUnchecked(rows.Type));
+                if (function_type.getInputTypeSlice()) |types| {
+                    try writer.print("({?} -> {?} in {?})", .{
+                        if (types[0].toId(rows.Type)) |id| wrapId(ctx, id) else null,
+                        if (types[1].toId(rows.Type)) |id| wrapId(ctx, id) else null,
+                        if (types[2].toId(rows.Type)) |id| wrapId(ctx, id) else null,
+                    });
+                } else {
+                    try writer.print("(INVALID FUNCTION TYPE {})", .{function_type});
+                }
+            }
+        }.format_function_type);
+
+        return key;
     }
 
     pub fn product_constructor(context: *Context) !Key {
         const data = try Kind.intern(context, .data, &.{});
-
-        const type_set = try Kind.create(context, .type_set, &.{data});
-
-        const kind = try Kind.create(context, .data, &.{type_set});
-
+        const type_set = try Kind.intern(context, .type_set, &.{data});
+        const kind = try Kind.intern(context, .data, &.{type_set});
         const constructor = try Constructor.init(context, kind);
 
         return constructor.getKey();
     }
+
+    pub fn int_constructor(context: *Context) !Key {
+        const kint = try context.getBuiltin(.int_kind);
+        const constructor = try Constructor.init(context, kint);
+        const key = constructor.getKey();
+
+        try context.bindFormatter(key, &struct {
+            pub fn format_signed_integer_type(ctx: *Context, value: Key, writer: std.io.AnyWriter) anyerror!void {
+                const ty: Type = wrapId(ctx, value.toIdUnchecked(rows.Type));
+
+                if (ty.getInputTypeSlice()) |ts| {
+                    const operand = ts[0];
+
+                    try writer.print("{}", .{operand});
+                } else {
+                    try writer.print("(INVALID INT TYPE {})", .{ty});
+                }
+            }
+        }.format_signed_integer_type);
+
+        return key;
+    }
+
+    pub fn signed_integer_constructor(context: *Context) !Key {
+        const int = try Kind.intern(context, .int, &.{});
+        const kind = try Kind.intern(context, .data, &.{int});
+        const constructor = try Constructor.init(context, kind);
+        const key = constructor.getKey();
+
+        try context.bindFormatter(key, &struct {
+            pub fn format_signed_integer_type(ctx: *Context, value: Key, writer: std.io.AnyWriter) anyerror!void {
+                const ty: Type = wrapId(ctx, value.toIdUnchecked(rows.Type));
+
+                if (ty.getInputTypeSlice()) |ts| {
+                    const operand = ts[0];
+
+                    try writer.print("(Int {})", .{operand});
+                } else {
+                    try writer.print("(INVALID SIGNED INTEGER TYPE {})", .{ty});
+                }
+            }
+        }.format_signed_integer_type);
+
+        return key;
+    }
+
+    pub fn unsigned_integer_constructor(context: *Context) !Key {
+        const int = try Kind.intern(context, .int, &.{});
+        const kind = try Kind.create(context, .data, &.{int});
+        const constructor = try Constructor.init(context, kind);
+        const key = constructor.getKey();
+
+        try context.bindFormatter(key, &struct {
+            pub fn format_unsigned_integer_type(ctx: *Context, value: Key, writer: std.io.AnyWriter) anyerror!void {
+                const ty: Type = wrapId(ctx, value.toIdUnchecked(rows.Type));
+
+                if (ty.getInputTypeSlice()) |ts| {
+                    const operand = ts[0];
+
+                    try writer.print("(Word {})", .{operand});
+                } else {
+                    try writer.print("(INVALID UNSIGNED INTEGER TYPE {})", .{ty});
+                }
+            }
+        }.format_unsigned_integer_type);
+
+        return key;
+    }
+
+    pub fn no_effect_type(context: *Context) !Key {
+        const kind = try Kind.intern(context, .effect, &.{});
+        const con = try Constructor.init(context, kind);
+        const ty = try Type.intern(context, con, &.{});
+
+        return ty.getKey();
+    }
 };
+
+pub const FormatFunction = fn (ctx: *Context, value: Key, writer: std.io.AnyWriter) anyerror!void;
 
 /// The core of Ribbon's intermediate representation. This is the main data
 /// structure used to represent Ribbon programs in the intermediate phase of
@@ -802,6 +988,13 @@ pub const Context = struct {
         mutability: pl.UniqueReprMap(Key, pl.Mutability, 80) = .empty,
         /// Builtin values.
         builtin: pl.UniqueReprBiMap(Builtin, Key, .bucket) = .empty,
+        /// Intrinsic value bindings.
+        intrinsic: pl.UniqueReprBiMap(bytecode.Instruction.OpCode, Id(rows.Intrinsic), .bucket) = .empty,
+        /// Formatting functions for values by key.
+        /// The key passed to the function is the key of the value to format; depending on the kind of formatter,
+        /// the binding key may be different. For example, in the case of types, the binding key is the type constructor,
+        /// and the key passed to the function is a type using that constructor.
+        formatter: pl.UniqueReprMap(Key, *const anyopaque, 80) = .empty,
     } = .{},
     /// Storage of standard ir graph types data.
     table: struct {
@@ -953,6 +1146,18 @@ pub const Context = struct {
         return id;
     }
 
+    pub fn internOpCode(self: *Context, opcode: bytecode.Instruction.OpCode) !Id(rows.Intrinsic) {
+        if (self.map.intrinsic.get_b(opcode)) |existing| {
+            return existing;
+        }
+
+        const id = try self.addRow(rows.Intrinsic, .constant, .{ .tag = .bytecode, .data = rows.Intrinsic.Data { .bytecode = opcode } });
+
+        try self.map.intrinsic.put(self.arena.child_allocator, opcode, id);
+
+        return id;
+    }
+
     /// Get an id from a keylist.
     /// This will intern the keylist if it is not already interned.
     pub fn internKeyList(self: *Context, keys: []const Key) !Id(rows.KeyList) {
@@ -1006,7 +1211,6 @@ pub const Context = struct {
         try self.map.key_to_name.put(self.arena.child_allocator, Key.fromId(id), name);
     }
 
-
     /// Bind an origin to a key.
     /// * This will fail if the origin is already bound to a different key,
     /// or if the key is already bound to a different origin.
@@ -1024,6 +1228,11 @@ pub const Context = struct {
         try self.map.origin.put(self.arena.child_allocator, key, origin);
     }
 
+    /// Bind a formatting function to a key.
+    pub fn bindFormatter(self: *Context, key: Key, function: *const FormatFunction) !void {
+        try self.map.formatter.put(self.arena.child_allocator, key, function);
+    }
+
     /// Get the last name bound to a key, if any.
     pub fn getName(self: *Context, id: anytype) ?Name {
         return wrapId(self, self.map.key_to_name.get(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return null);
@@ -1032,6 +1241,11 @@ pub const Context = struct {
     /// Get the source set bound to a key, if it exists.
     pub fn getOrigin(self: *Context, id: anytype) ?Origin {
         return wrapId(self, self.map.origin.get_b(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return null);
+    }
+
+    /// Get the formatter bound to a key, if it exists.
+    pub fn getFormatter(self: *Context, id: anytype) ?*const FormatFunction {
+        return @ptrCast(self.map.formatter.get(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return null);
     }
 
     /// Set the value of a specific cell (data structure field) in a table within this context.
@@ -1142,7 +1356,7 @@ pub inline fn WrappedId(comptime T: type) type {
         rows.Global => Global,
         rows.ForeignAddress => ForeignAddress,
         rows.BuiltinAddress => BuiltinAddress,
-        // rows.Intrinsic => Intrinsic,
+        rows.Intrinsic => Intrinsic,
         rows.Handler => Handler,
         rows.Function => Function,
         rows.DynamicScope => DynamicScope,
@@ -1268,6 +1482,10 @@ pub const KeyList = struct {
         self.context.delRow(self.id);
     }
 
+    pub fn cast(self: KeyList, comptime Narrow: type) Narrow {
+        return wrapId(self.context, self.id.cast(@FieldType(Narrow, "id").Value));
+    }
+
     pub fn getCount(self: KeyList) usize {
         return (self.getSlice() orelse return 0).len;
     }
@@ -1292,29 +1510,7 @@ pub const KeyList = struct {
             for (keys, 0..) |key, index| {
                 if (index != 0) try writer.writeAll(", ");
 
-                switch (key.tag) {
-                    .name => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Name)) }),
-                    .source => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(source.Source)) }),
-                    .kind => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Kind)) }),
-                    .constructor => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Constructor)) }),
-                    .type => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Type)) }),
-                    .function => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Function)) }),
-                    .effect => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Effect)) }),
-                    .constant => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Constant)) }),
-                    .global => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Global)) }),
-                    .foreign_address => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.ForeignAddress)) }),
-                    .builtin_address => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.BuiltinAddress)) }),
-                    // .intrinsic => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Intrinsic)) }),
-                    .handler => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Handler)) }),
-                    .dynamic_scope => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.DynamicScope)) }),
-                    .block => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Block)) }),
-                    .data_edge => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.DataEdge)) }),
-                    .control_edge => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.ControlEdge)) }),
-                    .instruction => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Instruction)) }),
-                    .buffer => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Buffer)) }),
-                    .key_list => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.KeyList)) }),
-                    else => try writer.print("{}", .{ key }),
-                }
+                try writer.print("{}", .{key.formatter(self.context)});
             }
 
             try writer.writeAll("]");
@@ -1575,6 +1771,7 @@ pub const Kind = struct {
     }
 };
 
+
 pub const Type = struct {
     id: Id(rows.Type),
     context: *Context,
@@ -1595,11 +1792,35 @@ pub const Type = struct {
         return Type.init(context, .constant, constructor, type_list);
     }
 
-    pub fn createFunction(context: *Context, inputs: []const Type, effect: Type, result: Type) !Type {
+    pub fn createInt(context: *Context, value: i256) !Type {
+        const constructor = try context.getBuiltin(.int_constructor);
+        const ty = try Type.init(context, .mutable, constructor, null);
+
+        const constant = try Constant.fromUnownedBytes(context, ty, std.mem.asBytes(&value));
+        const inputs = try KeyList.create(context, &.{ constant.getKey() });
+
+        try ty.setTypeInputs(inputs.cast(TypeList));
+
+        return ty;
+    }
+
+    pub fn createBitInteger(context: *Context, signedness: pl.Signedness, bit_size: u16) !Type {
+        const int = try Type.createInt(context, bit_size);
+
+        const cint = switch (signedness) {
+            .signed => try context.getBuiltin(.signed_integer_constructor),
+            .unsigned => try context.getBuiltin(.unsigned_integer_constructor),
+        };
+
+        return Type.create(context, cint, &.{ int });
+    }
+
+    pub fn createFunction(context: *Context, inputs: []const Type, result: Type, effect: Type) !Type {
         const type_list = try TypeList.create(context, inputs);
         errdefer type_list.deinit();
 
-        const input_product = try Type.intern(context, try context.getBuiltin(.product_constructor), inputs);
+        const input_product = try Type.create(context, try context.getBuiltin(.product_constructor), inputs);
+        errdefer input_product.deinit();
 
         return Type.create(context, try context.getBuiltin(.function_constructor), &.{ input_product, effect, result });
     }
@@ -1611,8 +1832,8 @@ pub const Type = struct {
         return Type.init(context, .mutable, constructor, type_list);
     }
 
-    pub fn init(context: *Context, mutability: pl.Mutability, constructor: Constructor, inputs: TypeList) !Type {
-        const id = try context.addRow(rows.Type, mutability, .{ .constructor = constructor.id, .inputs = inputs.id.cast(rows.KeyList) });
+    pub fn init(context: *Context, mutability: pl.Mutability, constructor: ?Constructor, inputs: ?TypeList) !Type {
+        const id = try context.addRow(rows.Type, mutability, .{ .constructor = if (constructor) |x| x.id else .null, .inputs = if (inputs) |x| x.id.cast(rows.KeyList) else .null });
         return Type{ .id = id, .context = context };
     }
 
@@ -1621,7 +1842,20 @@ pub const Type = struct {
     }
 
     pub fn format(self: Type, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("(𝓽𝔂𝓹𝓮 {} {?} :: {?} {?})", .{ self.id, self.getName(), self.getConstructor(), self.getTypeInputs() });
+        const constructor = self.getConstructor();
+
+        if (constructor) |c| {
+            if (self.context.getFormatter(c.id)) |formatter| {
+                formatter(self.context, Key.fromId(self.id), writer) catch |err| {
+                    log.err("error formatting type {}: {}", .{self.id, err});
+                    return error.InvalidArgument;
+                };
+            } else {
+                try writer.print("(𝓽𝔂𝓹𝓮 {} {?} :: {} {?})", .{ self.id, self.getName(), c, self.getTypeInputs() });
+            }
+        } else {
+            try writer.print("(𝓽𝔂𝓹𝓮 {} {?} :: null {?})", .{ self.id, self.getName(), self.getTypeInputs() });
+        }
     }
 
     pub fn setConstructor(self: Type, constructor: Constructor) !void {
@@ -1650,8 +1884,8 @@ pub const Type = struct {
         return wrapId(self.context, slice[index].toIdUnchecked(rows.Type));
     }
 
-    pub fn setTypeInputs(self: Type, inputs: Id(rows.TypeList)) !void {
-        try self.context.setCell(self.id, .inputs, inputs.cast(rows.KeyList));
+    pub fn setTypeInputs(self: Type, inputs: TypeList) !void {
+        try self.context.setCell(self.id, .inputs, inputs.id.cast(rows.KeyList));
     }
 
     pub fn getTypeInputs(self: Type) ?TypeList {
@@ -1921,6 +2155,29 @@ pub const BuiltinAddress = struct {
 
     pub fn format(self: BuiltinAddress, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
         try self.id.format(fmt, opts, writer);
+    }
+};
+
+pub const Intrinsic = struct {
+    id: Id(rows.Intrinsic),
+    context: *Context,
+
+    pub usingnamespace HandleBase(@This());
+
+    pub fn intern(context: *Context, opcode: bytecode.Instruction.OpCode) !Intrinsic {
+        const id = try context.internOpCode(opcode);
+        return Intrinsic{ .id = id, .context = context };
+    }
+
+    pub fn format(self: Intrinsic, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
+        try self.id.format(fmt, opts, writer);
+    }
+
+    pub fn getOpCode(self: Intrinsic) ?bytecode.Instruction.OpCode {
+        const tag = self.context.getCell(self.id, .tag) orelse return null;
+        if (tag != .bytecode) return null;
+
+        return self.context.getCell(self.id, .data).?.bytecode;
     }
 };
 
@@ -2511,27 +2768,20 @@ test {
 
     // std.debug.print("{}\n", .{test_name});
 
-    const kdata = try Kind.intern(context, .data, &.{});
-    const keffect = try Kind.intern(context, .effect, &.{});
+    const kdata = try context.getBuiltin(.data_kind);
+    const ccustom_data = try Constructor.init(context, kdata);
 
-    const cdata = try Constructor.init(context, kdata);
-    const ceffect = try Constructor.init(context, keffect);
+    try test_name.bindSymbol(ccustom_data);
+    try empty_origin.bindValue(ccustom_data);
 
-    try test_name.bindSymbol(cdata);
-    try empty_origin.bindValue(cdata);
+    const tcustom_data = try Type.intern(context, ccustom_data, &.{});
+    const tno_effect = try context.getBuiltin(.no_effect_type);
 
-    const tdata = try Type.intern(context, cdata, &.{});
-    const teffect = try Type.intern(context, ceffect, &.{});
-
-    // std.debug.print("{}\n", .{tdata});
-
-    const constant = try Constant.fromUnownedBytes(context, tdata, "test");
+    const constant = try Constant.fromUnownedBytes(context, tcustom_data, "test");
     defer constant.deinit();
 
-    // std.debug.print("{}\n", .{constant});
-
     const test_func_name = try Name.intern(context, "test_func_ty");
-    const function_ty = try Type.createFunction(context, &.{tdata, tdata}, teffect, tdata);
+    const function_ty = try Type.createFunction(context, &.{tcustom_data, tcustom_data}, tcustom_data, tno_effect);
 
     try test_func_name.bindSymbol(function_ty);
 
