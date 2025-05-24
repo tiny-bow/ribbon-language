@@ -17,7 +17,7 @@ const pl = @import("platform");
 const common = @import("common");
 const utils = @import("utils");
 const Interner = @import("Interner");
-const analysis = @import("analysis");
+const source = @import("source");
 const bytecode = @import("bytecode");
 
 test {
@@ -605,7 +605,7 @@ pub const Key = packed struct(u128) {
         pub fn toRowType(comptime self: Tag) type {
             comptime return switch (self) {
                 .name => rows.Name,
-                .source => analysis.Source,
+                .source => source.Source,
                 .kind => rows.Kind,
                 .constructor => rows.Constructor,
                 .type => rows.Type,
@@ -653,7 +653,7 @@ pub const Key = packed struct(u128) {
         pub fn fromRowType(comptime T: type) Tag {
             comptime return switch (T) {
                 rows.Name => .name,
-                analysis.Source => .source,
+                source.Source => .source,
                 rows.Kind => .kind,
                 rows.Constructor => .constructor,
                 rows.Type => .type,
@@ -789,7 +789,7 @@ pub const Context = struct {
         /// Maps interned string names to their unique id.
         name_storage: pl.UniqueReprStringBiMap(Id(rows.Name), .bucket) = .empty,
         /// Maps interned sources to their unique id.
-        source_storage: analysis.source.UniqueReprSourceBiMap(Id(analysis.Source), .bucket) = .empty,
+        source_storage: source.UniqueReprSourceBiMap(Id(source.Source), .bucket) = .empty,
         /// Binds keys to names, allowing the generation of debug information.
         key_to_name: pl.UniqueReprMap(Key, Id(rows.Name), 80) = .empty,
         /// binds names to keys, allowing the generation of symbol tables.
@@ -931,11 +931,11 @@ pub const Context = struct {
 
     /// Get an id from a source.
     /// This will intern the source if it is not already interned.
-    pub fn internSource(self: *Context, source: analysis.Source) !Id(analysis.Source) {
-        if (self.map.source_storage.get_b(source)) |id| return id;
+    pub fn internSource(self: *Context, src: source.Source) !Id(source.Source) {
+        if (self.map.source_storage.get_b(src)) |id| return id;
 
-        const id: Id(analysis.Source) = @enumFromInt(self.map.source_storage.count());
-        const source_copy = try source.dupe(self.arena.allocator());
+        const id: Id(source.Source) = @enumFromInt(self.map.source_storage.count());
+        const source_copy = try src.dupe(self.arena.allocator());
         try self.map.source_storage.put(self.arena.child_allocator, source_copy, id);
 
         return id;
@@ -1127,7 +1127,7 @@ pub const Context = struct {
 pub inline fn WrappedId(comptime T: type) type {
     return switch (T.Value) {
         rows.Name => Name,
-        analysis.Source => Source,
+        source.Source => Source,
         rows.Kind => Kind,
         rows.Constructor => Constructor,
         rows.Type => Type,
@@ -1294,7 +1294,7 @@ pub const KeyList = struct {
 
                 switch (key.tag) {
                     .name => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Name)) }),
-                    .source => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(analysis.Source)) }),
+                    .source => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(source.Source)) }),
                     .kind => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Kind)) }),
                     .constructor => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Constructor)) }),
                     .type => try writer.print("{}", .{ wrapId(self.context, key.toIdUnchecked(rows.Type)) }),
@@ -1357,17 +1357,17 @@ pub const Name = struct {
 };
 
 pub const Source = struct {
-    id: Id(analysis.Source),
+    id: Id(source.Source),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn intern(context: *Context, source: analysis.Source) !Source {
-        const id = try context.internSource(source);
+    pub fn intern(context: *Context, src: source.Source) !Source {
+        const id = try context.internSource(src);
         return Source{ .id = id, .context = context };
     }
 
-    pub fn getData(self: Source) !analysis.Source {
+    pub fn getData(self: Source) !source.Source {
         return self.context.map.source_storage.get_a(self.id) orelse return error.InvalidGraphState;
     }
 
@@ -1382,7 +1382,7 @@ pub const Origin = struct {
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
-    pub usingnamespace KeyListBase(@This(), analysis.Source);
+    pub usingnamespace KeyListBase(@This(), source.Source);
 
     pub fn bindValue(self: Origin, value: anytype) !void {
         try self.context.bindOrigin(self.id, Key.fromId(value.id));
@@ -2347,8 +2347,8 @@ pub const ControlEdge = struct {
         return ControlEdge{ .id = id, .context = context };
     }
 
-    pub fn create(context: *Context, source: Key, destination: Key, source_index: usize) !ControlEdge {
-        const id = try context.addRow(rows.ControlEdge, .mutable, .{ .source = source, .destination = destination, .source_index = source_index });
+    pub fn create(context: *Context, src: Key, dest: Key, source_index: usize) !ControlEdge {
+        const id = try context.addRow(rows.ControlEdge, .mutable, .{ .source = src, .destination = dest, .source_index = source_index });
         return ControlEdge{ .id = id, .context = context };
     }
 
@@ -2360,8 +2360,8 @@ pub const ControlEdge = struct {
         try writer.print("({})", .{ self.id });
     }
 
-    pub fn setSource(self: ControlEdge, source: Key) !void {
-        try self.context.setCell(self.id, .source, source);
+    pub fn setSource(self: ControlEdge, src: Key) !void {
+        try self.context.setCell(self.id, .source, src);
     }
 
     pub fn getSource(self: ControlEdge) ?Key {
@@ -2396,8 +2396,8 @@ pub const DataEdge = struct {
         return wrapId(context, id);
     }
 
-    pub fn create(context: *Context, source: Key, destination: Key) !DataEdge {
-        const id = try context.addRow(rows.DataEdge, .mutable, .{ .source = source, .destination = destination });
+    pub fn create(context: *Context, src: Key, destination: Key) !DataEdge {
+        const id = try context.addRow(rows.DataEdge, .mutable, .{ .source = src, .destination = destination });
         return wrapId(context, id);
     }
 
@@ -2409,8 +2409,8 @@ pub const DataEdge = struct {
         try writer.print("({})", .{ self.id });
     }
 
-    pub fn setSource(self: DataEdge, source: Key) !void {
-        try self.context.setCell(self.id, .source, source);
+    pub fn setSource(self: DataEdge, src: Key) !void {
+        try self.context.setCell(self.id, .source, src);
     }
 
     pub fn getSource(self: DataEdge) ?Key {
