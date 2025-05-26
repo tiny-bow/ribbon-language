@@ -18,73 +18,377 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-// TODO: Nan-tagging would be nice, but we have many object types that *we do not own*,
-// meaning we would need a double-indirection or a table in order to discriminate them.
-// Alternatives to consider:
-// * 16-bit tag + 48-bit data, giving us enough discriminators but not enough data for double-precision floats.
-// * 8-bit tag + 56-bit data? this would not be enough for double-precision floats but is more forward-compatible and increases the integer range.
-// * doesnt chez use tagging and doubles? maybe they solved this already
 
-/// A meta-language value.
-pub const Value = packed struct {
-    /// Indicates the variant of `data`.
-    tag: Tag,
-    /// Variant-specific data, discriminated by `tag`.
-    data: Data,
+/// An efficient, bit-packed union of all value types in the meta-language semantics.
+pub const Value = packed struct(u64) {
+    /// Value bits store the actual value when it is not an f64.
+    val_bits: Data,
+    /// Tag bits are used when the value is not an f64, and serve as a second discriminant, between immediates.
+    tag_bits: Tag,
+    /// The following bits are used by f64 as the sign and exponent, but when we encode other values,
+    /// these are all 1s, forming the first discriminant of the value.
+    nan_bits: u13,
 
-    /// Indicates the variant of the `data` in a `Value`.
-    pub const Tag: type = std.meta.FieldEnum(Data);
+    /// Payload of a `Value` that is not an f64.
+    pub const Data = packed struct(u48) {
+        /// The lower 3 bits are used to store the third discriminant, between the pointer types.
+        obj_bits: Obj,
+        /// All pointers must be aligned to 8 bytes, freeing up the lower 3 bits for the discriminant.
+        ptr_bits: u45,
 
-    /// Variant-specific data for a `Value`.
-    /// This is a union of all possible value types.
-    pub const Data = packed union {
-        /// 64-bit signed integer value.
-        int: i64,
-        /// Character value.
-        char: pl.Char,
-        /// String value.
-        string: *Value.String,
-        /// Interned symbolic value, can be compared by reference.
-        symbol: *Value.String,
-        /// Linear list of values.
-        array: *pl.ArrayList(Value),
-        /// Table of values.
-        record: *pl.StringMap(Value),
-        /// Function value.
-        bytecode: *core.Function,
-        /// Native value.
-        native: core.ForeignAddress,
-        /// Builtin value.
-        builtin: *core.BuiltinAddress,
-        /// Syntax tree.
-        syntax: *source.SyntaxTree,
-    };
-
-    /// Variant data for a string `Value`.
-    pub const String = opaque {
-        const len_size = @sizeOf(usize);
-        const len_align = @alignOf(usize);
-
-        /// Duplicates a slice of bytes into a new string.
-        pub fn init(allocator: std.mem.Allocator, value: []const u8) !*String {
-            const str = try allocator.alignedAlloc(u8, len_align, value.len + len_size);
-            @memcpy(str[0..len_size], std.mem.asBytes(&value.len));
-            @memcpy(str[len_size..], value);
-
-            return @ptrCast(str);
+        /// Same as @bitcast but the type is known.
+        pub fn asBits(self: @This()) u48 {
+            return @bitCast(self);
         }
 
-        /// Deinitializes the string and frees its memory.
-        pub fn deinit(self: *String, allocator: std.mem.Allocator) void {
-            const l = self.len();
-            allocator.free(@as([*]align(len_align) u8, @ptrCast(@alignCast(self)))[0..l + len_size]);
-        }
-
-        /// Get the length of the string.
-        pub fn len(self: *const String) usize {
-            return @as(*const usize, @ptrCast(@alignCast(self))).*;
+        /// Same as @bitcast but the type is known.
+        pub fn fromBits(bits: u48) @This() {
+            return @bitCast(bits);
         }
     };
+
+    const NAN_FILL: u13 = 0b1111111111111;
+    const PTR_FILL: u45 = 0b111111111111111111111111111111111111111111111;
+
+    /// The tag bits distinguish between different types of immediate values, separating them from f64 and object.
+    pub const Tag = enum(u3) {
+        /// Value payload is an f64.
+        f64,
+        /// Value payload is a 48-bit signed integer.
+        i48,
+        /// Value payload is a 48-bit unsigned integer.
+        u48,
+        /// Value payload is a character.
+        char,
+        /// Value payload is a boolean.
+        bool,
+        /// Value payload is a symbol, which is an interned, null-terminated immutable byte string pointer.
+        symbol,
+        /// Value payload is a string, which is an interned pointer to a custom data structure allowing immutable concatenation etc.
+        string,
+        /// Value payload is a pointer to an object, which is a user-defined data structure.
+        object,
+    };
+
+    /// The obj bits distinguish between different types of heap-allocated payloads.
+    pub const Obj = enum(u3) {
+        /// Value payload is a bytecode function.
+        function,
+        /// Value payload is a builtin address provided by the runtime.
+        builtin,
+        /// Value payload is a native address provided by the runtime.
+        native,
+        /// Value payload is a syntax tree.
+        source,
+        /// Usage TBD
+        _reserved0,
+        /// Usage TBD
+        _reserved1,
+        /// Usage TBD
+        _reserved2,
+        /// No payload, this is a nil value.
+        nil,
+    };
+
+    /// Same as @bitcast but the type is known.
+    pub fn asBits(self: Value) u64 {
+        return @bitCast(self);
+    }
+
+    /// Same as @bitcast but the type is known.
+    pub fn fromBits(bits: u64) Value {
+        return @bitCast(bits);
+    }
+
+    /// A value representing the absence of data.
+    pub const nil = Value {
+        .nan_bits = NAN_FILL,
+        .tag_bits = .object,
+        .val_bits = .{
+            .ptr_bits = PTR_FILL,
+            .obj_bits = .nil,
+        },
+    };
+
+    /// F64 signalling nan value.
+    pub const snan = Value.fromF64(std.math.snan(f64));
+
+    /// F64 quiet nan value.
+    pub const qnan = Value.fromF64(std.math.nan(f64));
+
+    /// F64-inf value.
+    pub const inf = Value.fromF64(std.math.inf(f64));
+
+    /// F64-neg-inf value.
+    pub const neg_inf = Value.fromF64(-std.math.inf(f64));
+
+    /// Determine if the value is nil.
+    pub fn isNil(self: Value) bool {
+        // TODO: check if this actually improves codegen in any way;
+        // optimizer probably should be able to figure out that we dont need shortcircuiting on this but idk
+        return @intFromBool(self.tag_bits == .object)
+             & @intFromBool(self.nan_bits == NAN_FILL)
+             & @intFromBool(self.val_bits.obj_bits == .nil)
+             == 1;
+    }
+
+    /// Determine if the value is numeric.
+    /// * returns `true` for: f64 (except NaN), i48, u48.
+    pub fn isNumber(self: Value) bool {
+        return ( @intFromBool(self.tag_bits == .f64)
+               & @intFromBool(self.nan_bits != NAN_FILL) )
+             | @intFromBool(self.tag_bits == .i48)
+             | @intFromBool(self.tag_bits == .u48)
+             == 1;
+    }
+
+    /// Determine if the value is non-numeric.
+    /// * returns `true` for: char, bool, symbol, string, objects.
+    pub fn isData(self: Value) bool {
+        return @intFromBool(!self.isNumber())
+             & @intFromBool(self.nan_bits == NAN_FILL)
+             == 1;
+    }
+
+
+    /// Construct a value from an f64 payload.
+    pub fn fromF64(x: f64) Value {
+        return @bitCast(x);
+    }
+
+    /// Determine if the payload of the value is an f64.
+    pub fn isF64(self: Value) bool {
+        return @intFromBool(self.tag_bits == .f64)
+             | @intFromBool(self.nan_bits != NAN_FILL)
+             == 1;
+    }
+
+    /// Determine if the payload of the value is a NaN by IEEE 754 standards.
+    /// * note this will return `false` for i48/u48 etc.
+    pub fn isNaN(self: Value) bool {
+        return std.math.isNan(@as(f64, @bitCast(self)));
+    }
+
+    /// Determine if the payload of the value is an infinity by IEEE 754 standards.
+    pub fn isInfF64(self: Value) bool {
+        return std.math.isInf(@as(f64, @bitCast(self)));
+    }
+
+    /// Determine if the payload of the value is a positive infinity by IEEE 754 standards.
+    pub fn isPosInfF64(self: Value) bool {
+        return std.math.isPositiveInf(@as(f64, @bitCast(self)));
+    }
+
+    /// Determine if the payload of the value is a negative infinity by IEEE 754 standards.
+    pub fn isNegInfF64(self: Value) bool {
+        return std.math.isNegativeInf(@as(f64, @bitCast(self)));
+    }
+
+    /// Determine if the payload of the value is a finite F64.
+    pub fn isFiniteF64(self: Value) bool {
+        return std.math.isFinite(@as(f64, @bitCast(self)));
+    }
+
+    /// Determine if the payload of the value is a normal F64.
+    /// * ie. not either of zeros, subnormal, infinity, or NaN.
+    pub fn isNormalF64(self: Value) bool {
+        return std.math.isNormal(@as(f64, @bitCast(self)));
+    }
+
+    /// Extract the f64 payload of a value. See also `forceF64`.
+    pub fn asF64(self: Value) ?f64 {
+        if (!self.isF64()) return null;
+
+        return @bitCast(self);
+    }
+
+    /// Extract the f64 payload of a value. See also `asF64`.
+    /// * only checked in safe modes
+    pub fn forceF64(self: Value) f64 {
+        std.debug.assert(self.isF64());
+
+        return @bitCast(self);
+    }
+
+    /// Construct a value from an i48 payload.
+    pub fn fromI48(x: i48) Value {
+        return Value{
+            .nan_bits = NAN_FILL,
+            .tag_bits = .i48,
+            .val_bits = .fromBits(@bitCast(x)),
+        };
+    }
+
+    /// Determine if the payload of the value is an i48.
+    pub fn isI48(self: Value) bool {
+        return @intFromBool(self.tag_bits == .i48)
+             & @intFromBool(self.nan_bits == NAN_FILL)
+             == 1;
+    }
+
+    /// Extract the i48 payload of a value. See also `forceI48`.
+    pub fn asI48(self: Value) ?i48 {
+        if (!self.isI48()) return null;
+
+        return @bitCast(self.val_bits);
+    }
+
+    /// Extract the i48 payload of a value. See also `asI48`.
+    /// * only checked in safe modes
+    pub fn forceI48(self: Value) i48 {
+        std.debug.assert(self.isI48());
+
+        return @bitCast(self.val_bits);
+    }
+
+    /// Construct a value from a u48 payload.
+    pub fn fromU48(x: u48) Value {
+        return Value{
+            .nan_bits = NAN_FILL,
+            .tag_bits = .u48,
+            .val_bits = .fromBits(x),
+        };
+    }
+
+    /// Determine if the payload of the value is a u48.
+    pub fn isU48(self: Value) bool {
+        return @intFromBool(self.tag_bits == .u48) & @intFromBool(self.nan_bits == NAN_FILL) == 1;
+    }
+
+    /// Extract the u48 payload of a value. See also `forceU48`.
+    pub fn asU48(self: Value) ?u48 {
+        if (!self.isU48()) return null;
+
+        return @bitCast(self.val_bits);
+    }
+
+    /// Extract the u48 payload of a value. See also `asU48`.
+    /// * only checked in safe modes
+    pub fn forceU48(self: Value) u48 {
+        std.debug.assert(self.isU48());
+
+        return @bitCast(self.val_bits);
+    }
+
+    /// Construct a value from a character payload.
+    pub fn fromChar(x: pl.Char) Value {
+        return Value{
+            .nan_bits = NAN_FILL,
+            .tag_bits = .char,
+            .val_bits = .fromBits(x),
+        };
+    }
+
+    /// Determine if the payload of the value is a character.
+    pub fn isChar(self: Value) bool {
+        return @intFromBool(self.tag_bits == .char) & @intFromBool(self.nan_bits == NAN_FILL) == 1;
+    }
+
+    /// Extract the character payload of a value. See also `forceChar`.
+    pub fn asChar(self: Value) ?pl.Char {
+        if (!self.isChar()) return null;
+
+        return @truncate(self.val_bits.asBits());
+    }
+
+    /// Extract the character payload of a value. See also `asChar`.
+    /// * only checked in safe modes
+    pub fn forceChar(self: Value) pl.Char {
+        std.debug.assert(self.isChar());
+
+        return @truncate(self.val_bits.asBits());
+    }
+
+    /// Construct a value from a boolean payload.
+    pub fn fromBool(x: bool) Value {
+        return Value{
+            .nan_bits = NAN_FILL,
+            .tag_bits = .bool,
+            .val_bits = .fromBits(@intFromBool(x)),
+        };
+    }
+
+    /// Determine if the payload of the value is a boolean.
+    pub fn isBool(self: Value) bool {
+        return @intFromBool(self.tag_bits == .bool) & @intFromBool(self.nan_bits == NAN_FILL) == 1;
+    }
+
+    /// Extract the boolean payload of a value. See also `forceBool`.
+    pub fn asBool(self: Value) ?bool {
+        if (!self.isBool()) return null;
+
+        return self.val_bits.asBits() != 0;
+    }
+
+    /// Extract the boolean payload of a value. See also `asBool`.
+    pub fn forceBool(self: Value) bool {
+        std.debug.assert(self.isBool());
+
+        return self.val_bits.asBits() != 0;
+    }
+
+    /// Construct a value from a string payload.
+    pub fn fromSymbol(symbol: [*:0]const u8) Value {
+        std.debug.assert(pl.alignDelta(symbol, 8) == 0);
+
+        return Value{
+            .nan_bits = NAN_FILL,
+            .tag_bits = .symbol,
+            .val_bits = .fromBits(@intCast(@intFromPtr(symbol))),
+        };
+    }
+
+    /// Determine if the payload of the value is a symbol.
+    pub fn isSymbol(self: Value) bool {
+        return @intFromBool(self.tag_bits == .symbol) & @intFromBool(self.nan_bits == NAN_FILL) == 1;
+    }
+
+    /// Extract the symbol payload of a value. See also `forceSymbol`.
+    pub fn asSymbol(self: Value) ?[*:0]const u8 {
+        if (!self.isSymbol()) return null;
+
+        return @ptrFromInt(self.val_bits.asBits());
+    }
+
+    /// Extract the symbol payload of a value. See also `asSymbol`.
+    /// * only checked in safe modes
+    pub fn forceSymbol(self: Value) [*:0]const u8 {
+        std.debug.assert(self.isSymbol());
+
+        return @ptrFromInt(self.val_bits.asBits());
+    }
+
+    /// Construct a value from an object payload.
+    pub fn fromObject(obj: Obj, ptr: *anyopaque) Value {
+        const ptr_bits: u48 = @intCast(@intFromPtr(ptr));
+        // ensure the pointer is aligned to 8 bytes and we can store our object discriminant
+        std.debug.assert(ptr_bits & 0b000000000000000000000000000000000000000000000_111 == 0);
+
+        return Value{
+            .nan_bits = NAN_FILL,
+            .tag_bits = .object,
+            .val_bits = .fromBits(ptr_bits | @intFromEnum(obj)),
+        };
+    }
+
+    /// Determine if the payload of the value is an object.
+    pub fn isObject(self: Value) bool {
+        return @intFromBool(self.tag_bits == .object) & @intFromBool(self.nan_bits == NAN_FILL) & @intFromBool(self.val_bits.obj_bits != .nil) == 1;
+    }
+
+    /// Extract the object payload of a value.
+    pub fn asObject(self: Value) ?*anyopaque {
+        if (!self.isObject()) return null;
+
+        return @ptrFromInt(@as(u48, self.val_bits.ptr_bits) << 3);
+    }
+
+    /// Extract the object payload of a value.
+    pub fn forceObject(self: Value) *anyopaque {
+        std.debug.assert(self.isObject());
+
+        return @ptrFromInt(self.val_bits.ptr_bits);
+    }
 };
 
 
@@ -2516,4 +2820,53 @@ test "cst_parse" {
         .{ .input = "'\\0", .expect = error.UnexpectedEof }, // 47
         .{ .input = "'x + 'y", .expect = "⟨+ 'x 'y⟩"}, // 48
     });
+}
+
+test "value_basics" {
+    {
+        var x: f64 = -10.0;
+
+        while (x < -10.0) : (x += 0.1) {
+            const y = Value.fromF64(x);
+            try std.testing.expect(y.isF64());
+            try std.testing.expect(!y.isNaN());
+            try std.testing.expectEqual(x, y.asF64());
+        }
+    }
+
+    {
+        var x: i48 = -1000;
+
+        while (x < 1000) : (x += 1) {
+            const y = Value.fromI48(x);
+            try std.testing.expect(y.isI48());
+            try std.testing.expect(y.isNaN());
+            try std.testing.expectEqual(x, y.asI48());
+        }
+    }
+
+    {
+        const a: [:0]const u8 = "test_string";
+
+        const b: [:0]align(8) u8 = try std.testing.allocator.allocWithOptions(u8, a.len, 8, 0);
+        defer std.testing.allocator.free(b);
+
+        @memcpy(b, a);
+
+        const x = Value.fromSymbol(b);
+        try std.testing.expect(x.isSymbol());
+        try std.testing.expect(x.isNaN());
+        try std.testing.expectEqualStrings(b, std.mem.span(x.asSymbol() orelse return error.NullSymbol));
+    }
+
+    {
+        var a: usize = 1;
+
+        const x = Value.fromObject(.native, &a);
+        try std.testing.expect(x.isObject());
+        try std.testing.expect(x.isNaN());
+        try std.testing.expectEqual(@intFromPtr(&a), @intFromPtr(x.asObject() orelse return error.NullObject));
+    }
+
+    std.debug.print("value basics done\n", .{});
 }
