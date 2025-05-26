@@ -24,28 +24,37 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
+/// 64-bit specialiation of `common.Id`, for ir structures.
 pub fn Id(comptime T: type) type {
     return common.Id.ofSize(T, 64);
 }
 
+/// Main data storage for the ir graph.
+/// Given a struct type `T`, this provides a table with rows of type `T`, and columns matching `T`'s fields.
+/// This is a simple interface wrapper over a multiarray-based slotmap.
 pub fn Table(comptime T: type) type {
     return struct {
         const Self = @This();
         const Id = ir.Id(T);
         const Data = common.SlotMap.MultiArray(T, 32, 32);
 
+        /// Multi-array based data storage for the table.
         data: Data = .empty,
 
+        /// Create a new table with a given capacity in the provided allocator.
         pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Self {
             return Self {
                 .data = try Data.initCapacity(allocator, capacity),
             };
         }
 
+        /// Ensure the table has at least the given capacity in *unused* space.
         pub fn ensureCapacity(self: *Self, allocator: std.mem.Allocator, capacity: usize) !void {
             try self.data.ensureCapacity(allocator, capacity);
         }
 
+        /// Deinitialize the table's rows.
+        /// * Not necessary to call if the table's row type does not have a `deinit` method.
         pub fn deinitData(self: *Self, allocator: std.mem.Allocator) void {
             if (comptime pl.hasDecl(T, .deinit)) {
                 for (0..self.data.count()) |i| {
@@ -55,23 +64,29 @@ pub fn Table(comptime T: type) type {
                     }
                 }
             }
+        }
 
+        /// Clear the table's rows.
+        /// * This does not deinitialize them; use `deinitData` first if needed.
+        pub fn clear(self: *Self) void {
             self.data.clear();
         }
 
+        /// Deinitialize the table, freeing all the memory used for its rows.
+        /// * This will deinitialize the rows themselves, if necessary.
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             self.deinitData(allocator);
             self.data.deinit(allocator);
         }
 
-        pub fn clear(self: *Self) void {
-            self.data.clear();
-        }
-
+        /// Get the number of rows in the table.
         pub fn rowCount(self: *Self) usize {
             return self.data.len;
         }
 
+        /// Get all entries in the table within a specific column.
+        /// * Given a `Table(T)`, returns a linear buffer containing the field of each `T` under the provided name.
+        /// * If a string name needs to be converted: `@field(std.meta.FieldEnum(T), comptime str)`
         pub fn getColumn(self: *Self, comptime name: std.meta.FieldEnum(T)) []std.meta.FieldType(T, name) {
             return self.data.fields(name);
         }
@@ -86,6 +101,8 @@ pub fn Table(comptime T: type) type {
             return @enumFromInt(@as(u64, @bitCast(ref)));
         }
 
+        /// Get the id of a table row at a specific index.
+        /// * Only bounds checked in safe modes.
         pub fn getIdFromIndex(self: *Self, index: u32) Self.Id {
             const slot_index = self.data.__valueToSlot(index).*;
 
@@ -95,30 +112,39 @@ pub fn Table(comptime T: type) type {
             });
         }
 
+        /// Get the index of a table row from its id.
         pub fn getIndex(self: *Self, id: Self.Id) ?usize {
             return if (self.data.resolveIndex(idToRef(id))) |i| i else null; // needed because i is u32 not usize
         }
 
+        /// Gets a pointer to a specific (row, column) cell in the table, given its id and name.
+        /// * If a string name needs to be converted: `@field(std.meta.FieldEnum(T), comptime str)`
         pub fn getCell(self: *Self, id: Self.Id, comptime name: std.meta.FieldEnum(T)) ?*std.meta.FieldType(T, name) {
             return self.getCellAt(self.getIndex(id) orelse return null, name);
         }
 
+        /// Gets a pointer to a specific (row, column) cell in the table, given its index and name.
+        /// * If a string name needs to be converted: `@field(std.meta.FieldEnum(T), comptime str)`
         pub fn getCellAt(self: *Self, index: usize, comptime name: std.meta.FieldEnum(T)) *std.meta.FieldType(T, name) {
             return self.data.field(index, name);
         }
 
+        /// Get a copy of a row of the table, given its id.
         pub fn getRow(self: *Self, id: Self.Id) ?T {
             const index = self.getIndex(@bitCast(id)) orelse return null;
 
             return self.data.get(index);
         }
 
+        /// Set a whole row of the table, given its id.
         pub fn setRow(self: *Self, id: Self.Id, value: T) !void {
             const index = self.getIndex(@bitCast(id)) orelse return error.InvalidId;
 
             return self.data.set(index, value);
         }
 
+        /// Create a new row in the table, returning its id.
+        /// * The value will be initialized with fields from the `init` argument, or from the default value of the field if not provided.
         pub fn addRow(self: *Self, allocator: std.mem.Allocator, init: anytype) !Self.Id {
             log.debug(@typeName(Self) ++ " @ {} addRow: {}", .{@intFromPtr(self), init});
             const I = @TypeOf(init);
@@ -148,6 +174,7 @@ pub fn Table(comptime T: type) type {
             return id;
         }
 
+        /// Delete a row from the table, given its id.
         pub fn delRow(self: *Self, id: Self.Id) void {
             self.data.destroy(idToRef(id));
         }
@@ -356,8 +383,8 @@ pub const rows = struct {
     /// which can be referenced by functions and types anywhere in the graph.
     pub const Effect = struct {
         id: Id(@This()),
-        /// types handlers bound for this effect must conform to
-        handler_list: Id(rows.HandlerList),
+        /// types that handlers bound for this effect must conform to
+        handler_type_list: Id(rows.TypeList),
     };
 
     /// Binds buffers and constant expressions to a type to form a constant value that can be used anywhere in the graph.
@@ -407,17 +434,22 @@ pub const rows = struct {
         /// The actual value of the intrinsic.
         data: Data,
 
+        /// Defines which kind of intrinsic is carried in `Instrinsic.Data`.
         pub const Tag = enum(u8) {
+            /// This intrinsic represents a specific bytecode instruction.
             bytecode,
+            /// Placeholder for future expansions to the intrinsic api.
             _,
         };
 
+        /// The actual value carried by an `Intrinsic`.
         pub const Data = packed union {
             /// Embedding the bytecode opcode directly is super convenient because we can
             /// use this to represent instructions that are not semantically significant to
             /// analysis, such as simple addition etc; and then also to represent selected
             /// instructions during the lowering process.
             bytecode: bytecode.Instruction.OpCode,
+            /// Placeholder for future expansions to the intrinsic api.
             userdata: *anyopaque,
         };
     };
@@ -530,6 +562,9 @@ pub const rows = struct {
         /// the index of this edge relative to the source;
         /// designates which control edge this is; ie the true or false branch of a conditional.
         source_index: usize = 0,
+        /// the index of this edge relative to the destination;
+        /// designates which control edge this is; ie the first or second predecessor in a phi.
+        destination_index: usize = 0,
     };
 
     /// Binds a type and an operation to form a single instruction in the graph.
@@ -552,6 +587,7 @@ pub const rows = struct {
         /// the actual data of this buffer (stored in the context arena)
         data: []const u8 = &.{},
 
+        /// Deinitialize the buffer, freeing its memory.
         pub fn deinit(self: *rows.Buffer, allocator: std.mem.Allocator) void {
             if (self.data.ptr != @as([]const u8, &.{}).ptr) return;
 
@@ -565,6 +601,7 @@ pub const rows = struct {
         /// the keys in this key set
         keys: pl.ArrayList(Key) = .empty,
 
+        /// Deinitialize the key list, freeing its memory.
         pub fn deinit(self: *rows.KeyList, allocator: std.mem.Allocator) void {
             self.keys.deinit(allocator);
         }
@@ -583,7 +620,7 @@ pub const Key = packed struct(u128) {
         .id = .null,
     };
 
-    /// Discriminator for the type of id carried by a `Key`.
+    /// Discriminator for the type of id carried by a `Key`. Generally, corresponds to a type in `ir.rows`.
     pub const Tag: type = enum(i64) { // must be 32 for abi-aligned packing with 32-bit id
         untyped = std.math.minInt(i64),
         none = 0,
@@ -610,6 +647,7 @@ pub const Key = packed struct(u128) {
         key_list,
         _,
 
+        /// Convert a comptime-known Tag to the row type it represents.
         pub fn toRowType(comptime self: Tag) type {
             comptime return switch (self) {
                 .name => rows.Name,
@@ -638,26 +676,32 @@ pub const Key = packed struct(u128) {
             };
         }
 
+        /// Get the field of a data structure that shares the name of a comptime-known tag.
         pub fn getField(self: Tag, data: anytype) @FieldType(@typeInfo(@TypeOf(data)).pointer.child, @tagName(self)) {
             return &@field(data, @tagName(self));
         }
 
+        /// Set the field of a data structure that shares the name of a comptime-known tag.
         pub fn setField(self: Tag, data: anytype, value: @FieldType(@typeInfo(@TypeOf(data)).pointer.child, @tagName(self))) void {
             @field(data, @tagName(self)) = value;
         }
 
+        /// Get a pointer to the field of a data structure that shares the name of a comptime-known tag.
         pub fn fieldPtr(comptime self: Tag, data: anytype) *@FieldType(@typeInfo(@TypeOf(data)).pointer.child, @tagName(self)) {
             return &@field(data, @tagName(self));
         }
 
+        /// Convert a comptime-known Tag to the type of id it represents.
         pub fn toIdType(comptime self: Tag) type {
             comptime return Id(self.toType());
         }
 
+        /// Convert an `Id(row._)` type to a comptime-known Tag.
         pub fn fromIdType(comptime T: type) Tag {
             return fromRowType(T.Value);
         }
 
+        /// Convert a type from `ir.rows` to a comptime-known Tag.
         pub fn fromRowType(comptime T: type) Tag {
             comptime return switch (T) {
                 rows.Name => .name,
@@ -693,6 +737,7 @@ pub const Key = packed struct(u128) {
         }
     };
 
+    /// Create a Key from an id of any known type.
     pub fn fromId(id: anytype) Key {
         return Key {
             .tag = comptime Tag.fromIdType(@TypeOf(id)),
@@ -700,10 +745,12 @@ pub const Key = packed struct(u128) {
         };
     }
 
+    /// Convert a key to an `Id` of the provided row type, without checking the tag.
     pub fn toIdUnchecked(self: Key, comptime T: type) Id(T) {
         return self.id.cast(T);
     }
 
+    /// Convert a key to an `Id` of the provided row type, if the tag matches.
     pub fn toId(self: Key, comptime T: type) ?Id(T) {
         if (self.tag != comptime Tag.fromRowType(T)) {
             return null;
@@ -712,6 +759,7 @@ pub const Key = packed struct(u128) {
         return self.id.cast(T);
     }
 
+    /// A wrapper type for std.fmt-related rich printing of `Key`.
     pub const KeyFormatter = struct {
         key: Key,
         context: *Context,
@@ -743,6 +791,7 @@ pub const Key = packed struct(u128) {
         }
     };
 
+    /// Create a rich formatter for this key, which can be used with `std.fmt`.
     pub fn formatter(self: Key, context: *Context) KeyFormatter {
         return KeyFormatter {
             .key = self,
@@ -780,14 +829,17 @@ pub const Builtin = enum {
     no_effect_type,
 };
 
+/// Convert a comptime-known `Builtin` to a handler wrapper of the corresponding row type.
 pub fn BuiltinType(comptime builtin: Builtin) type {
     return WrappedId(BuiltinId(builtin));
 }
 
+/// Convert a comptime-known `Builtin` to an `Id` of the corresponding row type.
 pub fn BuiltinId(comptime builtin: Builtin) type {
     return Id(BuiltinRowType(builtin));
 }
 
+/// Convert a comptime-known `Builtin` to the row type it represents.
 pub fn BuiltinRowType(comptime builtin: Builtin) type {
     return switch (builtin) {
         .data_kind => rows.Kind,
@@ -805,6 +857,7 @@ pub fn BuiltinRowType(comptime builtin: Builtin) type {
     };
 }
 
+/// Initializer functions for built-in values.
 pub const builtin_initializers = struct {
     pub fn data_kind(context: *Context) !Key {
         const kind = try Kind.intern(context, .data, &.{});
@@ -950,6 +1003,7 @@ pub const builtin_initializers = struct {
     }
 };
 
+/// The signature of functions that can provide custom formatting to an ir `Context`.
 pub const FormatFunction = fn (ctx: *Context, value: Key, writer: std.io.AnyWriter) anyerror!void;
 
 /// The core of Ribbon's intermediate representation. This is the main data
@@ -1092,14 +1146,17 @@ pub const Context = struct {
         self.gpa.destroy(self);
     }
 
+    /// Check whether a given id is constant.
     pub fn isConstant(self: *Context, id: anytype) bool {
         return (self.map.mutability.get(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return false) == .constant;
     }
 
+    /// Check whether a given id is mutable.
     pub fn isMutable(self: *Context, id: anytype) bool {
         return (self.map.mutability.get(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return false) == .mutable;
     }
 
+    /// Define the mutability of a given id.
     pub fn setMutability(self: *Context, id: anytype, mutability: pl.Mutability) !void {
         const key = Key.fromId(id.cast(RowType(@TypeOf(id))));
         if (self.map.mutability.get(key)) |existing| {
@@ -1111,6 +1168,7 @@ pub const Context = struct {
         try self.map.mutability.put(self.arena.child_allocator, key, mutability);
     }
 
+    /// Convert a mutable id to a constant id.
     pub fn makeConstant(self: *Context, id: anytype) !void {
         const key = Key.fromId(id.cast(RowType(@TypeOf(id))));
         if (self.map.mutability.get(key)) |existing| {
@@ -1238,12 +1296,12 @@ pub const Context = struct {
         return wrapId(self, self.map.key_to_name.get(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return null);
     }
 
-    /// Get the source set bound to a key, if it exists.
+    /// Get the source set bound to a key.
     pub fn getOrigin(self: *Context, id: anytype) ?Origin {
         return wrapId(self, self.map.origin.get_b(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return null);
     }
 
-    /// Get the formatter bound to a key, if it exists.
+    /// Get the formatter bound to a key.
     pub fn getFormatter(self: *Context, id: anytype) ?*const FormatFunction {
         return @ptrCast(self.map.formatter.get(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return null);
     }
@@ -1314,6 +1372,7 @@ pub const Context = struct {
         return id.cast(Row);
     }
 
+    /// Get a built-in value by its identifier.
     pub fn getBuiltin(self: *Context, comptime id: Builtin) !BuiltinType(id) {
         const IdT = @FieldType(BuiltinType(id), "id");
         const Row = IdT.Value;
@@ -1338,6 +1397,7 @@ pub const Context = struct {
     }
 };
 
+/// Type mapping from row types to wrapper handle types.
 pub inline fn WrappedId(comptime T: type) type {
     return switch (T.Value) {
         rows.Name => Name,
@@ -1370,10 +1430,12 @@ pub inline fn WrappedId(comptime T: type) type {
     };
 }
 
+/// Wrap an id in a `WrappedId` handle, which provides additional functionality.
 pub fn wrapId(context: *Context, id: anytype) WrappedId(@TypeOf(id)) {
     return .{ .context = context, .id = id };
 }
 
+/// Base mixin for handle types that provides common functionality.
 pub fn HandleBase(comptime Self: type) type {
     return struct {
         const Mixin = @This();
@@ -1381,24 +1443,29 @@ pub fn HandleBase(comptime Self: type) type {
         const Id = @FieldType(Self, "id");
         const Row = Mixin.Id.Value;
 
+        /// Get a low-level Key from this handle.
         pub fn getKey(self: Self) Key {
             return Key.fromId(self.id);
         }
 
+        /// Determine if the value bound by this handle is mutable.
         pub fn isMutable(self: Self) bool {
             return self.context.isMutable(self.id);
         }
 
+        /// Determine if the value bound by this handle is constant.
         pub fn isConstant(self: Self) bool {
             return self.context.isConstant(self.id);
         }
 
+        /// Get the symbol name binding the value associated with this handle, if present.
         pub fn getName(self: Self) ?Name {
             return self.context.getName(self.id);
         }
     };
 }
 
+/// Mixin for key list types that provides common functionality for key lists.
 pub fn KeyListBase(comptime Self: type, comptime T: type) type {
     return struct {
         const Mixin = @This();
@@ -1408,6 +1475,7 @@ pub fn KeyListBase(comptime Self: type, comptime T: type) type {
         const ValueId = ir.Id(T);
         const Value = WrappedId(ValueId);
 
+        /// Create a new key list from a slice of wrapper values.
         pub fn create(context: *Context, values: []const Value) !Self {
             const temp = try context.arena.allocator().alloc(Key, values.len);
             defer context.arena.allocator().free(temp);
@@ -1421,88 +1489,107 @@ pub fn KeyListBase(comptime Self: type, comptime T: type) type {
             return wrapId(context, id.cast(Row));
         }
 
+        /// Create a new empty key list.
         pub fn init(context: *Context) !Self {
             const id = try context.createKeyList(&.{});
             return wrapId(context, id.cast(Row));
         }
 
+        /// Deinitialize the key list, freeing its resources from the graph.
         pub fn deinit(self: Self) void {
             self.context.delRow(self.id);
         }
 
+        /// Get the number of keys in the key list.
         pub fn getCount(self: Self) usize {
             return (self.getSlice() orelse return 0).len;
         }
 
+        /// Get a mutable slice of keys in the key list.
         pub fn getMutSlice(self: Self) ?[]Key {
             return (self.getMutArrayList() orelse return null).items;
         }
 
+        /// Get a mutable pointer to the array list of keys in the key list.
         pub fn getMutArrayList(self: Self) ?*pl.ArrayList(Key) {
             std.debug.assert(!self.context.isConstant(self.id));
             return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys);
         }
 
+        /// Get a slice of keys in the key list.
         pub fn getSlice(self: Self) ?[]const Key {
             return (self.getArrayList() orelse return null).items;
         }
 
+        /// Get a pointer to the array list of keys in the key list.
         pub fn getArrayList(self: Self) ?*const pl.ArrayList(Key) {
             return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys);
         }
 
+        /// Append a value to the key list.
         pub fn append(self: Self, value: Value) !void {
             const array = self.getMutArrayList() orelse return error.InvalidGraphState;
             try array.append(self.context.arena.child_allocator, Key.fromId(value.id));
         }
 
+        /// `std.fmt` impl
         pub fn format(self: Self, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
             try wrapId(self.context, self.id.cast(rows.KeyList)).format(fmt, opts, writer);
         }
     };
 }
 
+/// Generic collection of graph keys.
 pub const KeyList = struct {
     id: Id(rows.KeyList),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new key list from a slice of keys.
     pub fn create(context: *Context, keys: []const Key) !KeyList {
         const id = try context.createKeyList(keys);
         return KeyList{ .id = id, .context = context };
     }
 
+    /// Create a new empty key list.
     pub fn init(context: *Context) !KeyList {
         const id = try context.createKeyList(&.{});
         return KeyList{ .id = id, .context = context };
     }
 
+    /// Deinitialize the key list, freeing its resources from the graph.
     pub fn deinit(self: KeyList) void {
         self.context.delRow(self.id);
     }
 
+    /// Cast the key list to a narrower type.
     pub fn cast(self: KeyList, comptime Narrow: type) Narrow {
         return wrapId(self.context, self.id.cast(@FieldType(Narrow, "id").Value));
     }
 
+    /// Get the number of keys in the key list.
     pub fn getCount(self: KeyList) usize {
         return (self.getSlice() orelse return 0).len;
     }
 
+    /// Get a mutable slice of keys in the key list.
     pub fn getSlice(self: KeyList) ?[]Key {
         return (self.getArrayList() orelse return null).items;
     }
 
+    /// Get a mutable pointer to the array list of keys in the key list.
     pub fn getArrayList(self: KeyList) ?*pl.ArrayList(Key) {
         return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys);
     }
 
+    /// Add a key to the key list.
     pub fn append(self: KeyList, key: Key) !void {
         const array = self.getArrayList() orelse return error.InvalidGraphState;
         try array.append(self.context.arena.child_allocator, key);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: KeyList, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         if (self.getSlice()) |keys| {
             try writer.writeAll("[");
@@ -1520,59 +1607,70 @@ pub const KeyList = struct {
     }
 };
 
+/// A handle to a name in the graph, which can be used to bind symbols and debug information.
 pub const Name = struct {
     id: Id(rows.Name),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Intern a name in the context, getting a shared handle to it.
     pub fn intern(context: *Context, name: []const u8) !Name {
         const id = try context.internName(name);
         return Name{ .id = id, .context = context };
     }
 
+    /// Get the text of the name.
     pub fn getText(self: Name) ![]const u8 {
         return self.context.map.name_storage.get_a(self.id) orelse return error.InvalidGraphState;
     }
 
-    pub fn getSymbolBinding(self: Name) !Key {
-        return self.context.map.name_to_key.get(self.id) orelse return error.InvalidGraphState;
+    /// Get the key associated with this name, if any is bound.
+    pub fn getSymbolBinding(self: Name) ?Key {
+        return self.context.map.name_to_key.get(self.id);
     }
 
+    /// Bind a key to this name, creating a symbol table entry.
     pub fn bindSymbol(self: Name, value: anytype) !void {
         try self.context.bindSymbolName(self.id, Key.fromId(value.id));
     }
 
+    /// Bind a key to this name, allowing the generation of debug information.
     pub fn bindDebug(self: Name, value: anytype) !void {
         try self.context.bindDebugName(self.id, Key.fromId(value.id));
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Name, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.writeAll(try self.getText());
     }
 };
 
+/// A handle to a source in the graph, which can be used to represent the origin of a value.
 pub const Source = struct {
     id: Id(source.Source),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Intern a source in the context, getting a shared handle to it.
     pub fn intern(context: *Context, src: source.Source) !Source {
         const id = try context.internSource(src);
         return Source{ .id = id, .context = context };
     }
 
+    /// Get a copy of the source data.
     pub fn getData(self: Source) !source.Source {
         return self.context.map.source_storage.get_a(self.id) orelse return error.InvalidGraphState;
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Source, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("{}", .{try self.getData()});
     }
 };
 
-
+/// A handle to a source set in the graph, which can be used to represent a multi-origin value.
 pub const Origin = struct {
     id: Id(rows.Origin),
     context: *Context,
@@ -1585,6 +1683,7 @@ pub const Origin = struct {
     }
 };
 
+/// Type-narrowing of KeyList for lists of `Handler`s.
 pub const HandlerList = struct {
     id: Id(rows.HandlerList),
     context: *Context,
@@ -1593,6 +1692,7 @@ pub const HandlerList = struct {
     pub usingnamespace KeyListBase(@This(), rows.Handler);
 };
 
+/// Type-narrowing of KeyList for lists of `Kind`s.
 pub const KindList = struct {
     id: Id(rows.KindList),
     context: *Context,
@@ -1600,6 +1700,7 @@ pub const KindList = struct {
     pub usingnamespace HandleBase(@This());
     pub usingnamespace KeyListBase(@This(), rows.Kind);
 
+    /// Get or create a shared KindList from a slice of `Kind`s.
     pub fn intern(context: *Context, kinds: []const Kind) !KindList {
         const temp = try context.arena.allocator().alloc(Key, kinds.len);
         defer context.arena.allocator().free(temp);
@@ -1613,6 +1714,7 @@ pub const KindList = struct {
     }
 };
 
+/// Type-narrowing of KeyList for lists of `Type`s.
 pub const TypeList = struct {
     id: Id(rows.TypeList),
     context: *Context,
@@ -1620,6 +1722,7 @@ pub const TypeList = struct {
     pub usingnamespace HandleBase(@This());
     pub usingnamespace KeyListBase(@This(), rows.Type);
 
+    /// Get or create a shared TypeList from a slice of `Type`s.
     pub fn intern(context: *Context, types: []const Type) !TypeList {
         const temp = try context.arena.allocator().alloc(Key, types.len);
         defer context.arena.allocator().free(temp);
@@ -1633,6 +1736,7 @@ pub const TypeList = struct {
     }
 };
 
+/// Type-narrowing of KeyList for lists of `Variable`s.
 pub const VariableList = struct {
     id: Id(rows.VariableList),
     context: *Context,
@@ -1640,6 +1744,7 @@ pub const VariableList = struct {
     pub usingnamespace HandleBase(@This());
     pub usingnamespace KeyListBase(@This(), rows.Variable);
 
+    /// Get or create a shared VariableList from a slice of `Variable`s.
     pub fn intern(context: *Context, variables: []const Variable) !VariableList {
         const temp = try context.arena.allocator().alloc(Key, variables.len);
         defer context.arena.allocator().free(temp);
@@ -1653,25 +1758,31 @@ pub const VariableList = struct {
     }
 };
 
+/// A handle to a type constructor in the ir graph.
+/// Essentially, this a discriminator for the open-union of types in the system.
 pub const Constructor = struct {
     id: Id(rows.Constructor),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new constructor with the given kind.
     pub fn init(context: *Context, kind: Kind) !Constructor {
         const id = try context.addRow(rows.Constructor, .mutable, .{ .kind = kind.id });
         return Constructor{ .id = id, .context = context };
     }
 
+    /// Remove a constructor from the graph, freeing its resources.
     pub fn deinit(self: Constructor) void {
         self.context.delRow(self.id);
     }
 
+    /// Set the kind of this constructor.
     pub fn setKind(self: Constructor, kind: Kind) !void {
         try self.context.setCell(self.id, .kind, kind.id);
     }
 
+    /// Get the kind of this constructor.
     pub fn getKind(self: Constructor) ?Kind {
         return Kind {
             .id = self.context.getCell(self.id, .kind) orelse return null,
@@ -1679,22 +1790,27 @@ pub const Constructor = struct {
         };
     }
 
+    /// Get the output tag of this constructor's kind.
     pub fn getOutputKindTag(self: Constructor) ?rows.Kind.Tag {
         return (self.getKind() orelse return null).getOutputTag();
     }
 
+    /// Get the number of input kinds for this constructor's kind.
     pub fn getInputKindCount(self: Constructor) usize {
         return (self.getInputKinds() orelse return 0).getCount();
     }
 
+    /// Get a slice of input kinds for this constructor's kind.
     pub fn getInputKindSlice(self: Constructor) ?[]const Key {
         return (self.getInputKinds() orelse return null).getSlice();
     }
 
+    /// Get the input KindList for this constructor's kind.
     pub fn getInputKinds(self: Constructor) ?KindList {
         return (self.getKind() orelse return null).getInputs();
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Constructor, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const kind = self.getKind();
         const name = self.context.getName(self.id);
@@ -1703,13 +1819,14 @@ pub const Constructor = struct {
     }
 };
 
-
+/// Defines the signature of a type constructor in the ir graph.
 pub const Kind = struct {
     id: Id(rows.Kind),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Get or create a shared Kind from a tag and a slice of input kinds.
     pub fn intern(context: *Context, tag: rows.Kind.Tag, inputs: []const Kind) !Kind {
         const kind_list = try KindList.intern(context, inputs);
 
@@ -1720,49 +1837,59 @@ pub const Kind = struct {
             }
         }
 
-        return Kind.init(context, .constant, tag, kind_list.id);
+        return Kind.init(context, .constant, tag, kind_list);
     }
 
+    /// Create a new Kind with the given tag and a slice of input kinds.
     pub fn create(context: *Context, tag: rows.Kind.Tag, ids: []const Kind) !Kind {
         const kind_list = try KindList.create(context, ids);
 
-        return Kind.init(context, .mutable, tag, kind_list.id);
+        return Kind.init(context, .mutable, tag, kind_list);
     }
 
-    pub fn init(context: *Context, mutability: pl.Mutability, tag: rows.Kind.Tag, inputs: Id(rows.KindList)) !Kind {
-        const id = try context.addRow(rows.Kind, mutability, .{ .tag = tag, .inputs = inputs.cast(rows.KeyList) });
+    /// Initialize a new Kind with the given mutability, tag, and input kinds.
+    pub fn init(context: *Context, mutability: pl.Mutability, tag: rows.Kind.Tag, inputs: ?KindList) !Kind {
+        const id = try context.addRow(rows.Kind, mutability, .{ .tag = tag, .inputs = if (inputs) |x| x.id.cast(rows.KeyList) else .null });
         return Kind{ .id = id, .context = context };
     }
 
+    /// Deinitialize the Kind, freeing its resources from the graph.
     pub fn deinit(self: Kind) void {
         self.context.delRow(self.id);
     }
 
+    /// Get the number of input kinds for this Kind.
     pub fn getInputCount(self: Kind) usize {
         return (self.getInputs() orelse return 0).getCount();
     }
 
+    /// Get a slice of input kinds for this Kind.
     pub fn getInputSlice(self: Kind) ?[]const Key {
         return (self.getInputs() orelse return null).getSlice();
     }
 
+    /// Set the output tag for this Kind.
     pub fn setOutputTag(self: Kind, tag: rows.Kind.Tag) !void {
         try self.context.setCell(self.id, .tag, tag);
     }
 
+    /// Get the output tag for this Kind.
     pub fn getOutputTag(self: Kind) ?rows.Kind.Tag {
         return (self.context.table.kind.getCell(self.id, .tag) orelse return null).*;
     }
 
-    pub fn setInputs(self: Kind, inputs: Id(rows.KindList)) !void {
-        try self.context.setCell(self.id, .inputs, inputs.cast(rows.KeyList));
+    /// Override the input KindList for this Kind.
+    pub fn setInputs(self: Kind, inputs: KindList) !void {
+        try self.context.setCell(self.id, .inputs, inputs.id.cast(rows.KeyList));
     }
 
+    /// Get the input KindList for this Kind.
     pub fn getInputs(self: Kind) ?KindList {
-        const inputs = (self.context.getCellPtr(self.id, .inputs) orelse return null).*;
-        return KindList{ .id = inputs.cast(rows.KindList), .context = self.context };
+        const id = (self.context.getCellPtr(self.id, .inputs) orelse return null).*;
+        return KindList{ .id = id.cast(rows.KindList), .context = self.context };
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Kind, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const tag = self.context.getCell(self.id, .tag);
         const inputs = self.context.getCell(self.id, .inputs);
@@ -1771,13 +1898,14 @@ pub const Kind = struct {
     }
 };
 
-
+/// A handle to a type in the ir graph.
 pub const Type = struct {
     id: Id(rows.Type),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Get or create a shared Type from a constructor and a slice of input types.
     pub fn intern(context: *Context, constructor: Constructor, inputs: []const Type) !Type {
         const type_list = try TypeList.intern(context, inputs);
         errdefer type_list.deinit();
@@ -1792,6 +1920,7 @@ pub const Type = struct {
         return Type.init(context, .constant, constructor, type_list);
     }
 
+    /// Create a new int-kinded type with the given value.
     pub fn createInt(context: *Context, value: i256) !Type {
         const constructor = try context.getBuiltin(.int_constructor);
         const ty = try Type.init(context, .mutable, constructor, null);
@@ -1804,6 +1933,7 @@ pub const Type = struct {
         return ty;
     }
 
+    /// Create a new data-kinded integer type with the given signedness and bit size.
     pub fn createBitInteger(context: *Context, signedness: pl.Signedness, bit_size: u16) !Type {
         const int = try Type.createInt(context, bit_size);
 
@@ -1815,6 +1945,7 @@ pub const Type = struct {
         return Type.create(context, cint, &.{ int });
     }
 
+    /// Create a new function type with the given input, result, and effect types.
     pub fn createFunction(context: *Context, inputs: []const Type, result: Type, effect: Type) !Type {
         const type_list = try TypeList.create(context, inputs);
         errdefer type_list.deinit();
@@ -1825,6 +1956,12 @@ pub const Type = struct {
         return Type.create(context, try context.getBuiltin(.function_constructor), &.{ input_product, effect, result });
     }
 
+    /// Create a new function type with the given input, result, and effect types.
+    pub fn createFunctionAB(context: *Context, input: Type, result: Type, effect: Type) !Type {
+        return Type.create(context, try context.getBuiltin(.function_constructor), &.{ input, effect, result });
+    }
+
+    /// Create a new type with the given constructor and input types.
     pub fn create(context: *Context, constructor: Constructor, inputs: []const Type) !Type {
         const type_list = try TypeList.create(context, inputs);
         errdefer type_list.deinit();
@@ -1832,15 +1969,18 @@ pub const Type = struct {
         return Type.init(context, .mutable, constructor, type_list);
     }
 
+    /// Initialize a new Type with the given mutability, constructor, and input types.
     pub fn init(context: *Context, mutability: pl.Mutability, constructor: ?Constructor, inputs: ?TypeList) !Type {
         const id = try context.addRow(rows.Type, mutability, .{ .constructor = if (constructor) |x| x.id else .null, .inputs = if (inputs) |x| x.id.cast(rows.KeyList) else .null });
         return Type{ .id = id, .context = context };
     }
 
+    /// Remove a Type from the graph, freeing its resources.
     pub fn deinit(self: Type) void {
         self.context.delRow(self.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Type, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const constructor = self.getConstructor();
 
@@ -1858,24 +1998,29 @@ pub const Type = struct {
         }
     }
 
+    /// Override the constructor of this type.
     pub fn setConstructor(self: Type, constructor: Constructor) !void {
         try self.context.setCell(self.id, .constructor, constructor.id);
     }
 
+    /// Get the constructor of this type.
     pub fn getConstructor(self: Type) ?Constructor {
         const id = self.context.getCell(self.id, .constructor) orelse return null;
 
         return wrapId(self.context, id);
     }
 
+    /// Get the number of input types for this type.
     pub fn getInputTypeCount(self: Type) usize {
         return (self.getTypeInputs() orelse return 0).getCount();
     }
 
+    /// Get a slice of input types for this type.
     pub fn getInputTypeSlice(self: Type) ?[]const Key {
         return (self.getTypeInputs() orelse return null).getSlice();
     }
 
+    /// Get an input type for this type by its index.
     pub fn getInputTypeIndex(self: Type, index: usize) ?Type {
         const slice = self.getInputTypeSlice() orelse return null;
 
@@ -1884,79 +2029,94 @@ pub const Type = struct {
         return wrapId(self.context, slice[index].toIdUnchecked(rows.Type));
     }
 
+    /// Override the input types for this type.
     pub fn setTypeInputs(self: Type, inputs: TypeList) !void {
         try self.context.setCell(self.id, .inputs, inputs.id.cast(rows.KeyList));
     }
 
+    /// Get the input TypeList for this type.
     pub fn getTypeInputs(self: Type) ?TypeList {
         const inputs = self.context.getCell(self.id, .inputs) orelse return null;
         return wrapId(self.context, inputs.cast(rows.TypeList));
     }
 
+    /// Get the kind of the constructor for this type.
     pub fn getConstructorKind(self: Type) ?Kind {
         const constructor = self.getConstructor() orelse return null;
 
         return constructor.getKind();
     }
 
+    /// Get the output tag of the constructor for this type.
     pub fn getConstructorOutputKindTag(self: Type) ?rows.Kind.Tag {
         return (self.getConstructorKind() orelse return null).getOutputTag();
     }
 
-    pub fn getConstructorInputKindCount(self: Type) ?usize {
-        return (self.getConstructorInputKinds() orelse return null).getCount();
+    /// Get the number of input kinds for the constructor of this type.
+    pub fn getConstructorInputKindCount(self: Type) usize {
+        return (self.getConstructorInputKinds() orelse return 0).getCount();
     }
 
+    /// Get a slice of input kinds for the constructor of this type.
     pub fn getConstructorInputKindSlice(self: Type) ?[]const Key {
         return (self.getConstructorInputKinds() orelse return null).getSlice();
     }
 
+    /// Get the input KindList for the constructor of this type.
     pub fn getConstructorInputKinds(self: Type) ?KindList {
         return (self.getConstructorKind() orelse return null).getInputs();
     }
 };
 
+/// A handle to an effect in the ir graph.
 pub const Effect = struct {
     id: Id(rows.Effect),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn init(context: *Context, handler_list: ?HandlerList) !Effect {
-        const id = try context.addRow(rows.Effect, .mutable, .{ .handler_list = if (handler_list) |x| x.id else .null });
+    /// Create a new effect with the given handler type list.
+    pub fn init(context: *Context, handler_type_list: ?TypeList) !Effect {
+        const id = try context.addRow(rows.Effect, .mutable, .{ .handler_type_list = if (handler_type_list) |x| x.id else .null });
         return Effect{ .id = id, .context = context };
     }
 
+    /// Remove an Effect from the graph, freeing its resources.
     pub fn deinit(self: Effect) void {
         self.context.delRow(self.id);
     }
 
-    pub fn getHandlerList(self: Effect) ?HandlerList {
-        const id = (self.context.table.effect.getCell(self.id, .handler_list) orelse return null).*;
+    /// Get the TypeList for the handlers of this effect.
+    pub fn getHandlerTypeList(self: Effect) ?TypeList {
+        const id = (self.context.table.effect.getCell(self.id, .handler_type_list) orelse return null).*;
         return wrapId(self.context, id);
     }
 
-    pub fn setHandlerList(self: Effect, handler_list: HandlerList) !void {
-        try self.context.setCell(self.id, .handler_list, handler_list.id);
+    /// Override the TypeList for the handlers of this effect.
+    pub fn setHandlerTypeList(self: Effect, handler_type_list: TypeList) !void {
+        try self.context.setCell(self.id, .handler_type_list, handler_type_list.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Effect, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const handler_list = (self.context.table.effect.getCell(self.id, .handler_list) orelse return error.InvalidGraphState).*;
+        const handler_type_list = (self.context.table.effect.getCell(self.id, .handler_type_list) orelse return error.InvalidGraphState).*;
 
         if (self.context.getName(self.id)) |name| {
-            try writer.print("({} {} : {})", .{name, self.id, handler_list});
+            try writer.print("({} {} : {})", .{name, self.id, handler_type_list});
         } else {
-            try writer.print("({} : {})", .{self.id, handler_list});
+            try writer.print("({} : {})", .{self.id, handler_type_list});
         }
     }
 };
 
+/// A handle to an effect handler in the ir graph.
 pub const Handler = struct {
     id: Id(rows.Handler),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new handler for the provided effect, using the given function under the provided cancellation type and upvalues.
     pub fn init(context: *Context, effect: ?Effect, function: ?Function, cancellation_type: ?Type, upvalues: ?KeyList) !Handler {
         const id = try context.addRow(rows.Handler, .mutable, .{
             .effect = if (effect) |x| x.id else .null,
@@ -1968,46 +2128,56 @@ pub const Handler = struct {
         return Handler{ .id = id, .context = context };
     }
 
+    /// Remove a Handler from the graph, freeing its resources.
     pub fn deinit(self: Handler) void {
         self.context.delRow(self.id);
     }
 
+    /// Get the effect this handler is associated with.
     pub fn getEffect(self: Handler) ?Effect {
         const id = (self.context.table.handler.getCell(self.id, .effect) orelse return null).*;
         return wrapId(self.context, id);
     }
 
+    /// Override the effect this handler is associated with.
     pub fn setEffect(self: Handler, effect: Effect) !void {
         try self.context.setCell(self.id, .effect, effect.id);
     }
 
+    /// Get the function implementing this handler's body.
     pub fn getFunction(self: Handler) ?Function {
         const id = (self.context.table.handler.getCell(self.id, .function) orelse return null).*;
         return wrapId(self.context, id);
     }
 
+    /// Override the function implementing this handler's body.
     pub fn setFunction(self: Handler, func: Function) !void {
         try self.context.setCell(self.id, .function, func.id);
     }
 
+    /// Get the type of cancellation used within this handler.
     pub fn getCancellationType(self: Handler) ?Type {
         const id = (self.context.table.handler.getCell(self.id, .cancellation_type) orelse return null).*;
         return wrapId(self.context, id);
     }
 
+    /// Override the type of cancellation used within this handler.
     pub fn setCancellationType(self: Handler, ty: Type) !void {
         try self.context.setCell(self.id, .cancellation_type, ty.id);
     }
 
+    /// Get the upvalues used by this handler.
     pub fn getUpvalues(self: Handler) ?KeyList {
         const id = (self.context.table.handler.getCell(self.id, .upvalues) orelse return null).*;
         return wrapId(self.context, id);
     }
 
+    /// Override the upvalues used by this handler.
     pub fn setUpvalues(self: Handler, upvalues: KeyList) !void {
         try self.context.setCell(self.id, .upvalues, upvalues.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Handler, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const name = self.context.getName(self.id);
         const effect = self.getEffect();
@@ -2015,22 +2185,26 @@ pub const Handler = struct {
     }
 };
 
+/// A handle to a constant in the ir graph; may be either a block or a buffer.
 pub const Constant = struct {
     id: Id(rows.Constant),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new constant from a block.
     pub fn fromBlock(context: *Context, ty: Type, block: Block) !Constant {
         const id = try context.addRow(rows.Constant, .mutable, .{ .type = ty.id, .data = Key.fromId(block.id) });
         return Constant{ .id = id, .context = context };
     }
 
+    /// Create a new constant from a buffer.
     pub fn fromBuffer(context: *Context, ty: Type, buffer: Buffer) !Constant {
         const id = try context.addRow(rows.Constant, .mutable, .{ .type = ty.id, .data = Key.fromId(buffer.id) });
         return Constant{ .id = id, .context = context };
     }
 
+    /// Create a new constant from a byte slice already owned by the ir context.
     pub fn fromOwnedBytes(context: *Context, ty: Type, owned_bytes: []const u8) !Constant {
         const buffer = try Buffer.fromOwnedBytes(context, owned_bytes);
         errdefer context.delRow(buffer.id);
@@ -2038,6 +2212,7 @@ pub const Constant = struct {
         return Constant.fromBuffer(context, ty, buffer);
     }
 
+    /// Create a new constant from an unowned byte slice.
     pub fn fromUnownedBytes(context: *Context, ty: Type, bytes: []const u8) !Constant {
         const buffer = try Buffer.create(context, bytes);
         errdefer context.delRow(buffer.id);
@@ -2045,24 +2220,29 @@ pub const Constant = struct {
         return Constant.fromBuffer(context, ty, buffer);
     }
 
+    /// Create a new constant with no data binding.
     pub fn init(context: *Context) !Constant {
         const id = try context.addRow(rows.Constant, .mutable, .{ });
         return Constant{ .id = id, .context = context };
     }
 
+    /// Remove a Constant from the graph, freeing its resources.
     pub fn deinit(self: Constant) void {
         self.context.delRow(self.id);
     }
 
-    pub fn getData(self: Constant) !Key {
+    /// Get the key binding this constant's data, if it has any.
+    pub fn getDataKey(self: Constant) !Key {
         const key = self.context.getCell(self.id, .data) orelse return error.InvalidGraphState;
         return key;
     }
 
-    pub fn setData(self: Constant, key: Key) !void {
+    /// Override the key binding this constant's data.
+    pub fn setDataKey(self: Constant, key: Key) !void {
         try self.context.setCell(self.id, .data, key);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Constant, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const ty = self.context.getCell(self.id, .type) orelse return error.InvalidGraphState;
         const key = self.context.getCell(self.id, .data) orelse return error.InvalidGraphState;
@@ -2076,39 +2256,47 @@ pub const Constant = struct {
     }
 };
 
+/// A handle to a global variable in the ir graph.
 pub const Global = struct {
     id: Id(rows.Global),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new global variable with the given type and initializer.
     pub fn init(context: *Context, ty: ?Type, initializer: ?Constant) !Global {
         const id = try context.addRow(rows.Global, .mutable, .{ .type = if (ty) |x| x.id else .null, .initializer = if (initializer) |x| x.id else .null });
         return Global{ .id = id, .context = context };
     }
 
+    /// Remove a Global from the graph, freeing its resources.
     pub fn deinit(self: Global) void {
         self.context.delRow(self.id);
     }
 
+    /// Get the type of this global variable.
     pub fn getType(self: Global) ?Type {
         const id = self.context.getCell(self.id, .type) orelse return null;
         return wrapId(self.context, id);
     }
 
+    /// Override the type of this global variable.
     pub fn setType(self: Global, ty: Type) !void {
         try self.context.setCell(self.id, .type, ty.id);
     }
 
+    /// Get the constant initializer of this global variable, if it has one.
     pub fn getInitializer(self: Global) ?Constant {
         const id = self.context.getCell(self.id, .initializer) orelse return null;
         return wrapId(self.context, id);
     }
 
+    /// Override the constant initializer of this global variable.
     pub fn setInitializer(self: Global, initializer: Constant) !void {
         try self.context.setCell(self.id, .initializer, initializer.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Global, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const name = self.getName();
         const ty = self.getType();
@@ -2118,61 +2306,73 @@ pub const Global = struct {
     }
 };
 
+/// A handle to a foreign address in the ir graph, which can be used to represent an external memory location linked by the runtime.
 pub const ForeignAddress = struct {
     id: Id(rows.ForeignAddress),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new foreign address for the given machine address and type.
     pub fn init(context: *Context, address: ?u64, ty: ?Type) !ForeignAddress {
         const id = try context.addRow(rows.ForeignAddress, .mutable, .{ .address = if (address) |x| x else 0, .type = if (ty) |x| x.id else .null });
         return ForeignAddress{ .id = id, .context = context };
     }
 
+    /// Remove a ForeignAddress from the graph, freeing its resources.
     pub fn deinit(self: ForeignAddress) void {
         self.context.delRow(self.id);
     }
 
+    /// `sdt.fmt` impl
     pub fn format(self: ForeignAddress, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
         try self.id.format(fmt, opts, writer);
     }
 };
 
+/// A handle to a builtin address in the ir graph, which can be used to represent a built-in memory location provided by the runtime.
 pub const BuiltinAddress = struct {
     id: Id(rows.BuiltinAddress),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new builtin address for the given machine address and type.
     pub fn init(context: *Context, address: ?u64, ty: ?Type) !BuiltinAddress {
         const id = try context.addRow(rows.BuiltinAddress, .mutable, .{ .address = if (address) |x| x else 0, .type = if (ty) |x| x.id else .null });
         return BuiltinAddress{ .id = id, .context = context };
     }
 
+    /// Remove a BuiltinAddress from the graph, freeing its resources.
     pub fn deinit(self: BuiltinAddress) void {
         self.context.delRow(self.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: BuiltinAddress, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
         try self.id.format(fmt, opts, writer);
     }
 };
 
+/// A handle to an intrinsic in the ir graph, which represents things like specific bytecode instructions.
 pub const Intrinsic = struct {
     id: Id(rows.Intrinsic),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Given a bytecode opcode, get a shared Intrinsic handle.
     pub fn intern(context: *Context, opcode: bytecode.Instruction.OpCode) !Intrinsic {
         const id = try context.internOpCode(opcode);
         return Intrinsic{ .id = id, .context = context };
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Intrinsic, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
         try self.id.format(fmt, opts, writer);
     }
 
+    /// Get the bytecode opcode for this intrinsic, if it is one.
     pub fn getOpCode(self: Intrinsic) ?bytecode.Instruction.OpCode {
         const tag = self.context.getCell(self.id, .tag) orelse return null;
         if (tag != .bytecode) return null;
@@ -2181,17 +2381,20 @@ pub const Intrinsic = struct {
     }
 };
 
+/// A handle to a buffer in the ir graph, which can be used to store arbitrary byte arrays.
 pub const Buffer = struct {
     id: Id(rows.Buffer),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new buffer from a slice of bytes that is already owned by the ir context.
     pub fn fromOwnedBytes(context: *Context, owned_data: []const u8) !Buffer {
         const id = try context.addRow(rows.Buffer, .mutable, .{ .data = owned_data });
         return wrapId(context, id);
     }
 
+    /// Create a new buffer from an unowned slice of bytes, which will be copied into the ir context's arena.
     pub fn create(context: *Context, unowned_data: []const u8) !Buffer {
         const owned_data = try context.arena.allocator().dupe(u8, unowned_data);
         errdefer context.arena.allocator().free(owned_data);
@@ -2200,35 +2403,44 @@ pub const Buffer = struct {
         return wrapId(context, id);
     }
 
+    /// Create a new buffer with no data binding.
     pub fn init(context: *Context) !Buffer {
         const id = try context.addRow(rows.Buffer, .mutable, .{ });
         return wrapId(context, id);
     }
 
+    /// Remove a Buffer from the graph, freeing its resources.
     pub fn deinit(self: Buffer) void {
         self.context.delRow(self.id);
     }
 
+    /// Override the data slice of this buffer.
+    /// * Provided slice should be owned by the ir context.
     pub fn setData(self: Buffer, data: []const u8) !void {
         return self.context.setCell(self.id, .data, data);
     }
 
-    pub fn getData(self: Buffer) ![]const u8 {
-        return self.context.getCell(self.id, .data) orelse error.InvalidGraphState;
+    /// Get the data slice of this buffer.
+    pub fn getData(self: Buffer) ?[]const u8 {
+        return self.context.getCell(self.id, .data);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Buffer, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
         try self.id.format(fmt, opts, writer);
     }
 };
 
+/// A handle to a function in the ir graph; either a standard procedure or an effect-handler.
 pub const Function = struct {
     id: Id(rows.Function),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
-    pub fn create(context: *Context, ty: Type) !Function {
+    /// Create a new function with the given type and a fresh, empty body.
+    /// * Variable bindings will be created in the body block, for each input type of the function.
+    pub fn create(context: *Context, ty: Type) !Function { // TODO: move variable binding/initial block creation to its own function
         const builtin_func_con = try context.getBuiltin(.function_constructor);
         const builtin_product_con = try context.getBuiltin(.product_constructor);
 
@@ -2261,15 +2473,19 @@ pub const Function = struct {
         return Function.init(context, ty, body);
     }
 
+    /// Create a new function with the given type and body.
+    /// * Does not create variable bindings for the input types of the function.
     pub fn init(context: *Context, ty: ?Type, body: ?Block) !Function {
         const id = try context.addRow(rows.Function, .mutable, .{ .type = if (ty) |x| x.id else .null, .body = if (body) |x| x.id else (try Block.init(context, null, null, null)).id });
         return wrapId(context, id);
     }
 
+    /// Remove a Function from the graph, freeing its resources.
     pub fn deinit(self: Function) void {
         self.context.delRow(self.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Function, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const name = self.context.getName(self.id);
         const ty = self.getType();
@@ -2278,10 +2494,12 @@ pub const Function = struct {
         try writer.print("({} {?s} : {?} = {?})", .{self.id, name, ty, body});
     }
 
+    /// Override the type of this function.
     pub fn setType(self: Function, ty: Type) !void {
         try self.context.setCell(self.id, .type, ty.id);
     }
 
+    /// Get the type of this function.
     pub fn getType(self: Function) ?Type {
         return Type {
             .id = self.context.getCell(self.id, .type) orelse return null,
@@ -2289,10 +2507,12 @@ pub const Function = struct {
         };
     }
 
+    /// Override the body block of this function.
     pub fn setBody(self: Function, body: Block) !void {
         try self.context.setCell(self.id, .body, body.id);
     }
 
+    /// Get the body block of this function.
     pub fn getBody(self: Function) ?Block {
         return Block {
             .id = self.context.getCell(self.id, .body) orelse return null,
@@ -2300,38 +2520,45 @@ pub const Function = struct {
         };
     }
 
+    /// Override the variables of this function's body block.
     pub fn setVariables(self: Function, variables: []const Variable) !void {
         const block = self.getBody() orelse return error.InvalidGraphState;
         try block.setVariables(try VariableList.create(self.context, variables));
     }
 
+    /// Get the variables of this function's body block.
     pub fn getVariables(self: Function) ?VariableList {
         const block = self.getBody() orelse return null;
         return block.getVariables();
     }
 
+    /// Get the contents of this function's body block.
     pub fn getContents(self: Function) ?KeyList {
         const block = self.getBody() orelse return null;
         return block.getContents();
     }
 
+    /// Get the number of elements within the content of this function's body block.
     pub fn getContentCount(self: Function) ?usize {
         const block = self.getBody() orelse return null;
         return block.getContentCount();
     }
 
+    /// Get a slice of the element keys within the content of this function's body block.
     pub fn getContentSlice(self: Function) ?[]const Key {
         const block = self.getBody() orelse return null;
         return block.getContentSlice();
     }
 };
 
+/// A handle to a dynamic scope in the ir graph, which can be used to manage inputs and handlers for effectful operations.
 pub const DynamicScope = struct {
     id: Id(rows.DynamicScope),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new dynamic scope with an empty input key list and handler list.
     pub fn new(context: *Context) !DynamicScope {
         const inputs = try KeyList.init(context);
         errdefer inputs.deinit();
@@ -2342,65 +2569,79 @@ pub const DynamicScope = struct {
         return DynamicScope.init(context, inputs, handler_list);
     }
 
+    /// Create a new dynamic scope with the given inputs and handler list.
     pub fn init(context: *Context, inputs: KeyList, handler_list: HandlerList) !DynamicScope {
         const id = try context.addRow(rows.DynamicScope, .mutable, .{ .inputs = inputs.id, .handler_list = handler_list.id });
         return DynamicScope{ .id = id, .context = context };
     }
 
+    /// Remove a DynamicScope from the graph, freeing its resources.
     pub fn deinit(self: DynamicScope) void {
         self.context.delRow(self.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: DynamicScope, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("({})", .{ self.id });
     }
 
+    /// Override the inputs of this dynamic scope.
     pub fn setInputs(self: DynamicScope, inputs: KeyList) !void {
         try self.context.setCell(self.id, .inputs, inputs.id);
     }
 
+    /// Get the inputs of this dynamic scope.
     pub fn getInputs(self: DynamicScope) ?KeyList {
         const inputs = self.context.getCell(self.id, .inputs) orelse return null;
         return wrapId(self.context, inputs);
     }
 
+    /// Override the handler list of this dynamic scope.
     pub fn setHandlerList(self: DynamicScope, handler_list: HandlerList) !void {
         try self.context.setCell(self.id, .handler_list, handler_list.id);
     }
 
+    /// Get the handler list of this dynamic scope.
     pub fn getHandlerList(self: DynamicScope) ?HandlerList {
         const handler_list = self.context.getCell(self.id, .handler_list) orelse return null;
         return wrapId(self.context, handler_list);
     }
 
+    /// Get the number of inputs in this dynamic scope.
     pub fn getInputCount(self: DynamicScope) usize {
         return (self.getInputs() orelse return 0).getCount();
     }
 
+    /// Get the number of handlers in this dynamic scope.
     pub fn getHandlerCount(self: DynamicScope) usize {
         return (self.getHandlerList() orelse return 0).getCount();
     }
 };
 
+/// A handle to a variable in the ir graph, which can be used to represent mutable state within a block.
 pub const Variable = struct {
     id: Id(rows.Variable),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new variable with the given type.
     pub fn create(context: *Context, ty: Type) !Variable {
         return Variable.init(context, ty);
     }
 
+    /// Create a new variable with the given type.
     pub fn init(context: *Context, ty: ?Type) !Variable {
         const id = try context.addRow(rows.Variable, .mutable, .{ .type = if (ty) |t| t.id else .null });
         return wrapId(context, id);
     }
 
+    /// Remove a Variable from the graph, freeing its resources.
     pub fn deinit(self: Variable) void {
         self.context.delRow(self.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Variable, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const name = self.context.getName(self.id);
         const ty = self.getType();
@@ -2408,22 +2649,29 @@ pub const Variable = struct {
         try writer.print("(𝓿𝓪𝓻 {} {?s} : {?})", .{self.id, name, ty});
     }
 
+    /// Override the type of this variable.
     pub fn setType(self: Variable, ty: Type) !void {
         try self.context.setCell(self.id, .type, ty.id);
     }
 
+    /// Get the type of this variable.
     pub fn getType(self: Variable) ?Type {
         const id = self.context.getCell(self.id, .type) orelse return null;
         return wrapId(self.context, id);
     }
 };
 
+/// A handle to a block in the ir graph, which can contain
+/// variables, a dynamic scope binding effect handlers to those variables, instructions,
+/// and other blocks.
+/// Instructions and blocks are stored in execution order.
 pub const Block = struct {
     id: Id(rows.Block),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new block with the given variables, dynamic scope, and empty contents.
     pub fn create(context: *Context, variables: []const Variable, dynamic_scope: ?DynamicScope) !Block {
         const block = try Block.init(context, null, dynamic_scope, null);
         errdefer block.deinit();
@@ -2440,6 +2688,7 @@ pub const Block = struct {
         return block;
     }
 
+    /// Create a new block with the given variables, dynamic scope, and contents.
     pub fn init(context: *Context,
         variables: ?VariableList,
         dynamic_scope: ?DynamicScope,
@@ -2453,10 +2702,12 @@ pub const Block = struct {
         return wrapId(context, id);
     }
 
+    /// Remove a Block from the graph, freeing its resources.
     pub fn deinit(self: Block) void {
         self.context.delRow(self.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Block, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         if (self.context.getName(self.id)) |alias| {
             try writer.print(":: {} {}\n", .{alias, self.id});
@@ -2494,54 +2745,68 @@ pub const Block = struct {
         }
     }
 
+    /// Override the variables of this block.
     pub fn setVariables(self: Block, variables: VariableList) !void {
         try self.context.setCell(self.id, .variables, variables.id);
     }
 
+    /// Get the VariableList of this block.
     pub fn getVariables(self: Block) ?VariableList {
         const variables = (self.context.table.block.getCell(self.id, .variables) orelse return null).*;
         return wrapId(self.context, variables.cast(rows.VariableList));
     }
 
+    /// Override the dynamic scope of this block.
     pub fn setDynamicScope(self: Block, dynamic_scope: DynamicScope) !void {
         try self.context.setCell(self.id, .dynamic_scope, dynamic_scope.id);
     }
 
+    /// Get the DynamicScope of this block.
     pub fn getDynamicScope(self: Block) ?DynamicScope {
         const dynamic_scope = (self.context.table.block.getCell(self.id, .dynamic_scope) orelse return null).*;
         return DynamicScope{ .id = dynamic_scope.cast(rows.DynamicScope), .context = self.context };
     }
 
+    /// Override the contents of this block.
     pub fn setContents(self: Block, contents: KeyList) !void {
         try self.context.setCell(self.id, .contents, contents.id);
     }
 
+    /// Get the ordered content KeyList of this block.
     pub fn getContents(self: Block) ?KeyList {
         const instructions = (self.context.table.block.getCell(self.id, .contents) orelse return null).*;
         return KeyList{ .id = instructions.cast(rows.KeyList), .context = self.context };
     }
 
+    /// Get the number of variables in this block.
     pub fn getVariableCount(self: Block) usize {
         return (self.getVariables() orelse return 0).getCount();
     }
 
+    /// Get a slice of the variable keys in this block.
     pub fn getVariableSlice(self: Block) ?[]const Key {
         return (self.getVariables() orelse return null).getSlice();
     }
 
+    /// Get the number of elements in the contents of this block.
     pub fn getContentCount(self: Block) ?usize {
         return (self.getContents() orelse return null).getCount();
     }
 
+    /// Get a slice of the element keys in the contents of this block.
     pub fn getContentSlice(self: Block) ?[]const Key {
         return (self.getContents() orelse return null).getSlice();
     }
 
+    /// Append a new element to the contents of this block.
+    /// * Expects either another `Block`, or an `Instruction`.
+    /// * Self-containment is an error.
     pub fn append(self: Block, value: anytype) !void {
         const contents = self.getContents() orelse return error.InvalidGraphState;
         try contents.append(Key.fromId(value.id));
     }
 
+    /// Create a new variable with the given type in this block.
     pub fn bindVariable(self: Block, ty: Type) !Variable {
         const variables = self.getVariables() orelse return error.InvalidGraphState;
         const variable = try Variable.create(self.context, ty);
@@ -2552,157 +2817,205 @@ pub const Block = struct {
     }
 };
 
+/// A handle to an instruction in the ir graph.
 pub const Instruction = struct {
     id: Id(rows.Instruction),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new instruction with the given operation.
     pub fn create(context: *Context, operation: Operation) !Instruction {
         return Instruction.init(context, null, operation);
     }
 
+    /// Create a new instruction with the given operation, optionally specifying its type.
+    /// * Type can be computed later if needed.
     pub fn init(context: *Context, ty: ?Type, operation: ?Operation) !Instruction {
         const id = try context.addRow(rows.Instruction, .mutable, .{ .type = if (ty) |t| t.id else .null, .operation = operation orelse .@"unreachable" });
         return wrapId(context, id);
     }
 
+    /// Remove an Instruction from the graph, freeing its resources.
     pub fn deinit(self: Instruction) void {
         self.context.delRow(self.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: Instruction, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("{s}", .{ @tagName(self.getOperation()) });
     }
 
+    /// Override the type of this instruction.
     pub fn setType(self: Instruction, ty: Type) !void {
         try self.context.setCell(self.id, .type, ty.id);
     }
 
-    pub fn getType(self: Instruction) ?Type {
+    /// Get the type of this instruction.
+    pub fn getType(self: Instruction) ?Type { // TODO: compute here?
         const id = self.context.getCell(self.id, .type) orelse return null;
         return wrapId(self.context, id);
     }
 
+    /// Override the operation of this instruction.
     pub fn setOperation(self: Instruction, operation: Operation) !void {
         try self.context.setCell(self.id, .operation, operation);
     }
 
+    /// Get the operation of this instruction.
     pub fn getOperation(self: Instruction) Operation {
         return self.context.getCell(self.id, .operation) orelse return .@"unreachable";
     }
 };
 
+/// A handle to a control edge in the ir graph, which represents a control flow dependency between two nodes.
+/// While operational nodes are arranged in execution order within Blocks,
+/// these edges represent flow between branches and phi instructions.
 pub const ControlEdge = struct {
     id: Id(rows.ControlEdge),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new control edge with no source or destination.
     pub fn init(context: *Context) !ControlEdge {
         const id = try context.addRow(rows.ControlEdge, .mutable, .{ });
         return ControlEdge{ .id = id, .context = context };
     }
 
-    pub fn create(context: *Context, src: Key, dest: Key, source_index: usize) !ControlEdge {
-        const id = try context.addRow(rows.ControlEdge, .mutable, .{ .source = src, .destination = dest, .source_index = source_index });
+    /// Create a new control edge with the given source and destination keys and indices.
+    pub fn create(context: *Context, src: Key, dest: Key, source_index: usize, destination_index: usize) !ControlEdge {
+        const id = try context.addRow(rows.ControlEdge, .mutable, .{ .source = src, .destination = dest, .source_index = source_index, .destination_index = destination_index});
         return ControlEdge{ .id = id, .context = context };
     }
 
+    /// Remove a ControlEdge from the graph, freeing its resources.
     pub fn deinit(self: ControlEdge) void {
         self.context.delRow(self.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: ControlEdge, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("({})", .{ self.id });
     }
 
+    /// Override the source of this control edge.
     pub fn setSource(self: ControlEdge, src: Key) !void {
         try self.context.setCell(self.id, .source, src);
     }
 
+    /// Get the source of this control edge.
     pub fn getSource(self: ControlEdge) ?Key {
         return self.context.getCell(self.id, .source);
     }
 
+    /// Override the destination of this control edge.
     pub fn setDestination(self: ControlEdge, destination: Key) !void {
         try self.context.setCell(self.id, .destination, destination);
     }
 
+    /// Get the destination of this control edge.
     pub fn getDestination(self: ControlEdge) ?Key {
         return self.context.getCell(self.id, .destination);
     }
 
+    /// Override the source index of this control edge.
     pub fn setSourceIndex(self: ControlEdge, index: usize) !void {
         try self.context.setCell(self.id, .source_index, index);
     }
 
+    /// Get the source index of this control edge.
     pub fn getSourceIndex(self: ControlEdge) usize {
         return self.context.getCell(self.id, .source_index) orelse 0;
     }
+
+    /// Get the destination index of this control edge.
+    pub fn getDestinationIndex(self: ControlEdge) usize {
+        return self.context.getCell(self.id, .destination_index) orelse 0;
+    }
+
+    /// Override the destination index of this control edge.
+    pub fn setDestinationIndex(self: ControlEdge, index: usize) !void {
+        try self.context.setCell(self.id, .destination_index, index);
+    }
 };
 
+/// A handle to a data edge in the ir graph, which represents a data dependency between two nodes.
 pub const DataEdge = struct {
     id: Id(rows.DataEdge),
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
 
+    /// Create a new data edge with no source or destination.
     pub fn init(context: *Context) !DataEdge {
         const id = try context.addRow(rows.DataEdge, .mutable, .{ });
         return wrapId(context, id);
     }
 
-    pub fn create(context: *Context, src: Key, destination: Key) !DataEdge {
-        const id = try context.addRow(rows.DataEdge, .mutable, .{ .source = src, .destination = destination });
+    /// Create a new data edge with the given source and destination keys and indices.
+    pub fn create(context: *Context, src: Key, destination: Key, source_index: usize, destination_index: usize) !DataEdge {
+        const id = try context.addRow(rows.DataEdge, .mutable, .{ .source = src, .destination = destination, .source_index = source_index, .destination_index = destination_index });
         return wrapId(context, id);
     }
 
+    /// Remove a DataEdge from the graph, freeing its resources.
     pub fn deinit(self: DataEdge) void {
         self.context.delRow(self.id);
     }
 
+    /// `std.fmt` impl
     pub fn format(self: DataEdge, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("({})", .{ self.id });
     }
 
+    /// Override the source of this data edge.
     pub fn setSource(self: DataEdge, src: Key) !void {
         try self.context.setCell(self.id, .source, src);
     }
 
+    /// Get the source of this data edge.
     pub fn getSource(self: DataEdge) ?Key {
         return self.context.getCell(self.id, .source);
     }
 
+    /// Override the destination of this data edge.
     pub fn setDestination(self: DataEdge, destination: Key) !void {
         try self.context.setCell(self.id, .destination, destination);
     }
 
+    /// Get the destination of this data edge.
     pub fn getDestination(self: DataEdge) ?Key {
         return self.context.getCell(self.id, .destination);
     }
 
+    /// Override the source index of this data edge.
     pub fn setSourceIndex(self: DataEdge, index: usize) !void {
         try self.context.setCell(self.id, .source_index, index);
     }
 
+    /// Get the source index of this data edge.
     pub fn getSourceIndex(self: DataEdge) usize {
         return self.context.getCell(self.id, .source_index) orelse 0;
     }
 
+    /// Override the destination index of this data edge.
     pub fn setDestinationIndex(self: DataEdge, index: usize) !void {
         try self.context.setCell(self.id, .destination_index, index);
     }
 
+    /// Get the destination index of this data edge.
     pub fn getDestinationIndex(self: DataEdge) usize {
         return self.context.getCell(self.id, .destination_index) orelse 0;
     }
 };
 
+/// Simple visitor structure for the ir graph; collects nodes.
 pub const Visitor = struct {
     context: *Context,
     visited: pl.UniqueReprSet(Key, 80),
 
+    /// Initialize a new Visitor with the given context.
     pub fn init(context: *Context) Visitor {
         return .{
             .context = context,
@@ -2710,18 +3023,22 @@ pub const Visitor = struct {
         };
     }
 
+    /// Deinitialize the Visitor, freeing its resources.
     pub fn deinit(self: *Visitor) void {
         self.visited.deinit(self.context.arena.child_allocator);
     }
 
+    /// Clear the visited set, retaining its capacity.
     pub fn clear(self: *Visitor) void {
         self.visited.clearRetainingCapacity();
     }
 
+    /// Check if the given key has already been visited.
     pub fn alreadyVisited(self: *Visitor, key: Key) !bool {
         return (try self.visited.getOrPut(self.context.arena.child_allocator, key)).found_existing;
     }
 
+    /// Visit all nodes reachable (via control flow) from the given key, recursively.
     pub fn reachable(self: *Visitor, key: Key) !void {
         if (try self.alreadyVisited(key)) return;
 
@@ -2755,9 +3072,7 @@ pub const Visitor = struct {
 };
 
 
-
-
-test {
+test "ir_basic_integration" {
     const context = try Context.init(std.testing.allocator);
     defer context.deinit();
 
