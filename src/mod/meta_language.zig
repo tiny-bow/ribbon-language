@@ -18,8 +18,12 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-// TODO: i think we should use nan-tagging instead;
-// integers larger than 2^53 can be stored on the heap.
+// TODO: Nan-tagging would be nice, but we have many object types that *we do not own*,
+// meaning we would need a double-indirection or a table in order to discriminate them.
+// Alternatives to consider:
+// * 16-bit tag + 48-bit data, giving us enough discriminators but not enough data for double-precision floats.
+// * 8-bit tag + 56-bit data? this would not be enough for double-precision floats but is more forward-compatible and increases the integer range.
+// * doesnt chez use tagging and doubles? maybe they solved this already
 
 /// A meta-language value.
 pub const Value = packed struct {
