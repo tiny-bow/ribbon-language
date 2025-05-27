@@ -348,38 +348,35 @@ pub const Value = packed struct(u64) {
     /// Determine if the value is numeric.
     /// * returns `true` for: f64 (except NaN), i48, u48.
     pub fn isNumber(self: Value) bool {
-        const isMask = @intFromBool(self.nan_bits & NAN_MASK == NAN_MASK);
-        const notMask = ~isMask;
+        const notNan = @intFromBool(self.nan_bits & NAN_MASK != NAN_MASK);
         const bits = @intFromEnum(self.tag_bits);
 
         const bit1: u1 = @truncate(bits >> 2);
         const bit2: u1 = @truncate(bits >> 1);
-        const bit3: u1 = @truncate(bits & 0b001);
+        const bit3: u1 = @truncate(bits >> 0);
 
-        return notMask | (isMask & ~bit1 & (bit2 ^ bit3)) == 1;
+        return notNan | (~bit1 & (bit2 ^ bit3)) == 1;
     }
 
     /// Determine if the value is non-numeric.
     /// * returns `true` for: nil, char, bool, symbol, objects.
     pub fn isData(self: Value) bool {
-        const isMask = @intFromBool(self.nan_bits & NAN_MASK == NAN_MASK);
+        const isNan = @intFromBool(self.nan_bits & NAN_MASK == NAN_MASK);
         const bits = @intFromEnum(self.tag_bits);
 
         const bit1: u1 = @truncate(bits >> 2);
         const bit2: u1 = @truncate(bits >> 1);
-        const bit3: u1 = @truncate(bits & 0b001);
+        const bit3: u1 = @truncate(bits >> 0);
 
-        return isMask & (bit1 | (bit2 & bit3)) == 1;
+        return isNan & (bit1 | (bit2 & bit3)) == 1;
     }
 
     /// Determine if the payload of the value is an f64.
     pub fn isF64(self: Value) bool {
-        const isMask = @intFromBool(self.nan_bits & NAN_MASK == NAN_MASK);
-        const notMask = ~isMask;
-
+        const notNan = @intFromBool(self.nan_bits & NAN_MASK != NAN_MASK);
         const noTag = @intFromBool(self.tag_bits == .f64);
 
-        return notMask | (isMask & noTag) == 1;
+        return notNan | noTag == 1;
     }
 
     /// Determine if the payload of the value is a NaN by IEEE 754 standards.
@@ -3177,7 +3174,7 @@ test "value_basics" {
     {
         var x: f64 = -10.0;
 
-        while (x < -10.0) : (x += 0.1) {
+        while (x < 10.0) : (x += 0.1) {
             const y = Value.from(x);
             try std.testing.expect(y.isNumber());
             try std.testing.expect(!y.isData());
