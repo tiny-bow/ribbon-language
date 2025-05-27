@@ -701,6 +701,8 @@ pub const mem = comptime_memorySize: {
         /// The cause of a trap, if any was known. Pointee-type depends on the trap.
         /// * TODO: error handling function that covers this variance
         trap: ?*const anyopaque,
+        /// Arbitrary user-data pointer, used by runtime environment to store fiber-local contextual data.
+        userdata: ?*anyopaque,
     };
 
     const FIELDS = std.meta.fieldNames(FIBER_HEADER);
@@ -853,7 +855,7 @@ pub const Fiber = extern struct {
         const header: *mem.FiberHeader = @ptrCast(buf.ptr);
 
         fiber_fields: inline for (comptime std.meta.fieldNames(mem.FiberHeader)) |fieldName| {
-            inline for (&.{ "loop", "trap", "breakpoint", "evidence" }) |ignoredField| {
+            inline for (&.{ "loop", "trap", "breakpoint", "evidence", "userdata" }) |ignoredField| {
                 if (comptime std.mem.eql(u8, fieldName, ignoredField)) {
                     continue :fiber_fields;
                 }
@@ -878,5 +880,15 @@ pub const Fiber = extern struct {
     /// * The name of the stack can be either a string or an enum literal.
     pub fn getStack(self: Fiber, stackName: anytype) [*]u8 {
         return @as([*]u8, @ptrCast(self.header)) + mem.getOffset(stackName);
+    }
+
+    /// Set the userdata pointer for this fiber.
+    pub fn setUserdata(self: *Fiber, data: ?*anyopaque) void {
+        self.header.userdata = data;
+    }
+
+    /// Get the userdata pointer for this fiber.
+    pub fn getUserdata(self: *const Fiber) ?*anyopaque {
+        return self.header.userdata;
     }
 };
