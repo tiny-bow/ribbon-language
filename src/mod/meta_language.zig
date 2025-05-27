@@ -20,6 +20,16 @@ test {
 
 
 /// An efficient, bit-packed union of all value types in the meta-language semantics.
+///
+/// ```txt
+///               ┍╾on target architectures, this bit is 1 for quiet nans, 0 for signalling.
+/// ┍╾f64 sign    │   ┍╾discriminant for non-f64                        ┍╾discriminant for objects
+/// ╽             ╽ ┌─┤                                               ┌─┤
+/// 0_00000000000_0_000_000000000000000000000000000000000000000000000_000 (64 bits)
+///   ├─────────┘       ├───────────────────────────────────────────┘
+///   │                 ┕╾45 bit object pointer (8 byte aligned means 3 lsb are always 0)
+///   ┕╾f64 exponent; if not f64, these are all 1s (encoding f64 nan), forming the first discriminant of the value
+/// ```
 pub const Value = packed struct(u64) {
     /// Value bits store the actual value when it is not an f64.
     val_bits: Data,
@@ -52,27 +62,28 @@ pub const Value = packed struct(u64) {
         }
     };
 
-    const NAN_FILL: u13 = 0b1111111111111;
+    const NAN_FILL: u13 = 0b1_11111111111_1; // signalling NaN bits; sign is irrelevant but prefer keeping it on as this makes nil all ones
+    const NAN_MASK: u13 = 0b0_11111111111_0; // we dont care about sign or signal when checking for nans
     const PTR_FILL: u45 = 0b111111111111111111111111111111111111111111111;
 
     /// The tag bits distinguish between different types of immediate values, separating them from f64 and object.
     pub const Tag = enum(u3) {
-        /// Value payload is an f64.
-        f64,
-        /// Value payload is a 48-bit signed integer.
-        i48,
-        /// Value payload is a 48-bit unsigned integer.
-        u48,
-        /// Value payload is a character.
-        char,
-        /// Value payload is a boolean.
-        bool,
-        /// Value payload is a symbol, which is an interned, null-terminated immutable byte string pointer.
-        symbol,
-        /// Usage TBD
-        _reserved0,
-        /// Value payload is a pointer to an object, which is a user-defined data structure.
-        object,
+        /// Value payload is an f64. Not actually encoded in `Value`'s tag bits; f64 is the default form. `0b000`
+        f64 = 0b000,
+        /// Value payload is a 48-bit signed integer. `0b001`
+        i48 = 0b001,
+        /// Value payload is a 48-bit unsigned integer. `0b010`
+        u48 = 0b010,
+        /// Value payload is a character. `0b011`
+        char = 0b011,
+        /// Value payload is a boolean. `0b100`
+        bool = 0b100,
+        /// Value payload is a symbol, which is an interned, null-terminated immutable byte string pointer. `0b101`
+        symbol = 0b101,
+        /// Usage TBD `0b110`
+        _reserved0 = 0b110,
+        /// Value payload is a pointer to an object, which is a user-defined data structure. `0b111`
+        object = 0b111,
 
         pub fn fromType(comptime T: type) Tag {
             return switch (T) {
@@ -93,22 +104,22 @@ pub const Value = packed struct(u64) {
 
     /// The obj bits distinguish between different types of heap-allocated payloads.
     pub const Obj = enum(u3) {
-        /// Value payload is a bytecode function.
-        bytecode,
-        /// Value payload is a builtin address provided by the runtime.
-        builtin,
-        /// Value payload is an address with a foreign abi, provided by the runtime.
-        foreign,
-        /// Value payload is a string, which is a custom data structure allowing immutable concatenation etc.
-        string,
-        /// Value payload is a concrete syntax tree; non-ml source code.
-        cst,
-        /// Value payload is an ml syntax tree; ml source code.
-        expr,
-        /// Usage TBD
-        _reserved1,
-        /// No payload, this is a nil value.
-        nil,
+        /// Value payload is a bytecode function. `0b000`
+        bytecode = 0b000,
+        /// Value payload is a builtin address provided by the runtime. `0b001`
+        builtin = 0b001,
+        /// Value payload is an address with a foreign abi, provided by the runtime. `0b010`
+        foreign = 0b010,
+        /// Value payload is a string, which is a custom data structure allowing immutable concatenation etc. `0b011`
+        string = 0b011,
+        /// Value payload is a concrete syntax tree; non-ml source code. `0b100`
+        cst = 0b100,
+        /// Value payload is an ml syntax tree; ml source code. `0b101`
+        expr = 0b101,
+        /// Usage TBD `0b110`
+        _reserved1 = 0b110,
+        /// No payload, this is a nil value. `0b111`
+        nil = 0b111,
 
         /// Convert a zig pointer type to an `Obj` discriminant.
         pub fn fromType(comptime T: type) Obj {
@@ -183,16 +194,7 @@ pub const Value = packed struct(u64) {
             .char => self.isChar(),
             .bool => self.isBool(),
             .symbol => self.isSymbol(),
-            .object => switch (comptime Obj.fromType(T)) {
-                .bytecode => self.isBytecode(),
-                .builtin => self.isBuiltin(),
-                .foreign => self.isForeign(),
-                .string => self.isString(),
-                .cst => self.isCst(),
-                .expr => self.isExpr(),
-                .nil => self.isNil(),
-                .reserved1 => unreachable,
-            },
+            .object => self.isObj(comptime Obj.fromType(T)),
             ._reserved0 => unreachable,
         };
     }
@@ -206,16 +208,7 @@ pub const Value = packed struct(u64) {
             .char => self.asChar(),
             .bool => self.asBool(),
             .symbol => self.asSymbol(),
-            .object => switch (comptime Obj.fromType(T)) {
-                .bytecode => self.asBytecode(),
-                .builtin => self.asBuiltin(),
-                .foreign => self.asForeign(),
-                .string => self.asString(),
-                .cst => self.asCst(),
-                .expr => self.asExpr(),
-                .nil => if (self.isNil()) return {} else return null,
-                ._reserved1 => unreachable,
-            },
+            .object => @ptrCast(self.asObj(comptime Obj.fromType(T))),
             ._reserved0 => unreachable,
         };
     }
@@ -230,19 +223,11 @@ pub const Value = packed struct(u64) {
             .char => self.forceChar(),
             .bool => self.forceBool(),
             .symbol => self.forceSymbol(),
-            .object => switch (comptime Obj.fromType(T)) {
-                .bytecode => self.forceBytecode(),
-                .builtin => self.forceBuiltin(),
-                .foreign => self.forceForeign(),
-                .string => self.forceString(),
-                .cst => self.forceCst(),
-                .expr => self.forceExpr(),
-                .nil => std.debug.assert(self.isNil()),
-                ._reserved1 => unreachable,
-            },
+            .object => @ptrCast(self.forceObj(comptime Obj.fromType(T))),
             ._reserved0 => unreachable,
         };
     }
+
 
 
     /// Construct a value from an f64 payload.
@@ -343,39 +328,58 @@ pub const Value = packed struct(u64) {
     }
 
 
+
+
     /// Determine if the value is nil.
     pub fn isNil(self: Value) bool {
-        // TODO: check if this actually improves codegen in any way;
-        // optimizer probably should be able to figure out that we dont need shortcircuiting on this but idk
-        return @intFromBool(self.tag_bits == .object)
-             & @intFromBool(self.nan_bits == NAN_FILL)
-             & @intFromBool(self.val_bits.obj_bits == .nil)
-             == 1;
+        const mask = comptime (Value {
+            .nan_bits = NAN_MASK,
+            .tag_bits = .object,
+            .val_bits = .{
+                .ptr_bits = 0,
+                .obj_bits = .nil,
+            },
+        }).asBits();
+
+        return self.asBits() & mask == mask;
     }
+
 
     /// Determine if the value is numeric.
     /// * returns `true` for: f64 (except NaN), i48, u48.
     pub fn isNumber(self: Value) bool {
-        return ( @intFromBool(self.tag_bits == .f64)
-               & @intFromBool(self.nan_bits != NAN_FILL) )
-             | @intFromBool(self.tag_bits == .i48)
-             | @intFromBool(self.tag_bits == .u48)
-             == 1;
+        const isMask = @intFromBool(self.nan_bits & NAN_MASK == NAN_MASK);
+        const notMask = ~isMask;
+        const bits = @intFromEnum(self.tag_bits);
+
+        const bit1: u1 = @truncate(bits >> 2);
+        const bit2: u1 = @truncate(bits >> 1);
+        const bit3: u1 = @truncate(bits & 0b001);
+
+        return notMask | (isMask & ~bit1 & (bit2 ^ bit3)) == 1;
     }
 
     /// Determine if the value is non-numeric.
-    /// * returns `true` for: nil, char, bool, symbol, string, objects.
+    /// * returns `true` for: nil, char, bool, symbol, objects.
     pub fn isData(self: Value) bool {
-        return @intFromBool(!self.isNumber())
-             & @intFromBool(self.nan_bits == NAN_FILL)
-             == 1;
+        const isMask = @intFromBool(self.nan_bits & NAN_MASK == NAN_MASK);
+        const bits = @intFromEnum(self.tag_bits);
+
+        const bit1: u1 = @truncate(bits >> 2);
+        const bit2: u1 = @truncate(bits >> 1);
+        const bit3: u1 = @truncate(bits & 0b001);
+
+        return isMask & (bit1 | (bit2 & bit3)) == 1;
     }
 
     /// Determine if the payload of the value is an f64.
     pub fn isF64(self: Value) bool {
-        return @intFromBool(self.tag_bits == .f64)
-             | @intFromBool(self.nan_bits != NAN_FILL)
-             == 1;
+        const isMask = @intFromBool(self.nan_bits & NAN_MASK == NAN_MASK);
+        const notMask = ~isMask;
+
+        const noTag = @intFromBool(self.tag_bits == .f64);
+
+        return notMask | (isMask & noTag) == 1;
     }
 
     /// Determine if the payload of the value is a NaN by IEEE 754 standards.
@@ -405,92 +409,120 @@ pub const Value = packed struct(u64) {
     }
 
     /// Determine if the payload of the value is a normal F64.
-    /// * ie. not either of zeros, subnormal, infinity, or NaN.
+    /// * ie. not either of zeroes, subnormal, infinity, or NaN.
     pub fn isNormalF64(self: Value) bool {
         return std.math.isNormal(@as(f64, @bitCast(self)));
     }
 
     /// Determine if the payload of the value is an i48.
     pub fn isI48(self: Value) bool {
-        return @intFromBool(self.tag_bits == .i48)
-             & @intFromBool(self.nan_bits == NAN_FILL)
-             == 1;
+        const mask = comptime (Value {
+            .nan_bits = NAN_MASK,
+            .tag_bits = .i48,
+            .val_bits = .fromBits(0),
+        }).asBits();
+
+        return self.asBits() & mask == mask;
     }
 
     /// Determine if the payload of the value is a u48.
     pub fn isU48(self: Value) bool {
-        return @intFromBool(self.tag_bits == .u48) & @intFromBool(self.nan_bits == NAN_FILL) == 1;
+        const mask = comptime (Value {
+            .nan_bits = NAN_MASK,
+            .tag_bits = .u48,
+            .val_bits = .fromBits(0),
+        }).asBits();
+
+        return self.asBits() & mask == mask;
     }
 
     /// Determine if the payload of the value is a character.
     pub fn isChar(self: Value) bool {
-        return @intFromBool(self.tag_bits == .char) & @intFromBool(self.nan_bits == NAN_FILL) == 1;
+        const mask = comptime (Value {
+            .nan_bits = NAN_MASK,
+            .tag_bits = .char,
+            .val_bits = .fromBits(0),
+        }).asBits();
+
+        return self.asBits() & mask == mask;
     }
 
     /// Determine if the payload of the value is a boolean.
     pub fn isBool(self: Value) bool {
-        return @intFromBool(self.tag_bits == .bool) & @intFromBool(self.nan_bits == NAN_FILL) == 1;
+        const mask = comptime (Value {
+            .nan_bits = NAN_MASK,
+            .tag_bits = .bool,
+            .val_bits = .fromBits(0),
+        }).asBits();
+
+        return self.asBits() & mask == mask;
     }
 
     /// Determine if the payload of the value is a symbol.
     pub fn isSymbol(self: Value) bool {
-        return @intFromBool(self.tag_bits == .symbol) & @intFromBool(self.nan_bits == NAN_FILL) == 1;
+        const mask = comptime (Value {
+            .nan_bits = NAN_MASK,
+            .tag_bits = .symbol,
+            .val_bits = .fromBits(0),
+        }).asBits();
+
+        return self.asBits() & mask == mask;
     }
 
     /// Determine if the payload of the value is an object.
     pub fn isObject(self: Value) bool {
-        return @intFromBool(self.tag_bits == .object)
-             & @intFromBool(self.nan_bits == NAN_FILL)
-             & @intFromBool(self.val_bits.obj_bits != .nil)
-             == 1;
+        const mask = comptime (Value {
+            .nan_bits = NAN_MASK,
+            .tag_bits = .object,
+            .val_bits = .fromBits(0),
+        }).asBits();
+
+        return self.asBits() & mask == mask
+           and self.val_bits.obj_bits != .nil;
+    }
+
+    /// Determine if the payload of the value is an object.
+    pub fn isObj(self: Value, obj: Obj) bool {
+        const mask = (Value {
+            .nan_bits = NAN_MASK,
+            .tag_bits = .object,
+            .val_bits = .{
+                .ptr_bits = 0,
+                .obj_bits = obj,
+            },
+        }).asBits();
+
+        return self.asBits() & mask == mask;
     }
 
     /// Determine if the payload of the value is a bytecode function.
     pub fn isBytecode(self: Value) bool {
-        return @intFromBool(self.tag_bits == .object)
-             & @intFromBool(self.nan_bits == NAN_FILL)
-             & @intFromBool(self.val_bits.obj_bits == .bytecode)
-             == 1;
+        return self.isObj(.bytecode);
     }
 
     /// Determine if the payload of the value is a builtin address.
     pub fn isBuiltin(self: Value) bool {
-        return @intFromBool(self.tag_bits == .object)
-             & @intFromBool(self.nan_bits == NAN_FILL)
-             & @intFromBool(self.val_bits.obj_bits == .builtin)
-             == 1;
+        return self.isObj(.builtin);
     }
 
     /// Determine if the payload of the value is a foreign address.
     pub fn isForeign(self: Value) bool {
-        return @intFromBool(self.tag_bits == .object)
-             & @intFromBool(self.nan_bits == NAN_FILL)
-             & @intFromBool(self.val_bits.obj_bits == .foreign)
-             == 1;
+        return self.isObj(.foreign);
     }
 
     /// Determine if the payload of the value is a string.
     pub fn isString(self: Value) bool {
-        return @intFromBool(self.tag_bits == .object)
-             & @intFromBool(self.nan_bits == NAN_FILL)
-             & @intFromBool(self.val_bits.obj_bits == .string)
-             == 1;
+        return self.isObj(.string);
     }
 
     /// Determine if the payload of the value is a concrete syntax tree.
     pub fn isCst(self: Value) bool {
-        return @intFromBool(self.tag_bits == .object)
-             & @intFromBool(self.nan_bits == NAN_FILL)
-             & @intFromBool(self.val_bits.obj_bits == .cst)
-             == 1;
+        return self.isObj(.cst);
     }
 
     /// Determine if the payload of the value is a meta-language expression.
     pub fn isExpr(self: Value) bool {
-        return @intFromBool(self.tag_bits == .object)
-             & @intFromBool(self.nan_bits == NAN_FILL)
-             & @intFromBool(self.val_bits.obj_bits == .expr)
-             == 1;
+        return self.isObj(.expr);
     }
 
 
@@ -541,6 +573,13 @@ pub const Value = packed struct(u64) {
     /// Extract the object payload of a value.
     pub fn asObject(self: Value) ?*anyopaque {
         if (!self.isObject()) return null;
+
+        return self.val_bits.forceObject();
+    }
+
+    /// Extract the object payload of a value if it is the right object type.
+    pub fn asObj(self: Value, obj: Obj) ?*anyopaque {
+        if (!self.isObj(obj)) return null;
 
         return self.val_bits.forceObject();
     }
@@ -640,6 +679,14 @@ pub const Value = packed struct(u64) {
     /// * only checked in safe modes
     pub fn forceObject(self: Value) *anyopaque {
         std.debug.assert(self.isObject());
+
+        return self.val_bits.forceObject();
+    }
+
+    /// Extract the object payload of a value if it is the right object type.
+    /// * only checked in safe modes
+    pub fn forceObj(self: Value, obj: Obj) *anyopaque {
+        std.debug.assert(self.isObj(obj));
 
         return self.val_bits.forceObject();
     }
