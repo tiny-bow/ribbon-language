@@ -68,7 +68,7 @@ pub const Value = packed struct(u64) {
 
     /// The tag bits distinguish between different types of immediate values, separating them from f64 and object.
     pub const Tag = enum(u3) {
-        /// Value payload is an f64. Not actually encoded in `Value`'s tag bits; f64 is the default form. `0b000`
+        /// Value payload is an f64. `0b000`
         f64 = 0b000,
         /// Value payload is a 48-bit signed integer. `0b001`
         i48 = 0b001,
