@@ -383,7 +383,7 @@ pub const Value = packed struct(u64) {
     }
 
     /// Determine if the payload of the value is a NaN by IEEE 754 standards.
-    /// * note this will return `false` for i48/u48 etc.
+    /// * note this will return `true` for i48/u48 etc.
     pub fn isNaN(self: Value) bool {
         return std.math.isNan(@as(f64, @bitCast(self)));
     }
