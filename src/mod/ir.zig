@@ -1132,6 +1132,20 @@ pub const Context = struct {
         return self;
     }
 
+    /// Clear the context, resetting all data structures to their initial state, but retaining memory for tables.
+    pub fn clear(self: *Context) void {
+        inline for (comptime std.meta.fieldNames(@FieldType(Context, "map"))) |map_name| {
+            @field(self.map, map_name).clearRetainingCapacity();
+        }
+
+        inline for (comptime std.meta.fieldNames(@FieldType(Context, "table"))) |table_name| {
+            @field(self.table, table_name).deinitData(self.gpa);
+            @field(self.table, table_name).clear();
+        }
+
+        _ = self.arena.reset(.retain_capacity);
+    }
+
     /// Deinitializes the context, freeing all memory that has since been allocated with the provided allocator.
     pub fn deinit(self: *Context) void {
         inline for (comptime std.meta.fieldNames(@FieldType(Context, "map"))) |map_name| {
