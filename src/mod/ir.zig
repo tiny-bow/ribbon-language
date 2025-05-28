@@ -3430,6 +3430,8 @@ pub const Visitor = struct {
         return map;
     }
 
+    /// Recursively merge the provided node and all nodes referenced by it, from the visitor's graph into the destination graph.
+    /// * If the node has already been visited, it will be looked up in the provided map.
     pub fn merge(self: *Visitor, dest: *Context, map: *pl.UniqueReprMap(Key, Key, 80), handle: anytype) error{OutOfMemory, InvalidGraphState}!@TypeOf(handle) {
         const key = handle.getKey();
 
@@ -3441,6 +3443,7 @@ pub const Visitor = struct {
     }
 
     /// Recursively merge the key node and all nodes referenced by it, from the visitor's graph into the destination graph.
+    /// * If the node has already been visited, it will be looked up in the provided map.
     pub fn mergeUntyped(self: *Visitor, dest: *Context, map: *pl.UniqueReprMap(Key, Key, 80), key: Key) error{OutOfMemory, InvalidGraphState}!Key {
         if (try self.alreadyVisited(key)) return map.get(key).?;
 
