@@ -36,7 +36,11 @@ pub fn Table(comptime T: type) type {
     return struct {
         const Self = @This();
         const Id = ir.Id(T);
+
         const Data = common.SlotMap.MultiArray(T, 32, 32);
+
+        /// The type of the rows in this table.
+        pub const RowType = T;
 
         /// Multi-array based data storage for the table.
         data: Data = .empty,
@@ -91,16 +95,6 @@ pub fn Table(comptime T: type) type {
             return self.data.fields(name);
         }
 
-        fn idToRef(id: Self.Id) Data.Ref {
-            const bits: u64 = @intFromEnum(id);
-
-            return @bitCast(bits);
-        }
-
-        fn refToId(ref: Data.Ref) Self.Id {
-            return @enumFromInt(@as(u64, @bitCast(ref)));
-        }
-
         /// Get the id of a table row at a specific index.
         /// * Only bounds checked in safe modes.
         pub fn getIdFromIndex(self: *Self, index: u32) Self.Id {
@@ -109,12 +103,12 @@ pub fn Table(comptime T: type) type {
             return refToId(Data.Ref {
                 .index = slot_index,
                 .generation = self.data.__generation(index).*,
-            });
+            }).cast(T);
         }
 
         /// Get the index of a table row from its id.
         pub fn getIndex(self: *Self, id: Self.Id) ?usize {
-            return if (self.data.resolveIndex(idToRef(id))) |i| i else null; // needed because i is u32 not usize
+            return if (self.data.resolveIndex(idToRef(id.cast(anyopaque)))) |i| i else null; // needed because i is u32 not usize
         }
 
         /// Gets a pointer to a specific (row, column) cell in the table, given its id and name.
@@ -154,7 +148,7 @@ pub fn Table(comptime T: type) type {
             inline for (comptime std.meta.fields(T)) |field| {
                 const field_enum = @field(std.meta.FieldEnum(T), field.name);
                 if (comptime std.mem.eql(u8, field.name, "id")) {
-                    self.data.field(index, field_enum).* = id;
+                    self.data.field(index, field_enum).* = id.cast(T);
                     continue;
                 }
 
@@ -171,12 +165,76 @@ pub fn Table(comptime T: type) type {
                 }
             }
 
-            return id;
+            return id.cast(T);
         }
 
         /// Delete a row from the table, given its id.
         pub fn delRow(self: *Self, id: Self.Id) void {
-            self.data.destroy(idToRef(id));
+            self.data.destroy(idToRef(id.cast(anyopaque)));
+        }
+
+        /// Get an iterator over all the ids in the table.
+        pub fn iterateIds(self: *Self) RefToIdIterator(Self.RowType) {
+            return .{
+                .inner = self.data.iterator(),
+            };
+        }
+
+        /// Get an iterator over all the keys in the table.
+        pub fn iterateKeys(self: *Self) TableKeyIterator {
+            return TableKeyIterator.from(Self.RowType, self.iterateIds().cast(anyopaque));
+        }
+    };
+}
+
+
+
+pub fn idToRef(id: Id(anyopaque)) common.SlotMap.Ref(32, 32) {
+    const bits: u64 = @intFromEnum(id);
+
+    return @bitCast(bits);
+}
+
+pub fn refToId(ref: common.SlotMap.Ref(32, 32)) Id(anyopaque) {
+    return @enumFromInt(@as(u64, @bitCast(ref)));
+}
+
+pub fn RefToIdIterator(comptime T: type) type {
+    return struct {
+        /// The type of the values covered by this iterator.
+        pub const RowType = T;
+
+        inner: common.SlotMap.Iterator(32, 32),
+
+        pub fn next(self: *@This()) ?Id(T) {
+            return refToId(self.inner.next() orelse return null).cast(T);
+        }
+
+        pub fn cast(self: @This(), comptime U: type) RefToIdIterator(U) {
+            return .{ .inner = self.inner };
+        }
+    };
+}
+
+pub const TableKeyIterator = IdToKeyIterator(RefToIdIterator(anyopaque));
+
+pub fn IdToKeyIterator(comptime I: type) type {
+    return struct {
+        tag: Key.Tag,
+        inner: I,
+
+        pub fn from(comptime R: type, id_iterator: I) @This() {
+            return .{
+                .tag = comptime Key.Tag.fromRowType(R),
+                .inner = id_iterator,
+            };
+        }
+
+        pub fn next(self: *@This()) ?Key {
+            return Key {
+                .tag = self.tag,
+                .id = self.inner.next() orelse return null,
+            };
         }
     };
 }
@@ -620,6 +678,12 @@ pub const Key = packed struct(u128) {
         .id = .null,
     };
 
+    /// Indicates where the data for a key is stored.
+    pub const Storage: type = enum(u8) {
+        map,
+        table,
+    };
+
     /// Discriminator for the type of id carried by a `Key`. Generally, corresponds to a type in `ir.rows`.
     pub const Tag: type = enum(i64) { // must be 32 for abi-aligned packing with 32-bit id
         untyped = std.math.minInt(i64),
@@ -646,6 +710,15 @@ pub const Key = packed struct(u128) {
         buffer,
         key_list,
         _,
+
+        /// Increment a tag to the next value category.
+        pub fn next(self: Tag) ?Tag {
+            const max = comptime @intFromEnum(Tag.key_list);
+            const a = @intFromEnum(self);
+            if (a == max) return null; // no next tag
+
+            return @enumFromInt(a + 1);
+        }
 
         /// Convert a comptime-known Tag to the row type it represents.
         pub fn toRowType(comptime self: Tag) type {
@@ -684,6 +757,14 @@ pub const Key = packed struct(u128) {
         /// Set the field of a data structure that shares the name of a comptime-known tag.
         pub fn setField(self: Tag, data: anytype, value: @FieldType(@typeInfo(@TypeOf(data)).pointer.child, @tagName(self))) void {
             @field(data, @tagName(self)) = value;
+        }
+
+        /// Determine whether the tag's data row lives in a map or a table.
+        pub fn getStorage(self: Tag) Storage {
+            return switch (self) {
+                .name, .source => .map,
+                else => .table,
+            };
         }
 
         /// Get a pointer to the field of a data structure that shares the name of a comptime-known tag.
@@ -1408,6 +1489,149 @@ pub const Context = struct {
 
     pub fn getBuiltinIdentity(self: *Context, id: Key) ?Builtin {
         return self.map.builtin.get_a(id);
+    }
+
+    /// Get an iterator that visits all keys in this context.
+    /// * keys will be visited categorically in the order they appear in the graph;
+    ///   so all names, then all sources, then all kinds, etc.
+    /// * within categories:
+    ///     + the names of *table* entries will be visited in the order they were added to the table.
+    ///     + the names of *map* entries will be visited in their arbitrary hash order.
+    pub fn keyIterator(self: *Context) KeyIterator {
+        return KeyIterator{
+            .context = self,
+            .category = comptime Key.Tag.fromRowType(rows.Name),
+            .inner = .none,
+        };
+    }
+};
+
+pub const KeyIterator = struct {
+    context: *Context,
+    category: ?Key.Tag,
+    inner: union(enum) {
+        none: void,
+        name: @FieldType(@FieldType(Context, "map"), "name_storage").Iterator,
+        source: @FieldType(@FieldType(Context, "map"), "source_storage").Iterator,
+        table: TableKeyIterator,
+    },
+
+    pub fn next(self: *KeyIterator) ?Key {
+        switch (self.inner) {
+            inline .name, .source => |*entry_iter| {
+                const entry = entry_iter.next() orelse {
+                    // if we reach the end of the iterator, we need to switch to the next category
+                    self.inner = .none;
+                    if (self.category) |category| self.category = category.next();
+                    return self.next();
+                };
+
+                return Key.fromId(entry.b);
+            },
+
+            .table => |*key_iter| {
+                const key = key_iter.next() orelse {
+                    // if we reach the end of the key iterator, we need to switch to the next category
+                    self.inner = .none;
+                    if (self.category) |category| self.category = category.next();
+                    return self.next();
+                };
+
+                return key;
+            },
+
+            .none => if (self.category) |category| {
+                switch (category) {
+                    .name => {
+                        self.inner = .{ .name = self.context.map.name_storage.iterator() };
+                        return self.next();
+                    },
+                    .source => {
+                        self.inner = .{ .source = self.context.map.source_storage.iterator() };
+                        return self.next();
+                    },
+                    .kind => {
+                        self.inner = .{ .table = self.context.table.kind.iterateKeys() };
+                        return self.next();
+                    },
+                    .constructor => {
+                        self.inner = .{ .table = self.context.table.constructor.iterateKeys() };
+                        return self.next();
+                    },
+                    .type => {
+                        self.inner = .{ .table = self.context.table.type.iterateKeys() };
+                        return self.next();
+                    },
+                    .effect => {
+                        self.inner = .{ .table = self.context.table.effect.iterateKeys() };
+                        return self.next();
+                    },
+                    .constant => {
+                        self.inner = .{ .table = self.context.table.constant.iterateKeys() };
+                        return self.next();
+                    },
+                    .global => {
+                        self.inner = .{ .table = self.context.table.global.iterateKeys() };
+                        return self.next();
+                    },
+                    .foreign_address => {
+                        self.inner = .{ .table = self.context.table.foreign_address.iterateKeys() };
+                        return self.next();
+                    },
+                    .builtin_address => {
+                        self.inner = .{ .table = self.context.table.builtin_address.iterateKeys() };
+                        return self.next();
+                    },
+                    .intrinsic => {
+                        self.inner = .{ .table = self.context.table.intrinsic.iterateKeys() };
+                        return self.next();
+                    },
+                    .handler => {
+                        self.inner = .{ .table = self.context.table.handler.iterateKeys() };
+                        return self.next();
+                    },
+                    .function => {
+                        self.inner = .{ .table = self.context.table.function.iterateKeys() };
+                        return self.next();
+                    },
+                    .dynamic_scope => {
+                        self.inner = .{ .table = self.context.table.dynamic_scope.iterateKeys() };
+                        return self.next();
+                    },
+                    .block => {
+                        self.inner = .{ .table = self.context.table.block.iterateKeys() };
+                        return self.next();
+                    },
+                    .variable => {
+                        self.inner = .{ .table = self.context.table.variable.iterateKeys() };
+                        return self.next();
+                    },
+                    .data_edge => {
+                        self.inner = .{ .table = self.context.table.data_edge.iterateKeys() };
+                        return self.next();
+                    },
+                    .control_edge => {
+                        self.inner = .{ .table = self.context.table.control_edge.iterateKeys() };
+                        return self.next();
+                    },
+                    .instruction => {
+                        self.inner = .{ .table = self.context.table.instruction.iterateKeys() };
+                        return self.next();
+                    },
+                    .buffer => {
+                        self.inner = .{ .table = self.context.table.buffer.iterateKeys() };
+                        return self.next();
+                    },
+                    .key_list => {
+                        self.inner = .{ .table = self.context.table.key_list.iterateKeys() };
+                        return self.next();
+                    },
+                    else => unreachable,
+                }
+            } else {
+                return null;
+            },
+        }
     }
 };
 
@@ -3122,5 +3346,12 @@ test "ir_basic_integration" {
 
     try body.append(try Instruction.create(context, .nop));
 
-    std.debug.print("{}", .{function});
+    // std.debug.print("{}", .{function});
+
+    var keys = context.keyIterator();
+
+    while (keys.next()) |key| {
+        log.debug("{}", .{key});
+        // std.debug.print("{}\n", .{key});
+    }
 }
