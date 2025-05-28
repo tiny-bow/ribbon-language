@@ -85,7 +85,7 @@ pub fn Table(comptime T: type) type {
 
         /// Get the number of rows in the table.
         pub fn rowCount(self: *Self) usize {
-            return self.data.len;
+            return self.data.count();
         }
 
         /// Get all entries in the table within a specific column.
@@ -658,6 +658,8 @@ pub const rows = struct {
         id: Id(@This()),
         /// the keys in this key set
         keys: pl.ArrayList(Key) = .empty,
+        /// whether or not the keylist is interned.
+        interned: bool = false,
 
         /// Deinitialize the key list, freeing its memory.
         pub fn deinit(self: *rows.KeyList, allocator: std.mem.Allocator) void {
@@ -1241,40 +1243,6 @@ pub const Context = struct {
         self.gpa.destroy(self);
     }
 
-    /// Check whether a given id is constant.
-    pub fn isConstant(self: *Context, id: anytype) bool {
-        return (self.map.mutability.get(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return false) == .constant;
-    }
-
-    /// Check whether a given id is mutable.
-    pub fn isMutable(self: *Context, id: anytype) bool {
-        return (self.map.mutability.get(Key.fromId(id.cast(RowType(@TypeOf(id))))) orelse return false) == .mutable;
-    }
-
-    /// Define the mutability of a given id.
-    pub fn setMutability(self: *Context, id: anytype, mutability: pl.Mutability) !void {
-        const key = Key.fromId(id.cast(RowType(@TypeOf(id))));
-        if (self.map.mutability.get(key)) |existing| {
-            if (existing == mutability) return;
-            log.debug("mutability of {} already set to {}", .{key, existing});
-            return error.InvalidGraphState;
-        }
-
-        try self.map.mutability.put(self.arena.child_allocator, key, mutability);
-    }
-
-    /// Convert a mutable id to a constant id.
-    pub fn makeConstant(self: *Context, id: anytype) !void {
-        const key = Key.fromId(id.cast(RowType(@TypeOf(id))));
-        if (self.map.mutability.get(key)) |existing| {
-            if (existing == .constant) return;
-        } else {
-            return error.InvalidGraphState;
-        }
-
-        try self.map.mutability.put(self.arena.child_allocator, key, .constant);
-    }
-
     /// Get an id from a source.
     /// This will intern the source if it is not already interned.
     pub fn internSource(self: *Context, src: source.Source) !Id(source.Source) {
@@ -1282,7 +1250,7 @@ pub const Context = struct {
 
         const id: Id(source.Source) = @enumFromInt(self.map.source_storage.count());
         const source_copy = try src.dupe(self.arena.allocator());
-        try self.map.source_storage.put(self.arena.child_allocator, source_copy, id);
+        try self.map.source_storage.put(self.gpa, source_copy, id);
 
         return id;
     }
@@ -1294,7 +1262,7 @@ pub const Context = struct {
 
         const id: Id(rows.Name) = @enumFromInt(self.map.name_storage.count());
         const name_copy = try self.arena.allocator().dupe(u8, name);
-        try self.map.name_storage.put(self.arena.child_allocator, name_copy, id);
+        try self.map.name_storage.put(self.gpa, name_copy, id);
 
         return id;
     }
@@ -1304,9 +1272,9 @@ pub const Context = struct {
             return existing;
         }
 
-        const id = try self.addRow(rows.Intrinsic, .constant, .{ .tag = .bytecode, .data = rows.Intrinsic.Data { .bytecode = opcode } });
+        const id = try self.addRow(rows.Intrinsic, .{ .tag = .bytecode, .data = rows.Intrinsic.Data { .bytecode = opcode } });
 
-        try self.map.intrinsic.put(self.arena.child_allocator, opcode, id);
+        try self.map.intrinsic.put(self.gpa, opcode, id);
 
         return id;
     }
@@ -1315,7 +1283,9 @@ pub const Context = struct {
     /// This will intern the keylist if it is not already interned.
     pub fn internKeyList(self: *Context, keys: []const Key) !Id(rows.KeyList) {
         lists: for (self.table.key_list.getColumn(.keys), 0..) |*existing_list, list_index| {
-            if (self.isMutable(self.table.key_list.getIdFromIndex(@intCast(list_index)))
+            const id = self.table.key_list.getIdFromIndex(@intCast(list_index));
+            const interned = self.getCell(id, .interned).?;
+            if (!interned
             or existing_list.items.len != keys.len) {
                 continue :lists;
             }
@@ -1331,10 +1301,10 @@ pub const Context = struct {
             }
         }
 
-        const id = try self.addRow(rows.KeyList, .constant , .{});
+        const id = try self.addRow(rows.KeyList , .{});
 
         const array: *pl.ArrayList(Key) = self.table.key_list.getCell(id, .keys) orelse unreachable;
-        try array.appendSlice(self.arena.child_allocator, keys);
+        try array.appendSlice(self.gpa, keys);
 
         return id;
     }
@@ -1342,10 +1312,10 @@ pub const Context = struct {
     /// Get an id from a keylist.
     /// This will create a new keylist even if a matching one already exists.
     pub fn createKeyList(self: *Context, keys: []const Key) !Id(rows.KeyList) {
-        const id = try self.addRow(rows.KeyList, .mutable, .{});
+        const id = try self.addRow(rows.KeyList, .{});
 
         const array: *pl.ArrayList(Key) = self.table.key_list.getCell(id, .keys) orelse unreachable;
-        try array.appendSlice(self.arena.child_allocator, keys);
+        try array.appendSlice(self.gpa, keys);
 
         return id;
     }
@@ -1354,14 +1324,14 @@ pub const Context = struct {
     /// * This will fail if the name is already bound to a different key,
     /// or if the key is already bound to a different name.
     pub fn bindSymbolName(self: *Context, name: Id(rows.Name), key: Key) !void {
-        try self.map.name_to_key.put(self.arena.child_allocator, name, key);
-        try self.map.key_to_name.put(self.arena.child_allocator, key, name);
+        try self.map.name_to_key.put(self.gpa, name, key);
+        try self.map.key_to_name.put(self.gpa, key, name);
     }
 
     /// Bind a key to a name, allowing the generation of debug information.
     /// * overrides any existing binding for the key; does not clobber symbol-table entry.
-    pub fn bindDebugName(self: *Context, name: Id(rows.Name), id: anytype) !void {
-        try self.map.key_to_name.put(self.arena.child_allocator, Key.fromId(id), name);
+    pub fn bindDebugName(self: *Context, name: Id(rows.Name), key: Key) !void {
+        try self.map.key_to_name.put(self.gpa, key, name);
     }
 
     /// Bind an origin to a key.
@@ -1378,12 +1348,12 @@ pub const Context = struct {
             return error.DuplicateNameBinding;
         }
 
-        try self.map.origin.put(self.arena.child_allocator, key, origin);
+        try self.map.origin.put(self.gpa, key, origin);
     }
 
     /// Bind a formatting function to a key.
     pub fn bindFormatter(self: *Context, key: Key, function: *const FormatFunction) !void {
-        try self.map.formatter.put(self.arena.child_allocator, key, function);
+        try self.map.formatter.put(self.gpa, key, function);
     }
 
     /// Get the last name bound to a key, if any.
@@ -1444,25 +1414,26 @@ pub const Context = struct {
 
     /// Delete a specific row in the tables within this context.
     pub fn delRow(self: *Context, id: anytype) void {
-        std.debug.assert(!self.isConstant(id));
-
         const tag = comptime Key.Tag.fromIdType(@TypeOf(id));
         const table = tag.fieldPtr(&self.table);
+
+        if (comptime tag == .key_list) {
+            // we do not delete interned key lists
+            std.debug.assert(!(self.getCell(id, .interned) orelse false));
+        }
 
         table.delRow(id.cast(RowType(@TypeOf(id))));
     }
 
     /// Add a new row to the tables within this context.
-    pub fn addRow(self: *Context, comptime Row: type, mutability: pl.Mutability, args: anytype) !Id(Row) {
+    pub fn addRow(self: *Context, comptime Row: type, args: anytype) !Id(Row) {
         const tag = comptime Key.Tag.fromRowType(Row);
         const table = tag.fieldPtr(&self.table);
 
-        log.debug("adding {s} row to table {} @{x}: {}", .{@tagName(mutability), tag, @intFromPtr(table), table.*});
+        log.debug("adding row to table {} @{x}: {}", .{tag, @intFromPtr(table), table.*});
 
-        const id = try table.addRow(self.arena.child_allocator, args);
+        const id = try table.addRow(self.gpa, args);
         errdefer table.delRow(id);
-
-        try self.setMutability(id, mutability);
 
         return id.cast(Row);
     }
@@ -1478,7 +1449,7 @@ pub const Context = struct {
 
         const key = try @field(builtin_initializers, @tagName(id))(self);
 
-        try self.map.builtin.put(self.arena.child_allocator, id, key);
+        try self.map.builtin.put(self.gpa, id, key);
 
         return wrapId(self, key.toIdUnchecked(Row));
     }
@@ -1489,6 +1460,20 @@ pub const Context = struct {
 
     pub fn getBuiltinIdentity(self: *Context, id: Key) ?Builtin {
         return self.map.builtin.get_a(id);
+    }
+
+    /// Get the number of unique keys in this context.
+    pub fn getKeyCount(self: *Context) usize {
+        var count: usize = 0;
+
+        count += self.map.name_storage.count();
+        count += self.map.source_storage.count();
+
+        inline for (comptime std.meta.fieldNames(@FieldType(Context, "table"))) |table_name| {
+            count += @field(self.table, table_name).rowCount();
+        }
+
+        return count;
     }
 
     /// Get an iterator that visits all keys in this context.
@@ -1681,19 +1666,12 @@ pub fn HandleBase(comptime Self: type) type {
         const Id = @FieldType(Self, "id");
         const Row = Mixin.Id.Value;
 
+        /// The ir.rows type of this handle.
+        pub const RowType = Row;
+
         /// Get a low-level Key from this handle.
         pub fn getKey(self: Self) Key {
             return Key.fromId(self.id);
-        }
-
-        /// Determine if the value bound by this handle is mutable.
-        pub fn isMutable(self: Self) bool {
-            return self.context.isMutable(self.id);
-        }
-
-        /// Determine if the value bound by this handle is constant.
-        pub fn isConstant(self: Self) bool {
-            return self.context.isConstant(self.id);
         }
 
         /// Get the symbol name binding the value associated with this handle, if present.
@@ -1733,6 +1711,11 @@ pub fn KeyListBase(comptime Self: type, comptime T: type) type {
             return wrapId(context, id.cast(Row));
         }
 
+        /// Determine if a key list is interned, or not.
+        pub fn isInterned(self: Self) bool {
+            return self.context.getCell(self.id.cast(rows.KeyList), .interned) orelse false;
+        }
+
         /// Deinitialize the key list, freeing its resources from the graph.
         pub fn deinit(self: Self) void {
             self.context.delRow(self.id);
@@ -1750,7 +1733,7 @@ pub fn KeyListBase(comptime Self: type, comptime T: type) type {
 
         /// Get a mutable pointer to the array list of keys in the key list.
         pub fn getMutArrayList(self: Self) ?*pl.ArrayList(Key) {
-            std.debug.assert(!self.context.isConstant(self.id));
+            std.debug.assert(!self.isInterned());
             return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys);
         }
 
@@ -1767,7 +1750,7 @@ pub fn KeyListBase(comptime Self: type, comptime T: type) type {
         /// Append a value to the key list.
         pub fn append(self: Self, value: Value) !void {
             const array = self.getMutArrayList() orelse return error.InvalidGraphState;
-            try array.append(self.context.arena.child_allocator, Key.fromId(value.id));
+            try array.append(self.context.gpa, Key.fromId(value.id));
         }
 
         /// `std.fmt` impl
@@ -1783,6 +1766,12 @@ pub const KeyList = struct {
     context: *Context,
 
     pub usingnamespace HandleBase(@This());
+
+    /// Get or create a shared KeyList from a slice of `Key`s.
+    pub fn intern(context: *Context, keys: []const Key) !KeyList {
+        const id = try context.internKeyList(keys);
+        return KeyList { .id = id.cast(rows.KeyList), .context = context };
+    }
 
     /// Create a new key list from a slice of keys.
     pub fn create(context: *Context, keys: []const Key) !KeyList {
@@ -1801,6 +1790,11 @@ pub const KeyList = struct {
         self.context.delRow(self.id);
     }
 
+    /// Determine if a key list is interned, or not.
+    pub fn isInterned(self: KeyList) bool {
+        return self.context.getCell(self.id, .interned) orelse false;
+    }
+
     /// Cast the key list to a narrower type.
     pub fn cast(self: KeyList, comptime Narrow: type) Narrow {
         return wrapId(self.context, self.id.cast(@FieldType(Narrow, "id").Value));
@@ -1812,19 +1806,30 @@ pub const KeyList = struct {
     }
 
     /// Get a mutable slice of keys in the key list.
-    pub fn getSlice(self: KeyList) ?[]Key {
-        return (self.getArrayList() orelse return null).items;
+    pub fn getMutSlice(self: KeyList) ?[]Key {
+        return (self.getMutArrayList() orelse return null).items;
     }
 
     /// Get a mutable pointer to the array list of keys in the key list.
-    pub fn getArrayList(self: KeyList) ?*pl.ArrayList(Key) {
-        return self.context.getCellPtr(self.id.cast(rows.KeyList), .keys);
+    pub fn getMutArrayList(self: KeyList) ?*pl.ArrayList(Key) {
+        std.debug.assert(!self.isInterned());
+        return self.context.getCellPtr(self.id, .keys);
+    }
+
+    /// Get a slice of keys in the key list.
+    pub fn getSlice(self: KeyList) ?[]const Key {
+        return (self.getArrayList() orelse return null).items;
+    }
+
+    /// Get a pointer to the array list of keys in the key list.
+    pub fn getArrayList(self: KeyList) ?*const pl.ArrayList(Key) {
+        return self.context.getCellPtr(self.id, .keys);
     }
 
     /// Add a key to the key list.
     pub fn append(self: KeyList, key: Key) !void {
-        const array = self.getArrayList() orelse return error.InvalidGraphState;
-        try array.append(self.context.arena.child_allocator, key);
+        const array = self.getMutArrayList() orelse return error.InvalidGraphState;
+        try array.append(self.context.gpa, key);
     }
 
     /// `std.fmt` impl
@@ -2005,8 +2010,8 @@ pub const Constructor = struct {
     pub usingnamespace HandleBase(@This());
 
     /// Create a new constructor with the given kind.
-    pub fn init(context: *Context, kind: Kind) !Constructor {
-        const id = try context.addRow(rows.Constructor, .mutable, .{ .kind = kind.id });
+    pub fn init(context: *Context, kind: ?Kind) !Constructor {
+        const id = try context.addRow(rows.Constructor, .{ .kind = if (kind) |x| x.id else .null });
         return Constructor{ .id = id, .context = context };
     }
 
@@ -2030,7 +2035,7 @@ pub const Constructor = struct {
 
     /// Get the output tag of this constructor's kind.
     pub fn getOutputKindTag(self: Constructor) ?rows.Kind.Tag {
-        return (self.getKind() orelse return null).getOutputTag();
+        return (self.getKind() orelse return null).getOutputTag() catch return null;
     }
 
     /// Get the number of input kinds for this constructor's kind.
@@ -2075,19 +2080,19 @@ pub const Kind = struct {
             }
         }
 
-        return Kind.init(context, .constant, tag, kind_list);
+        return Kind.init(context, tag, kind_list);
     }
 
     /// Create a new Kind with the given tag and a slice of input kinds.
     pub fn create(context: *Context, tag: rows.Kind.Tag, ids: []const Kind) !Kind {
         const kind_list = try KindList.create(context, ids);
 
-        return Kind.init(context, .mutable, tag, kind_list);
+        return Kind.init(context, tag, kind_list);
     }
 
     /// Initialize a new Kind with the given mutability, tag, and input kinds.
-    pub fn init(context: *Context, mutability: pl.Mutability, tag: rows.Kind.Tag, inputs: ?KindList) !Kind {
-        const id = try context.addRow(rows.Kind, mutability, .{ .tag = tag, .inputs = if (inputs) |x| x.id.cast(rows.KeyList) else .null });
+    pub fn init(context: *Context, tag: rows.Kind.Tag, inputs: ?KindList) !Kind {
+        const id = try context.addRow(rows.Kind, .{ .tag = tag, .inputs = if (inputs) |x| x.id.cast(rows.KeyList) else .null });
         return Kind{ .id = id, .context = context };
     }
 
@@ -2112,8 +2117,8 @@ pub const Kind = struct {
     }
 
     /// Get the output tag for this Kind.
-    pub fn getOutputTag(self: Kind) ?rows.Kind.Tag {
-        return (self.context.table.kind.getCell(self.id, .tag) orelse return null).*;
+    pub fn getOutputTag(self: Kind) !rows.Kind.Tag {
+        return (self.context.table.kind.getCell(self.id, .tag) orelse return error.InvalidGraphState).*;
     }
 
     /// Override the input KindList for this Kind.
@@ -2155,13 +2160,13 @@ pub const Type = struct {
             }
         }
 
-        return Type.init(context, .constant, constructor, type_list);
+        return Type.init(context, constructor, type_list);
     }
 
     /// Create a new int-kinded type with the given value.
     pub fn createInt(context: *Context, value: i256) !Type {
         const constructor = try context.getBuiltin(.int_constructor);
-        const ty = try Type.init(context, .mutable, constructor, null);
+        const ty = try Type.init(context, constructor, null);
 
         const constant = try Constant.fromUnownedBytes(context, ty, std.mem.asBytes(&value));
         const inputs = try KeyList.create(context, &.{ constant.getKey() });
@@ -2204,12 +2209,12 @@ pub const Type = struct {
         const type_list = try TypeList.create(context, inputs);
         errdefer type_list.deinit();
 
-        return Type.init(context, .mutable, constructor, type_list);
+        return Type.init(context, constructor, type_list);
     }
 
     /// Initialize a new Type with the given mutability, constructor, and input types.
-    pub fn init(context: *Context, mutability: pl.Mutability, constructor: ?Constructor, inputs: ?TypeList) !Type {
-        const id = try context.addRow(rows.Type, mutability, .{ .constructor = if (constructor) |x| x.id else .null, .inputs = if (inputs) |x| x.id.cast(rows.KeyList) else .null });
+    pub fn init(context: *Context, constructor: ?Constructor, inputs: ?TypeList) !Type {
+        const id = try context.addRow(rows.Type, .{ .constructor = if (constructor) |x| x.id else .null, .inputs = if (inputs) |x| x.id.cast(rows.KeyList) else .null });
         return Type{ .id = id, .context = context };
     }
 
@@ -2287,7 +2292,7 @@ pub const Type = struct {
 
     /// Get the output tag of the constructor for this type.
     pub fn getConstructorOutputKindTag(self: Type) ?rows.Kind.Tag {
-        return (self.getConstructorKind() orelse return null).getOutputTag();
+        return (self.getConstructorKind() orelse return null).getOutputTag() catch return null;
     }
 
     /// Get the number of input kinds for the constructor of this type.
@@ -2315,7 +2320,7 @@ pub const Effect = struct {
 
     /// Create a new effect with the given handler type list.
     pub fn init(context: *Context, handler_type_list: ?TypeList) !Effect {
-        const id = try context.addRow(rows.Effect, .mutable, .{ .handler_type_list = if (handler_type_list) |x| x.id else .null });
+        const id = try context.addRow(rows.Effect, .{ .handler_type_list = if (handler_type_list) |x| x.id else .null });
         return Effect{ .id = id, .context = context };
     }
 
@@ -2356,7 +2361,7 @@ pub const Handler = struct {
 
     /// Create a new handler for the provided effect, using the given function under the provided cancellation type and upvalues.
     pub fn init(context: *Context, effect: ?Effect, function: ?Function, cancellation_type: ?Type, upvalues: ?KeyList) !Handler {
-        const id = try context.addRow(rows.Handler, .mutable, .{
+        const id = try context.addRow(rows.Handler, .{
             .effect = if (effect) |x| x.id else .null,
             .function = if (function) |x| x.id else .null,
             .cancellation_type = if (cancellation_type) |x| x.id else .null,
@@ -2432,19 +2437,19 @@ pub const Constant = struct {
 
     /// Create a new constant from a block.
     pub fn fromBlock(context: *Context, ty: Type, block: Block) !Constant {
-        const id = try context.addRow(rows.Constant, .mutable, .{ .type = ty.id, .data = Key.fromId(block.id) });
+        const id = try context.addRow(rows.Constant, .{ .type = ty.id, .data = Key.fromId(block.id) });
         return Constant{ .id = id, .context = context };
     }
 
     /// Create a new constant from a buffer.
     pub fn fromBuffer(context: *Context, ty: Type, buffer: Buffer) !Constant {
-        const id = try context.addRow(rows.Constant, .mutable, .{ .type = ty.id, .data = Key.fromId(buffer.id) });
+        const id = try context.addRow(rows.Constant, .{ .type = ty.id, .data = Key.fromId(buffer.id) });
         return Constant{ .id = id, .context = context };
     }
 
     /// Create a new constant from a byte slice already owned by the ir context.
     pub fn fromOwnedBytes(context: *Context, ty: Type, owned_bytes: []const u8) !Constant {
-        const buffer = try Buffer.fromOwnedBytes(context, owned_bytes);
+        const buffer = try Buffer.fromOwnedBytes(context, ty, owned_bytes);
         errdefer context.delRow(buffer.id);
 
         return Constant.fromBuffer(context, ty, buffer);
@@ -2452,15 +2457,21 @@ pub const Constant = struct {
 
     /// Create a new constant from an unowned byte slice.
     pub fn fromUnownedBytes(context: *Context, ty: Type, bytes: []const u8) !Constant {
-        const buffer = try Buffer.create(context, bytes);
+        const buffer = try Buffer.fromUnownedBytes(context, ty, bytes);
         errdefer context.delRow(buffer.id);
 
         return Constant.fromBuffer(context, ty, buffer);
     }
 
     /// Create a new constant with no data binding.
-    pub fn init(context: *Context) !Constant {
-        const id = try context.addRow(rows.Constant, .mutable, .{ });
+    pub fn create(context: *Context) !Constant {
+        const id = try context.addRow(rows.Constant, .{ });
+        return Constant{ .id = id, .context = context };
+    }
+
+    /// Initialize a new Constant with the type and data key.
+    pub fn init(context: *Context, ty: ?Type, data: ?Key) !Constant {
+        const id = try context.addRow(rows.Constant, .{ .type = if (ty) |x| x.id else .null, .data = if (data) |x| x else Key.none });
         return Constant{ .id = id, .context = context };
     }
 
@@ -2470,14 +2481,24 @@ pub const Constant = struct {
     }
 
     /// Get the key binding this constant's data, if it has any.
-    pub fn getDataKey(self: Constant) !Key {
-        const key = self.context.getCell(self.id, .data) orelse return error.InvalidGraphState;
-        return key;
+    pub fn getDataKey(self: Constant) ?Key {
+        return self.context.getCell(self.id, .data) orelse return null;
     }
 
     /// Override the key binding this constant's data.
     pub fn setDataKey(self: Constant, key: Key) !void {
         try self.context.setCell(self.id, .data, key);
+    }
+
+    /// Get the type of this constant.
+    pub fn getType(self: Constant) ?Type {
+        const id = self.context.getCell(self.id, .type) orelse return null;
+        return wrapId(self.context, id);
+    }
+
+    /// Override the type of this constant.
+    pub fn setType(self: Constant, ty: Type) !void {
+        try self.context.setCell(self.id, .type, ty.id);
     }
 
     /// `std.fmt` impl
@@ -2503,7 +2524,7 @@ pub const Global = struct {
 
     /// Create a new global variable with the given type and initializer.
     pub fn init(context: *Context, ty: ?Type, initializer: ?Constant) !Global {
-        const id = try context.addRow(rows.Global, .mutable, .{ .type = if (ty) |x| x.id else .null, .initializer = if (initializer) |x| x.id else .null });
+        const id = try context.addRow(rows.Global, .{ .type = if (ty) |x| x.id else .null, .initializer = if (initializer) |x| x.id else .null });
         return Global{ .id = id, .context = context };
     }
 
@@ -2552,8 +2573,8 @@ pub const ForeignAddress = struct {
     pub usingnamespace HandleBase(@This());
 
     /// Create a new foreign address for the given machine address and type.
-    pub fn init(context: *Context, address: ?u64, ty: ?Type) !ForeignAddress {
-        const id = try context.addRow(rows.ForeignAddress, .mutable, .{ .address = if (address) |x| x else 0, .type = if (ty) |x| x.id else .null });
+    pub fn init(context: *Context, address: u64, ty: ?Type) !ForeignAddress {
+        const id = try context.addRow(rows.ForeignAddress, .{ .address = address, .type = if (ty) |x| x.id else .null });
         return ForeignAddress{ .id = id, .context = context };
     }
 
@@ -2566,6 +2587,27 @@ pub const ForeignAddress = struct {
     pub fn format(self: ForeignAddress, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
         try self.id.format(fmt, opts, writer);
     }
+
+    /// Get the actual address binding of this foreign address.
+    pub fn getAddress(self: ForeignAddress) u64 {
+        return self.context.getCell(self.id, .address) orelse 0;
+    }
+
+    /// Override the actual address binding of this foreign address.
+    pub fn setAddress(self: ForeignAddress, address: u64) !void {
+        try self.context.setCell(self.id, .address, address);
+    }
+
+    /// Get the type of this foreign address, if it has one.
+    pub fn getType(self: ForeignAddress) ?Type {
+        const id = self.context.getCell(self.id, .type) orelse return null;
+        return wrapId(self.context, id);
+    }
+
+    /// Override the type of this foreign address.
+    pub fn setType(self: ForeignAddress, ty: Type) !void {
+        try self.context.setCell(self.id, .type, ty.id);
+    }
 };
 
 /// A handle to a builtin address in the ir graph, which can be used to represent a built-in memory location provided by the runtime.
@@ -2576,8 +2618,8 @@ pub const BuiltinAddress = struct {
     pub usingnamespace HandleBase(@This());
 
     /// Create a new builtin address for the given machine address and type.
-    pub fn init(context: *Context, address: ?u64, ty: ?Type) !BuiltinAddress {
-        const id = try context.addRow(rows.BuiltinAddress, .mutable, .{ .address = if (address) |x| x else 0, .type = if (ty) |x| x.id else .null });
+    pub fn init(context: *Context, address: u64, ty: ?Type) !BuiltinAddress {
+        const id = try context.addRow(rows.BuiltinAddress, .{ .address = address, .type = if (ty) |x| x.id else .null });
         return BuiltinAddress{ .id = id, .context = context };
     }
 
@@ -2589,6 +2631,27 @@ pub const BuiltinAddress = struct {
     /// `std.fmt` impl
     pub fn format(self: BuiltinAddress, comptime fmt: []const u8, opts: std.fmt.FormatOptions, writer: anytype) !void {
         try self.id.format(fmt, opts, writer);
+    }
+
+    /// Get the address of this builtin.
+    pub fn getAddress(self: BuiltinAddress) u64 {
+        return self.context.getCell(self.id, .address) orelse 0;
+    }
+
+    /// Override the address of this builtin.
+    pub fn setAddress(self: BuiltinAddress, address: u64) !void {
+        try self.context.setCell(self.id, .address, address);
+    }
+
+    /// Get the type of this builtin address, if it has one.
+    pub fn getType(self: BuiltinAddress) ?Type {
+        const id = self.context.getCell(self.id, .type) orelse return null;
+        return wrapId(self.context, id);
+    }
+
+    /// Override the type of this builtin address.
+    pub fn setType(self: BuiltinAddress, ty: Type) !void {
+        try self.context.setCell(self.id, .type, ty.id);
     }
 };
 
@@ -2627,23 +2690,23 @@ pub const Buffer = struct {
     pub usingnamespace HandleBase(@This());
 
     /// Create a new buffer from a slice of bytes that is already owned by the ir context.
-    pub fn fromOwnedBytes(context: *Context, owned_data: []const u8) !Buffer {
-        const id = try context.addRow(rows.Buffer, .mutable, .{ .data = owned_data });
+    pub fn fromOwnedBytes(context: *Context, ty: ?Type, owned_data: []const u8) !Buffer {
+        const id = try context.addRow(rows.Buffer, .{ .type = if (ty) |x| x.id else .null, .data = owned_data });
         return wrapId(context, id);
     }
 
     /// Create a new buffer from an unowned slice of bytes, which will be copied into the ir context's arena.
-    pub fn create(context: *Context, unowned_data: []const u8) !Buffer {
+    pub fn fromUnownedBytes(context: *Context, ty: ?Type, unowned_data: []const u8) !Buffer {
         const owned_data = try context.arena.allocator().dupe(u8, unowned_data);
         errdefer context.arena.allocator().free(owned_data);
 
-        const id = try context.addRow(rows.Buffer, .mutable, .{ .data = owned_data });
+        const id = try context.addRow(rows.Buffer, .{ .type = if (ty) |x| x.id else .null, .data = owned_data });
         return wrapId(context, id);
     }
 
     /// Create a new buffer with no data binding.
-    pub fn init(context: *Context) !Buffer {
-        const id = try context.addRow(rows.Buffer, .mutable, .{ });
+    pub fn create(context: *Context, ty: ?Type) !Buffer {
+        const id = try context.addRow(rows.Buffer, .{ .type = if (ty) |x| x.id else .null });
         return wrapId(context, id);
     }
 
@@ -2661,6 +2724,17 @@ pub const Buffer = struct {
     /// Get the data slice of this buffer.
     pub fn getData(self: Buffer) ?[]const u8 {
         return self.context.getCell(self.id, .data);
+    }
+
+    /// Override the type of this buffer.
+    pub fn setType(self: Buffer, ty: Type) !void {
+        try self.context.setCell(self.id, .type, ty.id);
+    }
+
+    /// Get the type of this buffer.
+    pub fn getType(self: Buffer) ?Type {
+        const id = self.context.getCell(self.id, .type) orelse return null;
+        return wrapId(self.context, id);
     }
 
     /// `std.fmt` impl
@@ -2714,7 +2788,7 @@ pub const Function = struct {
     /// Create a new function with the given type and body.
     /// * Does not create variable bindings for the input types of the function.
     pub fn init(context: *Context, ty: ?Type, body: ?Block) !Function {
-        const id = try context.addRow(rows.Function, .mutable, .{ .type = if (ty) |x| x.id else .null, .body = if (body) |x| x.id else (try Block.init(context, null, null, null)).id });
+        const id = try context.addRow(rows.Function, .{ .type = if (ty) |x| x.id else .null, .body = if (body) |x| x.id else (try Block.init(context, null, null, null)).id });
         return wrapId(context, id);
     }
 
@@ -2808,8 +2882,8 @@ pub const DynamicScope = struct {
     }
 
     /// Create a new dynamic scope with the given inputs and handler list.
-    pub fn init(context: *Context, inputs: KeyList, handler_list: HandlerList) !DynamicScope {
-        const id = try context.addRow(rows.DynamicScope, .mutable, .{ .inputs = inputs.id, .handler_list = handler_list.id });
+    pub fn init(context: *Context, inputs: ?KeyList, handler_list: ?HandlerList) !DynamicScope {
+        const id = try context.addRow(rows.DynamicScope, .{ .inputs = if (inputs) |x| x.id else .null, .handler_list = if (handler_list) |x| x.id else .null });
         return DynamicScope{ .id = id, .context = context };
     }
 
@@ -2870,7 +2944,7 @@ pub const Variable = struct {
 
     /// Create a new variable with the given type.
     pub fn init(context: *Context, ty: ?Type) !Variable {
-        const id = try context.addRow(rows.Variable, .mutable, .{ .type = if (ty) |t| t.id else .null });
+        const id = try context.addRow(rows.Variable, .{ .type = if (ty) |t| t.id else .null });
         return wrapId(context, id);
     }
 
@@ -2932,7 +3006,7 @@ pub const Block = struct {
         dynamic_scope: ?DynamicScope,
         contents: ?KeyList,
     ) !Block {
-        const id = try context.addRow(rows.Block, .mutable, .{
+        const id = try context.addRow(rows.Block, .{
             .variables = if (variables) |x| x.id else (try VariableList.init(context)).id,
             .dynamic_scope = if (dynamic_scope) |x| x.id else .null,
             .contents = if (contents) |x| x.id else (try KeyList.init(context)).id,
@@ -3070,7 +3144,7 @@ pub const Instruction = struct {
     /// Create a new instruction with the given operation, optionally specifying its type.
     /// * Type can be computed later if needed.
     pub fn init(context: *Context, ty: ?Type, operation: ?Operation) !Instruction {
-        const id = try context.addRow(rows.Instruction, .mutable, .{ .type = if (ty) |t| t.id else .null, .operation = operation orelse .@"unreachable" });
+        const id = try context.addRow(rows.Instruction, .{ .type = if (ty) |t| t.id else .null, .operation = operation orelse .@"unreachable" });
         return wrapId(context, id);
     }
 
@@ -3117,13 +3191,13 @@ pub const ControlEdge = struct {
 
     /// Create a new control edge with no source or destination.
     pub fn init(context: *Context) !ControlEdge {
-        const id = try context.addRow(rows.ControlEdge, .mutable, .{ });
+        const id = try context.addRow(rows.ControlEdge, .{ });
         return ControlEdge{ .id = id, .context = context };
     }
 
     /// Create a new control edge with the given source and destination keys and indices.
     pub fn create(context: *Context, src: Key, dest: Key, source_index: usize, destination_index: usize) !ControlEdge {
-        const id = try context.addRow(rows.ControlEdge, .mutable, .{ .source = src, .destination = dest, .source_index = source_index, .destination_index = destination_index});
+        const id = try context.addRow(rows.ControlEdge, .{ .source = src, .destination = dest, .source_index = source_index, .destination_index = destination_index});
         return ControlEdge{ .id = id, .context = context };
     }
 
@@ -3187,13 +3261,13 @@ pub const DataEdge = struct {
 
     /// Create a new data edge with no source or destination.
     pub fn init(context: *Context) !DataEdge {
-        const id = try context.addRow(rows.DataEdge, .mutable, .{ });
+        const id = try context.addRow(rows.DataEdge, .{ });
         return wrapId(context, id);
     }
 
     /// Create a new data edge with the given source and destination keys and indices.
     pub fn create(context: *Context, src: Key, destination: Key, source_index: usize, destination_index: usize) !DataEdge {
-        const id = try context.addRow(rows.DataEdge, .mutable, .{ .source = src, .destination = destination, .source_index = source_index, .destination_index = destination_index });
+        const id = try context.addRow(rows.DataEdge, .{ .source = src, .destination = destination, .source_index = source_index, .destination_index = destination_index });
         return wrapId(context, id);
     }
 
@@ -3263,7 +3337,7 @@ pub const Visitor = struct {
 
     /// Deinitialize the Visitor, freeing its resources.
     pub fn deinit(self: *Visitor) void {
-        self.visited.deinit(self.context.arena.child_allocator);
+        self.visited.deinit(self.context.gpa);
     }
 
     /// Clear the visited set, retaining its capacity.
@@ -3273,7 +3347,7 @@ pub const Visitor = struct {
 
     /// Check if the given key has already been visited.
     pub fn alreadyVisited(self: *Visitor, key: Key) !bool {
-        return (try self.visited.getOrPut(self.context.arena.child_allocator, key)).found_existing;
+        return (try self.visited.getOrPut(self.context.gpa, key)).found_existing;
     }
 
     /// Visit all nodes reachable (via control flow) from the given key, recursively.
@@ -3306,6 +3380,271 @@ pub const Visitor = struct {
                 try self.reachable(content_key);
             }
         }
+    }
+
+    /// Merge all nodes from the visitor's graph into the graph provided here.
+    pub fn mergeAll(self: *Visitor, dest: *Context) !pl.UniqueReprMap(Key, Key, 80) {
+        var keys = self.context.keyIterator();
+
+        var map = pl.UniqueReprMap(Key, Key, 80).empty;
+        try map.ensureTotalCapacity(self.context.arena.allocator(), @intCast(self.context.getKeyCount()));
+        errdefer map.deinit(self.context.arena.allocator());
+
+        while (keys.next()) |key| {
+            _ = try self.mergeUntyped(dest, &map, key);
+        }
+
+        var key_to_name = self.context.map.key_to_name.iterator();
+        while (key_to_name.next()) |entry| {
+            const local_key: Key = entry.key_ptr.*;
+            const local_name: Name = wrapId(self.context, entry.value_ptr.*);
+
+            const dest_key = map.get(local_key).?;
+            const dest_name = try Name.intern(dest, try local_name.getText());
+
+            try dest.bindDebugName(dest_name.id, dest_key);
+        }
+
+        var name_to_key = self.context.map.name_to_key.iterator();
+        while (name_to_key.next()) |entry| {
+            const local_key: Key = entry.value_ptr.*;
+            const local_name: Name = wrapId(self.context, entry.key_ptr.*);
+
+            const dest_key = map.get(local_key).?;
+            const dest_name = try Name.intern(dest, try local_name.getText());
+
+            try dest.bindSymbolName(dest_name.id, dest_key);
+        }
+
+        var key_to_origin = self.context.map.origin.iterator();
+        while (key_to_origin.next()) |entry| {
+            const local_key: Key = entry.a;
+            const local_origin: Origin = wrapId(self.context, entry.b);
+
+            const dest_key = map.get(local_key).?;
+            const dest_origin_key = map.get(local_origin.getKey()).?;
+
+            try dest.bindOrigin(dest_origin_key.toIdUnchecked(rows.Origin), dest_key);
+        }
+
+        return map;
+    }
+
+    pub fn merge(self: *Visitor, dest: *Context, map: *pl.UniqueReprMap(Key, Key, 80), handle: anytype) error{OutOfMemory, InvalidGraphState}!@TypeOf(handle) {
+        const key = handle.getKey();
+
+        const new_key =
+            if (try self.alreadyVisited(key)) map.get(key).?
+            else try self.mergeUntyped(dest, map, key);
+
+        return wrapId(dest, new_key.toIdUnchecked(@TypeOf(handle).RowType));
+    }
+
+    /// Recursively merge the key node and all nodes referenced by it, from the visitor's graph into the destination graph.
+    pub fn mergeUntyped(self: *Visitor, dest: *Context, map: *pl.UniqueReprMap(Key, Key, 80), key: Key) error{OutOfMemory, InvalidGraphState}!Key {
+        if (try self.alreadyVisited(key)) return map.get(key).?;
+
+        const new_key = new_key: switch (key.tag) {
+            .name => {
+                const local_name = wrapId(self.context, key.toIdUnchecked(rows.Name));
+                const dest_name = try Name.intern(dest, try local_name.getText());
+
+                break :new_key dest_name.getKey();
+            },
+            .source => {
+                const local_source = wrapId(self.context, key.toIdUnchecked(source.Source));
+                const dest_source = try Source.intern(dest, local_source.getData() catch unreachable);
+
+                break :new_key dest_source.getKey();
+            },
+            .constructor => {
+                const local_constructor = wrapId(self.context, key.toIdUnchecked(rows.Constructor));
+
+                const kind =
+                    if (local_constructor.getKind()) |local_kind| try self.merge(dest, map, local_kind)
+                    else null;
+
+                const dest_constructor = try Constructor.init(dest, kind);
+
+                break :new_key dest_constructor.getKey();
+            },
+            .kind => {
+                const local_kind: Kind = wrapId(self.context, key.toIdUnchecked(rows.Kind));
+                const output_tag: rows.Kind.Tag = local_kind.getOutputTag() catch unreachable;
+                const input_kind_list =
+                    if (local_kind.getInputs()) |local_input_kinds| try self.merge(dest, map, local_input_kinds)
+                    else null;
+
+                const dest_kind = try Kind.init(dest, output_tag, input_kind_list);
+
+                break :new_key dest_kind.getKey();
+            },
+            .type => {
+                const local_type = wrapId(self.context, key.toIdUnchecked(rows.Type));
+                const constructor = if (local_type.getConstructor()) |local_constructor| try self.merge(dest, map, local_constructor) else null;
+                const input_types = if (local_type.getTypeInputs()) |local_input_types| try self.merge(dest, map, local_input_types) else null;
+
+                const dest_type = try Type.init(dest, constructor, input_types);
+
+                break :new_key dest_type.getKey();
+            },
+            .effect => {
+                const local_effect: Effect = wrapId(self.context, key.toIdUnchecked(rows.Effect));
+                const handler_type_list =
+                    if (local_effect.getHandlerTypeList()) |local_handler_types| try self.merge(dest, map, local_handler_types)
+                    else null;
+
+                const dest_effect = try Effect.init(dest, handler_type_list);
+
+                break :new_key dest_effect.getKey();
+            },
+            .constant => {
+                const local_constant = wrapId(self.context, key.toIdUnchecked(rows.Constant));
+                const ty = if (local_constant.getType()) |local_ty| try self.merge(dest, map, local_ty) else null;
+                const data = if (local_constant.getDataKey()) |local_data| try self.mergeUntyped(dest, map, local_data) else null;
+
+                const dest_constant = try Constant.init(dest, ty, data);
+
+                break :new_key dest_constant.getKey();
+            },
+            .global => {
+                const local_global = wrapId(self.context, key.toIdUnchecked(rows.Global));
+                const ty = if (local_global.getType()) |local_ty| try self.merge(dest, map, local_ty) else null;
+                const initializer = if (local_global.getInitializer()) |local_initializer| try self.merge(dest, map, local_initializer) else null;
+
+                const dest_global = try Global.init(dest, ty, initializer);
+
+                break :new_key dest_global.getKey();
+            },
+            .foreign_address => {
+                const local_address = wrapId(self.context, key.toIdUnchecked(rows.ForeignAddress));
+                const ty = if (local_address.getType()) |local_ty| try self.merge(dest, map, local_ty) else null;
+                const dest_address = try ForeignAddress.init(dest, local_address.getAddress(), ty);
+
+                break :new_key dest_address.getKey();
+            },
+            .builtin_address => {
+                const local_address = wrapId(self.context, key.toIdUnchecked(rows.BuiltinAddress));
+                const ty = if (local_address.getType()) |local_ty| try self.merge(dest, map, local_ty) else null;
+                const dest_address = try BuiltinAddress.init(dest, local_address.getAddress(), ty);
+
+                break :new_key dest_address.getKey();
+            },
+            .intrinsic => {
+                const local_intrinsic = wrapId(self.context, key.toIdUnchecked(rows.Intrinsic));
+                const dest_intrinsic = try Intrinsic.intern(dest, local_intrinsic.getOpCode().?);
+
+                break :new_key dest_intrinsic.getKey();
+            },
+            .handler => {
+                const local_handler = wrapId(self.context, key.toIdUnchecked(rows.Handler));
+                const effect = if (local_handler.getEffect()) |local_effect| try self.merge(dest, map, local_effect) else null;
+                const function = if (local_handler.getFunction()) |local_function| try self.merge(dest, map, local_function) else null;
+                const cancellation_type = if (local_handler.getCancellationType()) |local_cancellation_type| try self.merge(dest, map, local_cancellation_type) else null;
+                const upvalues = if (local_handler.getUpvalues()) |local_upvalues| try self.merge(dest, map, local_upvalues) else null;
+
+                const dest_handler = try Handler.init(dest, effect, function, cancellation_type, upvalues);
+
+                break :new_key dest_handler.getKey();
+            },
+            .function => {
+                const local_function = wrapId(self.context, key.toIdUnchecked(rows.Function));
+
+                const ty = if (local_function.getType()) |local_ty| try self.merge(dest, map, local_ty) else null;
+                const body = if (local_function.getBody()) |local_body| try self.merge(dest, map, local_body) else null;
+
+                const dest_function = try Function.init(dest, ty, body);
+
+                break :new_key dest_function.getKey();
+            },
+            .dynamic_scope => {
+                const local_scope = wrapId(self.context, key.toIdUnchecked(rows.DynamicScope));
+                const inputs = if (local_scope.getInputs()) |local_inputs| try self.merge(dest, map, local_inputs) else null;
+                const handler_list = if (local_scope.getHandlerList()) |local_handler_list| try self.merge(dest, map, local_handler_list) else null;
+
+                const dest_scope = try DynamicScope.init(dest, inputs, handler_list);
+
+                break :new_key dest_scope.getKey();
+            },
+            .block => {
+                const local_block = wrapId(self.context, key.toIdUnchecked(rows.Block));
+
+                const variables = if (local_block.getVariables()) |local_variables| try self.merge(dest, map, local_variables) else null;
+                const dynamic_scope = if (local_block.getDynamicScope()) |local_dynamic_scope| try self.merge(dest, map, local_dynamic_scope) else null;
+                const contents = if (local_block.getContents()) |local_contents| try self.merge(dest, map, local_contents) else null;
+
+                const dest_block = try Block.init(dest, variables, dynamic_scope, contents);
+
+                break :new_key dest_block.getKey();
+            },
+            .variable => {
+                const local_variable = wrapId(self.context, key.toIdUnchecked(rows.Variable));
+                const ty = if (local_variable.getType()) |local_ty| try self.merge(dest, map, local_ty) else null;
+
+                const dest_variable = try Variable.init(dest, ty);
+
+                break :new_key dest_variable.getKey();
+            },
+            .data_edge => {
+                const local_edge = wrapId(self.context, key.toIdUnchecked(rows.DataEdge));
+                const src = if (local_edge.getSource()) |local_source| try self.mergeUntyped(dest, map, local_source) else Key.none;
+                const destination = if (local_edge.getDestination()) |local_destination| try self.mergeUntyped(dest, map, local_destination) else Key.none;
+
+                const dest_edge = try DataEdge.create(dest, src, destination, local_edge.getSourceIndex(), local_edge.getDestinationIndex());
+
+                break :new_key dest_edge.getKey();
+            },
+            .control_edge => {
+                const local_edge = wrapId(self.context, key.toIdUnchecked(rows.ControlEdge));
+                const src = if (local_edge.getSource()) |local_source| try self.mergeUntyped(dest, map, local_source) else Key.none;
+                const destination = if (local_edge.getDestination()) |local_destination| try self.mergeUntyped(dest, map, local_destination) else Key.none;
+
+                const dest_edge = try ControlEdge.create(dest, src, destination, local_edge.getSourceIndex(), local_edge.getDestinationIndex());
+
+                break :new_key dest_edge.getKey();
+            },
+            .instruction => {
+                const local_instruction = wrapId(self.context, key.toIdUnchecked(rows.Instruction));
+                const ty = if (local_instruction.getType()) |local_ty| try self.merge(dest, map, local_ty) else null;
+                const operation = local_instruction.getOperation();
+
+                const dest_instruction = try Instruction.init(dest, ty, operation);
+
+                break :new_key dest_instruction.getKey();
+            },
+            .buffer => {
+                const local_buffer: Buffer = wrapId(self.context, key.toIdUnchecked(rows.Buffer));
+                const ty = if (local_buffer.getType()) |local_ty| try self.merge(dest, map, local_ty) else null;
+                const data = local_buffer.getData();
+
+                const dest_buffer = if (data) |bytes| try Buffer.fromUnownedBytes(dest, ty, bytes) else try Buffer.create(dest, ty);
+
+                break :new_key dest_buffer.getKey();
+            },
+            .key_list => {
+                const local_key_list = wrapId(self.context, key.toIdUnchecked(rows.KeyList));
+
+                var new_keys = pl.ArrayList(Key).empty;
+                try new_keys.ensureTotalCapacity(self.context.arena.allocator(), local_key_list.getCount());
+                defer new_keys.deinit(self.context.arena.allocator());
+
+                for (local_key_list.getSlice() orelse &.{}) |local_key| {
+                    const new_local_key = try self.mergeUntyped(dest, map, local_key);
+                    new_keys.appendAssumeCapacity(new_local_key);
+                }
+
+                const new_key_list =
+                    if (local_key_list.isInterned()) try KeyList.intern(dest, new_keys.items)
+                    else try KeyList.create(dest, new_keys.items);
+
+                break :new_key new_key_list.getKey();
+            },
+            else => unreachable,
+        };
+
+        map.putAssumeCapacity(key, new_key);
+
+        return new_key;
     }
 };
 
