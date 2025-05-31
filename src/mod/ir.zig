@@ -39,31 +39,59 @@ test {
 
 /// The main graph context of the ir.
 pub const Context = struct {
-    /// parent context, if any.
-    parent: ?*Context = null,
+    /// The context id. This is used to generate unique ids for nodes without knowing about sibling contexts.
+    id: u16 = 0,
+    /// State that varies between root/child contexts.
+    inner: union(enum) {
+        fresh_ctx: u16,
+        parent: *Context,
+    } = .{ .fresh_ctx = 1 },
     /// general purpose allocator for the context, used for collections and the following arena.
     gpa: std.mem.Allocator,
     /// arena allocator for the context, used for data nodes.
     arena: std.heap.ArenaAllocator,
     /// contains nodes that are not simple keylists.
-    nodes: pl.UniqueReprMap(LocalRef, Node, 80),
+    nodes: pl.UniqueReprMap(LocalRef, Node, 80) = .empty,
+    /// Used to generate context-unique ids for nodes.
+    fresh_node: u32 = 0,
 
-    pub fn init(gpa: std.mem.Allocator, parent: ?*Context) !*Context {
+    /// Create a root context with the given allocator.
+    pub fn initRoot(gpa: std.mem.Allocator) !*Context {
         var arena = std.heap.ArenaAllocator.init(gpa);
-
-        const self = try arena.allocator().create(Context);
         errdefer arena.deinit();
 
+        const self = try arena.allocator().create(Context);
+
         self.* = Context{
-            .parent = parent,
             .gpa = gpa,
             .arena = arena,
-            .nodes = pl.UniqueReprMap(LocalRef, Node, 80).empty,
         };
 
         try self.nodes.ensureTotalCapacity(self.gpa, 16384);
 
         return self;
+    }
+
+    /// Create a child context.
+    pub fn createChildContext(self: *Context) !*Context {
+        var arena = std.heap.ArenaAllocator.init(self.gpa);
+        errdefer arena.deinit();
+
+        const child = try arena.allocator().create(Context);
+
+        child.* = Context{
+            .id = self.inner.fresh_ctx,
+            .inner = .{ .parent = self },
+            .gpa = self.gpa,
+            .arena = arena,
+            .nodes = pl.UniqueReprMap(LocalRef, Node, 80).empty,
+        };
+
+        try child.nodes.ensureTotalCapacity(self.gpa, 16384);
+
+        self.inner.fresh_ctx += 1;
+
+        return child;
     }
 
     /// Clear the context, retaining the graph memory for reuse.
@@ -80,14 +108,26 @@ pub const Context = struct {
         arena.deinit();
     }
 
+    /// Generate a unique id.
+    pub fn genId(self: *Context) u48 {
+        const out = @as(u48, self.fresh_node) | @as(u48, self.inner.fresh_ctx) << 32;
+
+        self.fresh_node += 1;
+
+        return out;
+    }
+
     /// Add a node to the context, returning a reference to it.
     /// * This performs no validation on the node kind or value.
-    pub fn addNodeUnchecked(self: *Context, kind: NodeKind, value: Data) !Ref {
+    pub fn addNodeUnchecked(self: *Context, kind: NodeKind, value: Data) !LocalRef {
         const local_ref = LocalRef{
-            .type_id = kind,
-            .id = try self.nodes.insert(self.gpa, Node{ .kind = kind, .value = value }),
+            .node_kind = kind,
+            .id = self.genId(),
         };
-        return Ref{ .context = self, .inner = local_ref };
+
+        try self.nodes.put(self.gpa, local_ref, Node{ .kind = kind, .data = value });
+
+        return local_ref;
     }
 
     /// Delete a node from the context, given its reference.
@@ -95,22 +135,27 @@ pub const Context = struct {
     /// * Nodes relying on this node will be invalidated.
     /// * If the node does not exist, this is a no-op.
     pub fn delNode(self: *Context, ref: LocalRef) void {
-        const node = self.nodes.get(ref) orelse return;
+        var node = self.nodes.get(ref) orelse return;
         node.deinit(self.gpa);
         _ = self.nodes.remove(ref);
     }
 
-    /// Get a raw node from the context, given its reference.
-    pub fn getNode(self: *Context, ref: LocalRef) ?*Node {
-        return self.nodes.get(ref);
+    /// Get a pointer to raw node data, given its reference.
+    pub fn getNode(self: *Context, ref: LocalRef) ?*Data {
+        return &(self.nodes.getPtr(ref) orelse return null).data;
     }
 };
 
 /// Combines a `LocalRef` to a node in an ir context with a reference to the context itself.
 pub const Ref = packed struct(u128) {
+    /// The context this reference is bound to.
+    /// * This has to be type erased due to zig compiler limitations wrt comptime eval;
+    /// it is always of type `?*ir.Context`.
     context: ?*anyopaque,
+    /// The inner reference to the node in the context.
     inner: LocalRef,
 
+    /// The nil reference, a placeholder for an invalid or irrelevant reference.
     pub const nil = Ref {
         .context = null,
         .inner = .nil,
@@ -120,10 +165,13 @@ pub const Ref = packed struct(u128) {
 /// A reference to a node in an ir context; unlike `Ref`,
 /// this does not bind the context it is contained within.
 pub const LocalRef = packed struct (u64) {
-    type_id: NodeKind,
+    /// The kind of the node bound by this reference.
+    node_kind: NodeKind,
+    /// The unique id of the node in the context.
     id: u48,
 
-    pub const nil = LocalRef { .type_id = .nil, .id = 0 };
+    /// The nil reference, a placeholder for an invalid or irrelevant reference.
+    pub const nil = LocalRef { .node_kind = .nil, .id = 0 };
 };
 
 /// A reference to a node in the ir, which can be used to access the node's data.
@@ -137,6 +185,7 @@ pub const NodeKind = packed struct(u16) {
     /// this is always of type `ir.Discriminator`.
     discriminator: u13,
 
+    /// The nil node kind, which is used to indicate an empty or invalid node.
     pub const nil = NodeKind { .tag = @intFromEnum(Tag.nil), .discriminator = 0 };
 
     /// Create a new node kind with a data tag and the given data kind as its discriminator.
@@ -336,16 +385,18 @@ pub const structures = .{
 
 /// Body data type for data nodes.
 pub const Node = struct {
+    /// The kind of the data stored here.
     kind: NodeKind,
-    value: Data,
+    /// The untagged union of the data that can be stored here.
+    data: Data,
 
     fn deinit(self: *Node, gpa: std.mem.Allocator) void {
         switch (self.kind.getTag()) {
             .data => switch (self.kind.getDiscriminator()) {
-                .buffer => self.value.buffer.deinit(gpa),
+                .buffer => self.data.buffer.deinit(gpa),
                 else => {},
             },
-            .collection => self.value.key_list.keys.deinit(gpa),
+            .collection => self.data.ref_list.deinit(gpa),
             else => {},
         }
     }
@@ -353,17 +404,22 @@ pub const Node = struct {
 
 /// An untagged union of all the data types that can be stored in an ir node.
 pub const Data = union {
+    /// A symbolic name, such as a variable name or a function name.
     name: []const u8,
+    /// A source location.
     source: Source,
+    /// Arbitrary data, such as a string body.
     buffer: pl.ArrayList(u8),
+    /// IR-specific instruction operation.
     operation: Operation,
+    /// Bytecode instruction opcode; for use in intrinsics and final assembly.
     opcode: bytecode.Instruction.OpCode,
+    /// An arbitrary integer value, such as an index into an array.
     index: u64,
+    /// A variant describing the kind of a type.
     kind_tag: KindTag,
-    key_list: struct {
-        kind: NodeKind,
-        keys: pl.ArrayList(Ref),
-    },
+    /// Arbitrary list of graph refs, such as a list of types.
+    ref_list: pl.ArrayList(Ref),
 };
 
 /// Designates the kind of type that a node represents. Kinds provide a high-level categorization
