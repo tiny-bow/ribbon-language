@@ -39,6 +39,10 @@ pub const Source = struct {
             .location = self.location,
         };
     }
+
+    pub fn eql(self: *const Source, other: *const Source) bool {
+        return std.mem.eql(u8, self.name, other.name) and self.location == other.location;
+    }
 };
 
 pub inline fn SourceBiMap(comptime T: type, comptime Ctx: type, comptime style: pl.MapStyle) type {
