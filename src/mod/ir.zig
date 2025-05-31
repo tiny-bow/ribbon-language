@@ -25,27 +25,31 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
+pub const ContextId = common.Id.ofSize(Context, 16);
+pub const NodeId = common.Id.ofSize(Node, 32);
 
+pub const Id = packed struct {
+    context: ContextId,
+    node: NodeId,
 
-// # current objective
-//     refactor the ir towards more data-driven design
-//
-// # differences from previous version
-// * remove the special types in tables, unifying them down to a single table
-// * add the ability to reference a parent context
-// * handles wrap keys instead of ids
-// * handles formed via generic interface instead of bespoke types
+    pub const nil = Id {
+        .context = .null,
+        .node = .null,
+    };
+};
 
 
 /// The main graph context of the ir.
 pub const Context = struct {
     /// The context id. This is used to generate unique ids for nodes without knowing about sibling contexts.
-    id: u16 = 0,
+    id: ContextId = .fromInt(0),
     /// State that varies between root/child contexts.
     inner: union(enum) {
-        fresh_ctx: u16,
-        parent: *Context,
-    } = .{ .fresh_ctx = 1 },
+        root: Root,
+        child: struct {
+            root: *Context,
+        }
+    } = .{ .root = .{} },
     /// general purpose allocator for the context, used for collections and the following arena.
     gpa: std.mem.Allocator,
     /// arena allocator for the context, used for data nodes.
@@ -53,7 +57,47 @@ pub const Context = struct {
     /// contains nodes that are not simple keylists.
     nodes: pl.UniqueReprMap(LocalRef, Node, 80) = .empty,
     /// Used to generate context-unique ids for nodes.
-    fresh_node: u32 = 0,
+    fresh_node: NodeId = .fromInt(1),
+
+    /// The root context state.
+    pub const Root = struct {
+        fresh_ctx: ContextId = .fromInt(1),
+        interner: pl.HashMap(Node, LocalRef, NodeHasher, 80) = .empty,
+        children: pl.UniqueReprMap(ContextId, *Context, 80) = .empty,
+
+        /// Get a pointer to the Context this Root is stored in.
+        pub fn getRootContext(self: *Root) *Context {
+            const inner: *@FieldType(Context, "inner") = @fieldParentPtr("root", self);
+            return @fieldParentPtr("inner", inner);
+        }
+
+        /// Create a new context.
+        pub fn createContext(self: *Root) !*Context {
+            const ctx = self.getRootContext();
+
+            var arena = std.heap.ArenaAllocator.init(ctx.gpa);
+            errdefer arena.deinit();
+
+            const child = try arena.allocator().create(Context);
+
+            child.* = Context{
+                .id = ctx.inner.root.fresh_ctx.next(),
+                .inner = .{ .child = .{ .root = ctx } },
+                .gpa = ctx.gpa,
+                .arena = arena,
+                .nodes = pl.UniqueReprMap(LocalRef, Node, 80).empty,
+            };
+
+            try child.nodes.ensureTotalCapacity(ctx.gpa, 16384);
+
+            return child;
+        }
+
+        /// Get a context by its id.
+        pub fn getContext(self: *Root, id: ContextId) ?*Context {
+            return self.children.get(id);
+        }
+    };
 
     /// Create a root context with the given allocator.
     pub fn initRoot(gpa: std.mem.Allocator) !*Context {
@@ -72,28 +116,6 @@ pub const Context = struct {
         return self;
     }
 
-    /// Create a child context.
-    pub fn createChildContext(self: *Context) !*Context {
-        var arena = std.heap.ArenaAllocator.init(self.gpa);
-        errdefer arena.deinit();
-
-        const child = try arena.allocator().create(Context);
-
-        child.* = Context{
-            .id = self.inner.fresh_ctx,
-            .inner = .{ .parent = self },
-            .gpa = self.gpa,
-            .arena = arena,
-            .nodes = pl.UniqueReprMap(LocalRef, Node, 80).empty,
-        };
-
-        try child.nodes.ensureTotalCapacity(self.gpa, 16384);
-
-        self.inner.fresh_ctx += 1;
-
-        return child;
-    }
-
     /// Clear the context, retaining the graph memory for reuse.
     pub fn clear(self: *Context) void {
         self.nodes.clearRetainingCapacity();
@@ -109,25 +131,47 @@ pub const Context = struct {
     }
 
     /// Generate a unique id.
-    pub fn genId(self: *Context) u48 {
-        const out = @as(u48, self.fresh_node) | @as(u48, self.inner.fresh_ctx) << 32;
+    pub fn genId(self: *Context) Id {
+        return Id { .context = self.id, .node = self.fresh_node.next() };
+    }
 
-        self.fresh_node += 1;
+    /// Get the root state of this context.
+    pub fn getRoot(self: *Context) *Root {
+        return switch (self.inner) {
+            .root => &self.inner.root,
+            .child => &self.inner.child.root.inner.root,
+        };
+    }
 
-        return out;
+    /// Intern a node, returning a reference to it.
+    /// * This performs no validation on the node kind or value.
+    /// * If the node already exists, it will return the existing reference.
+    /// * Nodes added this way always live in the root context, even if this is a child context.
+    /// * Modifying nodes added this way is unsafe.
+    pub fn internNodeUnchecked(self: *Context, node: Node) !Ref {
+        const root = self.getRoot();
+        const ctx = root.getRootContext();
+
+        const gop = try root.interner.getOrPut(self.gpa, node);
+
+        if (!gop.found_existing) {
+            gop.value_ptr.* = (try ctx.addNodeUnchecked(node)).local;
+        }
+
+        return Ref { .context = ctx, .local = gop.value_ptr.* };
     }
 
     /// Add a node to the context, returning a reference to it.
     /// * This performs no validation on the node kind or value.
-    pub fn addNodeUnchecked(self: *Context, kind: NodeKind, value: Data) !LocalRef {
+    pub fn addNodeUnchecked(self: *Context, node: Node) !Ref {
         const local_ref = LocalRef{
-            .node_kind = kind,
+            .node_kind = node.kind,
             .id = self.genId(),
         };
 
-        try self.nodes.put(self.gpa, local_ref, Node{ .kind = kind, .data = value });
+        try self.nodes.put(self.gpa, local_ref, node);
 
-        return local_ref;
+        return Ref { .context = self, .local = local_ref };
     }
 
     /// Delete a node from the context, given its reference.
@@ -135,7 +179,7 @@ pub const Context = struct {
     /// * Nodes relying on this node will be invalidated.
     /// * If the node does not exist, this is a no-op.
     pub fn delNode(self: *Context, ref: LocalRef) void {
-        var node = self.nodes.get(ref) orelse return;
+        const node = self.nodes.getPtr(ref) orelse return;
         node.deinit(self.gpa);
         _ = self.nodes.remove(ref);
     }
@@ -153,12 +197,12 @@ pub const Ref = packed struct(u128) {
     /// it is always of type `?*ir.Context`.
     context: ?*anyopaque,
     /// The inner reference to the node in the context.
-    inner: LocalRef,
+    local: LocalRef,
 
     /// The nil reference, a placeholder for an invalid or irrelevant reference.
     pub const nil = Ref {
         .context = null,
-        .inner = .nil,
+        .local = .nil,
     };
 };
 
@@ -168,10 +212,10 @@ pub const LocalRef = packed struct (u64) {
     /// The kind of the node bound by this reference.
     node_kind: NodeKind,
     /// The unique id of the node in the context.
-    id: u48,
+    id: Id,
 
     /// The nil reference, a placeholder for an invalid or irrelevant reference.
-    pub const nil = LocalRef { .node_kind = .nil, .id = 0 };
+    pub const nil = LocalRef { .node_kind = .nil, .id = .nil };
 };
 
 /// A reference to a node in the ir, which can be used to access the node's data.
@@ -233,20 +277,20 @@ pub const Tag = enum(u3) {
 /// The discriminator of a node, which indicates the specific kind of value it contains.
 /// * Variant names are the field names of `ir.structures` and `ir.Data`, as well as `nil`.
 pub const Discriminator: type = Discriminator: {
-    const structure_fields = std.meta.fieldNames(@TypeOf(structures));
     const data_fields = std.meta.fieldNames(Data);
+    const structure_fields = std.meta.fieldNames(@TypeOf(structures));
 
-    var fields = [1]std.builtin.Type.EnumField {undefined} ** (structure_fields.len + data_fields.len - 1);
+    var fields = [1]std.builtin.Type.EnumField {undefined} ** (structure_fields.len + data_fields.len + 1);
     fields[0] = .{ .name = "nil", .value = 0 };
 
     var i = 1;
 
-    for (structure_fields[1..], 0..) |field, j| {
+    for (data_fields[0..], 0..) |field, j| {
         fields[i] = .{ .name = field, .value = j + 1000 };
         i += 1;
     }
 
-    for (data_fields[1..], 0..) |field, j| {
+    for (structure_fields[0..], 0..) |field, j| {
         fields[i] = .{ .name = field, .value = j + 2000 };
         i += 1;
     }
@@ -381,6 +425,48 @@ pub const structures = .{
     .intrinsic = .{
         .data = .{ .data, .nil }, // the data of the intrinsic function; usually, a bytecode opcode
     },
+};
+
+/// 64-bit context providing eql and hash functions for `Node` types.
+/// This is used by the interner to map constant value nodes to their references.
+pub const NodeHasher = struct {
+    pub fn eql(_: @This(), a: Node, b: Node) bool {
+        if (a.kind != b.kind) return false;
+
+        return switch (a.kind.getDiscriminator()) {
+            .nil => true,
+            .name => std.mem.eql(u8, a.data.name, b.data.name),
+            .source => a.data.source.eql(&b.data.source),
+            .buffer => std.mem.eql(u8, a.data.buffer.items, b.data.buffer.items),
+            .operation => a.data.operation == b.data.operation,
+            .opcode => a.data.opcode == b.data.opcode,
+            .index => a.data.index == b.data.index,
+            .kind_tag => a.data.kind_tag == b.data.kind_tag,
+            else => std.mem.eql(Ref, a.data.ref_list.items, b.data.ref_list.items),
+        };
+    }
+
+    pub fn hash(_: @This(), data: Node) u64 {
+        var hasher = std.hash.Fnv1a_64.init();
+        hasher.update(std.mem.asBytes(&data.kind));
+
+        switch (data.kind.getDiscriminator()) {
+            .nil => hasher.update(&.{0}),
+            .name => hasher.update(data.data.name),
+            .source => {
+                hasher.update(data.data.source.name);
+                hasher.update(std.mem.asBytes(&data.data.source.location));
+            },
+            .buffer => hasher.update(data.data.buffer.items),
+            .operation => hasher.update(std.mem.asBytes(&data.data.operation)),
+            .opcode => hasher.update(std.mem.asBytes(&data.data.opcode)),
+            .index => hasher.update(std.mem.asBytes(&data.data.index)),
+            .kind_tag => hasher.update(std.mem.asBytes(&data.data.kind_tag)),
+            else => hasher.update(std.mem.sliceAsBytes(data.data.ref_list.items)),
+        }
+
+        return hasher.final();
+    }
 };
 
 /// Body data type for data nodes.
