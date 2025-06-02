@@ -25,19 +25,6 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-pub const ContextId = common.Id.ofSize(Context, 16);
-pub const NodeId = common.Id.ofSize(Node, 32);
-
-pub const Id = packed struct {
-    context: ContextId,
-    node: NodeId,
-
-    pub const nil = Id {
-        .context = .null,
-        .node = .null,
-    };
-};
-
 
 /// The main graph context of the ir.
 pub const Context = struct {
@@ -56,13 +43,18 @@ pub const Context = struct {
     arena: std.heap.ArenaAllocator,
     /// contains nodes that are not simple keylists.
     nodes: pl.UniqueReprMap(LocalRef, Node, 80) = .empty,
+    /// Maps constant value nodes to references.
+    interner: pl.HashMap(Node, LocalRef, NodeHasher, 80) = .empty,
+    /// Flags whether a node is interned or not.
+    interned_refs: pl.UniqueReprSet(LocalRef, 80) = .empty,
     /// Used to generate context-unique ids for nodes.
     fresh_node: NodeId = .fromInt(1),
 
     /// The root context state.
     pub const Root = struct {
+        /// Used to generate unique ids for child contexts.
         fresh_ctx: ContextId = .fromInt(1),
-        interner: pl.HashMap(Node, LocalRef, NodeHasher, 80) = .empty,
+        /// All child contexts owned by this root context.
         children: pl.UniqueReprMap(ContextId, *Context, 80) = .empty,
 
         /// Get a pointer to the Context this Root is stored in.
@@ -85,7 +77,6 @@ pub const Context = struct {
                 .inner = .{ .child = .{ .root = ctx } },
                 .gpa = ctx.gpa,
                 .arena = arena,
-                .nodes = pl.UniqueReprMap(LocalRef, Node, 80).empty,
             };
 
             try child.nodes.ensureTotalCapacity(ctx.gpa, 16384);
@@ -96,6 +87,16 @@ pub const Context = struct {
         /// Get a context by its id.
         pub fn getContext(self: *Root, id: ContextId) ?*Context {
             return self.children.get(id);
+        }
+
+        /// Deinitialize the root context, freeing all memory it owns.
+        pub fn deinit(self: *Root, gpa: std.mem.Allocator) void {
+            var it = self.children.valueIterator();
+            while (it.next()) |child_ptr| child_ptr.*.deinit();
+
+            var arena = self.getRootContext().arena;
+            arena.deinit();
+            _ = self.children.deinit(gpa);
         }
     };
 
@@ -124,6 +125,10 @@ pub const Context = struct {
 
     /// Deinitialize the context, freeing all memory it owns.
     pub fn deinit(self: *Context) void {
+        switch (self.inner) {
+            .child => {},
+            .root => |*root| root.deinit(self.gpa),
+        }
         var it = self.nodes.valueIterator();
         while (it.next()) |node| node.deinit(self.gpa);
         var arena = self.arena;
@@ -143,27 +148,82 @@ pub const Context = struct {
         };
     }
 
-    /// Intern a node, returning a reference to it.
+    /// Intern a node within the context, returning a reference to it.
     /// * This performs no validation on the node kind or value.
-    /// * If the node already exists, it will return the existing reference.
-    /// * Nodes added this way always live in the root context, even if this is a child context.
+    /// * If the node already exists in this context, it will return the existing reference.
     /// * Modifying nodes added this way is unsafe.
-    pub fn internNodeUnchecked(self: *Context, node: Node) !Ref {
-        const root = self.getRoot();
-        const ctx = root.getRootContext();
-
-        const gop = try root.interner.getOrPut(self.gpa, node);
+    pub fn internLocalUnchecked(self: *Context, node: Node) !Ref {
+        const gop = try self.interner.getOrPut(self.gpa, node);
 
         if (!gop.found_existing) {
-            gop.value_ptr.* = (try ctx.addNodeUnchecked(node)).local;
+            gop.value_ptr.* = (try self.addLocalUnchecked(node)).local;
+
+            try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
         }
 
-        return Ref { .context = ctx, .local = gop.value_ptr.* };
+        return Ref { .context = self, .local = gop.value_ptr.* };
+    }
+
+    /// Create a new structure node in the context, given a structure kind and an initializer.
+    /// * The initializer must be a struct with the same fields as the structure kind.
+    pub fn createStructure(self: *Context, comptime kind: StructureKind, init: anytype) !Ref {
+        const struct_name = comptime @tagName(kind);
+        const T = comptime std.meta.FieldType(Structures, kind);
+        const structure_decls = comptime std.meta.fields(T);
+        const structure_value = @field(structures, struct_name);
+
+        const ref = self.addLocalUnchecked(Node{
+            .kind = NodeKind.structure(kind),
+            .data = .{
+                .ref_list = .empty,
+            },
+        });
+
+        const data = self.getLocalMut(ref.local).?;
+
+        inline for (structure_decls) |decl| {
+            const decl_info = @typeInfo(decl.type);
+            const decl_value = @field(structure_value, decl.name);
+            const init_value: Ref = @field(init, decl.name);
+
+            switch (decl_info) {
+                .enum_literal => {
+                    if (comptime std.mem.eql(u8, @tagName(decl_value), "any")) {
+                        try data.ref_list.append(init_value);
+                    } else {
+                        @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
+                    }
+                },
+                .@"struct" => |info| {
+                    if (!info.is_tuple) @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
+                    if (!info.fields.len == 2) @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
+
+                    const node_kind = comptime NodeKind{
+                        .tag = @intFromEnum(@field(Tag, @tagName(decl_value[0]))),
+                        .discriminator = @intFromEnum(@field(Discriminator, @tagName(decl_value[1]))),
+                    };
+
+                    if (init_value.local.node_kind == node_kind) {
+                        try data.ref_list.append(init_value);
+                    } else {
+                        log.debug("Unexpected node kind for structure {s} field decl {s}: expected {}, got {}", .{
+                            struct_name,
+                            decl.name,
+                            node_kind,
+                            init_value.local.node_kind,
+                        });
+
+                        return error.InvalidNodeKind;
+                    }
+                },
+                else => @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type)),
+            }
+        }
     }
 
     /// Add a node to the context, returning a reference to it.
     /// * This performs no validation on the node kind or value.
-    pub fn addNodeUnchecked(self: *Context, node: Node) !Ref {
+    pub fn addLocalUnchecked(self: *Context, node: Node) !Ref {
         const local_ref = LocalRef{
             .node_kind = node.kind,
             .id = self.genId(),
@@ -178,15 +238,34 @@ pub const Context = struct {
     /// * This will deinitialize the node, freeing any memory it owns.
     /// * Nodes relying on this node will be invalidated.
     /// * If the node does not exist, this is a no-op.
-    pub fn delNode(self: *Context, ref: LocalRef) void {
+    /// * If the node is interned, this is a no-op.
+    pub fn delLocal(self: *Context, ref: LocalRef) void {
+        if (self.interned_refs.contains(ref)) {
+            log.debug("Tried to delete an interned node: {}", .{ref});
+            return;
+        }
+
         const node = self.nodes.getPtr(ref) orelse return;
         node.deinit(self.gpa);
         _ = self.nodes.remove(ref);
     }
 
-    /// Get a pointer to raw node data, given its reference.
-    pub fn getNode(self: *Context, ref: LocalRef) ?*Data {
+    /// Get an immutable pointer to raw node data, given its reference.
+    pub fn getLocal(self: *Context, ref: LocalRef) ?*const Data {
         return &(self.nodes.getPtr(ref) orelse return null).data;
+    }
+
+    /// Get a mutable pointer to raw node data, given its reference.
+    /// * This will return null if the node is interned, as interned nodes are immutable.
+    pub fn getLocalMut(self: *Context, ref: LocalRef) ?*Data {
+        const node = self.nodes.getPtr(ref) orelse return null;
+
+        if (self.interned_refs.contains(ref)) {
+            log.debug("Tried to get mutable pointer to an interned node: {}", .{ref});
+            return null;
+        }
+
+        return &node.data;
     }
 };
 
@@ -200,10 +279,7 @@ pub const Ref = packed struct(u128) {
     local: LocalRef,
 
     /// The nil reference, a placeholder for an invalid or irrelevant reference.
-    pub const nil = Ref {
-        .context = null,
-        .local = .nil,
-    };
+    pub const nil = Ref { .context = null, .local = .nil };
 };
 
 /// A reference to a node in an ir context; unlike `Ref`,
@@ -216,6 +292,25 @@ pub const LocalRef = packed struct (u64) {
 
     /// The nil reference, a placeholder for an invalid or irrelevant reference.
     pub const nil = LocalRef { .node_kind = .nil, .id = .nil };
+};
+
+/// Uniquely identifies a child context in an ir.
+pub const ContextId = common.Id.ofSize(Context, 16);
+/// Uniquely identifies a node in an unknown ir context.
+pub const NodeId = common.Id.ofSize(Node, 32);
+
+/// Uniquely identifies a node in a specific ir context.
+pub const Id = packed struct {
+    /// The context this node is bound to.
+    context: ContextId,
+    /// The unique id of the node in the context.
+    node: NodeId,
+
+    /// The nil id, a placeholder for an invalid or irrelevant id.
+    pub const nil = Id {
+        .context = .null,
+        .node = .null,
+    };
 };
 
 /// A reference to a node in the ir, which can be used to access the node's data.
@@ -278,7 +373,7 @@ pub const Tag = enum(u3) {
 /// * Variant names are the field names of `ir.structures` and `ir.Data`, as well as `nil`.
 pub const Discriminator: type = Discriminator: {
     const data_fields = std.meta.fieldNames(Data);
-    const structure_fields = std.meta.fieldNames(@TypeOf(structures));
+    const structure_fields = std.meta.fieldNames(Structures);
 
     var fields = [1]std.builtin.Type.EnumField {undefined} ** (structure_fields.len + data_fields.len + 1);
     fields[0] = .{ .name = "nil", .value = 0 };
@@ -306,7 +401,7 @@ pub const Discriminator: type = Discriminator: {
 };
 
 /// The kind of data that can be stored in a `Data` node.
-/// * Variant names are the field names of `ir.Data` without key_list`, as well as `nil`.
+/// * Variant names are the field names of `ir.Data` without ref_list`, as well as `nil`.
 pub const DataKind: type = DataKind: {
     const data_fields = std.meta.fieldNames(Data);
 
@@ -333,7 +428,7 @@ pub const DataKind: type = DataKind: {
 /// The kind of structures that can be stored in a `Structure` node.
 /// * Variant names are the field names of `ir.structures`, as well as `nil`.
 pub const StructureKind: type = Structure: {
-    const generated_fields = std.meta.fieldNames(@TypeOf(structures));
+    const generated_fields = std.meta.fieldNames(Structures);
 
     var fields = [1]std.builtin.Type.EnumField {undefined} ** (generated_fields.len + 1);
 
@@ -356,7 +451,10 @@ pub const StructureKind: type = Structure: {
     });
 };
 
-/// Untyped comptime data structure describing the kinds of structural nodes in the ir.
+/// The type of the ir structures definition structure.
+pub const Structures = @TypeOf(structures);
+
+/// Comptime data structure describing the kinds of structural nodes in the ir. Type is `ir.Structures`.
 pub const structures = .{
     .kind = .{
         .output_tag = .{ .data, .kind_tag },
@@ -383,16 +481,23 @@ pub const structures = .{
     .local = .{
         .type = .{ .structure, .type }
     },
+    .handler = .{
+        .parent_block = .{ .structure, .block }, // the block that this handler is alive within
+        .function = .{ .structure, .function }, // the function that implements the handler
+        .handled_effect = .{ .structure, .effect }, // the effect that this handler can handle
+        .cancellation_type = .{ .structure, .type }, // the type that this handler can cancel the effect with
+    },
     .function = .{
-        .type = .{ .structure, .type },
-        .parent_block = .{ .structure, .block },
+        .parent_handler = .{ .structure, .handler }, // the handler that this function is a part of, if any
         .body_block = .{ .structure, .block },
+        .type = .{ .structure, .type },
     },
     .block = .{
         .parent = .{ .structure, .nil }, // either a block, function, or constant
         .locals = .{ .collection, .local },
         .handlers = .{ .collection, .handler },
         .contents = .{ .collection, .nil }, // a collection of either blocks or instructions
+        .type = .{ .structure, .type }, // the type of data yielded by the block
     },
     .instruction = .{
         .parent = .{ .structure, .block }, // the block that contains this instruction
@@ -411,10 +516,17 @@ pub const structures = .{
         .source_index = .{ .data, .index }, // the index of the edge in the source
         .destination_index = .{ .data, .index }, // the index of the edge in the destination
     },
-    .handler = .{
-        .function = .{ .structure, .function }, // the function that implements the handler
-        .handled_effect = .{ .structure, .effect }, // the effect that this handler handles
-        .cancellation_type = .{ .structure, .type }, // the type that this handler can cancel the effect with
+    .global_symbol = .{
+        .name = .{ .data, .name },
+        .node = .any,
+    },
+    .debug_symbols = .{
+        .name = .{ .collection, .name },
+        .node = .any,
+    },
+    .debug_sources = .{
+        .source = .{ .collection, .source },
+        .node = .any,
     },
     .foreign = .{
         .address = .{ .data, .index }, // the address of the foreign function
