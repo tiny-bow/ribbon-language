@@ -32,8 +32,11 @@ pub const Context = struct {
     id: ContextId = .fromInt(0),
     /// State that varies between root/child contexts.
     inner: union(enum) {
+        /// This is a root context.
         root: Root,
+        /// This is a child context.
         child: struct {
+            /// The root context this child belongs to.
             root: *Context,
         }
     } = .{ .root = .{} },
@@ -41,7 +44,7 @@ pub const Context = struct {
     gpa: std.mem.Allocator,
     /// arena allocator for the context, used for data nodes.
     arena: std.heap.ArenaAllocator,
-    /// contains nodes that are not simple keylists.
+    /// contains all graph nodes in this context.
     nodes: pl.UniqueReprMap(LocalRef, Node, 80) = .empty,
     /// Maps constant value nodes to references.
     interner: pl.HashMap(Node, LocalRef, NodeHasher, 80) = .empty,
@@ -84,6 +87,13 @@ pub const Context = struct {
             return child;
         }
 
+        /// Destroy a context by its id.
+        pub fn destroyContext(self: *Root, id: ContextId) void {
+            const child = self.children.get(id) orelse return;
+            child.destroy();
+            _ = self.children.remove(id);
+        }
+
         /// Get a context by its id.
         pub fn getContext(self: *Root, id: ContextId) ?*Context {
             return self.children.get(id);
@@ -101,7 +111,7 @@ pub const Context = struct {
     };
 
     /// Create a root context with the given allocator.
-    pub fn initRoot(gpa: std.mem.Allocator) !*Context {
+    pub fn init(gpa: std.mem.Allocator) !*Context {
         var arena = std.heap.ArenaAllocator.init(gpa);
         errdefer arena.deinit();
 
@@ -123,16 +133,27 @@ pub const Context = struct {
         _ = self.arena.reset(.retain_capacity);
     }
 
-    /// Deinitialize the context, freeing all memory it owns.
-    pub fn deinit(self: *Context) void {
-        switch (self.inner) {
-            .child => {},
-            .root => |*root| root.deinit(self.gpa),
-        }
+    /// Destroy the context, freeing all memory it owns.
+    /// * This is called by `Context.deinit` in roots, and by `Root.destroyContext` for child contexts.
+    fn destroy(self: *Context) void {
         var it = self.nodes.valueIterator();
         while (it.next()) |node| node.deinit(self.gpa);
         var arena = self.arena;
         arena.deinit();
+    }
+
+    /// Deinitialize the context, freeing all memory it owns.
+    pub fn deinit(self: *Context) void {
+        switch (self.inner) {
+            .child => {
+                self.getRoot().destroyContext(self.id);
+            },
+            .root => |*root| {
+                root.deinit(self.gpa);
+
+                self.destroy();
+            }
+        }
     }
 
     /// Generate a unique id.
@@ -162,63 +183,6 @@ pub const Context = struct {
         }
 
         return Ref { .context = self, .local = gop.value_ptr.* };
-    }
-
-    /// Create a new structure node in the context, given a structure kind and an initializer.
-    /// * The initializer must be a struct with the same fields as the structure kind.
-    pub fn createLocalStructure(self: *Context, comptime kind: StructureKind, init: anytype) !Ref {
-        const struct_name = comptime @tagName(kind);
-        const T = comptime std.meta.FieldType(Structures, kind);
-        const structure_decls = comptime std.meta.fields(T);
-        const structure_value = @field(structures, struct_name);
-
-        const ref = self.addLocalUnchecked(Node{
-            .kind = NodeKind.structure(kind),
-            .data = .{
-                .ref_list = .empty,
-            },
-        });
-
-        const data = self.getLocalMut(ref.local).?;
-
-        inline for (structure_decls) |decl| {
-            const decl_info = @typeInfo(decl.type);
-            const decl_value = @field(structure_value, decl.name);
-            const init_value: Ref = @field(init, decl.name);
-
-            switch (decl_info) {
-                .enum_literal => {
-                    if (comptime std.mem.eql(u8, @tagName(decl_value), "any")) {
-                        try data.ref_list.append(init_value);
-                    } else {
-                        @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
-                    }
-                },
-                .@"struct" => |info| {
-                    if (!info.is_tuple) @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
-                    if (!info.fields.len == 2) @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
-
-                    const node_kind = comptime NodeKind{
-                        .tag = @intFromEnum(@field(Tag, @tagName(decl_value[0]))),
-                        .discriminator = @intFromEnum(@field(Discriminator, @tagName(decl_value[1]))),
-                    };
-
-                    if (init_value.local.node_kind == node_kind) {
-                        try data.ref_list.append(init_value);
-                    } else {
-                        log.debug("Unexpected node kind for structure {s} field decl {s}: expected {}, got {}", .{
-                            struct_name,
-                            decl.name,
-                            node_kind,
-                            init_value.local.node_kind,
-                        });
-
-                        return error.InvalidNodeKind;
-                    }
-                },
-                else => @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type)),
-            }
-        }
     }
 
     /// Add a node to the context, returning a reference to it.
@@ -267,7 +231,113 @@ pub const Context = struct {
 
         return &node.data;
     }
+
+    /// Intern a data node in the context, given a data kind and data.
+    /// * If the node already exists in this context, it will return the existing reference.
+    /// * Modifying nodes added this way is unsafe.
+    pub fn internLocalData(self: *Context, comptime kind: DataKind, value: DataType(kind)) !Ref {
+        const node = try data(kind, value);
+        errdefer node.deinit(self.gpa);
+
+        return try self.internLocalUnchecked(node);
+    }
+
+    /// Intern a structure node in the context, given a structure kind and an initializer.
+    /// * The initializer must be a struct with the same fields as the structure kind. See `ir.structure`.
+    /// * If the node already exists in this context, it will return the existing reference.
+    /// * Modifying nodes added this way is unsafe.
+    pub fn internLocalStructure(self: *Context, comptime kind: StructureKind, value: anytype) !Ref {
+        const node = try structure(self.gpa, kind, value);
+        errdefer node.deinit(self.gpa);
+
+        return try self.internLocalUnchecked(node);
+    }
+
+    /// Create a new data node in the context, given a data kind and data.
+    pub fn addLocalData(self: *Context, comptime kind: DataKind, value: DataType(kind)) !Ref {
+        const node = try data(kind, value);
+        errdefer node.deinit(self.gpa);
+
+        return self.addLocalUnchecked(node);
+    }
+
+    /// Create a new structure node in the context, given a structure kind and an initializer.
+    /// * The initializer must be a struct with the same fields as the structure kind. See `ir.structure`.
+    pub fn addLocalStructure(self: *Context, comptime kind: StructureKind, value: anytype) !Ref {
+        const node = try structure(self.gpa, kind, value);
+        errdefer node.deinit(self.gpa);
+
+        return self.addLocalUnchecked(node);
+    }
 };
+
+/// Create a data node outside of a context, given a data kind and data.
+pub fn data(comptime kind: DataKind, value: DataType(kind)) !Node {
+    return Node {
+        .kind = NodeKind.data(kind),
+        .data = @unionInit(Data, @tagName(kind), value),
+    };
+}
+
+/// Create a structure node outside of a context, given a structure kind and data.
+/// * The initializer must be a struct with the same fields as the structure kind.
+/// * Comptime and runtime checking is employed to ensure the initializer field refs are the right kinds.
+pub fn structure(allocator: std.mem.Allocator, comptime kind: StructureKind, value: anytype) !Node {
+    const struct_name = comptime @tagName(kind);
+    const T = comptime std.meta.FieldType(Structures, kind);
+    const structure_decls = comptime std.meta.fields(T);
+    const structure_value = @field(structures, struct_name);
+
+    var ref_list = pl.ArrayList(Ref).empty;
+    try ref_list.ensureTotalCapacity(allocator, structure_decls.len);
+    errdefer ref_list.deinit(allocator);
+
+    inline for (structure_decls) |decl| {
+        const decl_info = @typeInfo(decl.type);
+        const decl_value = @field(structure_value, decl.name);
+        const init_value: Ref = @field(value, decl.name);
+
+        switch (decl_info) {
+            .enum_literal => {
+                if (comptime std.mem.eql(u8, @tagName(decl_value), "any")) {
+                    ref_list.appendAssumeCapacity(init_value);
+                } else {
+                    @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
+                }
+            },
+            .@"struct" => |info| {
+                if (!info.is_tuple) @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
+                if (!info.fields.len == 2) @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
+
+                const node_kind = comptime NodeKind{
+                    .tag = @intFromEnum(@field(Tag, @tagName(decl_value[0]))),
+                    .discriminator = @intFromEnum(@field(Discriminator, @tagName(decl_value[1]))),
+                };
+
+                if (init_value.local.node_kind == node_kind) {
+                    ref_list.appendAssumeCapacity(init_value);
+                } else {
+                    log.debug("Unexpected node kind for structure {s} field decl {s}: expected {}, got {}", .{
+                        struct_name,
+                        decl.name,
+                        node_kind,
+                        init_value.local.node_kind,
+                    });
+
+                    return error.InvalidNodeKind;
+                }
+            },
+            else => @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type)),
+        }
+    }
+
+    return Node{
+        .kind = NodeKind.structure(kind),
+        .data = .{
+            .ref_list = ref_list,
+        },
+    };
+}
 
 /// Combines a `LocalRef` to a node in an ir context with a reference to the context itself.
 pub const Ref = packed struct(u128) {
@@ -425,6 +495,11 @@ pub const DataKind: type = DataKind: {
     });
 };
 
+/// Convert a `DataKind` to the type of data it represents.
+pub fn DataType(comptime kind: DataKind) type {
+    comptime return @FieldType(Data, @tagName(kind));
+}
+
 /// The kind of structures that can be stored in a `Structure` node.
 /// * Variant names are the field names of `ir.structures`, as well as `nil`.
 pub const StructureKind: type = Structure: {
@@ -558,23 +633,23 @@ pub const NodeHasher = struct {
         };
     }
 
-    pub fn hash(_: @This(), data: Node) u64 {
+    pub fn hash(_: @This(), n: Node) u64 {
         var hasher = std.hash.Fnv1a_64.init();
-        hasher.update(std.mem.asBytes(&data.kind));
+        hasher.update(std.mem.asBytes(&n.kind));
 
-        switch (data.kind.getDiscriminator()) {
+        switch (n.kind.getDiscriminator()) {
             .nil => hasher.update(&.{0}),
-            .name => hasher.update(data.data.name),
+            .name => hasher.update(n.data.name),
             .source => {
-                hasher.update(data.data.source.name);
-                hasher.update(std.mem.asBytes(&data.data.source.location));
+                hasher.update(n.data.source.name);
+                hasher.update(std.mem.asBytes(&n.data.source.location));
             },
-            .buffer => hasher.update(data.data.buffer.items),
-            .operation => hasher.update(std.mem.asBytes(&data.data.operation)),
-            .opcode => hasher.update(std.mem.asBytes(&data.data.opcode)),
-            .index => hasher.update(std.mem.asBytes(&data.data.index)),
-            .kind_tag => hasher.update(std.mem.asBytes(&data.data.kind_tag)),
-            else => hasher.update(std.mem.sliceAsBytes(data.data.ref_list.items)),
+            .buffer => hasher.update(n.data.buffer.items),
+            .operation => hasher.update(std.mem.asBytes(&n.data.operation)),
+            .opcode => hasher.update(std.mem.asBytes(&n.data.opcode)),
+            .index => hasher.update(std.mem.asBytes(&n.data.index)),
+            .kind_tag => hasher.update(std.mem.asBytes(&n.data.kind_tag)),
+            else => hasher.update(std.mem.sliceAsBytes(n.data.ref_list.items)),
         }
 
         return hasher.final();
