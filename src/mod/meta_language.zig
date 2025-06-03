@@ -957,13 +957,13 @@ pub const Expr = struct {
 
     /// Returns the precedence of the expression.
     pub fn precedence(self: *const Expr) i16 {
-        switch (self.data) {
+        return switch (self.data) {
             .operator => return self.data.operator.precedence,
-            .int, .char, .string, .identifier, .symbol, .decl, .set, .lambda => return std.math.maxInt(i16),
-            .list, .tuple, .array, .compound => return std.math.maxInt(i16),
-            .seq => return std.math.minInt(i16),
-            .apply => return 0,
-        }
+            .int, .char, .string, .identifier, .symbol, .decl, .set, .lambda => std.math.maxInt(i16),
+            .list, .tuple, .array, .compound => std.math.maxInt(i16),
+            .seq => std.math.minInt(i16),
+            .apply => 0,
+        };
     }
 
     /// Writes a source-text representation of the expression to the given writer.
@@ -1023,7 +1023,8 @@ pub const Expr = struct {
                 }
             },
             .apply => {
-                for (self.data.apply) |child| {
+                for (self.data.apply, 0..) |child, i| {
+                    if (i > 0) try writer.writeAll(" ");
                     try child.display(0, writer);
                 }
             },
