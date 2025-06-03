@@ -166,7 +166,7 @@ pub const Context = struct {
 
     /// Create a new structure node in the context, given a structure kind and an initializer.
     /// * The initializer must be a struct with the same fields as the structure kind.
-    pub fn createStructure(self: *Context, comptime kind: StructureKind, init: anytype) !Ref {
+    pub fn createLocalStructure(self: *Context, comptime kind: StructureKind, init: anytype) !Ref {
         const struct_name = comptime @tagName(kind);
         const T = comptime std.meta.FieldType(Structures, kind);
         const structure_decls = comptime std.meta.fields(T);
@@ -401,7 +401,7 @@ pub const Discriminator: type = Discriminator: {
 };
 
 /// The kind of data that can be stored in a `Data` node.
-/// * Variant names are the field names of `ir.Data` without ref_list`, as well as `nil`.
+/// * Variant names are the field names of `ir.Data` without `ref_list`, as well as `nil`.
 pub const DataKind: type = DataKind: {
     const data_fields = std.meta.fieldNames(Data);
 
@@ -452,7 +452,7 @@ pub const StructureKind: type = Structure: {
 };
 
 /// The type of the ir structures definition structure.
-pub const Structures = @TypeOf(structures);
+pub const Structures: type = @TypeOf(structures);
 
 /// Comptime data structure describing the kinds of structural nodes in the ir. Type is `ir.Structures`.
 pub const structures = .{
