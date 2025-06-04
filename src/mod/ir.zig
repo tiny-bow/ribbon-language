@@ -161,11 +161,24 @@ pub const Context = struct {
         return Id { .context = self.id, .node = self.fresh_node.next() };
     }
 
+    /// Determine if this context is a root context.
+    pub fn isRoot(self: *Context) bool {
+        return self.inner == .root;
+    }
+
     /// Get the root state of this context.
     pub fn getRoot(self: *Context) *Root {
         return switch (self.inner) {
             .root => &self.inner.root,
             .child => &self.inner.child.root.inner.root,
+        };
+    }
+
+    /// Get the root context of this context.
+    pub fn getRootContext(self: *Context) *Context {
+        return switch (self.inner) {
+            .root => self,
+            .child => self.inner.child.root,
         };
     }
 
@@ -282,6 +295,7 @@ pub fn data(comptime kind: DataKind, value: DataType(kind)) !Node {
 /// Create a structure node outside of a context, given a structure kind and data.
 /// * The initializer must be a struct with the same fields as the structure kind.
 /// * Comptime and runtime checking is employed to ensure the initializer field refs are the right kinds.
+/// * Allocator should be that of the context that will own the node.
 pub fn structure(allocator: std.mem.Allocator, comptime kind: StructureKind, value: anytype) !Node {
     const struct_name = comptime @tagName(kind);
     const T = comptime std.meta.FieldType(Structures, kind);
