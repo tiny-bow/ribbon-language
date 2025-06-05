@@ -13,11 +13,203 @@ const common = @import("common");
 const utils = @import("utils");
 const source = @import("source");
 const core = @import("core");
+const ir = @import("ir");
+const ir2bc = @import("ir2bc");
 
 test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
+pub const BytecodeId = common.Id.ofSize(core.Bytecode, 32);
+pub const CompilerId = common.Id.ofSize(Compiler, 32);
+
+pub const Context = struct {
+    backend: *ir2bc.Compiler,
+    compilers: pl.UniqueReprArrayMap(CompilerId, *Compiler, false) = .empty,
+    bytecode: pl.UniqueReprArrayMap(BytecodeId, core.Bytecode, false) = .empty,
+    fresh_id: BytecodeId = .fromInt(0),
+
+    pub fn init(allocator: std.mem.Allocator) !Context {
+        return Context{
+            .backend = try ir2bc.Compiler.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Context) void {
+        for (self.bytecode.values()) |bc| {
+            bc.deinit(self.backend.allocator);
+        }
+
+        self.backend.deinit();
+    }
+
+    pub fn takeOwnership(self: *Context, id: BytecodeId) ?core.Bytecode {
+        const bc = self.bytecode.get(id) orelse return null;
+
+        _ = self.bytecode.swapRemove(id);
+
+        return bc;
+    }
+
+    pub fn addBytecode(self: *Context, bytecode: core.Bytecode) !BytecodeId {
+        const id = self.fresh_id;
+        self.fresh_id = self.fresh_id.next();
+
+        try self.bytecode.put(self.backend.allocator, id, bytecode);
+
+        return id;
+    }
+
+    pub fn delBytecode(self: *Context, id: BytecodeId) void {
+        const bc = self.takeOwnership(id) orelse return;
+
+        bc.deinit(self.backend.allocator);
+    }
+
+    pub fn createCompiler(self: *Context) !*Compiler {
+        const job = try self.backend.createJob(null);
+
+        const compiler = try self.backend.allocator.create(Compiler);
+        errdefer self.backend.allocator.destroy(compiler);
+
+        compiler.* = Compiler{
+            .id = CompilerId.fromInt(self.compilers.count()),
+            .context = self,
+            .job = job,
+            .arena = std.heap.ArenaAllocator.init(self.backend.allocator),
+        };
+
+        try self.compilers.put(self.backend.allocator, compiler.id, compiler);
+
+        return compiler;
+    }
+
+    pub fn resolveCompiler(self: *Context, compiler: *Compiler) !BytecodeId {
+        const bc = try self.backend.compileJob(compiler.job);
+
+        return self.addBytecode(bc);
+    }
+};
+
+
+pub const Compiler = struct {
+    id: CompilerId,
+    context: *Context,
+    job: *ir2bc.Job,
+    arena: std.heap.ArenaAllocator,
+    builtin: struct {
+        value_type: ir.Ref = .nil,
+    } = .{},
+
+    pub fn getBuiltin(self: *Compiler, builtin: std.meta.FieldEnum(@TypeOf(self.builtin))) !ir.Ref {
+        const name = comptime @tagName(builtin);
+        const initializer = comptime @field(builtin_initializers, name);
+        const ref: *ir.Ref = &@field(self.builtin, name);
+
+        if (ref.* == ir.Ref.nil) {
+            ref.* = try initializer(self);
+        }
+
+        return ref.*;
+    }
+
+    pub const builtin_initializers = struct {
+        pub fn value_type(self: *Compiler) !ir.Ref {
+            const graph = self.job.context;
+
+            const kind_tag = try graph.internLocalData(.kind_tag, ir.KindTag.data);
+            const kind = try graph.internLocalStructure(.kind, .{
+                .output_tag = kind_tag,
+                .input_kinds = ir.Ref.nil,
+            });
+
+            const constructor = try graph.addLocalStructure(.constructor, .{
+                .kind = kind,
+            });
+
+            return graph.internLocalStructure(.type, .{
+                .constructor = constructor,
+                .input_types = ir.Ref.nil,
+            });
+        }
+    };
+
+    pub fn addSource(self: *Compiler, source_name: []const u8, src: []const u8) !void {
+        if (try getExpr(self.arena.allocator(), .{}, source_name, src)) |x| {
+            var expr = x;
+            defer expr.deinit(self.arena.allocator());
+
+            _ = try self.compileExpr(&expr);
+        }
+    }
+
+    pub fn compileExpr(self: *Compiler, expr: *const Expr) !ir.Ref {
+        const graph = self.job.context;
+
+        const value_type = try self.getBuiltin(.value_type);
+
+        const value = switch (expr.data) {
+            .int => |x|
+                if (x < std.math.maxInt(i48) and x > std.math.minInt(i48))
+                    Value.fromI48(@intCast(x))
+                else if (x < std.math.maxInt(u48) and x >= 0)
+                    Value.fromU48(@intCast(x))
+                else
+                    pl.todo(noreturn, "big int"),
+            .char => |x| Value.fromChar(x),
+            .string => |x| {
+                // TODO: this is interesting; i'm not sure how to handle this situation yet.
+                // basically, we need an interned value, that references an interned string;
+                // the issue is that the string pointer does not exist yet, so the resulting value would be invalid.
+                // here, i have just interned the buffer directly but this won't work without refinement,
+                // as the symbol wants to work the same way, and we have not encoded the discriminator, and theres no logic here to treat this differently.
+                // what we need instead is to build a constant expression that evaluates to the value we want,
+                // but i'm not quite sure how to acheive that yet, due to the fact that we are using Value; which is a zig type.
+                // Most obvious solution is just generating calls to builtins, I suppose.
+                return graph.internLocalStructure(.constant, .{
+                    .type = value_type,
+                    .value = try graph.internLocalBuffer(x),
+                });
+            },
+            .identifier => |x| return self.getLocal(x),
+            .symbol => pl.todo(noreturn, "symbol expr"),
+            .seq => {
+                // const block = try graph.addLocalStructure(.block, .{
+                //     .parent = self.parentRef(),
+                //     .locals = self.createLocals(),
+                //     .handlers = ir.Ref.nil,
+                //     .contents = self.createSeq(),
+                //     .type = ir.Ref.nil,
+                // });
+
+                // TODO: create locals and create seq;
+                // we need wrapper types or something to manage this better, so that we can easily
+                // manage local state while building up the sequence.
+                // Most obvious solution is a block-level abstraction here.
+
+                pl.todo(noreturn, "seq expr");
+            },
+            .list => pl.todo(noreturn, "list expr"),
+            .tuple => pl.todo(noreturn, "tuple expr"),
+            .array => pl.todo(noreturn, "array expr"),
+            .compound => pl.todo(noreturn, "compound expr"),
+            .apply => pl.todo(noreturn, "apply expr"),
+            .operator => pl.todo(noreturn, "operator expr"),
+            .decl => pl.todo(noreturn, "decl expr"),
+            .set => pl.todo(noreturn, "set expr"),
+            .lambda => pl.todo(noreturn, "lambda expr"),
+        };
+
+        return graph.internLocalStructure(.constant, .{
+            .type = value_type,
+            .value = try graph.internLocalBuffer(std.mem.asBytes(&value)),
+        });
+    }
+
+    pub fn getLocal(self: *Compiler, name: []const u8) !ir.Ref {
+        pl.todo(noreturn, .{ "getLocal", self, name });
+    }
+};
 
 /// An efficient, bit-packed union of all value types in the meta-language semantics.
 ///
@@ -766,7 +958,7 @@ pub const Expr = struct {
         /// Symbol literal.
         /// This is a special token that is simply a name, but is not a variable reference.
         /// It is used as a kind of global enum.
-        symbol: Expr.Symbol,
+        symbol: []const u8,
         /// Sequenced expressions; statement list.
         seq: []Expr,
         /// Comma-separated expressions; abstract list.
@@ -872,24 +1064,6 @@ pub const Expr = struct {
         }
     };
 
-    /// Data for a symbol literal.
-    pub const Symbol = union(enum) {
-        punctuation: source.Punctuation,
-        sequence: []const u8,
-
-        pub fn format(
-            self: *const Symbol,
-            comptime _: []const u8,
-            _: std.fmt.FormatOptions,
-            writer: anytype,
-        ) !void {
-            switch (self.*) {
-                .punctuation => try writer.print("{u}", .{self.punctuation.toChar()}),
-                .sequence => try writer.print("{s}", .{self.sequence}),
-            }
-        }
-    };
-
     /// Data for an operator application.
     pub const Operator = struct {
         position: enum { prefix, infix, postfix },
@@ -979,7 +1153,7 @@ pub const Expr = struct {
             .char => try writer.print("'{u}'", .{self.data.char}),
             .string => try writer.print("\"{s}\"", .{self.data.string}),
             .identifier => try writer.print("{s}", .{self.data.identifier}),
-            .symbol => try writer.print("{}", .{self.data.symbol}),
+            .symbol => try writer.print("{s}", .{self.data.symbol}),
             .list => {
                 try writer.writeAll("⟨ ");
                 for (self.data.list) |child| {
@@ -1092,20 +1266,22 @@ pub fn parseCst(allocator: std.mem.Allocator, src: []const u8, cst: source.Synta
 
                 return Expr{
                    .source = cst.source,
-                    .data = .{ .symbol = .{
-                        .sequence = bytes,
-                    } },
+                    .data = .{ .symbol = bytes },
                 };
             }
 
             if (cst.token.tag != .special
             or  cst.token.data.special.escaped != false) return error.UnexpectedInput;
 
+            const char = cst.token.data.special.punctuation.toChar();
+            const buf = try allocator.alloc(u8, std.unicode.utf8CodepointSequenceLength(char) catch unreachable);
+            errdefer allocator.free(buf);
+
+            _ = std.unicode.utf8Encode(char, buf) catch unreachable;
+
             return Expr{
                .source = cst.source,
-                .data = .{ .symbol = .{
-                    .punctuation = cst.token.data.special.punctuation,
-                } },
+                .data = .{ .symbol = buf },
             };
         },
 

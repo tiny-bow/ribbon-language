@@ -45,6 +45,7 @@ pub const Compiler = struct {
     /// * To create both at once, use `init`.
     pub fn fromContext(context: *ir.Context, allocator: ?std.mem.Allocator) !*Compiler {
         const gpa = allocator orelse context.gpa;
+
         const self = try gpa.create(Compiler);
         errdefer gpa.destroy(self);
 

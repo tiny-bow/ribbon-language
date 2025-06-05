@@ -285,6 +285,8 @@ pub fn build(b: *std.Build) !void {
     meta_language_mod.addImport("utils", utils_mod);
     meta_language_mod.addImport("source", source_mod);
     meta_language_mod.addImport("core", core_mod);
+    meta_language_mod.addImport("ir", ir_mod);
+    meta_language_mod.addImport("ir2bc", ir2bc_mod);
 
     ribbon_mod.addImport("core", core_mod);
     ribbon_mod.addImport("abi", abi_mod);

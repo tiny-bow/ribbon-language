@@ -245,11 +245,32 @@ pub const Context = struct {
         return &node.data;
     }
 
+    /// Intern a data buffer in the context.
+    /// * If the buffer already exists in this context, it will return the existing reference.
+    /// * Modifying nodes added this way is unsafe.
+    pub fn internLocalBuffer(self: *Context, value: []const u8) !Ref {
+        const gop = try self.interner.getOrPutAdapted(self.gpa, value, BufferHasher);
+
+        if (!gop.found_existing) {
+            const arr = try pl.ArrayList(u8).initCapacity(self.gpa, value.len);
+
+            var node = try data(.buffer, arr);
+            errdefer node.deinit(self.gpa);
+
+            gop.value_ptr.* = (try self.addLocalUnchecked(node)).local;
+
+            try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
+        }
+
+        return Ref { .context = self, .local = gop.value_ptr.* };
+    }
+
     /// Intern a data node in the context, given a data kind and data.
     /// * If the node already exists in this context, it will return the existing reference.
     /// * Modifying nodes added this way is unsafe.
+    /// * Prefer `internLocalBuffer` for buffer data, as it is more efficient and avoids ownership issues.
     pub fn internLocalData(self: *Context, comptime kind: DataKind, value: DataType(kind)) !Ref {
-        const node = try data(kind, value);
+        var node = try data(kind, value);
         errdefer node.deinit(self.gpa);
 
         return try self.internLocalUnchecked(node);
@@ -260,7 +281,7 @@ pub const Context = struct {
     /// * If the node already exists in this context, it will return the existing reference.
     /// * Modifying nodes added this way is unsafe.
     pub fn internLocalStructure(self: *Context, comptime kind: StructureKind, value: anytype) !Ref {
-        const node = try structure(self.gpa, kind, value);
+        var node = try structure(self.gpa, kind, value);
         errdefer node.deinit(self.gpa);
 
         return try self.internLocalUnchecked(node);
@@ -268,7 +289,7 @@ pub const Context = struct {
 
     /// Create a new data node in the context, given a data kind and data.
     pub fn addLocalData(self: *Context, comptime kind: DataKind, value: DataType(kind)) !Ref {
-        const node = try data(kind, value);
+        var node = try data(kind, value);
         errdefer node.deinit(self.gpa);
 
         return self.addLocalUnchecked(node);
@@ -277,7 +298,7 @@ pub const Context = struct {
     /// Create a new structure node in the context, given a structure kind and an initializer.
     /// * The initializer must be a struct with the same fields as the structure kind. See `ir.structure`.
     pub fn addLocalStructure(self: *Context, comptime kind: StructureKind, value: anytype) !Ref {
-        const node = try structure(self.gpa, kind, value);
+        var node = try structure(self.gpa, kind, value);
         errdefer node.deinit(self.gpa);
 
         return self.addLocalUnchecked(node);
@@ -298,7 +319,7 @@ pub fn data(comptime kind: DataKind, value: DataType(kind)) !Node {
 /// * Allocator should be that of the context that will own the node.
 pub fn structure(allocator: std.mem.Allocator, comptime kind: StructureKind, value: anytype) !Node {
     const struct_name = comptime @tagName(kind);
-    const T = comptime std.meta.FieldType(Structures, kind);
+    const T = comptime @FieldType(Structures, struct_name);
     const structure_decls = comptime std.meta.fields(T);
     const structure_value = @field(structures, struct_name);
 
@@ -321,7 +342,7 @@ pub fn structure(allocator: std.mem.Allocator, comptime kind: StructureKind, val
             },
             .@"struct" => |info| {
                 if (!info.is_tuple) @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
-                if (!info.fields.len == 2) @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
+                if (info.fields.len != 2) @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
 
                 const node_kind = comptime NodeKind{
                     .tag = @intFromEnum(@field(Tag, @tagName(decl_value[0]))),
@@ -665,6 +686,24 @@ pub const NodeHasher = struct {
             .kind_tag => hasher.update(std.mem.asBytes(&n.data.kind_tag)),
             else => hasher.update(std.mem.sliceAsBytes(n.data.ref_list.items)),
         }
+
+        return hasher.final();
+    }
+};
+
+/// 64-bit context providing eql and hash functions for `Node` and `[]const u8` types.
+/// This is used by the interner to map constant value nodes to their references.
+pub const BufferHasher = struct {
+    pub fn eql(b: []const u8, a: Node) bool {
+        if (a.kind != NodeKind.data(.buffer)) return false;
+
+        return std.mem.eql(u8, a.data.buffer.items, b);
+    }
+
+    pub fn hash(n: []const u8) u64 {
+        var hasher = std.hash.Fnv1a_64.init();
+        hasher.update(std.mem.asBytes(&ir.NodeKind.data(.buffer)));
+        hasher.update(n);
 
         return hasher.final();
     }
