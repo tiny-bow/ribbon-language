@@ -59,11 +59,38 @@ pub const Context = struct {
         fresh_ctx: ContextId = .fromInt(1),
         /// All child contexts owned by this root context.
         children: pl.UniqueReprMap(ContextId, *Context, 80) = .empty,
+        /// Maps specific refs to user defined data, used for miscellaneous operations like layout computation, display, etc.
+        userdata: pl.UniqueReprMap(Ref, *const UserData, 80) = .empty,
 
         /// Get a pointer to the Context this Root is stored in.
         pub fn getRootContext(self: *Root) *Context {
             const inner: *@FieldType(Context, "inner") = @fieldParentPtr("root", self);
             return @fieldParentPtr("inner", inner);
+        }
+
+        /// Deinitialize the root context, freeing all memory it owns.
+        pub fn deinit(self: *Root, gpa: std.mem.Allocator) void {
+            var it = self.children.valueIterator();
+            while (it.next()) |child_ptr| child_ptr.*.deinit();
+
+            var arena = self.getRootContext().arena;
+            arena.deinit();
+            _ = self.children.deinit(gpa);
+        }
+
+        /// Add a userdata for a specific reference.
+        pub fn addUserData(self: *Root, ref: Ref, userdata: *const UserData) !void {
+            try self.userdata.put(self.getRootContext().gpa, ref, userdata);
+        }
+
+        /// Get a userdata for a specific reference.
+        pub fn getUserData(self: *Root, ref: Ref) ?*const UserData {
+            return self.userdata.get(ref);
+        }
+
+        /// Delete a userdata for a specific reference.
+        pub fn delUserData(self: *Root, ref: Ref) void {
+            _ = self.userdata.remove(ref);
         }
 
         /// Create a new context.
@@ -97,16 +124,6 @@ pub const Context = struct {
         /// Get a context by its id.
         pub fn getContext(self: *Root, id: ContextId) ?*Context {
             return self.children.get(id);
-        }
-
-        /// Deinitialize the root context, freeing all memory it owns.
-        pub fn deinit(self: *Root, gpa: std.mem.Allocator) void {
-            var it = self.children.valueIterator();
-            while (it.next()) |child_ptr| child_ptr.*.deinit();
-
-            var arena = self.getRootContext().arena;
-            arena.deinit();
-            _ = self.children.deinit(gpa);
         }
     };
 
@@ -385,6 +402,70 @@ pub const Ref = packed struct(u128) {
 
     /// The nil reference, a placeholder for an invalid or irrelevant reference.
     pub const nil = Ref { .context = null, .local = .nil };
+
+    /// Cast the Ref to a Context pointer.
+    pub fn getContext(self: Ref) ?*Context {
+        return @alignCast(@ptrCast(self.context));
+    }
+
+    /// Get a field of a structure data node bound by this reference.
+    pub fn getField(self: Ref, comptime field: anytype) !Ref {
+        const context = self.getContext() orelse return error.InvalidReference;
+
+        return self.local.getField(context, field);
+    }
+
+    /// Get a ref list from a structure or list node bound by this reference.
+    pub fn getChildren(self: Ref) ![]const Ref {
+        const context = self.getContext() orelse return error.InvalidReference;
+
+        std.debug.assert(self.local.node_kind.getTag() == .structure or self.local.node_kind.getTag() == .collection);
+
+        const local_data = context.getLocal(self.local) orelse return error.InvalidReference;
+
+        return local_data.ref_list.items;
+    }
+
+    /// Set the userdata for the node bound by this reference.
+    pub fn setUserData(self: Ref, userdata: *const UserData) !void {
+        const context = self.getContext() orelse return error.InvalidReference;
+
+        const root = context.getRoot();
+        try root.addUserData(self, userdata);
+    }
+
+    /// Get the userdata for the node bound by this reference.
+    pub fn getUserData(self: Ref) !*const UserData {
+        const context = self.getContext() orelse return error.InvalidReference;
+
+        const root = context.getRoot();
+        const userdata = root.getUserData(self) orelse return error.UserDataNotFound;
+
+        return userdata;
+    }
+
+    /// Delete the userdata for the node bound by this reference.
+    pub fn delUserData(self: Ref) void {
+        const context = self.getContext() orelse return;
+
+        const root = context.getRoot();
+        root.delUserData(self);
+    }
+
+    /// `std.fmt` impl
+    pub fn format(self: Ref, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror!void {
+        const context = self.getContext() orelse return error.InvalidReference;
+
+        const node_data = context.getLocal(self.local) orelse return error.InvalidReference;
+
+        const userdata = try context.getRoot().getUserData(self);
+
+        if (userdata.display) |display_fn| {
+            try display_fn(node_data, writer.any());
+        } else {
+            try std.fmt.format(writer, "Ref({}, {d})", .{self.local.node_kind, self.local.id});
+        }
+    }
 };
 
 /// A reference to a node in an ir context; unlike `Ref`,
@@ -397,6 +478,36 @@ pub const LocalRef = packed struct (u64) {
 
     /// The nil reference, a placeholder for an invalid or irrelevant reference.
     pub const nil = LocalRef { .node_kind = .nil, .id = .nil };
+
+    /// Get a field of a structure data node bound by this reference.
+    pub fn getField(self: LocalRef, context: *Context, comptime field: anytype) !Ref {
+        const field_name = comptime @tagName(field);
+
+        std.debug.assert(self.node_kind.getTag() == .structure);
+
+        const local_data = context.getLocal(self) orelse return error.InvalidReference;
+
+        const structure_kind: StructureKind = @enumFromInt(@intFromEnum(self.node_kind.getDiscriminator()));
+
+        if (structure_kind == .nil) return error.InvalidGraphState;
+
+        outer: inline for (comptime std.meta.fieldNames(StructureKind)[1..]) |kind_name| {
+            const kind = comptime @field(StructureKind, kind_name);
+
+            if (kind == structure_kind) {
+                const struct_info = comptime @field(structures, kind_name);
+                const struct_fields = comptime std.meta.fieldNames(@TypeOf(struct_info));
+
+                const field_index = comptime for (struct_fields, 0..) |name, i| {
+                    if (std.mem.eql(u8, name, field_name)) break i;
+                } else continue :outer;
+
+                return local_data.ref_list.items[field_index];
+            }
+        }
+
+        unreachable;
+    }
 };
 
 /// Uniquely identifies a child context in an ir.
@@ -747,6 +858,56 @@ pub const Data = union {
     /// Arbitrary list of graph refs, such as a list of types.
     ref_list: pl.ArrayList(Ref),
 };
+
+/// VTable and arbitrary data map for user defined data on nodes.
+pub const UserData = struct {
+    /// Type constructors are expected to bind this.
+    computeLayout: ?*const fn (constructor: Ref, input_types: []const Ref) anyerror!struct { u64, pl.Alignment } = null,
+    /// Any ref can bind this to provide a custom display function for the node.
+    display: ?*const fn (value: *const Data, writer: std.io.AnyWriter) anyerror!void = null,
+    /// Any opaque data can be stored here, bound with comptime-known names.
+    bindings: pl.StringArrayMap(*anyopaque) = .empty,
+
+    // TODO: zig seems to hate TypeId-style abstraction, but in the event this becomes viable,
+    // we could use a custom map here to provide type-safe access to the bindings.
+
+    /// Store an arbitrary address in the user data map, bound to a comptime-known key.
+    pub fn addData(self: *UserData, comptime key: pl.EnumLiteral, value: anytype) !void {
+        try self.bindings.put(self.bindings.allocator(), comptime @tagName(key), @ptrCast(value));
+    }
+
+    /// Get an arbitrary address from the user data map, bound to a comptime-known key.
+    /// * This does not perform any checking on the type stored in the map.
+    pub fn getData(self: *UserData, comptime T: type, comptime key: pl.EnumLiteral) ?*T {
+        return @alignCast(@ptrCast(self.bindings.get(comptime @tagName(key))));
+    }
+
+    /// Delete an arbitrary address from the user data map, given the comptime-known key it is bound to.
+    /// * If the key does not exist, this is a no-op.
+    pub fn delData(self: *UserData, comptime key: pl.EnumLiteral) void {
+        _ = self.bindings.remove(comptime @tagName(key));
+    }
+};
+
+/// Compute the layout of a type node by reference.
+pub fn computeLayout(ref: Ref) !struct { u64, pl.Alignment } {
+    if (ref.local.node_kind.getTag() != .structure or ref.local.node_kind.getDiscriminator() != .type) {
+        return error.InvalidNodeKind;
+    }
+
+    const ref_constructor = try ref.getField(.constructor);
+    const ref_input_types = try ref.getField(.input_types);
+
+    const input_types = try ref_input_types.getChildren();
+
+    const userdata = try ref_constructor.getUserData();
+
+    if (userdata.computeLayout) |computeLayoutFn| {
+        return computeLayoutFn(ref_constructor, input_types);
+    } else {
+        return error.InvalidGraphState;
+    }
+}
 
 /// Designates the kind of type that a node represents. Kinds provide a high-level categorization
 /// of types, allowing us to discern which locations and functionalities their values are
