@@ -60,7 +60,7 @@ pub const Context = struct {
         /// All child contexts owned by this root context.
         children: pl.UniqueReprMap(ContextId, *Context, 80) = .empty,
         /// Maps specific refs to user defined data, used for miscellaneous operations like layout computation, display, etc.
-        userdata: pl.UniqueReprMap(Ref, *const UserData, 80) = .empty,
+        userdata: pl.UniqueReprMap(Ref, *UserData, 80) = .empty,
 
         /// Get a pointer to the Context this Root is stored in.
         pub fn getRootContext(self: *Root) *Context {
@@ -78,14 +78,18 @@ pub const Context = struct {
             _ = self.children.deinit(gpa);
         }
 
-        /// Add a userdata for a specific reference.
-        pub fn addUserData(self: *Root, ref: Ref, userdata: *const UserData) !void {
-            try self.userdata.put(self.getRootContext().gpa, ref, userdata);
-        }
+        /// Get the userdata for a specific reference.
+        pub fn getUserData(self: *Root, ref: Ref) !*UserData {
+            const ctx = self.getRootContext();
+            const gop = try self.userdata.getOrPut(ctx.gpa, ref);
 
-        /// Get a userdata for a specific reference.
-        pub fn getUserData(self: *Root, ref: Ref) ?*const UserData {
-            return self.userdata.get(ref);
+            if (!gop.found_existing) {
+                const addr = try ctx.gpa.create(UserData);
+                addr.* = .{ .context = ctx };
+                gop.value_ptr.* = addr;
+            }
+
+            return gop.value_ptr.*;
         }
 
         /// Delete a userdata for a specific reference.
@@ -426,20 +430,12 @@ pub const Ref = packed struct(u128) {
         return local_data.ref_list.items;
     }
 
-    /// Set the userdata for the node bound by this reference.
-    pub fn setUserData(self: Ref, userdata: *const UserData) !void {
-        const context = self.getContext() orelse return error.InvalidReference;
-
-        const root = context.getRoot();
-        try root.addUserData(self, userdata);
-    }
-
     /// Get the userdata for the node bound by this reference.
-    pub fn getUserData(self: Ref) !*const UserData {
+    pub fn getUserData(self: Ref) !*UserData {
         const context = self.getContext() orelse return error.InvalidReference;
 
         const root = context.getRoot();
-        const userdata = root.getUserData(self) orelse return error.UserDataNotFound;
+        const userdata = try root.getUserData(self);
 
         return userdata;
     }
@@ -861,6 +857,8 @@ pub const Data = union {
 
 /// VTable and arbitrary data map for user defined data on nodes.
 pub const UserData = struct {
+    /// The context this user data is bound to.
+    context: *Context,
     /// Type constructors are expected to bind this.
     computeLayout: ?*const fn (constructor: Ref, input_types: []const Ref) anyerror!struct { u64, pl.Alignment } = null,
     /// Any ref can bind this to provide a custom display function for the node.
@@ -873,7 +871,7 @@ pub const UserData = struct {
 
     /// Store an arbitrary address in the user data map, bound to a comptime-known key.
     pub fn addData(self: *UserData, comptime key: pl.EnumLiteral, value: anytype) !void {
-        try self.bindings.put(self.bindings.allocator(), comptime @tagName(key), @ptrCast(value));
+        try self.bindings.put(self.context.gpa, comptime @tagName(key), @ptrCast(value));
     }
 
     /// Get an arbitrary address from the user data map, bound to a comptime-known key.

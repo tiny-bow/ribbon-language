@@ -127,6 +127,14 @@ pub const Compiler = struct {
                 .kind = kind,
             });
 
+            const ud = try constructor.getUserData();
+
+            ud.computeLayout = &struct {
+                pub fn value_layout(_: ir.Ref, _: []const ir.Ref) !struct { u64, pl.Alignment } {
+                    return .{ 8, 8 };
+                }
+            }.value_layout;
+
             return graph.internLocalStructure(.type, .{
                 .constructor = constructor,
                 .input_types = ir.Ref.nil,
