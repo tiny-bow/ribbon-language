@@ -16,7 +16,6 @@ const log = std.log.scoped(.Rir);
 const pl = @import("platform");
 const common = @import("common");
 const utils = @import("utils");
-const Interner = @import("Interner");
 const source = @import("source");
 const Source = source.Source;
 const bytecode = @import("bytecode");
@@ -61,6 +60,8 @@ pub const Context = struct {
         children: pl.UniqueReprMap(ContextId, *Context, 80) = .empty,
         /// Maps specific refs to user defined data, used for miscellaneous operations like layout computation, display, etc.
         userdata: pl.UniqueReprMap(Ref, *UserData, 80) = .empty,
+        /// Maps builtin structures to their definition references.
+        builtin: pl.UniqueReprMap(Builtin, Ref, 80) = .empty,
 
         /// Get a pointer to the Context this Root is stored in.
         pub fn getRootContext(self: *Root) *Context {
@@ -76,6 +77,25 @@ pub const Context = struct {
             var arena = self.getRootContext().arena;
             arena.deinit();
             _ = self.children.deinit(gpa);
+        }
+
+        /// Get the ref associated with a builtin identity.
+        ///
+        /// **IMPORTANT**
+        /// * Unlike the frontend language, this requires canonicalization of the order of set and map types.
+        /// * While the frontend type system uses marker types to distinguish the layout of structure fields,
+        /// here we do not use unordered sets; thus the order of the lists is used to encode the layout.
+        pub fn getBuiltin(self: *Root, comptime builtin: Builtin, args: anytype) !Ref {
+            const ctx = self.getRootContext();
+            const gop = try self.builtin.getOrPut(ctx.gpa, builtin);
+
+            if (!gop.found_existing) {
+                const initializer = @field(builtins, @tagName(builtin));
+
+                gop.value_ptr.* = try @call(.auto, initializer, .{ self.getRootContext() } ++ args);
+            }
+
+            return gop.value_ptr.*;
         }
 
         /// Get the userdata for a specific reference.
@@ -273,9 +293,38 @@ pub const Context = struct {
         const gop = try self.interner.getOrPutAdapted(self.gpa, value, BufferHasher);
 
         if (!gop.found_existing) {
-            const arr = try pl.ArrayList(u8).initCapacity(self.gpa, value.len);
+            var arr = try pl.ArrayList(u8).initCapacity(self.gpa, value.len);
+            errdefer arr.deinit(self.gpa);
+
+            arr.appendSliceAssumeCapacity(value);
 
             var node = try data(.buffer, arr);
+            errdefer node.deinit(self.gpa);
+
+            gop.value_ptr.* = (try self.addLocalUnchecked(node)).local;
+
+            try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
+        }
+
+        return Ref { .context = self, .local = gop.value_ptr.* };
+    }
+
+    /// Intern a ref list in the context.
+    /// * If the list already exists in this context, it will return the existing reference.
+    /// * Modifying nodes added this way is unsafe.
+    pub fn internLocalList(self: *Context, comptime element_kind: Discriminator, value: []const Ref) !Ref {
+        const gop = try self.interner.getOrPutAdapted(self.gpa, value, ListHasher(element_kind));
+
+        if (!gop.found_existing) {
+            var arr = try pl.ArrayList(Ref).initCapacity(self.gpa, value.len);
+            errdefer arr.deinit(self.gpa);
+
+            arr.appendSliceAssumeCapacity(value);
+
+            var node = Node {
+                .kind = NodeKind.collection(element_kind),
+                .data = .{ .ref_list = arr },
+            };
             errdefer node.deinit(self.gpa);
 
             gop.value_ptr.* = (try self.addLocalUnchecked(node)).local;
@@ -294,7 +343,7 @@ pub const Context = struct {
         var node = try data(kind, value);
         errdefer node.deinit(self.gpa);
 
-        return try self.internLocalUnchecked(node);
+        return self.internLocalUnchecked(node);
     }
 
     /// Intern a structure node in the context, given a structure kind and an initializer.
@@ -305,7 +354,7 @@ pub const Context = struct {
         var node = try structure(self.gpa, kind, value);
         errdefer node.deinit(self.gpa);
 
-        return try self.internLocalUnchecked(node);
+        return self.internLocalUnchecked(node);
     }
 
     /// Create a new data node in the context, given a data kind and data.
@@ -800,6 +849,26 @@ pub const NodeHasher = struct {
 
 /// 64-bit context providing eql and hash functions for `Node` and `[]const u8` types.
 /// This is used by the interner to map constant value nodes to their references.
+pub fn ListHasher(comptime element_kind: Discriminator) type {
+    return struct {
+        pub fn eql(b: []const Ref, a: Node) bool {
+            if (a.kind.getTag() != .collection or a.kind.getDiscriminator() != element_kind) return false;
+
+            return std.mem.eql(Ref, a.data.ref_list.items, b);
+        }
+
+        pub fn hash(n: []const Ref) u64 {
+            var hasher = std.hash.Fnv1a_64.init();
+            hasher.update(std.mem.asBytes(&ir.NodeKind.collection(element_kind)));
+            hasher.update(std.mem.sliceAsBytes(n));
+
+            return hasher.final();
+        }
+    };
+}
+
+/// 64-bit context providing eql and hash functions for `Node` and `[]const u8` types.
+/// This is used by the interner to map constant value nodes to their references.
 pub const BufferHasher = struct {
     pub fn eql(b: []const u8, a: Node) bool {
         if (a.kind != NodeKind.data(.buffer)) return false;
@@ -853,6 +922,213 @@ pub const Data = union {
     kind_tag: KindTag,
     /// Arbitrary list of graph refs, such as a list of types.
     ref_list: pl.ArrayList(Ref),
+};
+
+/// Identity of a builtin construct such as a type constructor, type, etc.
+pub const Builtin = enum(u8) {
+    /// See `ir.KindTag.data`.
+    data_kind,
+    /// See `ir.KindTag.primitive`.
+    primitive_kind,
+    /// See `ir.KindTag.set`.
+    type_set_kind,
+    /// See `ir.KindTag.set`.
+    data_type_set_kind,
+    /// See `ir.KindTag.map`.
+    type_map_kind,
+    /// See `ir.KindTag.map`.
+    data_type_map_kind,
+
+    /// A type constructor for the `integer` type family, which is a type of kind `primitive`,
+    /// with a signedness symbolic parameter and a bit width parameter.
+    integer_constructor,
+    /// A type constructor for the `symbol` type family, which is a type of kind `primitive`,
+    /// with a primitive parameter for the name of the symbol.
+    symbol_constructor,
+    /// A type constructor for the `set` family, which is a type of kind `set`,
+    /// with a key kind.
+    type_set_constructor,
+    /// A type constructor for the `map` type family, which is a type of kind `map`,
+    /// with two type set parameters
+    type_map_constructor,
+    /// A type constructor for the `struct` type family, which is a type of kind `structure`,
+    /// with a map of fields.
+    struct_constructor,
+
+    /// Interned byte buffers may designate this type of kind `primitive`,
+    /// in lieu of a more specific type that must otherwise be discerned from their usage.
+    /// This is done to prevent situations like `integer_type` referring to itself,
+    /// in the process of typing its bit size constant.
+    interned_bytes_type,
+    /// An integer type, an instance of the `integer` type constructor.
+    integer_type,
+    /// A symbol type, an instance of the `symbol` type constructor.
+    symbol_type,
+    /// A type of kind `set`, which is a list of keys of kind `key_kind`.
+    type_set_type,
+    /// A type of kind `map`, which is a pair of two sets, keys and values.
+    type_map_type,
+    /// A structural type, an instance of the `struct` type constructor.
+    struct_type,
+};
+
+/// initializers for builtin constructs. See `ir.Context.Root.getBuiltin`.
+pub const builtins = struct {
+    pub fn data_kind(ctx: *Context) !Ref {
+        return ctx.internLocalStructure(.kind, .{
+            .output_tag = try ctx.internLocalData(.kind_tag, .data),
+            .input_kinds = Ref.nil,
+        });
+    }
+
+    pub fn primitive_kind(ctx: *Context) !Ref {
+        return ctx.internLocalStructure(.kind, .{
+            .output_tag = try ctx.internLocalData(.kind_tag, .primitive),
+            .input_kinds = Ref.nil,
+        });
+    }
+
+    pub fn type_set_kind(ctx: *Context, key_kind: Ref) !Ref {
+        return ctx.internLocalStructure(.kind, .{
+            .output_tag = try ctx.internLocalData(.kind_tag, .set),
+            .input_kinds = try ctx.internLocalList(.kind, &.{ key_kind }),
+        });
+    }
+
+    pub fn type_map_kind(ctx: *Context, key_set_kind: Ref, val_set_kind: Ref) !Ref {
+        return ctx.internLocalStructure(.kind, .{
+            .output_tag = try ctx.internLocalData(.kind_tag, .map),
+            .input_kinds = try ctx.internLocalList(.kind, &.{
+                key_set_kind,
+                val_set_kind,
+            }),
+        });
+    }
+
+    pub fn data_type_set_kind(ctx: *Context) !Ref {
+        return ctx.getRoot().getBuiltin(.type_set_kind, .{
+            try ctx.getRoot().getBuiltin(.data_kind, .{}),
+        });
+    }
+
+    pub fn data_type_map_kind(ctx: *Context) !Ref {
+        return ctx.getRoot().getBuiltin(.type_map_kind, .{
+            try ctx.getRoot().getBuiltin(.data_type_set_kind, .{}),
+            try ctx.getRoot().getBuiltin(.data_type_set_kind, .{}),
+        });
+    }
+
+    pub fn integer_constructor(ctx: *Context) !Ref {
+        const k_primitive = try ctx.getRoot().getBuiltin(.primitive_kind, .{});
+
+        return ctx.addLocalStructure(.constructor, .{
+            .kind = try ctx.internLocalStructure(.kind, .{
+                .output_tag = try ctx.internLocalData(.kind_tag, .primitive),
+                .input_kinds = try ctx.internLocalList(.kind, &.{ k_primitive, k_primitive }),
+            }),
+        });
+    }
+
+    pub fn symbol_constructor(ctx: *Context) !Ref {
+        const k_arrow = try ctx.internLocalStructure(.kind, .{
+            .output_tag = try ctx.internLocalData(.kind_tag, .primitive),
+            .input_kinds = try ctx.internLocalList(.kind, &.{ try ctx.getRoot().getBuiltin(.primitive_kind, .{}) }),
+        });
+
+        return ctx.addLocalStructure(.constructor, .{
+            .kind = k_arrow,
+        });
+    }
+
+    pub fn type_set_constructor(ctx: *Context, key_kind: Ref) !Ref {
+        return ctx.addLocalStructure(.constructor, .{
+            .kind = try ctx.getRoot().getBuiltin(.type_set_kind, .{ key_kind }),
+        });
+    }
+
+    pub fn type_map_constructor(ctx: *Context, key_set_kind: Ref, val_set_kind: Ref) !Ref {
+        return ctx.addLocalStructure(.constructor, .{
+            .kind = try ctx.getRoot().getBuiltin(.type_map_kind, .{ key_set_kind, val_set_kind }),
+        });
+    }
+
+    // TODO: we need to be able to add additional flags; such as layout method, ie packed vs c, etc.
+    //       should this be done with the userdata? or with additional type parameters?
+    pub fn struct_constructor(ctx: *Context) !Ref {
+        return ctx.addLocalStructure(.constructor, .{
+            .kind = try ctx.internLocalStructure(.kind, .{
+                .output_tag = try ctx.internLocalData(.kind_tag, .structure),
+                .input_kinds = try ctx.internLocalList(.kind, &.{
+                    try ctx.getRoot().getBuiltin(.data_type_map_kind, .{}),
+                }),
+            }),
+        });
+    }
+
+    pub fn interned_bytes_type(ctx: *Context) !Ref {
+        return ctx.addLocalStructure(.constructor, .{
+            .kind = try ctx.getRoot().getBuiltin(.primitive_kind, .{}),
+        });
+    }
+
+    pub fn integer_type(ctx: *Context, signedness: pl.Signedness, bit_size: pl.Alignment) !Ref {
+        return ctx.internLocalStructure(.type, .{
+            .constructor = try ctx.getRoot().getBuiltin(.integer_constructor, .{}),
+            .input_types = try ctx.internLocalList(.type, &.{
+                try ctx.internLocalStructure(.constant, .{
+                    .type = try ctx.getRoot().getBuiltin(.interned_bytes_type, .{}),
+                    .value = try ctx.internLocalBuffer(std.mem.asBytes(&signedness)),
+                }),
+                try ctx.internLocalStructure(.constant, .{
+                    .type = try ctx.getRoot().getBuiltin(.interned_bytes_type, .{}),
+                    .value = try ctx.internLocalBuffer(std.mem.asBytes(&bit_size)),
+                }),
+            }),
+        });
+    }
+
+    pub fn symbol_type(ctx: *Context, name: []const u8) !Ref {
+        return ctx.internLocalStructure(.type, .{
+            .constructor = try ctx.getRoot().getBuiltin(.symbol_constructor, .{}),
+            .input_types = try ctx.internLocalList(.type, &.{ try ctx.internLocalData(.name, name) }),
+        });
+    }
+
+    pub fn type_set_type(ctx: *Context, key_kind: Ref, keys: []const Ref) !Ref {
+        return ctx.internLocalStructure(.type, .{
+            .constructor = try ctx.getRoot().getBuiltin(.type_set_constructor, .{ key_kind }),
+            .input_types = try ctx.internLocalList(.type, keys),
+        });
+    }
+
+    pub fn type_map_type(ctx: *Context, key_kind: Ref, val_kind: Ref, keys: []const Ref, vals: []const Ref) !Ref {
+        return ctx.internLocalStructure(.type, .{
+            .constructor = try ctx.getRoot().getBuiltin(.type_map_constructor, .{
+                try ctx.getRoot().getBuiltin(.type_set_kind, .{ key_kind }),
+                try ctx.getRoot().getBuiltin(.type_set_kind, .{ val_kind }),
+            }),
+            .input_types = try ctx.internLocalList(.type, &.{
+                try ctx.getRoot().getBuiltin(.type_set_type, .{ key_kind, keys }),
+                try ctx.getRoot().getBuiltin(.type_set_type, .{ val_kind, vals }),
+            }),
+        });
+    }
+
+    pub fn struct_type(ctx: *Context, names: []const Ref, types: []const Ref) !Ref {
+        const k_data = try ctx.getRoot().getBuiltin(.data_kind, .{});
+
+        return ctx.internLocalStructure(.type, .{
+            .constructor = try ctx.getRoot().getBuiltin(.struct_constructor, .{}),
+            .input_types = try ctx.internLocalList(.type, &.{
+                try ctx.getRoot().getBuiltin(.type_map_type, .{
+                    k_data,
+                    k_data,
+                    names,
+                    types,
+                }),
+            }),
+        });
+    }
 };
 
 /// VTable and arbitrary data map for user defined data on nodes.
@@ -924,12 +1200,18 @@ pub const KindTag = enum(u8) {
     /// Effect types represent a side effect that can be performed by a function.
     /// They are markers that bind sets of handlers together, but do not have a value.
     effect,
-    /// A set of types; for example a set of effect types. No value.
+    /// An array of types; for example a set of effect types. No value.
     set,
-    /// A map of types; for example the fields of a struct. No value.
+    /// An associative array of types; for example the fields of a struct. No value.
     map,
     /// This is *data*, but which cannot be a value; Only the destination of a pointer.
     @"opaque",
+    /// The kind of types that designate a single structural value.
+    /// The product type `(Int, Int)` or a struct `{ 0 'x Int, 1 'y Int }` for example.
+    structure,
+    /// The kind of types that designate a single primitive value.
+    /// The integer type `1` or symbolic type `'foo` for example.
+    primitive,
     /// The kind of types that designate a function *definition*, which can be called,
     /// have side effects, have a return value, and have an address that can be taken.
     /// They differ from `data` in that they are not values, they are available for uses like

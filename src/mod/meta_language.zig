@@ -98,10 +98,11 @@ pub const Compiler = struct {
     job: *ir2bc.Job,
     arena: std.heap.ArenaAllocator,
     builtin: struct {
+        value_data_type: ir.Ref = .nil,
         value_type: ir.Ref = .nil,
     } = .{},
 
-    pub fn getBuiltin(self: *Compiler, builtin: std.meta.FieldEnum(@TypeOf(self.builtin))) !ir.Ref {
+    pub fn getBuiltin(self: *Compiler, comptime builtin: std.meta.FieldEnum(@TypeOf(self.builtin))) !ir.Ref {
         const name = comptime @tagName(builtin);
         const initializer = comptime @field(builtin_initializers, name);
         const ref: *ir.Ref = &@field(self.builtin, name);
@@ -166,14 +167,13 @@ pub const Compiler = struct {
                     pl.todo(noreturn, "big int"),
             .char => |x| Value.fromChar(x),
             .string => |x| {
-                // TODO: this is interesting; i'm not sure how to handle this situation yet.
+                // TODO: Value ADT.
                 // basically, we need an interned value, that references an interned string;
                 // the issue is that the string pointer does not exist yet, so the resulting value would be invalid.
                 // here, i have just interned the buffer directly but this won't work without refinement,
                 // as the symbol wants to work the same way, and we have not encoded the discriminator, and theres no logic here to treat this differently.
                 // what we need instead is to build a constant expression that evaluates to the value we want,
-                // but i'm not quite sure how to acheive that yet, due to the fact that we are using Value; which is a zig type.
-                // Most obvious solution is just generating calls to builtins, I suppose.
+                // in order to do this we need an ADT representation of Value.
                 return graph.internLocalStructure(.constant, .{
                     .type = value_type,
                     .value = try graph.internLocalBuffer(x),
