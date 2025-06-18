@@ -1243,7 +1243,15 @@ pub fn parseCst(allocator: std.mem.Allocator, src: []const u8, cst: source.Synta
         cst_types.Int => {
             const bytes = cst.token.data.sequence.asSlice();
 
+            // Zig's parseInt supports our precise syntax:
+            // When base is zero the string prefix is examined to detect the true base:
+            // A prefix of "0b" implies base=2,
+            // A prefix of "0x" implies base=16,
+            // Otherwise base=10 is assumed.
+            // Ignores '_' character in buf.
             const int = std.fmt.parseInt(i64, bytes, 0) catch |err| {
+                // The cst parser interpreted this as an integer, meaning it starts with a decimal digit.
+                // If we can't parse it as an integer, it is lexically invalid. User error.
                 log.debug("parseCst: failed to parse int literal {s}: {}", .{bytes, err});
                 return error.UnexpectedInput;
             };
@@ -2252,7 +2260,7 @@ pub fn nuds() [10]source.Nud {
 
                     const first_char = utils.text.nthCodepoint(0, s) catch unreachable orelse unreachable;
 
-                    if (utils.text.isDecimal(first_char) and utils.text.isHexDigitStr(s)) {
+                    if (utils.text.isDecimal(first_char)) {
                         log.debug("leaf: found int literal", .{});
                         return source.SyntaxTree{
                             .source = .{ .name = parser.settings.source_name, .location = token.location },
