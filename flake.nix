@@ -82,8 +82,8 @@
         shellHook = ''
           echo "Zig version: ${zig.version}"
           echo "ZLS version: ${zls.version}"
-          
-          export PS1="(dev:zig@${zig.version}) $PS1"
+
+          export PROMPT_NAME='dev:zig@${zig.version}';
         '';
       };
     };
