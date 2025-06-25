@@ -1,5 +1,6 @@
 {
     // this is ignored in mono-repo workspace mode, and the cSpell settings are ignored when
     // in single-repo workspace mode, so this is my workaround for now...
-    "cSpell.enabled": false
+    "cSpell.enabled": false,
+    "nixEnvSelector.nixFile": "${workspaceFolder}/flake.nix",
 }

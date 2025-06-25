@@ -9,16 +9,16 @@
         "clear": true
     },
     "tasks": [
-        {
-            "label": "watch",
-            "detail": "Continually runs main on source changes (Uses bash, watchexec)",
-            "type": "shell",
-            "command": "watchexec -wsrc -wbuild.zig -wbuild.zig.zon bash src/bin/tools/watcher.sh",
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-        },
+        // { TODO: make this not suck
+        //     "label": "watch",
+        //     "detail": "Continually runs main on source changes (Uses bash, watchexec)",
+        //     "type": "shell",
+        //     "command": "watchexec -wsrc -wbuild.zig -wbuild.zig.zon bash src/bin/tools/watcher.sh",
+        //     "group": {
+        //         "kind": "build",
+        //         "isDefault": true
+        //     },
+        // },
         {
             "label": "check",
             "detail": "Run semantic analysis",
