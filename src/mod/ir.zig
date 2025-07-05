@@ -66,10 +66,6 @@ pub const Any = packed struct {
     /// Convert this `Any` to a pointer of type `T`, if the type matches.
     /// * The type must be a pointer type, otherwise this will fail at compile time.
     pub fn to(self: Any, comptime T: type) ?*T {
-        if (comptime @typeInfo(T) != .pointer) {
-            @compileError(@typeName(T) ++ " is not a pointer type, cannot be used with Any");
-        }
-
         if (TypeId.of(T).ptr != self.type_id.ptr) return null;
 
         return @alignCast(@ptrCast(self.ptr));
@@ -110,7 +106,7 @@ pub fn enumFieldArray(comptime T: type) [@typeInfo(T).@"enum".fields.len]std.met
 pub fn isEnumVariant(comptime T: type, value: anytype) bool {
     const field_values = comptime enumFieldArray(T);
 
-    return std.mem.indexOfScalar(std.meta.Tag(T), field_values, value) != null;
+    return std.mem.indexOfScalar(std.meta.Tag(T), &field_values, value) != null;
 }
 
 /// VTable and arbitrary data map for user defined data on nodes.
@@ -138,7 +134,7 @@ pub const UserData = struct {
     /// Delete an arbitrary address from the user data map, given the comptime-known key it is bound to.
     /// * If the key does not exist, this is a no-op.
     pub fn delData(self: *UserData, comptime key: pl.EnumLiteral) void {
-        _ = self.bindings.remove(comptime @tagName(key));
+        _ = self.bindings.swapRemove(comptime @tagName(key));
     }
 };
 
@@ -300,13 +296,11 @@ pub const Root = struct {
     }
 
     /// Deinitialize the root context, freeing all memory it owns.
-    pub fn deinit(self: *Root, gpa: std.mem.Allocator) void {
+    pub fn deinit(self: *Root) void {
         var it = self.children.valueIterator();
-        while (it.next()) |child_ptr| child_ptr.*.deinit();
+        while (it.next()) |child_ptr| child_ptr.*.destroy();
 
-        var arena = self.getRootContext().arena;
-        arena.deinit();
-        _ = self.children.deinit(gpa);
+        self.getRootContext().destroy();
     }
 
     /// Create a new context.
@@ -362,11 +356,11 @@ pub const Context = struct {
     /// arena allocator for the context, used for data nodes.
     arena: std.heap.ArenaAllocator,
     /// contains all graph nodes in this context.
-    nodes: pl.UniqueReprMap(LocalRef, Node, 80) = .empty,
+    nodes: pl.UniqueReprMap(Ref, Node, 80) = .empty,
     /// Maps constant value nodes to references.
-    interner: pl.HashMap(Node, LocalRef, NodeHasher, 80) = .empty,
+    interner: pl.HashMap(Node, Ref, NodeHasher, 80) = .empty,
     /// Flags whether a node is interned or not.
-    interned_refs: pl.UniqueReprSet(LocalRef, 80) = .empty,
+    interned_refs: pl.UniqueReprSet(Ref, 80) = .empty,
     /// Used to generate context-unique ids for nodes.
     fresh_node: NodeId = .fromInt(1),
     /// Maps specific refs to user defined data, used for miscellaneous operations like layout computation, display, etc.
@@ -409,14 +403,8 @@ pub const Context = struct {
     /// Deinitialize the context, freeing all memory it owns.
     pub fn deinit(self: *Context) void {
         switch (self.inner) {
-            .child => {
-                self.getRoot().destroyContext(self.id);
-            },
-            .root => |*root| {
-                root.deinit(self.gpa);
-
-                self.destroy();
-            },
+            .root => |*root| root.deinit(),
+            .child => self.getRoot().destroyContext(self.id),
         }
     }
 
@@ -447,13 +435,13 @@ pub const Context = struct {
     }
 
     /// Get the ref associated with a builtin identity.
-    pub fn getBuiltin(self: *Context, comptime builtin: Builtin, args: anytype) !Ref {
+    pub fn getBuiltin(self: *Context, comptime builtin: Builtin) !Ref {
         const gop = try self.builtin.getOrPut(self.gpa, builtin);
 
         if (!gop.found_existing) {
             const initializer = @field(builtins, @tagName(builtin));
 
-            gop.value_ptr.* = try @call(.auto, initializer, .{self.getRootContext()} ++ args);
+            gop.value_ptr.* = try initializer(self);
         }
 
         return gop.value_ptr.*;
@@ -461,12 +449,11 @@ pub const Context = struct {
 
     /// Get the userdata for a specific reference.
     pub fn getUserData(self: *Context, ref: Ref) !*UserData {
-        const ctx = self.getRootContext();
-        const gop = try self.userdata.getOrPut(ctx.gpa, ref);
+        const gop = try self.userdata.getOrPut(self.gpa, ref);
 
         if (!gop.found_existing) {
-            const addr = try ctx.gpa.create(UserData);
-            addr.* = .{ .context = ctx };
+            const addr = try self.gpa.create(UserData);
+            addr.* = .{ .context = self };
             gop.value_ptr.* = addr;
         }
 
@@ -478,6 +465,46 @@ pub const Context = struct {
         _ = self.userdata.remove(ref);
     }
 
+    /// Get a field of a structure data node bound by this reference.
+    pub fn getField(self: *Context, ref: Ref, comptime field: anytype) !Ref {
+        if (ref.node_kind.getTag() != .structure) {
+            return error.InvalidNodeKind;
+        }
+
+        return ref.getField(self, field);
+    }
+
+    /// Get a ref list from a structure or list node bound by this reference.
+    pub fn getChildren(self: *Context, ref: Ref) ![]const Ref {
+        if (ref.node_kind.getTag() != .structure and ref.node_kind.getTag() != .collection) {
+            return error.InvalidNodeKind;
+        }
+
+        const local_data = self.getNode(ref) orelse return error.InvalidReference;
+
+        return local_data.ref_list.items;
+    }
+
+    /// Compute the layout of a type node by reference.
+    pub fn computeLayout(self: *Context, ref: Ref) !struct { u64, pl.Alignment } {
+        if (ref.node_kind.getTag() != .structure or ref.node_kind.getDiscriminator() != .type) {
+            return error.InvalidNodeKind;
+        }
+
+        const ref_constructor = try self.getField(ref, .constructor);
+        const ref_input_types = try self.getField(ref, .input_types);
+
+        const input_types = try self.getChildren(ref_input_types);
+
+        const userdata = try self.getUserData(ref_input_types);
+
+        if (userdata.computeLayout) |computeLayoutFn| {
+            return computeLayoutFn(ref_constructor, input_types);
+        } else {
+            return error.InvalidGraphState;
+        }
+    }
+
     /// Intern a node within the context, returning a reference to it.
     /// * This performs no validation on the node kind or value.
     /// * If the node already exists in this context, it will return the existing reference.
@@ -486,25 +513,25 @@ pub const Context = struct {
         const gop = try self.interner.getOrPut(self.gpa, node);
 
         if (!gop.found_existing) {
-            gop.value_ptr.* = (try self.addNodeUnchecked(node)).local;
+            gop.value_ptr.* = try self.addNodeUnchecked(node);
 
             try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
         }
 
-        return Ref{ .context = self, .local = gop.value_ptr.* };
+        return gop.value_ptr.*;
     }
 
     /// Add a node to the context, returning a reference to it.
     /// * This performs no validation on the node kind or value.
     pub fn addNodeUnchecked(self: *Context, node: Node) !Ref {
-        const local_ref = LocalRef{
+        const ref = Ref{
             .node_kind = node.kind,
             .id = self.genId(),
         };
 
-        try self.nodes.put(self.gpa, local_ref, node);
+        try self.nodes.put(self.gpa, ref, node);
 
-        return Ref{ .context = self, .local = local_ref };
+        return ref;
     }
 
     /// Delete a node from the context, given its reference.
@@ -512,7 +539,7 @@ pub const Context = struct {
     /// * Nodes relying on this node will be invalidated.
     /// * If the node does not exist, this is a no-op.
     /// * If the node is interned, this is a no-op.
-    pub fn delNode(self: *Context, ref: LocalRef) void {
+    pub fn delNode(self: *Context, ref: Ref) void {
         if (self.interned_refs.contains(ref)) {
             log.debug("Tried to delete an interned node: {}", .{ref});
             return;
@@ -524,13 +551,13 @@ pub const Context = struct {
     }
 
     /// Get an immutable pointer to raw node data, given its reference.
-    pub fn getNode(self: *Context, ref: LocalRef) ?*const Data {
+    pub fn getNode(self: *Context, ref: Ref) ?*const Data {
         return &(self.nodes.getPtr(ref) orelse return null).bytes;
     }
 
     /// Get a mutable pointer to raw node data, given its reference.
     /// * This will return null if the node is interned, as interned nodes are immutable.
-    pub fn getNodeMut(self: *Context, ref: LocalRef) ?*Data {
+    pub fn getNodeMut(self: *Context, ref: Ref) ?*Data {
         const node = self.nodes.getPtr(ref) orelse return null;
 
         if (self.interned_refs.contains(ref)) {
@@ -629,12 +656,14 @@ pub const Context = struct {
             var node = try Node.data(.buffer, arr);
             errdefer node.deinit(self.gpa);
 
-            gop.value_ptr.* = (try self.addNodeUnchecked(node)).local;
+            gop.key_ptr.* = node;
+
+            gop.value_ptr.* = try self.addNodeUnchecked(node);
 
             try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
         }
 
-        return Ref{ .context = self, .local = gop.value_ptr.* };
+        return gop.value_ptr.*;
     }
 
     /// Intern a ref list in the context.
@@ -655,115 +684,29 @@ pub const Context = struct {
             };
             errdefer node.deinit(self.gpa);
 
-            gop.value_ptr.* = (try self.addNodeUnchecked(node)).local;
+            gop.key_ptr.* = node;
+            gop.value_ptr.* = try self.addNodeUnchecked(node);
 
             try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
         }
 
-        return Ref{ .context = self, .local = gop.value_ptr.* };
-    }
-};
-
-/// Combines a `LocalRef` with a node in an ir context with a reference to the context itself.
-pub const Ref = packed struct(u128) {
-    /// The context this reference is bound to.
-    /// * This has to be type erased due to zig compiler limitations wrt comptime eval;
-    /// it is always of type `?*ir.Context`.
-    context: ?*anyopaque,
-    /// The inner reference to the node in the context.
-    local: LocalRef,
-
-    /// The nil reference, a placeholder for an invalid or irrelevant reference.
-    pub const nil = Ref{ .context = null, .local = .nil };
-
-    /// Cast the Ref to a Context pointer.
-    pub fn getContext(self: Ref) ?*Context {
-        return @alignCast(@ptrCast(self.context));
-    }
-
-    /// Get a field of a structure data node bound by this reference.
-    pub fn getField(self: Ref, comptime field: anytype) !Ref {
-        const context = self.getContext() orelse return error.InvalidReference;
-
-        return self.local.getField(context, field);
-    }
-
-    /// Get a ref list from a structure or list node bound by this reference.
-    pub fn getChildren(self: Ref) ![]const Ref {
-        const context = self.getContext() orelse return error.InvalidReference;
-
-        std.debug.assert(self.local.node_kind.getTag() == .structure or self.local.node_kind.getTag() == .collection);
-
-        const local_data = context.getNode(self.local) orelse return error.InvalidReference;
-
-        return local_data.ref_list.items;
-    }
-
-    /// Get the userdata for the node bound by this reference.
-    pub fn getUserData(self: Ref) !*UserData {
-        const context = self.getContext() orelse return error.InvalidReference;
-
-        const userdata = try context.getUserData(self);
-
-        return userdata;
-    }
-
-    /// Delete the userdata for the node bound by this reference.
-    pub fn delUserData(self: Ref) void {
-        const context = self.getContext() orelse return;
-
-        context.delUserData(self);
-    }
-
-    /// Compute the layout of a type node by reference.
-    pub fn computeLayout(ref: Ref) !struct { u64, pl.Alignment } {
-        if (ref.local.node_kind.getTag() != .structure or ref.local.node_kind.getDiscriminator() != .type) {
-            return error.InvalidNodeKind;
-        }
-
-        const ref_constructor = try ref.getField(.constructor);
-        const ref_input_types = try ref.getField(.input_types);
-
-        const input_types = try ref_input_types.getChildren();
-
-        const userdata = try ref_constructor.getUserData();
-
-        if (userdata.computeLayout) |computeLayoutFn| {
-            return computeLayoutFn(ref_constructor, input_types);
-        } else {
-            return error.InvalidGraphState;
-        }
-    }
-
-    /// `std.fmt` impl
-    pub fn format(self: Ref, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) anyerror!void {
-        const context = self.getContext() orelse return error.InvalidReference;
-
-        const node_data = context.getNode(self.local) orelse return error.InvalidReference;
-
-        const userdata = try context.getRoot().getUserData(self);
-
-        if (userdata.display) |display_fn| {
-            try display_fn(node_data, writer.any());
-        } else {
-            try std.fmt.format(writer, "Ref({}, {d})", .{ self.local.node_kind, self.local.id });
-        }
+        return gop.value_ptr.*;
     }
 };
 
 /// A reference to a node in an ir context; unlike `Ref`,
 /// this does not bind the context it is contained within.
-pub const LocalRef = packed struct(u64) {
+pub const Ref = packed struct(u64) {
     /// The kind of the node bound by this reference.
     node_kind: NodeKind,
     /// The unique id of the node in the context.
     id: Id,
 
     /// The nil reference, a placeholder for an invalid or irrelevant reference.
-    pub const nil = LocalRef{ .node_kind = .nil, .id = .nil };
+    pub const nil = Ref{ .node_kind = .nil, .id = .nil };
 
     /// Get a field of a structure data node bound by this reference.
-    pub fn getField(self: LocalRef, context: *Context, comptime field: anytype) !Ref {
+    pub fn getField(self: Ref, context: *Context, comptime field: anytype) !Ref {
         const field_name = comptime @tagName(field);
 
         std.debug.assert(self.node_kind.getTag() == .structure);
@@ -1114,23 +1057,25 @@ pub const Node = struct {
                     if (!info.is_tuple) @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
                     if (info.fields.len != 2) @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
 
-                    const node_kind = comptime NodeKind{
-                        .tag = @intFromEnum(@field(Tag, @tagName(decl_value[0]))),
-                        .discriminator = @intFromEnum(@field(Discriminator, @tagName(decl_value[1]))),
-                    };
+                    // FIXME: the following causes spurious errors atm
 
-                    if (init_value.local.node_kind == node_kind) {
-                        ref_list.appendAssumeCapacity(init_value);
-                    } else {
-                        log.debug("Unexpected node kind for structure {s} field decl {s}: expected {}, got {}", .{
-                            struct_name,
-                            decl.name,
-                            node_kind,
-                            init_value.local.node_kind,
-                        });
+                    // const node_kind = comptime NodeKind{
+                    //     .tag = @intFromEnum(@field(Tag, @tagName(decl_value[0]))),
+                    //     .discriminator = @intFromEnum(@field(Discriminator, @tagName(decl_value[1]))),
+                    // };
 
-                        return error.InvalidNodeKind;
-                    }
+                    // if (init_value.node_kind == node_kind) {
+                    ref_list.appendAssumeCapacity(init_value);
+                    // } else {
+                    //     log.debug("Unexpected node kind for structure {s} field decl {s}: expected {}, got {}", .{
+                    //         struct_name,
+                    //         decl.name,
+                    //         node_kind,
+                    //         init_value.node_kind,
+                    //     });
+
+                    //     return error.InvalidNodeKind;
+                    // }
                 },
                 else => {
                     @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
@@ -1177,14 +1122,15 @@ pub const Node = struct {
 
 /// An untagged union of all the data types that can be stored in an ir node.
 pub const Data = union {
-    /// An arbitrary integer value, such as an index into an array.
-    primitive: u64,
     /// A symbolic name, such as a variable name or a function name.
     name: []const u8,
     /// A source location.
     source: Source,
     /// Arbitrary data, such as a string body.
     buffer: pl.ArrayList(u8),
+
+    /// An arbitrary integer value, such as an index into an array.
+    primitive: u64,
     /// Arbitrary list of graph refs, such as a list of types.
     ref_list: pl.ArrayList(Ref),
 };
@@ -1217,27 +1163,33 @@ pub const Structures: type = @TypeOf(structures);
 /// The discriminator of a node, which indicates the specific kind of value it contains.
 /// * Variant names are the field names of `ir.structures`, `ir.primitives`, `ir.Data` without `ref_list` or `primitive`, and `nil`.
 pub const Discriminator: type = Discriminator: {
-    const data_fields = std.meta.fieldNames(Data);
-    const primitive_fields = std.meta.fieldNames(Primitives);
-    const structure_fields = std.meta.fieldNames(Structures);
+    const data_fields = std.meta.fieldNames(DataKind);
+    const primitive_fields = std.meta.fieldNames(PrimitiveKind);
+    const structure_fields = std.meta.fieldNames(StructureKind);
 
-    var fields = [1]std.builtin.Type.EnumField{undefined} ** (primitive_fields.len + structure_fields.len + data_fields.len + 1);
+    var fields = [1]std.builtin.Type.EnumField{undefined} ** ((primitive_fields.len - 1) + (structure_fields.len - 1) + (data_fields.len - 1) + 1);
     fields[0] = .{ .name = "nil", .value = 0 };
 
     var i = 1;
 
-    for (data_fields[0..], 0..) |field, j| {
-        fields[i] = .{ .name = field, .value = j + 1000 };
+    for (data_fields[0..]) |field| {
+        if (std.mem.eql(u8, field, "nil")) continue;
+
+        fields[i] = .{ .name = field, .value = @intFromEnum(@field(DataKind, field)) };
         i += 1;
     }
 
-    for (primitive_fields[0..], 0..) |field, j| {
-        fields[i] = .{ .name = field, .value = j + 2000 };
+    for (primitive_fields[0..]) |field| {
+        if (std.mem.eql(u8, field, "nil")) continue;
+
+        fields[i] = .{ .name = field, .value = @intFromEnum(@field(PrimitiveKind, field)) };
         i += 1;
     }
 
-    for (structure_fields[0..], 0..) |field, j| {
-        fields[i] = .{ .name = field, .value = j + 3000 };
+    for (structure_fields[0..]) |field| {
+        if (std.mem.eql(u8, field, "nil")) continue;
+
+        fields[i] = .{ .name = field, .value = @intFromEnum(@field(StructureKind, field)) };
         i += 1;
     }
 
@@ -1269,7 +1221,7 @@ pub const DataKind: type = DataKind: {
 
         fields[i] = .{
             .name = field_name,
-            .value = i + 1000,
+            .value = 1000 + i,
         };
 
         i += 1;
@@ -1484,6 +1436,12 @@ pub const builtins = struct {
         });
     }
 
+    pub fn interned_bytes_type(ctx: *Context) !Ref {
+        return ctx.addStructure(.constructor, .{
+            .kind = try ctx.getBuiltin(.primitive_kind),
+        });
+    }
+
     pub fn primitive_kind(ctx: *Context) !Ref {
         return ctx.internStructure(.kind, .{
             .output_tag = try ctx.internPrimitive(KindTag.primitive),
@@ -1491,6 +1449,57 @@ pub const builtins = struct {
         });
     }
 
+    pub fn data_type_set_kind(ctx: *Context) !Ref {
+        return builders.type_set_kind(
+            ctx,
+            try ctx.getBuiltin(.data_kind),
+        );
+    }
+
+    pub fn data_type_map_kind(ctx: *Context) !Ref {
+        return builders.type_map_kind(
+            ctx,
+            try ctx.getBuiltin(.data_type_set_kind),
+            try ctx.getBuiltin(.data_type_set_kind),
+        );
+    }
+
+    pub fn integer_constructor(ctx: *Context) !Ref {
+        const k_primitive = try ctx.getBuiltin(.primitive_kind);
+
+        return ctx.addStructure(.constructor, .{
+            .kind = try ctx.internStructure(.kind, .{
+                .output_tag = try ctx.internPrimitive(KindTag.primitive),
+                .input_kinds = try ctx.internList(.kind, &.{ k_primitive, k_primitive }),
+            }),
+        });
+    }
+
+    pub fn symbol_constructor(ctx: *Context) !Ref {
+        const k_arrow = try ctx.internStructure(.kind, .{
+            .output_tag = try ctx.internPrimitive(KindTag.primitive),
+            .input_kinds = try ctx.internList(.kind, &.{try ctx.getBuiltin(.primitive_kind)}),
+        });
+
+        return ctx.addStructure(.constructor, .{
+            .kind = k_arrow,
+        });
+    }
+
+    pub fn struct_constructor(ctx: *Context) !Ref {
+        return ctx.addStructure(.constructor, .{
+            .kind = try ctx.internStructure(.kind, .{
+                .output_tag = try ctx.internPrimitive(KindTag.structure),
+                .input_kinds = try ctx.internList(.kind, &.{
+                    try ctx.getBuiltin(.primitive_kind), // layout
+                    try ctx.getBuiltin(.data_type_map_kind), // field names -> types
+                }),
+            }),
+        });
+    }
+};
+
+pub const builders = struct {
     pub fn type_set_kind(ctx: *Context, key_kind: Ref) !Ref {
         return ctx.internStructure(.kind, .{
             .output_tag = try ctx.internPrimitive(KindTag.set),
@@ -1508,82 +1517,28 @@ pub const builtins = struct {
         });
     }
 
-    pub fn data_type_set_kind(ctx: *Context) !Ref {
-        return ctx.getBuiltin(.type_set_kind, .{
-            try ctx.getBuiltin(.data_kind, .{}),
-        });
-    }
-
-    pub fn data_type_map_kind(ctx: *Context) !Ref {
-        return ctx.getBuiltin(.type_map_kind, .{
-            try ctx.getBuiltin(.data_type_set_kind, .{}),
-            try ctx.getBuiltin(.data_type_set_kind, .{}),
-        });
-    }
-
-    pub fn integer_constructor(ctx: *Context) !Ref {
-        const k_primitive = try ctx.getBuiltin(.primitive_kind, .{});
-
-        return ctx.addStructure(.constructor, .{
-            .kind = try ctx.internStructure(.kind, .{
-                .output_tag = try ctx.internPrimitive(KindTag.primitive),
-                .input_kinds = try ctx.internList(.kind, &.{ k_primitive, k_primitive }),
-            }),
-        });
-    }
-
-    pub fn symbol_constructor(ctx: *Context) !Ref {
-        const k_arrow = try ctx.internStructure(.kind, .{
-            .output_tag = try ctx.internPrimitive(KindTag.primitive),
-            .input_kinds = try ctx.internList(.kind, &.{try ctx.getBuiltin(.primitive_kind, .{})}),
-        });
-
-        return ctx.addStructure(.constructor, .{
-            .kind = k_arrow,
-        });
-    }
-
     pub fn type_set_constructor(ctx: *Context, key_kind: Ref) !Ref {
         return ctx.addStructure(.constructor, .{
-            .kind = try ctx.getBuiltin(.type_set_kind, .{key_kind}),
+            .kind = try builders.type_set_kind(ctx, key_kind),
         });
     }
 
     pub fn type_map_constructor(ctx: *Context, key_set_kind: Ref, val_set_kind: Ref) !Ref {
         return ctx.addStructure(.constructor, .{
-            .kind = try ctx.getBuiltin(.type_map_kind, .{ key_set_kind, val_set_kind }),
-        });
-    }
-
-    // TODO: we need to be able to add additional flags; such as layout method, ie packed vs c, etc.
-    //       should this be done with the userdata? or with additional type parameters?
-    pub fn struct_constructor(ctx: *Context) !Ref {
-        return ctx.addStructure(.constructor, .{
-            .kind = try ctx.internStructure(.kind, .{
-                .output_tag = try ctx.internPrimitive(KindTag.structure),
-                .input_kinds = try ctx.internList(.kind, &.{
-                    try ctx.getBuiltin(.data_type_map_kind, .{}),
-                }),
-            }),
-        });
-    }
-
-    pub fn interned_bytes_type(ctx: *Context) !Ref {
-        return ctx.addStructure(.constructor, .{
-            .kind = try ctx.getBuiltin(.primitive_kind, .{}),
+            .kind = try builders.type_map_kind(ctx, key_set_kind, val_set_kind),
         });
     }
 
     pub fn integer_type(ctx: *Context, signedness: pl.Signedness, bit_size: pl.Alignment) !Ref {
         return ctx.internStructure(.type, .{
-            .constructor = try ctx.getBuiltin(.integer_constructor, .{}),
+            .constructor = try ctx.getBuiltin(.integer_constructor),
             .input_types = try ctx.internList(.type, &.{
                 try ctx.internStructure(.constant, .{
-                    .type = try ctx.getBuiltin(.interned_bytes_type, .{}),
+                    .type = try ctx.getBuiltin(.interned_bytes_type),
                     .value = try ctx.internBuffer(std.mem.asBytes(&signedness)),
                 }),
                 try ctx.internStructure(.constant, .{
-                    .type = try ctx.getBuiltin(.interned_bytes_type, .{}),
+                    .type = try ctx.getBuiltin(.interned_bytes_type),
                     .value = try ctx.internBuffer(std.mem.asBytes(&bit_size)),
                 }),
             }),
@@ -1592,46 +1547,295 @@ pub const builtins = struct {
 
     pub fn symbol_type(ctx: *Context, name: []const u8) !Ref {
         return ctx.internStructure(.type, .{
-            .constructor = try ctx.getBuiltin(.symbol_constructor, .{}),
+            .constructor = try ctx.getBuiltin(.symbol_constructor),
             .input_types = try ctx.internList(.type, &.{try ctx.internData(.name, name)}),
         });
     }
 
     pub fn type_set_type(ctx: *Context, key_kind: Ref, keys: []const Ref) !Ref {
         return ctx.internStructure(.type, .{
-            .constructor = try ctx.getBuiltin(.type_set_constructor, .{key_kind}),
+            .constructor = try builders.type_set_constructor(ctx, key_kind),
             .input_types = try ctx.internList(.type, keys),
         });
     }
 
     pub fn type_map_type(ctx: *Context, key_kind: Ref, val_kind: Ref, keys: []const Ref, vals: []const Ref) !Ref {
         return ctx.internStructure(.type, .{
-            .constructor = try ctx.getBuiltin(.type_map_constructor, .{
-                try ctx.getBuiltin(.type_set_kind, .{key_kind}),
-                try ctx.getBuiltin(.type_set_kind, .{val_kind}),
-            }),
+            .constructor = try builders.type_map_constructor(
+                ctx,
+                try builders.type_set_kind(ctx, key_kind),
+                try builders.type_set_kind(ctx, val_kind),
+            ),
             .input_types = try ctx.internList(.type, &.{
-                try ctx.getBuiltin(.type_set_type, .{ key_kind, keys }),
-                try ctx.getBuiltin(.type_set_type, .{ val_kind, vals }),
+                try builders.type_set_type(ctx, key_kind, keys),
+                try builders.type_set_type(ctx, val_kind, vals),
             }),
         });
     }
 
-    /// * Note: While the frontend type system uses marker types to distinguish the layout of structure fields,
-    /// here we do not use unordered sets; thus the order of the lists is used to encode the layout.
-    pub fn struct_type(ctx: *Context, names: []const Ref, types: []const Ref) !Ref {
-        const k_data = try ctx.getBuiltin(.data_kind, .{});
+    /// * Note: While the frontend type system uses marker types to distinguish the order of structure fields,
+    /// here we do not use unordered sets; thus the order of the lists is used to encode the order.
+    /// * The `layout` must be a symbol of the set `{'c, 'packed}`
+    pub fn struct_type(ctx: *Context, layout: Ref, names: []const Ref, types: []const Ref) !Ref {
+        const k_data = try ctx.getBuiltin(.data_kind);
 
         return ctx.internStructure(.type, .{
-            .constructor = try ctx.getBuiltin(.struct_constructor, .{}),
+            .constructor = try ctx.getBuiltin(.struct_constructor),
             .input_types = try ctx.internList(.type, &.{
-                try ctx.getBuiltin(.type_map_type, .{
+                layout,
+                try builders.type_map_type(
+                    ctx,
                     k_data,
                     k_data,
                     names,
                     types,
-                }),
+                ),
             }),
         });
     }
 };
+
+const testing = std.testing;
+
+test "ir integration - basic context operations" {
+    const gpa = std.heap.page_allocator; // FIXME: testing allocator detects leaks
+
+    // Create root context
+    const ctx = try ir.Context.init(gpa);
+    defer ctx.deinit();
+
+    // Test basic node creation
+    const int_node = try ctx.addPrimitive(@as(u64, 42));
+    const name_node = try ctx.addData(.name, "test_variable");
+
+    // Verify nodes were created
+    try testing.expect(int_node != ir.Ref.nil);
+    try testing.expect(name_node != ir.Ref.nil);
+
+    // Test data retrieval
+    const int_data = ctx.getNode(int_node);
+    try testing.expect(int_data != null);
+    try testing.expectEqual(@as(u64, 42), int_data.?.primitive);
+
+    const name_data = ctx.getNode(name_node);
+    try testing.expect(name_data != null);
+    try testing.expectEqualStrings("test_variable", name_data.?.name);
+}
+
+test "ir integration - struct type creation with packed layout" {
+    const gpa = std.heap.page_allocator; // FIXME: testing allocator detects leaks
+
+    // Create root context
+    const ctx = try ir.Context.init(gpa);
+    defer ctx.deinit();
+
+    // Create basic types for struct fields
+    const u32_type = try builders.integer_type(ctx, .unsigned, 32);
+    const u16_type = try builders.integer_type(ctx, .unsigned, 16);
+    const u8_type = try builders.integer_type(ctx, .unsigned, 8);
+
+    // Create field names
+    const field1_name = try ctx.internData(.name, "x");
+    const field2_name = try ctx.internData(.name, "y");
+    const field3_name = try ctx.internData(.name, "z");
+
+    // Create packed layout symbol
+    const packed_layout = try builders.symbol_type(ctx, "packed");
+
+    // Create the struct type with packed layout and three fields
+    const field_names = [_]ir.Ref{ field1_name, field2_name, field3_name };
+    const field_types = [_]ir.Ref{ u32_type, u16_type, u8_type };
+
+    const struct_type = try builders.struct_type(ctx, packed_layout, &field_names, &field_types);
+
+    // Verify the struct type was created
+    try testing.expect(struct_type != ir.Ref.nil);
+    try testing.expectEqual(ir.Tag.structure, struct_type.node_kind.getTag());
+    try testing.expectEqual(ir.StructureKind.type, ir.discriminants.force(ir.StructureKind, struct_type.node_kind.getDiscriminator()));
+
+    // Verify we can get the constructor and input types
+    const constructor = try ctx.getField(struct_type, .constructor);
+    const input_types = try ctx.getField(struct_type, .input_types);
+
+    try testing.expect(constructor != ir.Ref.nil);
+    try testing.expect(input_types != ir.Ref.nil);
+
+    // Verify the input types list contains our field information
+    const children = try ctx.getChildren(input_types);
+    try testing.expect(children.len > 0);
+}
+
+test "ir integration - interning and node reuse" {
+    const gpa = std.heap.page_allocator; // FIXME: testing allocator detects leaks
+
+    const ctx = try ir.Context.init(gpa);
+    defer ctx.deinit();
+
+    // Test primitive interning
+    const int1 = try ctx.internPrimitive(@as(u64, 100));
+    const int2 = try ctx.internPrimitive(@as(u64, 100));
+
+    // Should be the same reference (interned)
+    try testing.expectEqual(int1, int2);
+
+    // Test buffer interning
+    const buf1 = try ctx.internBuffer("hello world");
+    const buf2 = try ctx.internBuffer("hello world");
+
+    // Should be the same reference (interned)
+    try testing.expectEqual(buf1, buf2);
+
+    // Different content should give different references
+    const buf3 = try ctx.internBuffer("different");
+    try testing.expect(buf1.id.node != buf3.id.node);
+}
+
+test "ir integration - child context creation" {
+    const gpa = std.heap.page_allocator; // FIXME: testing allocator detects leaks
+
+    const root_ctx = try ir.Context.init(gpa);
+    defer root_ctx.deinit();
+
+    // Create child context
+    const child_ctx = try root_ctx.inner.root.createContext();
+
+    // Verify child context properties
+    try testing.expect(!child_ctx.isRoot());
+    try testing.expectEqual(root_ctx, child_ctx.getRootContext());
+    try testing.expect(child_ctx.id.toInt() != 0);
+
+    // Test that we can create nodes in child context
+    const test_node = try child_ctx.addPrimitive(@as(u64, 999));
+    try testing.expect(test_node != ir.Ref.nil);
+    try testing.expectEqual(child_ctx.id, test_node.id.context);
+}
+
+test "ir integration - user data management" {
+    const gpa = std.heap.page_allocator; // FIXME: testing allocator detects leaks
+
+    const ctx = try ir.Context.init(gpa);
+    defer ctx.deinit();
+
+    // Create a test node
+    const test_ref = try ctx.addPrimitive(@as(u64, 42));
+
+    // Get user data for the node
+    const userdata = try ctx.getUserData(test_ref);
+    try testing.expect(userdata.context == ctx);
+
+    // Test adding custom data
+    const test_value: u32 = 12345;
+    try userdata.addData(.test_key, @constCast(&test_value));
+
+    // Test retrieving custom data
+    const retrieved = userdata.getData(u32, .test_key);
+    try testing.expect(retrieved != null);
+    try testing.expectEqual(@as(u32, 12345), retrieved.?.*);
+
+    // Test deleting custom data
+    userdata.delData(.test_key);
+    const after_delete = userdata.getData(*const u32, .test_key);
+    try testing.expect(after_delete == null);
+}
+
+test "ir integration - list and collection operations" {
+    const gpa = std.heap.page_allocator; // FIXME: testing allocator detects leaks
+
+    const ctx = try ir.Context.init(gpa);
+    defer ctx.deinit();
+
+    // Create some test references
+    const ref1 = try ctx.addPrimitive(@as(u64, 1));
+    const ref2 = try ctx.addPrimitive(@as(u64, 2));
+    const ref3 = try ctx.addPrimitive(@as(u64, 3));
+
+    const refs = [_]ir.Ref{ ref1, ref2, ref3 };
+
+    // Create a list
+    const list_ref = try ctx.addList(.index, &refs);
+    try testing.expect(list_ref != ir.Ref.nil);
+    try testing.expectEqual(ir.Tag.collection, list_ref.node_kind.getTag());
+
+    // Get children from the list
+    const children = try ctx.getChildren(list_ref);
+    try testing.expectEqual(@as(usize, 3), children.len);
+    try testing.expectEqual(ref1, children[0]);
+    try testing.expectEqual(ref2, children[1]);
+    try testing.expectEqual(ref3, children[2]);
+
+    // Test interned list
+    const interned_list = try ctx.internList(.index, &refs);
+    try testing.expect(interned_list != ir.Ref.nil);
+
+    // Create the same list again - should be interned
+    const interned_list2 = try ctx.internList(.index, &refs);
+    try testing.expectEqual(interned_list, interned_list2);
+}
+
+test "ir integration - builtin types and operations" {
+    const gpa = std.heap.page_allocator; // FIXME: testing allocator detects leaks
+
+    const ctx = try ir.Context.init(gpa);
+    defer ctx.deinit();
+
+    // Test getting builtin kinds
+    const data_kind = try ctx.getBuiltin(.data_kind);
+    const primitive_kind = try ctx.getBuiltin(.primitive_kind);
+
+    try testing.expect(data_kind != ir.Ref.nil);
+    try testing.expect(primitive_kind != ir.Ref.nil);
+
+    // Test integer type creation
+    const i32_type = try builders.integer_type(ctx, .signed, 32);
+    const u64_type = try builders.integer_type(ctx, .unsigned, 64);
+
+    try testing.expect(i32_type != ir.Ref.nil);
+    try testing.expect(u64_type != ir.Ref.nil);
+
+    // Different types should have different references
+    try testing.expect(i32_type.id.node != u64_type.id.node);
+
+    // Test symbol type creation
+    const symbol_type = try builders.symbol_type(ctx, "my_symbol");
+    try testing.expect(symbol_type != ir.Ref.nil);
+}
+
+test "ir integration - discriminant utilities" {
+    // Test discriminant conversion utilities
+    const data_disc: ir.Discriminator = .name;
+    const data_kind = ir.discriminants.cast(ir.DataKind, data_disc);
+    try testing.expect(data_kind != null);
+    try testing.expectEqual(ir.DataKind.name, data_kind.?);
+
+    const prim_disc: ir.Discriminator = .operation;
+    const prim_kind = ir.discriminants.cast(ir.PrimitiveKind, prim_disc);
+    try testing.expect(prim_kind != null);
+    try testing.expectEqual(ir.PrimitiveKind.operation, prim_kind.?);
+
+    // Test invalid conversion
+    const invalid = ir.discriminants.cast(ir.DataKind, prim_disc);
+    try testing.expect(invalid == null);
+
+    // Test force conversion
+    const forced = ir.discriminants.force(ir.DataKind, data_disc);
+    try testing.expectEqual(ir.DataKind.name, forced);
+}
+
+test "ir integration - node kind operations" {
+    // Test node kind creation and inspection
+    const data_kind = ir.NodeKind.data(.name);
+    try testing.expectEqual(ir.Tag.data, data_kind.getTag());
+    try testing.expectEqual(ir.DataKind.name, ir.discriminants.force(ir.DataKind, data_kind.getDiscriminator()));
+
+    const prim_kind = ir.NodeKind.primitive(.operation);
+    try testing.expectEqual(ir.Tag.primitive, prim_kind.getTag());
+    try testing.expectEqual(ir.PrimitiveKind.operation, ir.discriminants.force(ir.PrimitiveKind, prim_kind.getDiscriminator()));
+
+    const struct_kind = ir.NodeKind.structure(.type);
+    try testing.expectEqual(ir.Tag.structure, struct_kind.getTag());
+    try testing.expectEqual(ir.StructureKind.type, ir.discriminants.force(ir.StructureKind, struct_kind.getDiscriminator()));
+
+    const coll_kind = ir.NodeKind.collection(.index);
+    try testing.expectEqual(ir.Tag.collection, coll_kind.getTag());
+    try testing.expectEqual(ir.Discriminator.index, coll_kind.getDiscriminator());
+}

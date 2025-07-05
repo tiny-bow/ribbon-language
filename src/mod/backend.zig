@@ -13,7 +13,7 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-pub const Artifact = struct {
+pub const Artifact = packed struct {
     target: Target,
     value: *anyopaque,
 
@@ -25,7 +25,7 @@ pub const Artifact = struct {
 
 pub const Target = packed struct {
     data: *anyopaque,
-    vtable: *VTable,
+    vtable: *const VTable,
 
     pub const Error = anyerror;
 
@@ -37,30 +37,52 @@ pub const Target = packed struct {
         @call(.auto, self.vtable.freeArtifact, .{ self.data, artifact });
     }
 
+    pub fn deinit(self: Target, compiler: *Compiler) void {
+        @call(.auto, self.vtable.deinit, .{ self.data, compiler });
+    }
+
     pub const VTable = struct {
-        runJob: *const fn (self: *const anyopaque, job: *Job) Target.Error!Artifact,
-        freeArtifact: *const fn (self: *const anyopaque, artifact: Artifact) void,
+        runJob: *const fn (self: *anyopaque, job: *Job) Target.Error!Artifact,
+        freeArtifact: *const fn (self: *anyopaque, artifact: Artifact) void,
+        deinit: *const fn (self: *anyopaque, compiler: *Compiler) void,
     };
 };
 
 /// The default target for compiling Ribbon IR into bytecode.
 pub const BytecodeTarget = struct {
     /// Addresses of bytecode values already compiled.
-    table: bytecode.Table,
+    table: bytecode.Table = .{},
 
     /// Get a `backend.Target` object from this bytecode target.
     pub fn target(self: *BytecodeTarget) Target {
         return Target{
-            .data = self,
+            .data = @ptrCast(self),
             .vtable = &.{
                 .runJob = @ptrCast(&runJob),
                 .freeArtifact = @ptrCast(&freeArtifact),
+                .deinit = @ptrCast(&deinit),
             },
         };
     }
 
+    /// Create a new bytecode target for the given compiler.
+    pub fn init(compiler: *Compiler) !*BytecodeTarget {
+        const self = try compiler.allocator.create(BytecodeTarget);
+        errdefer compiler.allocator.destroy(self);
+
+        self.* = BytecodeTarget{};
+
+        return self;
+    }
+
+    /// Deinitialize the bytecode target, freeing all memory it owns.
+    pub fn deinit(self: *BytecodeTarget, compiler: *Compiler) void {
+        self.table.deinit(compiler.allocator);
+        compiler.allocator.destroy(self);
+    }
+
     /// Given a compilation job, compile the IR in its context into a bytecode artifact.
-    pub fn runJob(self: *const BytecodeTarget, job: *Job) Target.Error!Artifact {
+    pub fn runJob(self: *BytecodeTarget, job: *Job) Target.Error!Artifact {
         // Compile the IR context into bytecode.
         // TODO: ...
         const compiled = pl.todo(*core.Bytecode, .{job});
@@ -73,9 +95,11 @@ pub const BytecodeTarget = struct {
     }
 
     /// Free compiled bytecode artifacts.
-    pub fn freeArtifact(self: *const BytecodeTarget, artifact: Artifact) void {
+    pub fn freeArtifact(self: *BytecodeTarget, artifact: Artifact) void {
+        // Free the target-specific data at the opaque pointer in the artifact.
+        std.debug.assert(artifact.target == self.target());
         // TODO: ...
-        pl.todo(noreturn, .{ self, artifact });
+        pl.todo(noreturn, .{});
     }
 };
 
@@ -92,14 +116,14 @@ pub const Compiler = struct {
     /// Create an ir compiler instance.
     /// * This will create a new IR context, and use the same allocator for the IR and compiled data.
     /// * The compiler can also be created with `fromContext`, which will use an existing IR context.
-    pub fn init(allocator: std.mem.Allocator) !*Compiler {
+    pub fn init(allocator: std.mem.Allocator, comptime TargetType: type) !*Compiler {
         const self = try allocator.create(Compiler);
         errdefer allocator.destroy(self);
 
         self.* = Compiler{
             .allocator = allocator,
             .context = try ir.Context.init(allocator),
-            .table = .{},
+            .target = (try TargetType.init(self)).target(),
         };
 
         return self;
@@ -109,7 +133,7 @@ pub const Compiler = struct {
     /// * This allows using a different allocator for the compiler instance;
     ///   if one is not provided, the IR context's allocator will be used.
     /// * To create both at once, use `init`.
-    pub fn fromContext(context: *ir.Context, allocator: ?std.mem.Allocator) !*Compiler {
+    pub fn fromContext(context: *ir.Context, allocator: ?std.mem.Allocator, target: Target) !*Compiler {
         const gpa = allocator orelse context.gpa;
 
         const self = try gpa.create(Compiler);
@@ -118,7 +142,7 @@ pub const Compiler = struct {
         self.* = Compiler{
             .allocator = gpa,
             .context = context,
-            .table = .{},
+            .target = target,
         };
 
         return self;
@@ -127,7 +151,7 @@ pub const Compiler = struct {
     /// Deinitialize the compiler, freeing all memory it still owns.
     pub fn deinit(self: *Compiler) void {
         self.context.deinit();
-        self.table.deinit(self.allocator);
+        self.target.deinit(self);
         self.allocator.destroy(self);
     }
 
@@ -142,7 +166,6 @@ pub const Compiler = struct {
         job.* = Job{
             .root = self,
             .context = ctx,
-            .table = .{},
         };
 
         return job;
@@ -174,13 +197,11 @@ pub const Job = struct {
 
     /// Reset the job-local state for the compilation of a new set of values.
     pub fn reset(self: *Job) void {
-        self.table.clear();
         self.context.clear();
     }
 
     /// Cancel the job, deinitializing it and freeing all memory it owns.
     pub fn deinit(self: *Job) void {
-        self.table.deinit(self.root.allocator);
         self.context.deinit();
         self.root.allocator.destroy(self);
     }

@@ -21,77 +21,81 @@ test {
 }
 
 pub const BytecodeId = common.Id.ofSize(core.Bytecode, 32);
-pub const CompilerId = common.Id.ofSize(Compiler, 32);
+pub const CompilerId = common.Id.ofSize(Compilation, 32);
 
 pub const Context = struct {
-    backend: *backend.Compiler,
-    compilers: pl.UniqueReprArrayMap(CompilerId, *Compiler, false) = .empty,
-    bytecode: pl.UniqueReprArrayMap(BytecodeId, core.Bytecode, false) = .empty,
+    compiler: *backend.Compiler,
+    compilations: pl.UniqueReprArrayMap(CompilerId, *Compilation, false) = .empty,
+    artifacts: pl.UniqueReprArrayMap(BytecodeId, backend.Artifact, false) = .empty,
     fresh_id: BytecodeId = .fromInt(0),
 
     pub fn init(allocator: std.mem.Allocator) !Context {
         return Context{
-            .backend = try backend.Compiler.init(allocator),
+            .compiler = try backend.Compiler.init(allocator, backend.BytecodeTarget),
         };
     }
 
     pub fn deinit(self: *Context) void {
-        for (self.bytecode.values()) |bc| {
-            bc.deinit(self.backend.allocator);
+        for (self.artifacts.values()) |artifact| {
+            artifact.deinit();
         }
 
-        self.backend.deinit();
+        self.compiler.deinit();
     }
 
-    pub fn takeOwnership(self: *Context, id: BytecodeId) ?core.Bytecode {
-        const bc = self.bytecode.get(id) orelse return null;
+    pub fn takeArtifact(self: *Context, id: BytecodeId) ?backend.Artifact {
+        const artifact = self.artifacts.get(id) orelse return null;
 
-        _ = self.bytecode.swapRemove(id);
+        _ = self.artifacts.swapRemove(id);
 
-        return bc;
+        return artifact;
     }
 
-    pub fn addBytecode(self: *Context, bytecode: core.Bytecode) !BytecodeId {
+    pub fn getArtifact(self: *Context, id: BytecodeId) ?backend.Artifact {
+        return self.artifacts.get(id);
+    }
+
+    pub fn addArtifact(self: *Context, artifact: backend.Artifact) !BytecodeId {
         const id = self.fresh_id;
         self.fresh_id = self.fresh_id.next();
 
-        try self.bytecode.put(self.backend.allocator, id, bytecode);
+        try self.artifacts.put(self.compiler.allocator, id, artifact);
 
         return id;
     }
 
-    pub fn delBytecode(self: *Context, id: BytecodeId) void {
-        const bc = self.takeOwnership(id) orelse return;
+    pub fn delArtifact(self: *Context, id: BytecodeId) void {
+        const artifact = self.takeArtifact(id) orelse return;
 
-        bc.deinit(self.backend.allocator);
+        artifact.deinit();
     }
 
-    pub fn createCompiler(self: *Context) !*Compiler {
-        const job = try self.backend.createJob(null);
+    pub fn createCompiler(self: *Context) !*Compilation {
+        const job = try self.compiler.createJob();
 
-        const compiler = try self.backend.allocator.create(Compiler);
-        errdefer self.backend.allocator.destroy(compiler);
+        const compiler = try self.compiler.allocator.create(Compilation);
+        errdefer self.compiler.allocator.destroy(compiler);
 
-        compiler.* = Compiler{
-            .id = CompilerId.fromInt(self.compilers.count()),
+        compiler.* = Compilation{
+            .id = CompilerId.fromInt(self.compilations.count()),
             .context = self,
             .job = job,
-            .arena = std.heap.ArenaAllocator.init(self.backend.allocator),
+            .arena = std.heap.ArenaAllocator.init(self.compiler.allocator),
         };
 
-        try self.compilers.put(self.backend.allocator, compiler.id, compiler);
+        try self.compilations.put(self.compiler.allocator, compiler.id, compiler);
 
         return compiler;
     }
 
-    pub fn resolveCompiler(self: *Context, compiler: *Compiler) !BytecodeId {
-        const bc = try self.backend.compileJob(compiler.job);
+    pub fn resolveCompilation(self: *Context, compilation: *Compilation) !BytecodeId {
+        const artifact = try self.compiler.compileJob(compilation.job);
 
-        return self.addBytecode(bc);
+        return self.addArtifact(artifact);
     }
 };
 
-pub const Compiler = struct {
+pub const Compilation = struct {
     id: CompilerId,
     context: *Context,
     job: *backend.Job,
@@ -101,7 +105,7 @@ pub const Compiler = struct {
         value_type: ir.Ref = .nil,
     } = .{},
 
-    pub fn getBuiltin(self: *Compiler, comptime builtin: std.meta.FieldEnum(@TypeOf(self.builtin))) !ir.Ref {
+    pub fn getBuiltin(self: *Compilation, comptime builtin: std.meta.FieldEnum(@TypeOf(self.builtin))) !ir.Ref {
         const name = comptime @tagName(builtin);
         const initializer = comptime @field(builtin_initializers, name);
         const ref: *ir.Ref = &@field(self.builtin, name);
@@ -114,7 +118,7 @@ pub const Compiler = struct {
     }
 
     pub const builtin_initializers = struct {
-        pub fn value_type(self: *Compiler) !ir.Ref {
+        pub fn value_type(self: *Compilation) !ir.Ref {
             const graph = self.job.context;
 
             const kind_tag = try graph.internPrimitive(ir.KindTag.data);
@@ -127,7 +131,7 @@ pub const Compiler = struct {
                 .kind = kind,
             });
 
-            const ud = try constructor.getUserData();
+            const ud = try self.job.context.getUserData(constructor);
 
             ud.computeLayout = &struct {
                 pub fn value_layout(_: ir.Ref, _: []const ir.Ref) !struct { u64, pl.Alignment } {
@@ -142,7 +146,7 @@ pub const Compiler = struct {
         }
     };
 
-    pub fn addSource(self: *Compiler, source_name: []const u8, src: []const u8) !void {
+    pub fn addSource(self: *Compilation, source_name: []const u8, src: []const u8) !void {
         if (try getExpr(self.arena.allocator(), .{}, source_name, src)) |x| {
             var expr = x;
             defer expr.deinit(self.arena.allocator());
@@ -151,7 +155,7 @@ pub const Compiler = struct {
         }
     }
 
-    pub fn compileExpr(self: *Compiler, expr: *const Expr) !ir.Ref {
+    pub fn compileExpr(self: *Compilation, expr: *const Expr) !ir.Ref {
         const graph = self.job.context;
 
         const value_type = try self.getBuiltin(.value_type);
@@ -212,7 +216,7 @@ pub const Compiler = struct {
         });
     }
 
-    pub fn getLocal(self: *Compiler, name: []const u8) !ir.Ref {
+    pub fn getLocal(self: *Compilation, name: []const u8) !ir.Ref {
         pl.todo(noreturn, .{ "getLocal", self, name });
     }
 };
