@@ -14,7 +14,7 @@ const utils = @import("utils");
 const source = @import("source");
 const core = @import("core");
 const ir = @import("ir");
-const ir2bc = @import("ir2bc");
+const backend = @import("backend");
 
 test {
     std.testing.refAllDeclsRecursive(@This());
@@ -24,14 +24,14 @@ pub const BytecodeId = common.Id.ofSize(core.Bytecode, 32);
 pub const CompilerId = common.Id.ofSize(Compiler, 32);
 
 pub const Context = struct {
-    backend: *ir2bc.Compiler,
+    backend: *backend.Compiler,
     compilers: pl.UniqueReprArrayMap(CompilerId, *Compiler, false) = .empty,
     bytecode: pl.UniqueReprArrayMap(BytecodeId, core.Bytecode, false) = .empty,
     fresh_id: BytecodeId = .fromInt(0),
 
     pub fn init(allocator: std.mem.Allocator) !Context {
         return Context{
-            .backend = try ir2bc.Compiler.init(allocator),
+            .backend = try backend.Compiler.init(allocator),
         };
     }
 
@@ -94,7 +94,7 @@ pub const Context = struct {
 pub const Compiler = struct {
     id: CompilerId,
     context: *Context,
-    job: *ir2bc.Job,
+    job: *backend.Job,
     arena: std.heap.ArenaAllocator,
     builtin: struct {
         value_data_type: ir.Ref = .nil,

@@ -286,6 +286,63 @@ pub const Operation = enum(u8) {
     bitcast,
 };
 
+/// The root context state.
+pub const Root = struct {
+    /// Used to generate unique ids for child contexts.
+    fresh_ctx: ContextId = .fromInt(1),
+    /// All child contexts owned by this root context.
+    children: pl.UniqueReprMap(ContextId, *Context, 80) = .empty,
+
+    /// Get a pointer to the Context this Root is stored in.
+    pub fn getRootContext(self: *Root) *Context {
+        const inner: *@FieldType(Context, "inner") = @fieldParentPtr("root", self);
+        return @fieldParentPtr("inner", inner);
+    }
+
+    /// Deinitialize the root context, freeing all memory it owns.
+    pub fn deinit(self: *Root, gpa: std.mem.Allocator) void {
+        var it = self.children.valueIterator();
+        while (it.next()) |child_ptr| child_ptr.*.deinit();
+
+        var arena = self.getRootContext().arena;
+        arena.deinit();
+        _ = self.children.deinit(gpa);
+    }
+
+    /// Create a new context.
+    pub fn createContext(self: *Root) !*Context {
+        const ctx = self.getRootContext();
+
+        var arena = std.heap.ArenaAllocator.init(ctx.gpa);
+        errdefer arena.deinit();
+
+        const child = try arena.allocator().create(Context);
+
+        child.* = Context{
+            .id = ctx.inner.root.fresh_ctx.next(),
+            .inner = .{ .child = .{ .root = ctx } },
+            .gpa = ctx.gpa,
+            .arena = arena,
+        };
+
+        try child.nodes.ensureTotalCapacity(ctx.gpa, 16384);
+
+        return child;
+    }
+
+    /// Destroy a context by its id.
+    pub fn destroyContext(self: *Root, id: ContextId) void {
+        const child = self.children.get(id) orelse return;
+        child.destroy();
+        _ = self.children.remove(id);
+    }
+
+    /// Get a context by its id.
+    pub fn getContext(self: *Root, id: ContextId) ?*Context {
+        return self.children.get(id);
+    }
+};
+
 /// The main graph context of the ir.
 pub const Context = struct {
     /// The context id. This is used to generate unique ids for nodes without knowing about sibling contexts.
@@ -316,63 +373,6 @@ pub const Context = struct {
     userdata: pl.UniqueReprMap(Ref, *UserData, 80) = .empty,
     /// Maps builtin structures to their definition references.
     builtin: pl.UniqueReprMap(Builtin, Ref, 80) = .empty,
-
-    /// The root context state.
-    pub const Root = struct {
-        /// Used to generate unique ids for child contexts.
-        fresh_ctx: ContextId = .fromInt(1),
-        /// All child contexts owned by this root context.
-        children: pl.UniqueReprMap(ContextId, *Context, 80) = .empty,
-
-        /// Get a pointer to the Context this Root is stored in.
-        pub fn getRootContext(self: *Root) *Context {
-            const inner: *@FieldType(Context, "inner") = @fieldParentPtr("root", self);
-            return @fieldParentPtr("inner", inner);
-        }
-
-        /// Deinitialize the root context, freeing all memory it owns.
-        pub fn deinit(self: *Root, gpa: std.mem.Allocator) void {
-            var it = self.children.valueIterator();
-            while (it.next()) |child_ptr| child_ptr.*.deinit();
-
-            var arena = self.getRootContext().arena;
-            arena.deinit();
-            _ = self.children.deinit(gpa);
-        }
-
-        /// Create a new context.
-        pub fn createContext(self: *Root) !*Context {
-            const ctx = self.getRootContext();
-
-            var arena = std.heap.ArenaAllocator.init(ctx.gpa);
-            errdefer arena.deinit();
-
-            const child = try arena.allocator().create(Context);
-
-            child.* = Context{
-                .id = ctx.inner.root.fresh_ctx.next(),
-                .inner = .{ .child = .{ .root = ctx } },
-                .gpa = ctx.gpa,
-                .arena = arena,
-            };
-
-            try child.nodes.ensureTotalCapacity(ctx.gpa, 16384);
-
-            return child;
-        }
-
-        /// Destroy a context by its id.
-        pub fn destroyContext(self: *Root, id: ContextId) void {
-            const child = self.children.get(id) orelse return;
-            child.destroy();
-            _ = self.children.remove(id);
-        }
-
-        /// Get a context by its id.
-        pub fn getContext(self: *Root, id: ContextId) ?*Context {
-            return self.children.get(id);
-        }
-    };
 
     /// Create a root context with the given allocator.
     pub fn init(gpa: std.mem.Allocator) !*Context {

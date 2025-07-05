@@ -98,7 +98,7 @@ pub const Mnemonic = struct {
         return Mnemonic{
             .name = name,
             .description = "",
-            .instructions = &.{ .basic(.mnemonic, description, operands) },
+            .instructions = &.{.basic(.mnemonic, description, operands)},
         };
     }
 
@@ -106,7 +106,7 @@ pub const Mnemonic = struct {
         return Mnemonic{
             .name = name,
             .description = "",
-            .instructions = &.{ .terminator(.mnemonic, description, operands) },
+            .instructions = &.{.terminator(.mnemonic, description, operands)},
         };
     }
 };
@@ -213,7 +213,6 @@ pub const Operand = enum {
         try writer.writeByte('`');
     }
 
-
     /// Returns whether the operand type is a an immediate value.
     /// ### Example
     /// ```
@@ -222,11 +221,22 @@ pub const Operand = enum {
     /// ```
     pub fn isImmediate(self: Operand) bool {
         switch (self) {
-            .register, .upvalue, .global, .function, .abi,
-            .builtin, .foreign, .effect, .handler_set, .constant,
+            .register,
+            .upvalue,
+            .global,
+            .function,
+            .abi,
+            .builtin,
+            .foreign,
+            .effect,
+            .handler_set,
+            .constant,
             => return false,
 
-            .byte, .short, .int, .word,
+            .byte,
+            .short,
+            .int,
+            .word,
             => return true,
         }
     }
@@ -356,8 +366,8 @@ pub fn wordBoundaryHeuristic(operand: Operand, remSize: anytype, wordOffset: any
 
 pub fn formatInstructionName(mnemonic: []const u8, instr: InstructionName, writer: anytype) !void {
     switch (instr) {
-        .mnemonic => try writer.print("{s}", .{ mnemonic }),
-        .overridden => |o| try writer.print("{s}", .{ o }),
+        .mnemonic => try writer.print("{s}", .{mnemonic}),
+        .overridden => |o| try writer.print("{s}", .{o}),
         .prefixed => |p| {
             try writer.writeAll(p);
 
@@ -419,13 +429,13 @@ pub fn formatOperand(index: usize, operands: []const Operand, writer: anytype) !
     }
 }
 
-
 /// The exact semantic version of this specification.
 pub const VERSION = pl.VERSION; // TODO: make isa version independent when it has stabilized
 
 /// Compile-time accessible data describing all of Ribbon's bytecode instructions.
 pub const CATEGORIES: []const Category = &.{
-    .category("Miscellaneous",
+    .category(
+        "Miscellaneous",
         "Items that do not fit into another category",
         &.{
             .basicSingleton("nop", "No operation", &.{}),
@@ -433,130 +443,152 @@ pub const CATEGORIES: []const Category = &.{
         },
     ),
 
-    .category("Control flow",
+    .category(
+        "Control flow",
         "Instructions that control the flow of execution",
         &.{
             .terminatorSingleton("halt", "Halts execution at this instruction offset", &.{}),
-
-            .mnemonic("trap",
+            .mnemonic(
+                "trap",
                 "Marks a point in the code as not normally reachable, in two ways",
                 &.{
-                    .terminator(.mnemonic,
+                    .terminator(
+                        .mnemonic,
                         \\Traps execution of the `Rvm.Fiber` at this instruction offset
                         \\Unlike `unreachable`, this indicates expected behavior; optimizing compilers should *not* assume it is never reached
-                        , &.{},
+                    ,
+                        &.{},
                     ),
-                    .terminator(.override("unreachable"),
+                    .terminator(
+                        .override("unreachable"),
                         \\Marks a point in the code as unreachable; if executed in Rvm, it is the same as `trap`
                         \\Unlike `trap`, however, this indicates undefined behavior; optimizing compilers should assume it is never reached
-                        , &.{},
+                    ,
+                        &.{},
                     ),
                 },
             ),
-
-            .mnemonic("set",
+            .mnemonic(
+                "set",
                 "Effect handler set stack manipulation",
                 &.{
-                    .basic(.prefix("push"),
+                    .basic(
+                        .prefix("push"),
                         \\Pushes {0} onto the stack.
                         \\The handlers in this set will be first in line for their effects' prompts until a corresponding `pop` operation.
-                        , &.{ .handler_set },
+                    ,
+                        &.{.handler_set},
                     ),
-                    .basic(.prefix("pop"),
+                    .basic(
+                        .prefix("pop"),
                         "Pops the top most {.handler_set} from the stack, restoring the previous if present",
                         &.{},
                     ),
                 },
             ),
-
-            .mnemonic("br",
+            .mnemonic(
+                "br",
                 "Instruction pointer manipulation",
                 &.{
-                    .terminator(.mnemonic, "Applies a signed integer offset {0} to the instruction pointer", &.{ .int }),
+                    .terminator(.mnemonic, "Applies a signed integer offset {0} to the instruction pointer", &.{.int}),
                     .terminator(.suffix("if"), "Applies a signed integer offset {1} to the instruction pointer, if the value stored in {0} is non-zero", &.{ .register, .int }),
                 },
             ),
-
-            .mnemonic("call",
+            .mnemonic(
+                "call",
                 \\Various ways of calling functions, in all cases taking up to max({.byte}) number of arguments.
                 \\Arguments are expected to be {.register} values, encoded in the instruction stream after the call instruction.
                 \\* {.register} is not instruction-aligned; padding bytes may need to be added and accounted for following the arguments, to ensure the next instruction is aligned
-                , &.{
+            ,
+                &.{
                     .variable(.mnemonic, "Calls the function in {1} using {2}, placing the result in {0}", &.{ .register, .register, .abi, .byte }),
                     .variable(.suffix("c"), "Calls the function at {1} using {2}, placing the result in {0}", &.{ .register, .function, .abi, .byte }),
-
-                    .variable(.override("prompt"),
+                    .variable(
+                        .override("prompt"),
                         \\Calls the effect handler designated by {1} using {2}, placing the result in {0}.
-                        , &.{ .register, .effect, .abi, .byte },
+                    ,
+                        &.{ .register, .effect, .abi, .byte },
                     ),
                 },
             ),
-
-            .mnemonic("return",
+            .mnemonic(
+                "return",
                 "End the current function, in one of two ways",
                 &.{
-                    .terminator(.mnemonic, "Returns flow control to the caller of current function, yielding {0} to the caller", &.{ .register }),
-                    .terminator(.override("cancel"), "Returns flow control to the offset associated with the current effect handler's {.handler_set}, yielding {0} as the cancellation value", &.{ .register }),
+                    .terminator(.mnemonic, "Returns flow control to the caller of current function, yielding {0} to the caller", &.{.register}),
+                    .terminator(.override("cancel"), "Returns flow control to the offset associated with the current effect handler's {.handler_set}, yielding {0} as the cancellation value", &.{.register}),
                 },
             ),
         },
     ),
 
-    .category("Memory",
+    .category(
+        "Memory",
         "Instructions that provide memory access",
         &.{
-            .mnemonic("mem_set",
+            .mnemonic(
+                "mem_set",
                 "Set bytes in memory",
                 &.{
-                    .basic(.mnemonic,
+                    .basic(
+                        .mnemonic,
                         "Each byte, starting from the address in {0}, up to an offset of {2}, is set to the least significant byte of {1}",
                         &.{ .register, .register, .register },
                     ),
-                    .basic(.suffix("a"),
+                    .basic(
+                        .suffix("a"),
                         "Each byte, starting from the address in {0}, up to an offset of {2}, is set to {1}",
                         &.{ .register, .register, .int },
                     ),
-                    .basic(.suffix("b"),
+                    .basic(
+                        .suffix("b"),
                         "Each byte, starting from the address in {0}, up to an offset of {1}, is set to {2}",
                         &.{ .register, .register, .byte },
                     ),
                 },
             ),
-            .mnemonic("mem_copy",
+            .mnemonic(
+                "mem_copy",
                 "Copy bytes in memory",
                 &.{
-                    .basic(.mnemonic,
+                    .basic(
+                        .mnemonic,
                         "Each byte, starting from the address in {1}, up to an offset of {2}, is copied to the same offset of the address in {0}",
                         &.{ .register, .register, .register },
                     ),
-                    .basic(.suffix("a"),
+                    .basic(
+                        .suffix("a"),
                         "Each byte, starting from the address in {1}, up to an offset of {2}, is copied to the same offset from the address in {0}",
                         &.{ .register, .register, .int },
                     ),
-                    .basic(.suffix("b"),
+                    .basic(
+                        .suffix("b"),
                         "Each byte, starting from the address of {2}, up to an offset of {1}, is copied to the same offset from the address in {0}",
                         &.{ .register, .register, .constant },
                     ),
                 },
             ),
-            .mnemonic("mem_swap",
+            .mnemonic(
+                "mem_swap",
                 "Swap bytes in memory.",
                 &.{
-                    .basic(.mnemonic,
+                    .basic(
+                        .mnemonic,
                         "Each byte, starting from the addresses in {0} and {1}, up to an offset of {2}, are swapped with each-other",
                         &.{ .register, .register, .register },
                     ),
-                    .basic(.suffix("c"),
+                    .basic(
+                        .suffix("c"),
                         "Each byte, starting from the addresses in {0} and {1}, up to an offset of {2}, are swapped with each-other",
                         &.{ .register, .register, .int },
                     ),
                 },
             ),
-
-            .mnemonic("addr",
+            .mnemonic(
+                "addr",
                 "Get addresses from special values.",
                 &.{
-                    .basic(.suffix("l"), "Get the address of a signed integer frame-relative operand stack offset {1}, placing it in {0}.\n\nAn operand stack offset of 1 is equivalent to 8 bytes down from the base of the stack frame", &.{.register, .int}),
+                    .basic(.suffix("l"), "Get the address of a signed integer frame-relative operand stack offset {1}, placing it in {0}.\n\nAn operand stack offset of 1 is equivalent to 8 bytes down from the base of the stack frame", &.{ .register, .int }),
                     .basic(.suffix("u"), "Get the address of {1}, placing it in {0}", &.{ .register, .upvalue }),
                     .basic(.suffix("g"), "Get the address of {1}, placing it in {0}", &.{ .register, .global }),
                     .basic(.suffix("f"), "Get the address of {1}, placing it in {0}", &.{ .register, .function }),
@@ -565,8 +597,8 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("c"), "Get the address of {1}, placing it in {0}", &.{ .register, .constant }),
                 },
             ),
-
-            .mnemonic("load",
+            .mnemonic(
+                "load",
                 "Loads a value from memory",
                 &.{
                     .basic(.suffix("8"), "Loads an 8-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .int }),
@@ -575,14 +607,14 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("64"), "Loads a 64-bit value from memory at the address in {1} offset by {2}, placing the result in {0}", &.{ .register, .register, .int }),
                 },
             ),
-            .mnemonic("store",
+            .mnemonic(
+                "store",
                 "Stores a value to memory",
                 &.{
                     .basic(.suffix("8"), "Stores an 8-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("16"), "Stores a 16-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("32"), "Stores a 32-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("64"), "Stores a 64-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
-
                     .basic(.suffix("8c"), "Stores an 8-bit value to memory at the address in {0} offset by {2}", &.{ .register, .byte, .int }),
                     .basic(.suffix("16c"), "Stores a 16-bit value to memory at the address in {0} offset by {2}", &.{ .register, .short, .int }),
                     .basic(.suffix("32c"), "Stores a 32-bit value to memory at the address in {0} offset by {2}", &.{ .register, .int, .int }),
@@ -592,11 +624,14 @@ pub const CATEGORIES: []const Category = &.{
         },
     ),
 
-    .category("Bitwise",
+    .category(
+        "Bitwise",
         \\Instructions that manipulate values at the bit level.
         \\* Where the size is < 64-bits, the least significant bits of the input value(s) are used, and the remainder of the output value is zeroed
-        , &.{
-            .mnemonic("bit_swap",
+    ,
+        &.{
+            .mnemonic(
+                "bit_swap",
                 "Swaps bits of two registers",
                 &.{
                     .basic(.suffix("8"), "8-bit {0} ⇔ {1}", &.{ .register, .register }),
@@ -605,22 +640,22 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("64"), "64-bit {0} ⇔ {1}", &.{ .register, .register }),
                 },
             ),
-            .mnemonic("bit_copy",
+            .mnemonic(
+                "bit_copy",
                 "Copies bits from one register into another",
                 &.{
                     .basic(.suffix("8"), "8-bit {0} = {1}", &.{ .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1}", &.{ .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1}", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1}", &.{ .register, .register }),
-
                     .basic(.suffix("8c"), "Copies an 8-bit {1} value into {0}", &.{ .register, .byte }),
                     .basic(.suffix("16c"), "Copies a 16-bit {1} value into {0}", &.{ .register, .short }),
                     .basic(.suffix("32c"), "Copies a 32-bit {1} value into {0}", &.{ .register, .int }),
                     .basic(.suffix("64c"), "Copies a 64-bit {1} value into {0}", &.{ .register, .word }),
                 },
             ),
-
-            .mnemonic("bit_clz",
+            .mnemonic(
+                "bit_clz",
                 "Counts the number of leading zero bits in the provided value",
                 &.{
                     .basic(.suffix("8"), "Counts the leading zeroes in 8-bits of {1}, placing the result in {0}", &.{ .register, .register }),
@@ -629,7 +664,8 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("64"), "Counts the leading zeroes in 64-bits of {1}, placing the result in {0}", &.{ .register, .register }),
                 },
             ),
-            .mnemonic("bit_pop",
+            .mnemonic(
+                "bit_pop",
                 "Counts the number of bits that are set to 1 in the provided value",
                 &.{
                     .basic(.suffix("8"), "Counts the set bits in 8-bits of {1}, placing the result in {0}", &.{ .register, .register }),
@@ -638,8 +674,8 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("64"), "Counts the set bits in 64-bits of {1}, placing the result in {0}", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("bit_not",
+            .mnemonic(
+                "bit_not",
                 "Performs a bitwise `NOT` operation on the provided value",
                 &.{
                     .basic(.suffix("8"), "8-bit {0} = ~{1}", &.{ .register, .register }),
@@ -648,100 +684,90 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("64"), "64-bit {0} = ~{1}", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("bit_and",
+            .mnemonic(
+                "bit_and",
                 "Performs a bitwise `AND` operation on the provided values",
                 &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} & {2}", &.{ .register, .register, .register }),
-                    .basic(.suffix("16"), "6-bit {0} = {1} & {2}", &.{ .register, .register, .register }),
+                    .basic(.suffix("16"), "16-bit {0} = {1} & {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} & {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} & {2}", &.{ .register, .register, .register }),
-
                     .basic(.suffix("8c"), "8-bit {0} = {1} & {2}", &.{ .register, .register, .byte }),
-                    .basic(.suffix("16c"), "6-bit {0} = {1} & {2}", &.{ .register, .register, .short }),
+                    .basic(.suffix("16c"), "16-bit {0} = {1} & {2}", &.{ .register, .register, .short }),
                     .basic(.suffix("32c"), "32-bit {0} = {1} & {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("64c"), "64-bit {0} = {1} & {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("bit_or",
+            .mnemonic(
+                "bit_or",
                 "Performs a bitwise `OR` operation on the provided values",
                 &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} | {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} | {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} | {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} | {2}", &.{ .register, .register, .register }),
-
                     .basic(.suffix("8c"), "8-bit {0} = {1} | {2}", &.{ .register, .register, .byte }),
                     .basic(.suffix("16c"), "16-bit {0} = {1} | {2}", &.{ .register, .register, .short }),
                     .basic(.suffix("32c"), "32-bit {0} = {1} | {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("64c"), "64-bit {0} = {1} | {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("bit_xor",
+            .mnemonic(
+                "bit_xor",
                 "Performs a bitwise `XOR` operation on the provided values",
                 &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} ^ {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} ^ {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} ^ {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} ^ {2}", &.{ .register, .register, .register }),
-
                     .basic(.suffix("8c"), "8-bit {0} = {1} ^ {2}", &.{ .register, .register, .byte }),
                     .basic(.suffix("16c"), "16-bit {0} = {1} ^ {2}", &.{ .register, .register, .short }),
                     .basic(.suffix("32c"), "32-bit {0} = {1} ^ {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("64c"), "64-bit {0} = {1} ^ {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("bit_lshift",
+            .mnemonic(
+                "bit_lshift",
                 "Performs a bitwise left shift operation on the provided values",
                 &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} << {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} << {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} << {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} << {2}", &.{ .register, .register, .register }),
-
                     .basic(.suffix("8a"), "8-bit {0} = {2} << {1}", &.{ .register, .register, .byte }),
                     .basic(.suffix("16a"), "16-bit {0} = {2} << {1}", &.{ .register, .register, .short }),
                     .basic(.suffix("32a"), "32-bit {0} = {2} << {1}", &.{ .register, .register, .int }),
                     .basic(.suffix("64a"), "64-bit {0} = {2} << {1}", &.{ .register, .register, .word }),
-
                     .basic(.suffix("8b"), "8-bit {0} = {1} << {2}", &.{ .register, .register, .byte }),
                     .basic(.suffix("16b"), "16-bit {0} = {1} << {2}", &.{ .register, .register, .byte }),
                     .basic(.suffix("32b"), "32-bit {0} = {1} << {2}", &.{ .register, .register, .byte }),
                     .basic(.suffix("64b"), "64-bit {0} = {1} << {2}", &.{ .register, .register, .byte }),
                 },
             ),
-
-            .mnemonic("bit_rshift",
+            .mnemonic(
+                "bit_rshift",
                 "Performs a bitwise right shift operation on the provided values",
                 &.{
                     .basic(.override("u_rshift8"), "8-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_rshift16"), "16-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_rshift32"), "32-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_rshift64"), "64-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .register }),
-
                     .basic(.override("u_rshift8a"), "8-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .byte }),
                     .basic(.override("u_rshift16a"), "16-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .short }),
                     .basic(.override("u_rshift32a"), "32-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .int }),
                     .basic(.override("u_rshift64a"), "64-bit unsigned/logical {0} = {2} >> {1}", &.{ .register, .register, .word }),
-
                     .basic(.override("u_rshift8b"), "8-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .byte }),
                     .basic(.override("u_rshift16b"), "16-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .byte }),
                     .basic(.override("u_rshift32b"), "32-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .byte }),
                     .basic(.override("u_rshift64b"), "64-bit unsigned/logical {0} = {1} >> {2}", &.{ .register, .register, .byte }),
-
                     .basic(.override("s_rshift8"), "8-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_rshift16"), "16-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_rshift32"), "32-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_rshift64"), "64-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .register }),
-
                     .basic(.override("s_rshift8a"), "8-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .byte }),
                     .basic(.override("s_rshift16a"), "16-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .short }),
                     .basic(.override("s_rshift32a"), "32-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .int }),
                     .basic(.override("s_rshift64a"), "64-bit signed/arithmetic {0} = {2} >> {1}", &.{ .register, .register, .word }),
-
                     .basic(.override("s_rshift8b"), "8-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .byte }),
                     .basic(.override("s_rshift16b"), "16-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .byte }),
                     .basic(.override("s_rshift32b"), "32-bit signed/arithmetic {0} = {1} >> {2}", &.{ .register, .register, .byte }),
@@ -751,212 +777,185 @@ pub const CATEGORIES: []const Category = &.{
         },
     ),
 
-    .category("Comparison",
+    .category(
+        "Comparison",
         "Instructions that compare values",
         &.{
-            .mnemonic("eq",
+            .mnemonic(
+                "eq",
                 "Performs an equality comparison on the provided values",
                 &.{
                     .basic(.wrap("i", "8"), "8-bit integer {0} = {1} == {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "16"), "16-bit integer {0} = {1} == {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "32"), "32-bit integer {0} = {1} == {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "64"), "64-bit integer {0} = {1} == {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("i", "8c"), "8-bit integer {0} = {1} == {2}", &.{ .register, .register, .byte }),
                     .basic(.wrap("i", "16c"), "16-bit integer {0} = {1} == {2}", &.{ .register, .register, .short }),
                     .basic(.wrap("i", "32c"), "32-bit integer {0} = {1} == {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("i", "64c"), "64-bit integer {0} = {1} == {2}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} == {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} == {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("f", "32c"), "32-bit floating point {0} = {1} == {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("f", "64c"), "64-bit floating point {0} = {1} == {2}", &.{ .register, .register, .word }),
                 },
             ),
-            .mnemonic("ne",
+            .mnemonic(
+                "ne",
                 "Performs an inequality comparison on the provided values",
                 &.{
                     .basic(.wrap("i", "8"), "8-bit integer {0} = {1} != {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "16"), "16-bit integer {0} = {1} != {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "32"), "32-bit integer {0} = {1} != {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("i", "64"), "64-bit integer {0} = {1} != {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("i", "8c"), "8-bit integer {0} = {1} != {2}", &.{ .register, .register, .byte }),
                     .basic(.wrap("i", "16c"), "16-bit integer {0} = {1} != {2}", &.{ .register, .register, .short }),
                     .basic(.wrap("i", "32c"), "32-bit integer {0} = {1} != {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("i", "64c"), "64-bit integer {0} = {1} != {2}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} != {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} != {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("f", "32c"), "32-bit floating point {0} = {1} != {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("f", "64c"), "64-bit floating point {0} = {1} != {2}", &.{ .register, .register, .word }),
                 },
             ),
-            .mnemonic("lt",
+            .mnemonic(
+                "lt",
                 "Performs a less-than comparison on the provided values",
                 &.{
                     .basic(.wrap("u", "8"), "8-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "16"), "16-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "64"), "64-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .byte }),
                     .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .short }),
                     .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} < {1}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .byte }),
                     .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .short }),
                     .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} < {2}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("s", "8"), "8-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "16"), "16-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "32"), "32-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "64"), "64-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .byte }),
                     .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .short }),
                     .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} < {1}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .byte }),
                     .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .short }),
                     .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} < {2}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} < {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} < {2}", &.{ .register, .register, .int }),
-
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} < {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} < {1}", &.{ .register, .register, .word }),
                     .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} < {2}", &.{ .register, .register, .word }),
                 },
             ),
-            .mnemonic("gt",
+            .mnemonic(
+                "gt",
                 "Performs a greater-than comparison on the provided values",
                 &.{
                     .basic(.wrap("u", "8"), "8-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "16"), "16-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "64"), "64-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .byte }),
                     .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .short }),
                     .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} > {1}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .byte }),
                     .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .short }),
                     .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} > {2}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("s", "8"), "8-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "16"), "16-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "32"), "32-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "64"), "64-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .byte }),
                     .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .short }),
                     .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} > {1}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .byte }),
                     .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .short }),
                     .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} > {2}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} > {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} > {2}", &.{ .register, .register, .int }),
-
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} > {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} > {1}", &.{ .register, .register, .word }),
                     .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} > {2}", &.{ .register, .register, .word }),
                 },
             ),
-            .mnemonic("le",
+            .mnemonic(
+                "le",
                 "Performs a less-than-or-equal comparison on the provided values",
                 &.{
                     .basic(.wrap("u", "8"), "8-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "16"), "16-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "64"), "64-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .byte }),
                     .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .short }),
                     .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} <= {1}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .byte }),
                     .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .short }),
                     .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} <= {2}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("s", "8"), "8-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "16"), "16-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "32"), "32-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "64"), "64-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .byte }),
                     .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .short }),
                     .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} <= {1}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .byte }),
                     .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .short }),
                     .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} <= {2}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} <= {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} <= {2}", &.{ .register, .register, .int }),
-
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} <= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} <= {1}", &.{ .register, .register, .word }),
                     .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} <= {2}", &.{ .register, .register, .word }),
                 },
             ),
-            .mnemonic("ge",
+            .mnemonic(
+                "ge",
                 "Performs a greater-than-or-equal comparison on the provided values",
                 &.{
                     .basic(.wrap("u", "8"), "8-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "16"), "16-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "32"), "32-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("u", "64"), "64-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("u", "8a"), "8-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .byte }),
                     .basic(.wrap("u", "16a"), "16-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .short }),
                     .basic(.wrap("u", "32a"), "32-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("u", "64a"), "64-bit unsigned integer {0} = {2} >= {1}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("u", "8b"), "8-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .byte }),
                     .basic(.wrap("u", "16b"), "16-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .short }),
                     .basic(.wrap("u", "32b"), "32-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("u", "64b"), "64-bit unsigned integer {0} = {1} >= {2}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("s", "8"), "8-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "16"), "16-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "32"), "32-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("s", "64"), "64-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .register }),
-
                     .basic(.wrap("s", "8a"), "8-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .byte }),
                     .basic(.wrap("s", "16a"), "16-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .short }),
                     .basic(.wrap("s", "32a"), "32-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("s", "64a"), "64-bit signed integer {0} = {2} >= {1}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("s", "8b"), "8-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .byte }),
                     .basic(.wrap("s", "16b"), "16-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .short }),
                     .basic(.wrap("s", "32b"), "32-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .int }),
                     .basic(.wrap("s", "64b"), "64-bit signed integer {0} = {1} >= {2}", &.{ .register, .register, .word }),
-
                     .basic(.wrap("f", "32"), "32-bit floating point {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "32a"), "32-bit floating point {0} = {2} >= {1}", &.{ .register, .register, .int }),
                     .basic(.wrap("f", "32b"), "32-bit floating point {0} = {1} >= {2}", &.{ .register, .register, .int }),
-
                     .basic(.wrap("f", "64"), "64-bit floating point {0} = {1} >= {2}", &.{ .register, .register, .register }),
                     .basic(.wrap("f", "64a"), "64-bit floating point {0} = {2} >= {1}", &.{ .register, .register, .word }),
                     .basic(.wrap("f", "64b"), "64-bit floating point {0} = {1} >= {2}", &.{ .register, .register, .word }),
@@ -965,22 +964,26 @@ pub const CATEGORIES: []const Category = &.{
         },
     ),
 
-    .category("Integer arithmetic",
+    .category(
+        "Integer arithmetic",
         \\Instructions that perform integer arithmetic operations on values.
         \\Because we use two's compliment integers, the signedness of the operands does not affect all operations. Where it does, the mnemonic will be prefixed with "u" or "s", otherwise with "i".
         \\* Where the size is < 64-bits, the least significant bits of the input value(s) are used, and the remainder of the output value is zeroed
-        , &.{
-            .mnemonic("i_neg",
+    ,
+        &.{
+            .mnemonic(
+                "i_neg",
                 \\Performs integer negation on the provided value.
-                , &.{
+            ,
+                &.{
                     .basic(.override("s_neg8"), "8-bit {0} = -{1}", &.{ .register, .register }),
                     .basic(.override("s_neg16"), "16-bit {0} = -{1}", &.{ .register, .register }),
                     .basic(.override("s_neg32"), "32-bit {0} = -{1}", &.{ .register, .register }),
                     .basic(.override("s_neg64"), "64-bit {0} = -{1}", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("i_abs",
+            .mnemonic(
+                "i_abs",
                 "Finds the absolute value of the provided value",
                 &.{
                     .basic(.override("s_abs8"), "8-bit {0} = |{1}|", &.{ .register, .register }),
@@ -989,140 +992,124 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.override("s_abs64"), "64-bit {0} = |{1}|", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("i_add",
+            .mnemonic(
+                "i_add",
                 "Performs integer addition on the provided values.",
                 &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
-
                     .basic(.suffix("8c"), "8-bit {0} = {1} + {2}", &.{ .register, .register, .byte }),
                     .basic(.suffix("16c"), "16-bit {0} = {1} + {2}", &.{ .register, .register, .short }),
                     .basic(.suffix("32c"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("64c"), "64-bit {0} = {1} + {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("i_sub",
+            .mnemonic(
+                "i_sub",
                 "Performs integer subtraction on the provided values.",
                 &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
-
                     .basic(.suffix("8a"), "8-bit {0} = {2} - {1}", &.{ .register, .register, .byte }),
                     .basic(.suffix("16a"), "16-bit {0} = {2} - {1}", &.{ .register, .register, .short }),
                     .basic(.suffix("32a"), "32-bit {0} = {2} - {1}", &.{ .register, .register, .int }),
                     .basic(.suffix("64a"), "64-bit {0} = {2} - {1}", &.{ .register, .register, .word }),
-
                     .basic(.suffix("8b"), "8-bit {0} = {1} - {2}", &.{ .register, .register, .byte }),
                     .basic(.suffix("16b"), "16-bit {0} = {1} - {2}", &.{ .register, .register, .short }),
                     .basic(.suffix("32b"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("64b"), "64-bit {0} = {1} - {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("i_mul",
+            .mnemonic(
+                "i_mul",
                 "Performs integer multiplication on the provided values.",
                 &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
-
                     .basic(.suffix("8c"), "8-bit {0} = {1} * {2}", &.{ .register, .register, .byte }),
                     .basic(.suffix("16c"), "16-bit {0} = {1} * {2}", &.{ .register, .register, .short }),
                     .basic(.suffix("32c"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("64c"), "64-bit {0} = {1} * {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("i_div",
+            .mnemonic(
+                "i_div",
                 "Performs integer division on the provided values.",
                 &.{
                     .basic(.override("u_div8"), "8-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_div16"), "16-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_div32"), "32-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_div64"), "64-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .register }),
-
                     .basic(.override("u_div8a"), "8-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .byte }),
                     .basic(.override("u_div16a"), "16-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .short }),
                     .basic(.override("u_div32a"), "32-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .int }),
                     .basic(.override("u_div64a"), "64-bit unsigned {0} = {2} / {1}", &.{ .register, .register, .word }),
-
                     .basic(.override("u_div8b"), "8-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .byte }),
                     .basic(.override("u_div16b"), "16-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .short }),
                     .basic(.override("u_div32b"), "32-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .int }),
                     .basic(.override("u_div64b"), "64-bit unsigned {0} = {1} / {2}", &.{ .register, .register, .word }),
-
                     .basic(.override("s_div8"), "8-bit signed {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_div16"), "16-bit signed {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_div32"), "32-bit signed {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_div64"), "64-bit signed {0} = {1} / {2}", &.{ .register, .register, .register }),
-
                     .basic(.override("s_div8a"), "8-bit signed {0} = {2} / {1}", &.{ .register, .register, .byte }),
                     .basic(.override("s_div16a"), "16-bit signed {0} = {2} / {1}", &.{ .register, .register, .short }),
                     .basic(.override("s_div32a"), "32-bit signed {0} = {2} / {1}", &.{ .register, .register, .int }),
                     .basic(.override("s_div64a"), "64-bit signed {0} = {2} / {1}", &.{ .register, .register, .word }),
-
                     .basic(.override("s_div8b"), "8-bit signed {0} = {1} / {2}", &.{ .register, .register, .byte }),
                     .basic(.override("s_div16b"), "16-bit signed {0} = {1} / {2}", &.{ .register, .register, .short }),
                     .basic(.override("s_div32b"), "32-bit signed {0} = {1} / {2}", &.{ .register, .register, .int }),
                     .basic(.override("s_div64b"), "64-bit signed {0} = {1} / {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("i_rem",
+            .mnemonic(
+                "i_rem",
                 "Gets the remainder of integer division on the provided values.",
                 &.{
                     .basic(.override("u_rem8"), "8-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_rem16"), "16-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_rem32"), "32-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.override("u_rem64"), "64-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .register }),
-
                     .basic(.override("u_rem8a"), "8-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .byte }),
                     .basic(.override("u_rem16a"), "16-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .short }),
                     .basic(.override("u_rem32a"), "32-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .int }),
                     .basic(.override("u_rem64a"), "64-bit unsigned {0} = {2} % {1}", &.{ .register, .register, .word }),
-
                     .basic(.override("u_rem8b"), "8-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .byte }),
                     .basic(.override("u_rem16b"), "16-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .short }),
                     .basic(.override("u_rem32b"), "32-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .int }),
                     .basic(.override("u_rem64b"), "64-bit unsigned {0} = {1} % {2}", &.{ .register, .register, .word }),
-
                     .basic(.override("s_rem8"), "8-bit signed {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_rem16"), "16-bit signed {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_rem32"), "32-bit signed {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.override("s_rem64"), "64-bit signed {0} = {1} % {2}", &.{ .register, .register, .register }),
-
                     .basic(.override("s_rem8a"), "8-bit signed {0} = {2} % {1}", &.{ .register, .register, .byte }),
                     .basic(.override("s_rem16a"), "16-bit signed {0} = {2} % {1}", &.{ .register, .register, .short }),
                     .basic(.override("s_rem32a"), "32-bit signed {0} = {2} % {1}", &.{ .register, .register, .int }),
                     .basic(.override("s_rem64a"), "64-bit signed {0} = {2} % {1}", &.{ .register, .register, .word }),
-
                     .basic(.override("s_rem8b"), "8-bit signed {0} = {1} % {2}", &.{ .register, .register, .byte }),
                     .basic(.override("s_rem16b"), "16-bit signed {0} = {1} % {2}", &.{ .register, .register, .short }),
                     .basic(.override("s_rem32b"), "32-bit signed {0} = {1} % {2}", &.{ .register, .register, .int }),
                     .basic(.override("s_rem64b"), "64-bit signed {0} = {1} % {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("i_pow",
+            .mnemonic(
+                "i_pow",
                 "Raises a provided value to the power of the other provided value.",
                 &.{
                     .basic(.suffix("8"), "8-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("16"), "16-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
-
                     .basic(.suffix("8a"), "8-bit {0} = {2} ** {1}", &.{ .register, .register, .byte }),
                     .basic(.suffix("16a"), "16-bit {0} = {2} ** {1}", &.{ .register, .register, .short }),
                     .basic(.suffix("32a"), "32-bit {0} = {2} ** {1}", &.{ .register, .register, .int }),
                     .basic(.suffix("64a"), "64-bit {0} = {2} ** {1}", &.{ .register, .register, .word }),
-
                     .basic(.suffix("8b"), "8-bit {0} = {1} ** {2}", &.{ .register, .register, .byte }),
                     .basic(.suffix("16b"), "16-bit {0} = {1} ** {2}", &.{ .register, .register, .short }),
                     .basic(.suffix("32b"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .int }),
@@ -1132,150 +1119,147 @@ pub const CATEGORIES: []const Category = &.{
         },
     ),
 
-    .category("Floating point arithmetic",
+    .category(
+        "Floating point arithmetic",
         \\Instructions that perform floating point arithmetic operations on values.
         \\* Where the size is < 64-bits, the least significant bits of the input value(s) are used and the remainder of the output value is zeroed
-        , &.{
-            .mnemonic("f_neg",
+    ,
+        &.{
+            .mnemonic(
+                "f_neg",
                 "Performs floating point negation on the provided value",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = -{1}", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = -{1}", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("f_abs",
+            .mnemonic(
+                "f_abs",
                 "Performs a floating point absolute value operation on the provided value",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = |{1}|", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = |{1}|", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("f_sqrt",
+            .mnemonic(
+                "f_sqrt",
                 "Performs a square root operation on the provided value",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = sqrt({1})", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = sqrt({1})", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("f_floor",
+            .mnemonic(
+                "f_floor",
                 "Performs a flooring operation on the provided value",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = floor({1})", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = floor({1})", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("f_ceil",
+            .mnemonic(
+                "f_ceil",
                 "Performs a ceiling operation on the provided value",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = ceil({1})", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = ceil({1})", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("f_round",
+            .mnemonic(
+                "f_round",
                 "Performs a rounding operation on the provided value",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = round({1})", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = round({1})", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("f_trunc",
+            .mnemonic(
+                "f_trunc",
                 "Performs a truncation operation on the provided value",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = truncate({1})", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = truncate({1})", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("f_whole",
+            .mnemonic(
+                "f_whole",
                 "Extracts the whole number part of the provided value",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = whole({1})", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = whole({1})", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("f_frac",
+            .mnemonic(
+                "f_frac",
                 "Extracts the fractional part of the provided value",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = frac({1})", &.{ .register, .register }),
                     .basic(.suffix("64"), "64-bit {0} = frac({1})", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("f_add",
+            .mnemonic(
+                "f_add",
                 "Performs floating point addition on the provided values",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32c"), "32-bit {0} = {1} + {2}", &.{ .register, .register, .int }),
-
                     .basic(.suffix("64"), "64-bit {0} = {1} + {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64c"), "64-bit {0} = {1} + {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("f_sub",
+            .mnemonic(
+                "f_sub",
                 "Performs floating point subtraction on the provided values",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32a"), "32-bit {0} = {2} - {1}", &.{ .register, .register, .int }),
                     .basic(.suffix("32b"), "32-bit {0} = {1} - {2}", &.{ .register, .register, .int }),
-
                     .basic(.suffix("64"), "64-bit {0} = {1} - {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64a"), "64-bit {0} = {2} - {1}", &.{ .register, .register, .word }),
                     .basic(.suffix("64b"), "64-bit {0} = {1} - {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("f_mul",
+            .mnemonic(
+                "f_mul",
                 "Performs floating point multiplication on the provided values",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32c"), "32-bit {0} = {1} * {2}", &.{ .register, .register, .int }),
-
                     .basic(.suffix("64"), "64-bit {0} = {1} * {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64c"), "64-bit {0} = {1} * {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("f_div",
+            .mnemonic(
+                "f_div",
                 "Performs floating point division on the provided values",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32a"), "32-bit {0} = {2} / {1}", &.{ .register, .register, .int }),
                     .basic(.suffix("32b"), "32-bit {0} = {1} / {2}", &.{ .register, .register, .int }),
-
                     .basic(.suffix("64"), "64-bit {0} = {1} / {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64a"), "64-bit {0} = {2} / {1}", &.{ .register, .register, .word }),
                     .basic(.suffix("64b"), "64-bit {0} = {1} / {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("f_rem",
+            .mnemonic(
+                "f_rem",
                 "Gets the remainder of floating point division on the provided values",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32a"), "32-bit {0} = {2} % {1}", &.{ .register, .register, .int }),
                     .basic(.suffix("32b"), "32-bit {0} = {1} % {2}", &.{ .register, .register, .int }),
-
                     .basic(.suffix("64"), "64-bit {0} = {1} % {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64a"), "64-bit {0} = {2} % {1}", &.{ .register, .register, .word }),
                     .basic(.suffix("64b"), "64-bit {0} = {1} % {2}", &.{ .register, .register, .word }),
                 },
             ),
-
-            .mnemonic("f_pow",
+            .mnemonic(
+                "f_pow",
                 "Raises a provided value to the power of the other provided value",
                 &.{
                     .basic(.suffix("32"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("32a"), "32-bit {0} = {2} ** {1}", &.{ .register, .register, .int }),
                     .basic(.suffix("32b"), "32-bit {0} = {1} ** {2}", &.{ .register, .register, .int }),
-
                     .basic(.suffix("64"), "64-bit {0} = {1} ** {2}", &.{ .register, .register, .register }),
                     .basic(.suffix("64a"), "64-bit {0} = {2} ** {1}", &.{ .register, .register, .word }),
                     .basic(.suffix("64b"), "64-bit {0} = {1} ** {2}", &.{ .register, .register, .word }),
@@ -1284,67 +1268,63 @@ pub const CATEGORIES: []const Category = &.{
         },
     ),
 
-    .category("Value conversion",
+    .category(
+        "Value conversion",
         "Instructions that convert values between different bit representations",
         &.{
             // u_ext is not necessary since the default behavior when moving a value into a larger register is to zero extend.
-
-            .mnemonic("s_ext",
+            .mnemonic(
+                "s_ext",
                 "Signed bit extension",
                 &.{
                     .basic(.suffix("8_16"), "Sign extend 8-bits of {1} to 16-bits, placing the result in {0}", &.{ .register, .register }),
                     .basic(.suffix("8_32"), "Sign extend 8-bits of {1} to 32-bits, placing the result in {0}", &.{ .register, .register }),
                     .basic(.suffix("8_64"), "Sign extend 8-bits of {1} to 64-bits, placing the result in {0}", &.{ .register, .register }),
-
                     .basic(.suffix("16_32"), "Sign extend 16-bits of {1} to 32-bits, placing the result in {0}", &.{ .register, .register }),
                     .basic(.suffix("16_64"), "Sign extend 16-bits of {1} to 64-bits, placing the result in {0}", &.{ .register, .register }),
-
                     .basic(.suffix("32_64"), "Sign extend 32-bits of {1} to 64-bits, placing the result in {0}", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("f_to_i",
+            .mnemonic(
+                "f_to_i",
                 "Convert floats to various integer representations.",
                 &.{
                     .basic(.override("f32_to_u8"), "Convert of 32-bit float in {1} to 8-bit integer; discards sign, places the result in {0}", &.{ .register, .register }),
                     .basic(.override("f32_to_u16"), "Convert of 32-bit float in {1} to 16-bit integer; discards sign, places the result in {0}", &.{ .register, .register }),
                     .basic(.override("f32_to_u32"), "Convert of 32-bit float in {1} to 32-bit integer; discards sign, places the result in {0}", &.{ .register, .register }),
                     .basic(.override("f32_to_u64"), "Convert of 32-bit float in {1} to 64-bit integer; discards sign, places the result in {0}", &.{ .register, .register }),
-
                     .basic(.override("f32_to_s8"), "Convert of 32-bit float in {1} to 8-bit integer; keeps sign, places the result in {0}", &.{ .register, .register }),
                     .basic(.override("f32_to_s16"), "Convert of 32-bit float in {1} to 16-bit integer; keeps sign, places the result in {0}", &.{ .register, .register }),
                     .basic(.override("f32_to_s32"), "Convert of 32-bit float in {1} to 32-bit integer; keeps sign, places the result in {0}", &.{ .register, .register }),
                     .basic(.override("f32_to_s64"), "Convert of 32-bit float in {1} to 64-bit integer; keeps sign, places the result in {0}", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("i_to_f",
+            .mnemonic(
+                "i_to_f",
                 \\Convert various integers to float representations.
                 \\* Information loss is possible if the integer's most significant bit index is larger than the float's mantissa bit size
-                , &.{
+            ,
+                &.{
                     .basic(.override("u8_to_f32"), "Convert 8-bits in {1} to 32-bit float; discards sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("u16_to_f32"), "Convert 16-bits in {1} to 32-bit float; discards sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("u32_to_f32"), "Convert 32-bits in {1} to 32-bit float; discards sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("u64_to_f32"), "Convert 64-bits in {1} to 32-bit float; discards sign, places result in {0}", &.{ .register, .register }),
-
                     .basic(.override("s8_to_f32"), "Convert 8-bits in {1} to 32-bit float; keeps sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("s16_to_f32"), "Convert 16-bits in {1} to 32-bit float; keeps sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("s32_to_f32"), "Convert 32-bits in {1} to 32-bit float; keeps sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("s64_to_f32"), "Convert 64-bits in {1} to 32-bit float; keeps sign, places result in {0}", &.{ .register, .register }),
-
                     .basic(.override("u8_to_f64"), "Convert 8-bits in {1} to 64-bit float; discards sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("u16_to_f64"), "Convert 16-bits in {1} to 64-bit float; discards sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("u32_to_f64"), "Convert 32-bits in {1} to 64-bit float; discards sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("u64_to_f64"), "Convert 64-bits in {1} to 64-bit float; discards sign, places result in {0}", &.{ .register, .register }),
-
                     .basic(.override("s8_to_f64"), "Convert 8-bits in {1} to 64-bit float; keeps sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("s16_to_f64"), "Convert 16-bits in {1} to 64-bit float; keeps sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("s32_to_f64"), "Convert 32-bits in {1} to 64-bit float; keeps sign, places result in {0}", &.{ .register, .register }),
                     .basic(.override("s64_to_f64"), "Convert 64-bits in {1} to 64-bit float; keeps sign, places result in {0}", &.{ .register, .register }),
                 },
             ),
-
-            .mnemonic("f_to_f",
+            .mnemonic(
+                "f_to_f",
                 "Floating point to floating point conversion",
                 &.{
                     .basic(.override("f32_to_f64"), "Convert 32-bit float in {1} to 64-bit float; places the result in {0}", &.{ .register, .register }),

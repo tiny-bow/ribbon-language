@@ -26,7 +26,7 @@ pub fn disas(vmem: pl.VirtualMemory, writer: anytype) !void {
     var ptr: core.InstructionAddr = @ptrCast(vmem);
     const end = ptr + @divExact(vmem.len, 8);
 
-    try writer.print("[{x:0<16}]:\n", .{ @intFromPtr(ptr)});
+    try writer.print("[{x:0<16}]:\n", .{@intFromPtr(ptr)});
 
     while (@intFromPtr(ptr) < @intFromPtr(end)) : (ptr += 1) {
         const encodedBits: u64 = @as([*]const core.InstructionBits, ptr)[0];
@@ -46,7 +46,7 @@ pub fn disas(vmem: pl.VirtualMemory, writer: anytype) !void {
                 inline for (comptime std.meta.fieldNames(T)) |opName| {
                     const operandBytes = std.mem.asBytes(&@field(set, opName));
 
-                    try writer.print(" (" ++ opName ++ " {x})", .{ operandBytes });
+                    try writer.print(" (" ++ opName ++ " {x})", .{operandBytes});
                 }
             }
         }
@@ -114,8 +114,9 @@ pub const Encoder = struct {
     /// Writes an integer to the encoder.
     pub fn writeInt(
         self: *Encoder,
-        comptime T: type, value: T,
-        comptime _: enum {little}, // allows backward compat with zig's writer interface; but only in provably compatible use-cases
+        comptime T: type,
+        value: T,
+        comptime _: enum { little }, // allows backward compat with zig's writer interface; but only in provably compatible use-cases
     ) Writer.Error!void {
         try self.writer.writeInt(T, value, .little);
     }
@@ -189,7 +190,6 @@ pub const Encoder = struct {
     }
 };
 
-
 /// A simple builder API for bytecode functions.
 pub const Builder = struct {
     /// The allocator used by this function.
@@ -230,13 +230,13 @@ pub const Builder = struct {
     }
 
     /// Create a new basic block within this function, returning a pointer to it.
-    pub fn createBlock(ptr: *const Builder) error{NameCollision, TooManyBlocks, OutOfMemory}!*const Block {
+    pub fn createBlock(ptr: *const Builder) error{ NameCollision, TooManyBlocks, OutOfMemory }!*const Block {
         const self = @constCast(ptr);
 
         const index = self.blocks.items.len;
 
         if (index > Id.MAX_INT) {
-            log.err("bytecode.Builder.createBlock: Cannot create more than {d} blocks in function {}", .{Id.MAX_INT, self.id});
+            log.err("bytecode.Builder.createBlock: Cannot create more than {d} blocks in function {}", .{ Id.MAX_INT, self.id });
             return error.TooManyBlocks;
         }
 
@@ -247,7 +247,7 @@ pub const Builder = struct {
         return block;
     }
 
-    pub fn encode(ptr: *const Builder, encoder: *Encoder) error{BadEncoding, OutOfMemory}!void {
+    pub fn encode(ptr: *const Builder, encoder: *Encoder) error{ BadEncoding, OutOfMemory }!void {
         const self = @constCast(ptr);
 
         if (self.blocks.items.len == 0) {
@@ -311,7 +311,7 @@ pub const Block = struct {
     }
 
     /// Write this block's instructions into the provided bytecode encoder.
-    pub fn encode(ptr: *const Block, encoder: *Encoder) error{BadEncoding, OutOfMemory}!void {
+    pub fn encode(ptr: *const Block, encoder: *Encoder) error{ BadEncoding, OutOfMemory }!void {
         const self: *Block = @constCast(ptr);
 
         for (self.body.items) |basic| {
@@ -334,11 +334,11 @@ pub const Block = struct {
     /// This function is used internally by `instr` and `instrPre`.
     /// It can be called directly, though it should be noted that it does not
     /// type-check the `data` argument, whereas `instr` does.
-    pub fn composeInstr(ptr: *const Block, code: Instruction.OpCode, data: anytype) error{BadEncoding, OutOfMemory}!void {
+    pub fn composeInstr(ptr: *const Block, code: Instruction.OpCode, data: anytype) error{ BadEncoding, OutOfMemory }!void {
         const self: *Block = @constCast(ptr);
 
         if (self.terminator) |term| {
-            log.err("Cannot insert instruction `{s}` into block with terminator `{s}`", .{@tagName(code), @tagName(term.code)});
+            log.err("Cannot insert instruction `{s}` into block with terminator `{s}`", .{ @tagName(code), @tagName(term.code) });
             return error.BadEncoding;
         }
 
@@ -365,7 +365,7 @@ pub const Block = struct {
     /// `.{}` syntax should work.
     ///
     /// See also `instrPre`, which takes a pre-composed `Instruction` instead of individual components.
-    pub fn instr(ptr: *const Block, comptime code: Instruction.OpCode, data: Instruction.SetType(code)) error{BadEncoding, OutOfMemory}!void {
+    pub fn instr(ptr: *const Block, comptime code: Instruction.OpCode, data: Instruction.SetType(code)) error{ BadEncoding, OutOfMemory }!void {
         return ptr.composeInstr(code, data);
     }
 
@@ -374,12 +374,10 @@ pub const Block = struct {
     /// * `instruction` must be properly composed, or runtime errors will occur.
     ///
     /// See also `instr`, which takes the individual components of an instruction separately.
-    pub fn instrPre(ptr: *const Block, instruction: Instruction) error{BadEncoding, OutOfMemory}!void {
+    pub fn instrPre(ptr: *const Block, instruction: Instruction) error{ BadEncoding, OutOfMemory }!void {
         return ptr.composeInstr(instruction.code, instruction.data);
     }
 };
-
-
 
 /// Unified SymbolTable + AddressTable.
 pub const Table = struct {
@@ -668,7 +666,6 @@ pub const SymbolTable = struct {
     /// Binds *fully-qualified* names to AddressTable ids
     map: std.StringArrayHashMapUnmanaged(core.SymbolTable.Value) = .empty, // TODO why is this not in pl?
 
-
     /// Bind a fully qualified name to an address table id of a constant.
     pub fn bindConstant(self: *SymbolTable, allocator: std.mem.Allocator, name: []const u8, id: Id.of(core.Constant)) !void {
         try self.map.putNoClobber(allocator, name, .{ .kind = .constant, .id = id.cast(anyopaque) });
@@ -869,13 +866,13 @@ pub const SymbolTable = struct {
 
         var bytes_offset: usize = 0;
 
-        const key_buf: []core.SymbolTable.Key = @alignCast(std.mem.bytesAsSlice(core.SymbolTable.Key, buf[bytes_len..bytes_len + key_size * self.map.count()]));
-        const val_buf: []core.SymbolTable.Value = @alignCast(std.mem.bytesAsSlice(core.SymbolTable.Value, buf[bytes_len + key_size * self.map.count()..total_len]));
+        const key_buf: []core.SymbolTable.Key = @alignCast(std.mem.bytesAsSlice(core.SymbolTable.Key, buf[bytes_len .. bytes_len + key_size * self.map.count()]));
+        const val_buf: []core.SymbolTable.Value = @alignCast(std.mem.bytesAsSlice(core.SymbolTable.Value, buf[bytes_len + key_size * self.map.count() .. total_len]));
 
         var it = self.map.iterator();
         var i: usize = 0;
         while (it.next()) |entry| {
-            const key_copy = buf[bytes_offset..bytes_offset + entry.key_ptr.len];
+            const key_copy = buf[bytes_offset .. bytes_offset + entry.key_ptr.len];
             bytes_offset += entry.key_ptr.len;
             @memcpy(key_copy, entry.key_ptr.*);
 
@@ -1092,12 +1089,12 @@ pub const AddressTable = struct {
         std.debug.assert(buf.len >= offset);
 
         const constants = buf[0..constant_bytes];
-        const globals = buf[constant_bytes..constant_bytes + global_bytes];
-        const functions = buf[constant_bytes + global_bytes..constant_bytes + global_bytes + function_bytes];
-        const builtin_addresses = buf[constant_bytes + global_bytes + function_bytes..constant_bytes + global_bytes + function_bytes + builtin_bytes];
-        const foreign_addresses = buf[constant_bytes + global_bytes + function_bytes + builtin_bytes..constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes];
-        const handler_sets = buf[constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes..constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes + handler_bytes];
-        const effects = buf[constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes + handler_bytes..constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes + handler_bytes + effect_bytes];
+        const globals = buf[constant_bytes .. constant_bytes + global_bytes];
+        const functions = buf[constant_bytes + global_bytes .. constant_bytes + global_bytes + function_bytes];
+        const builtin_addresses = buf[constant_bytes + global_bytes + function_bytes .. constant_bytes + global_bytes + function_bytes + builtin_bytes];
+        const foreign_addresses = buf[constant_bytes + global_bytes + function_bytes + builtin_bytes .. constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes];
+        const handler_sets = buf[constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes .. constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes + handler_bytes];
+        const effects = buf[constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes + handler_bytes .. constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes + handler_bytes + effect_bytes];
 
         @memcpy(constants, std.mem.sliceAsBytes(self.constants.items));
         @memcpy(globals, std.mem.sliceAsBytes(self.globals.items));
@@ -1126,7 +1123,7 @@ pub const AddressTable = struct {
             for (std.meta.fieldNames(AddressTable)) |comp_field| {
                 if (std.mem.eql(u8, core_field, comp_field)) continue :outer;
             } else {
-                @compileError("missing field " ++ core_field ++ " in ir2bc.AddressTable");
+                @compileError("missing field " ++ core_field ++ " in backend.AddressTable");
             }
         }
 
@@ -1134,7 +1131,7 @@ pub const AddressTable = struct {
             for (std.meta.fieldNames(core.AddressTable)) |core_field| {
                 if (std.mem.eql(u8, core_field, comp_field)) continue :outer;
             } else {
-                @compileError("extra field " ++ comp_field ++ " in ir2bc.AddressTable");
+                @compileError("extra field " ++ comp_field ++ " in backend.AddressTable");
             }
         }
 

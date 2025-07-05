@@ -7,6 +7,6 @@ pub const bytecode = @import("bytecode");
 pub const analysis = @import("analysis");
 pub const interpreter = @import("interpreter");
 pub const ir = @import("ir");
-pub const ir2bc = @import("ir2bc");
+pub const backend = @import("backend");
 pub const machine = @import("machine");
 pub const meta_language = @import("meta_language");

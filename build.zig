@@ -2,7 +2,7 @@ const std = @import("std");
 
 const nasm = @import("nasm");
 
-const SUPPORTED_ARCH = &.{ .x86_64 };
+const SUPPORTED_ARCH = &.{.x86_64};
 const SUPPORTED_OS = &.{ .windows, .linux };
 
 pub fn build(b: *std.Build) !void {
@@ -58,8 +58,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-
-
     const core_mod = b.createModule(.{
         .root_source_file = b.path("src/mod/core.zig"),
         .target = target,
@@ -72,15 +70,11 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-
-
     const Instruction_mod = b.createModule(.{
         .root_source_file = null,
         .target = target,
         .optimize = optimize,
     });
-
-
 
     const interpreter_mod = b.createModule(.{
         .root_source_file = b.path("src/mod/interpreter.zig"),
@@ -94,8 +88,8 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const ir2bc_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/ir2bc.zig"),
+    const backend_mod = b.createModule(.{
+        .root_source_file = b.path("src/mod/backend.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -130,21 +124,13 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-
-
     const ribbon_mod = b.addModule("ribbon_language", .{
         .root_source_file = b.path("src/mod/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-
-
-
-
-
     // setup tool calls //
-
 
     const gen_tool = b.addExecutable(.{
         .name = "gen",
@@ -152,7 +138,6 @@ pub fn build(b: *std.Build) !void {
         .use_llvm = false,
         .use_lld = false,
     });
-
 
     const gen_isa = b.addRunArtifact(gen_tool);
 
@@ -162,7 +147,6 @@ pub fn build(b: *std.Build) !void {
 
     const Isa_markdown_install = b.addInstallFile(Isa_markdown, "docs/Isa.md");
 
-
     const gen_types = b.addRunArtifact(gen_tool);
 
     gen_types.addArg("types");
@@ -171,9 +155,6 @@ pub fn build(b: *std.Build) !void {
     const Instruction_src_install = b.addInstallFileWithDir(Instruction_src, .{ .custom = "tmp" }, "Instruction.zig");
 
     Instruction_mod.root_source_file = Instruction_src;
-
-
-
 
     // create exports //
 
@@ -185,8 +166,6 @@ pub fn build(b: *std.Build) !void {
 
     const main_install = b.addInstallArtifact(main_bin, .{});
 
-
-
     // create tests //
     const abi_test = b.addTest(.{ .root_module = abi_mod });
     // assembler mod is a dep
@@ -196,15 +175,13 @@ pub fn build(b: *std.Build) !void {
     const Instruction_test = b.addTest(.{ .root_module = Instruction_mod });
     const interpreter_test = b.addTest(.{ .root_module = interpreter_mod });
     const ir_test = b.addTest(.{ .root_module = ir_mod });
-    const ir2bc_test = b.addTest(.{ .root_module = ir2bc_mod });
+    const backend_test = b.addTest(.{ .root_module = backend_mod });
     const isa_test = b.addTest(.{ .root_module = isa_mod });
     const machine_test = b.addTest(.{ .root_module = machine_mod });
     const main_test = b.addTest(.{ .root_module = main_mod });
     const meta_language_test = b.addTest(.{ .root_module = meta_language_mod });
     const source_test = b.addTest(.{ .root_module = source_mod });
     const ribbon_test = b.addTest(.{ .root_module = ribbon_mod });
-
-
 
     // add imports //
 
@@ -234,11 +211,9 @@ pub fn build(b: *std.Build) !void {
     gen_mod.addAnonymousImport("Isa_intro.md", .{ .root_source_file = b.path("src/gen-base/markdown/Isa_intro.md") });
     gen_mod.addAnonymousImport("Instruction_intro.zig", .{ .root_source_file = b.path("src/gen-base/zig/Instruction_intro.zig") });
 
-
     Instruction_mod.addImport("platform", platform_mod);
     Instruction_mod.addImport("core", core_mod);
     Instruction_mod.addImport("Id", Id_mod);
-
 
     interpreter_mod.addImport("platform", platform_mod);
     interpreter_mod.addImport("core", core_mod);
@@ -247,7 +222,6 @@ pub fn build(b: *std.Build) !void {
     interpreter_mod.addImport("common", common_mod);
     // interpreter_mod.addObjectFile(assembly_obj);
 
-
     ir_mod.addImport("platform", platform_mod);
     ir_mod.addImport("common", common_mod);
     ir_mod.addImport("utils", utils_mod);
@@ -255,11 +229,11 @@ pub fn build(b: *std.Build) !void {
     ir_mod.addImport("bytecode", bytecode_mod);
     ir_mod.addImport("source", source_mod);
 
-    ir2bc_mod.addImport("platform", platform_mod);
-    ir2bc_mod.addImport("core", core_mod);
-    ir2bc_mod.addImport("bytecode", bytecode_mod);
-    ir2bc_mod.addImport("ir", ir_mod);
-    ir2bc_mod.addImport("Id", Id_mod);
+    backend_mod.addImport("platform", platform_mod);
+    backend_mod.addImport("core", core_mod);
+    backend_mod.addImport("bytecode", bytecode_mod);
+    backend_mod.addImport("ir", ir_mod);
+    backend_mod.addImport("Id", Id_mod);
 
     isa_mod.addImport("platform", platform_mod);
 
@@ -275,7 +249,6 @@ pub fn build(b: *std.Build) !void {
     main_mod.addImport("utils", utils_mod);
     main_mod.addImport("repl", repl_mod);
 
-
     source_mod.addImport("platform", platform_mod);
     source_mod.addImport("common", common_mod);
     source_mod.addImport("utils", utils_mod);
@@ -286,21 +259,17 @@ pub fn build(b: *std.Build) !void {
     meta_language_mod.addImport("source", source_mod);
     meta_language_mod.addImport("core", core_mod);
     meta_language_mod.addImport("ir", ir_mod);
-    meta_language_mod.addImport("ir2bc", ir2bc_mod);
+    meta_language_mod.addImport("backend", backend_mod);
 
     ribbon_mod.addImport("core", core_mod);
     ribbon_mod.addImport("abi", abi_mod);
     ribbon_mod.addImport("bytecode", bytecode_mod);
     ribbon_mod.addImport("interpreter", interpreter_mod);
     ribbon_mod.addImport("ir", ir_mod);
-    ribbon_mod.addImport("ir2bc", ir2bc_mod);
+    ribbon_mod.addImport("backend", backend_mod);
     ribbon_mod.addImport("machine", machine_mod);
     ribbon_mod.addImport("meta_language", meta_language_mod);
     ribbon_mod.addImport("source", source_mod);
-
-
-
-
 
     // setup steps //
 
@@ -341,7 +310,7 @@ pub fn build(b: *std.Build) !void {
     check_step.dependOn(&gen_test.step);
     check_step.dependOn(&interpreter_test.step);
     check_step.dependOn(&ir_test.step);
-    check_step.dependOn(&ir2bc_test.step);
+    check_step.dependOn(&backend_test.step);
     check_step.dependOn(&isa_test.step);
     check_step.dependOn(&machine_test.step);
     check_step.dependOn(&main_test.step);
@@ -358,14 +327,13 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&b.addRunArtifact(Instruction_test).step);
     test_step.dependOn(&b.addRunArtifact(interpreter_test).step);
     test_step.dependOn(&b.addRunArtifact(ir_test).step);
-    test_step.dependOn(&b.addRunArtifact(ir2bc_test).step);
+    test_step.dependOn(&b.addRunArtifact(backend_test).step);
     test_step.dependOn(&b.addRunArtifact(isa_test).step);
     test_step.dependOn(&b.addRunArtifact(machine_test).step);
     test_step.dependOn(&b.addRunArtifact(main_test).step);
     test_step.dependOn(&b.addRunArtifact(meta_language_test).step);
     test_step.dependOn(&b.addRunArtifact(source_test).step);
     test_step.dependOn(&b.addRunArtifact(ribbon_test).step);
-
 
     const docs_step = b.step("docs", "Generate documentation");
 
@@ -376,16 +344,13 @@ pub fn build(b: *std.Build) !void {
     }).step);
     docs_step.dependOn(&Isa_markdown_install.step);
 
-
     const isa_step = b.step("isa", "Generate ISA documentation");
 
     isa_step.dependOn(&Isa_markdown_install.step);
 }
 
-
 fn parseZon(b: *std.Build, comptime T: type) T {
-    const zonText = std.fs.cwd().readFileAllocOptions(b.allocator, "build.zig.zon", std.math.maxInt(usize), 2048, 1, 0)
-        catch @panic("Unable to read build.zig.zon");
+    const zonText = std.fs.cwd().readFileAllocOptions(b.allocator, "build.zig.zon", std.math.maxInt(usize), 2048, 1, 0) catch @panic("Unable to read build.zig.zon");
 
     var parseStatus = std.zon.parse.Status{};
 
@@ -403,13 +368,12 @@ fn parseZon(b: *std.Build, comptime T: type) T {
         while (it.next()) |parseErr| {
             const loc = parseErr.getLocation(&parseStatus);
 
-            std.debug.print("[build.zig.zon:{}]: {s}\n", .{loc.line + 1, parseErr.fmtMessage(&parseStatus)});
+            std.debug.print("[build.zig.zon:{}]: {s}\n", .{ loc.line + 1, parseErr.fmtMessage(&parseStatus) });
         }
 
         std.process.exit(1);
     };
 }
-
 
 fn zigObjectFmtToNasm(zigFmt: std.Target.ObjectFormat) []const u8 {
     switch (zigFmt) {
@@ -422,11 +386,11 @@ fn zigObjectFmtToNasm(zigFmt: std.Target.ObjectFormat) []const u8 {
             \\Object format `{s}` is not supported by Ribbon.
             \\
             \\
-            , .{@tagName(zigFmt)} ,
+        ,
+            .{@tagName(zigFmt)},
         ),
     }
 }
-
 
 fn validateTarget(target: std.Target) void {
     if (std.mem.indexOfScalar(std.Target.Cpu.Arch, SUPPORTED_ARCH, target.cpu.arch) == null) {
@@ -447,7 +411,8 @@ fn validateTarget(target: std.Target) void {
                 \\We want this to work, but its a *lot* of work.
                 \\
                 \\
-                , .{ @tagName(target.cpu.arch) } ,
+            ,
+                .{@tagName(target.cpu.arch)},
             );
         }
     }
@@ -461,7 +426,8 @@ fn validateTarget(target: std.Target) void {
             \\If it happens to work let us know on GitHub!
             \\
             \\
-            , .{ @tagName(target.os.tag) } ,
+        ,
+            .{@tagName(target.os.tag)},
         );
     }
 }
