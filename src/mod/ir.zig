@@ -92,6 +92,27 @@ pub const Any = packed struct {
     }
 };
 
+// TODO: move this to `ribbon-platform`
+pub fn enumFieldArray(comptime T: type) [@typeInfo(T).@"enum".fields.len]std.meta.Tag(T) {
+    comptime {
+        const field_names = std.meta.fieldNames(T);
+        var field_values = [1]std.meta.Tag(T){undefined} ** field_names.len;
+
+        for (field_names, 0..) |field, i| {
+            field_values[i] = @intFromEnum(@field(T, field));
+        }
+
+        return field_values;
+    }
+}
+
+// TODO: move this to `ribbon-platform`
+pub fn isEnumVariant(comptime T: type, value: anytype) bool {
+    const field_values = comptime enumFieldArray(T);
+
+    return std.mem.indexOfScalar(std.meta.Tag(T), field_values, value) != null;
+}
+
 /// VTable and arbitrary data map for user defined data on nodes.
 pub const UserData = struct {
     /// The context this user data is bound to.
@@ -836,268 +857,22 @@ pub const NodeKind = packed struct(u16) {
     }
 };
 
-/// The tag of a node, which indicates the overall node shape, be it data, structure, or collection.
-pub const Tag = enum(u3) {
-    /// The tag for an empty or invalid node.
-    /// Discriminator is ignored, and should always be initialized to nil.
-    nil,
-    /// The tag for a node that contains unstructured data, such as a name, source, or similar.
-    /// Discriminator always carries a specific kind, such as `name`, `source`, etc.
-    data,
-    /// The tag for a node that contains a primitive, such as an integer, index, or opcode.
-    /// Discriminator may carry a specific kind, or nil to indicate untyped bytes.
-    primitive,
-    /// The tag for a node that contains a structure, such as a function, block, or instruction.
-    /// Discriminator always carries a specific kind, such as `type`, `effect`, or `function`.
-    structure,
-    /// The tag for a node that is simply a list of other nodes.
-    /// Discriminator may carry a specific kind, or nil to indicate a heterogeneous collection.
-    collection,
-};
-
-/// The discriminator of a node, which indicates the specific kind of value it contains.
-/// * Variant names are the field names of `ir.structures`, `ir.primitives` and `ir.Data`, as well as `nil`.
-pub const Discriminator: type = Discriminator: {
-    const data_fields = std.meta.fieldNames(Data);
-    const primitive_fields = std.meta.fieldNames(Primitives);
-    const structure_fields = std.meta.fieldNames(Structures);
-
-    var fields = [1]std.builtin.Type.EnumField{undefined} ** (primitive_fields.len + structure_fields.len + data_fields.len + 1);
-    fields[0] = .{ .name = "nil", .value = 0 };
-
-    var i = 1;
-
-    for (data_fields[0..], 0..) |field, j| {
-        fields[i] = .{ .name = field, .value = j + 1000 };
-        i += 1;
-    }
-
-    for (primitive_fields[0..], 0..) |field, j| {
-        fields[i] = .{ .name = field, .value = j + 2000 };
-        i += 1;
-    }
-
-    for (structure_fields[0..], 0..) |field, j| {
-        fields[i] = .{ .name = field, .value = j + 3000 };
-        i += 1;
-    }
-
-    break :Discriminator @Type(.{
-        .@"enum" = std.builtin.Type.Enum{
-            .tag_type = u13,
-            .fields = &fields,
-            .decls = &.{},
-            .is_exhaustive = true,
-        },
-    });
-};
-
-/// The kind of data that can be stored in a `Data` node.
-/// * Variant names are the field names of `ir.Data` without `ref_list`, as well as `nil`.
-pub const DataKind: type = DataKind: {
-    const data_fields = std.meta.fieldNames(Data);
-
-    var fields = [1]std.builtin.Type.EnumField{undefined} ** data_fields.len;
-    fields[0] = .{ .name = "nil", .value = 0 };
-
-    for (data_fields[0 .. data_fields.len - 1], 1..) |field_name, i| {
-        fields[i] = .{
-            .name = field_name,
-            .value = i + 1000,
-        };
-    }
-
-    break :DataKind @Type(.{
-        .@"enum" = std.builtin.Type.Enum{
-            .tag_type = u13,
-            .fields = &fields,
-            .decls = &.{},
-            .is_exhaustive = true,
-        },
-    });
-};
-
-/// Convert a `DataKind` to the type of data it represents.
-pub fn DataType(comptime kind: DataKind) type {
-    comptime return @FieldType(Data, @tagName(kind));
-}
-
-/// The kind of primitives that can be stored in a `Primitive` node.
-/// * Variant names are the field names of `ir.primitives`, as well as `nil`.
-pub const PrimitiveKind: type = Primitive: {
-    const generated_fields = std.meta.fieldNames(Primitives);
-
-    var fields = [1]std.builtin.Type.EnumField{undefined} ** (generated_fields.len + 1);
-
-    fields[0] = .{ .name = "nil", .value = 0 };
-
-    for (generated_fields, 1..) |field_name, i| {
-        fields[i] = .{
-            .name = field_name,
-            .value = 2000 + i,
-        };
-    }
-
-    break :Primitive @Type(.{
-        .@"enum" = std.builtin.Type.Enum{
-            .tag_type = u13,
-            .fields = &fields,
-            .decls = &.{},
-            .is_exhaustive = true,
-        },
-    });
-};
-
-/// The kind of structures that can be stored in a `Structure` node.
-/// * Variant names are the field names of `ir.structures`, as well as `nil`.
-pub const StructureKind: type = Structure: {
-    const generated_fields = std.meta.fieldNames(Structures);
-
-    var fields = [1]std.builtin.Type.EnumField{undefined} ** (generated_fields.len + 1);
-
-    fields[0] = .{ .name = "nil", .value = 0 };
-
-    for (generated_fields, 1..) |field_name, i| {
-        fields[i] = .{
-            .name = field_name,
-            .value = 3000 + i,
-        };
-    }
-
-    break :Structure @Type(.{
-        .@"enum" = std.builtin.Type.Enum{
-            .tag_type = u13,
-            .fields = &fields,
-            .decls = &.{},
-            .is_exhaustive = true,
-        },
-    });
-};
-
-/// The type of primitive data nodes definition structure.
-pub const Primitives: type = @TypeOf(primitives);
-
-/// Comptime data structure describing the primitive data nodes in the ir. Type is `ir.Primitives`.
-pub const primitives = .{
-    // IR-specific instruction operation.
-    .operation = Operation,
-    // Bytecode instruction opcode; for use in intrinsics and final assembly.
-    .opcode = bytecode.Instruction.OpCode,
-    // A variant describing the kind of a type.
-    .kind_tag = KindTag,
-};
-
-/// Bitwise conversion functions for primitive data nodes.
-pub const primitive_converters = struct {
-    pub fn operation(op: Operation) u64 {
-        return @intFromEnum(op);
-    }
-
-    pub fn opcode(op: bytecode.Instruction.OpCode) u64 {
-        return @intFromEnum(op);
-    }
-
-    pub fn kind_tag(tag: KindTag) u64 {
-        return @intFromEnum(tag);
-    }
-};
-
-/// The type of the ir structures definition structure.
-pub const Structures: type = @TypeOf(structures);
-
-/// Comptime data structure describing the kinds of structural nodes in the ir. Type is `ir.Structures`.
-pub const structures = .{
-    .kind = .{
-        .output_tag = .{ .data, .kind_tag },
-        .input_kinds = .{ .collection, .kind },
-    },
-    .constructor = .{
-        .kind = .{ .structure, .kind },
-    },
-    .type = .{
-        .constructor = .{ .structure, .constructor },
-        .input_types = .{ .collection, .type },
-    },
-    .effect = .{
-        .handler_types = .{ .collection, .type },
-    },
-    .constant = .{
-        .type = .{ .structure, .type },
-        .value = .any,
-    },
-    .global = .{ .type = .{ .structure, .type }, .initializer = .{ .structure, .constant } },
-    .local = .{ .type = .{ .structure, .type } },
-    .handler = .{
-        .parent_block = .{ .structure, .block }, // the block that this handler is alive within
-        .function = .{ .structure, .function }, // the function that implements the handler
-        .handled_effect = .{ .structure, .effect }, // the effect that this handler can handle
-        .cancellation_type = .{ .structure, .type }, // the type that this handler can cancel the effect with
-    },
-    .function = .{
-        .parent_handler = .{ .structure, .handler }, // the handler that this function is a part of, if any
-        .body_block = .{ .structure, .block },
-        .type = .{ .structure, .type },
-    },
-    .block = .{
-        .parent = .{ .structure, .nil }, // either a block, function, or constant
-        .locals = .{ .collection, .local },
-        .handlers = .{ .collection, .handler },
-        .contents = .{ .collection, .nil }, // a collection of either blocks or instructions
-        .type = .{ .structure, .type }, // the type of data yielded by the block
-    },
-    .instruction = .{
-        .parent = .{ .structure, .block }, // the block that contains this instruction
-        .operation = .{ .data, .operation }, // the operation performed by this instruction
-        .type = .{ .structure, .type }, // the type of data yielded by the instruction
-    },
-    .ctrl_edge = .{
-        .source = .{ .structure, .nil }, // either a block or an instruction
-        .destination = .{ .structure, .nil }, // either a block or an instruction
-        .source_index = .{ .data, .index }, // the index of the edge in the source
-        .destination_index = .{ .data, .index }, // the index of the edge in the destination
-    },
-    .data_edge = .{
-        .source = .{ .structure, .nil }, // either a block or an instruction
-        .destination = .{ .structure, .nil }, // either a block or an instruction
-        .source_index = .{ .data, .index }, // the index of the edge in the source
-        .destination_index = .{ .data, .index }, // the index of the edge in the destination
-    },
-    .global_symbol = .{
-        .name = .{ .data, .name },
-        .node = .any,
-    },
-    .debug_symbols = .{
-        .name = .{ .collection, .name },
-        .node = .any,
-    },
-    .debug_sources = .{
-        .source = .{ .collection, .source },
-        .node = .any,
-    },
-    .foreign = .{
-        .address = .{ .data, .index }, // the address of the foreign function
-    },
-    .builtin = .{
-        .address = .{ .data, .index }, // the address of the builtin function
-    },
-    .intrinsic = .{
-        .data = .{ .data, .nil }, // the data of the intrinsic function; usually, a bytecode opcode
-    },
-};
-
 /// 64-bit context providing eql and hash functions for `Node` types.
 /// This is used by the interner to map constant value nodes to their references.
 pub const NodeHasher = struct {
     pub fn eql(_: @This(), a: Node, b: Node) bool {
         if (a.kind != b.kind) return false;
 
-        return switch (a.kind.getDiscriminator()) {
-            .nil => true,
-            .name => std.mem.eql(u8, a.bytes.name, b.bytes.name),
-            .source => a.bytes.source.eql(&b.bytes.source),
-            .buffer => std.mem.eql(u8, a.bytes.buffer.items, b.bytes.buffer.items),
-            .operation, .opcode, .kind_tag => a.bytes.primitive == b.bytes.primitive,
-            else => std.mem.eql(Ref, a.bytes.ref_list.items, b.bytes.ref_list.items),
+        return switch (a.kind.getTag()) {
+            .nil => false,
+            .data => switch (discriminants.force(DataKind, a.kind.getDiscriminator())) {
+                .nil => false,
+                .name => std.mem.eql(u8, a.bytes.name, b.bytes.name),
+                .source => a.bytes.source.eql(&b.bytes.source),
+                .buffer => std.mem.eql(u8, a.bytes.buffer.items, b.bytes.buffer.items),
+            },
+            .primitive => a.bytes.primitive == b.bytes.primitive,
+            .structure, .collection => std.mem.eql(Ref, a.bytes.ref_list.items, b.bytes.ref_list.items),
         };
     }
 
@@ -1105,19 +880,121 @@ pub const NodeHasher = struct {
         var hasher = std.hash.Fnv1a_64.init();
         hasher.update(std.mem.asBytes(&n.kind));
 
-        switch (n.kind.getDiscriminator()) {
-            .nil => hasher.update(&.{0}),
-            .name => hasher.update(n.bytes.name),
-            .source => {
-                hasher.update(n.bytes.source.name);
-                hasher.update(std.mem.asBytes(&n.bytes.source.location));
+        switch (n.kind.getTag()) {
+            .nil => {},
+            .data => switch (discriminants.force(DataKind, n.kind.getDiscriminator())) {
+                .nil => {},
+                .name => hasher.update(n.bytes.name),
+                .source => n.bytes.source.hash(&hasher),
+                .buffer => hasher.update(n.bytes.buffer.items),
             },
-            .buffer => hasher.update(n.bytes.buffer.items),
-            .operation, .opcode, .kind_tag => hasher.update(std.mem.asBytes(&n.bytes.primitive)),
-            else => hasher.update(std.mem.sliceAsBytes(n.bytes.ref_list.items)),
+            .primitive => hasher.update(std.mem.asBytes(&n.bytes.primitive)),
+            .structure, .collection => hasher.update(std.mem.sliceAsBytes(n.bytes.ref_list.items)),
         }
 
         return hasher.final();
+    }
+};
+
+/// Utilities for working with node discriminant enums.
+pub const discriminants = struct {
+    /// Determine if a zig type is a node discriminant enum.
+    /// * ie, one of `Discriminator`, `DataKind`, `PrimitiveKind`, or `StructureKind`.
+    pub fn isValidType(comptime T: type) bool {
+        comptime return switch (T) {
+            Discriminator,
+            DataKind,
+            PrimitiveKind,
+            StructureKind,
+            => true,
+            else => false,
+        };
+    }
+
+    /// Determine if `T` is substitutable for `U`
+    /// * `Discriminator isSubstitutableFor { DataKind, PrimitiveKind, StructureKind }`
+    /// * `DataKind isSubstitutableFor { Discriminator, DataKind }`
+    /// * `PrimitiveKind isSubstitutableFor { Discriminator, PrimitiveKind }`
+    /// * `StructureKind isSubstitutableFor { Discriminator, StructureKind }`
+    pub fn isSubstitutableFor(comptime T: type, comptime U: type) bool {
+        comptime return switch (T) {
+            Discriminator => switch (U) {
+                Discriminator => true,
+                DataKind => true,
+                PrimitiveKind => true,
+                StructureKind => true,
+                else => false,
+            },
+            DataKind => switch (U) {
+                Discriminator => true,
+                DataKind => true,
+                PrimitiveKind => false,
+                StructureKind => false,
+                else => false,
+            },
+            PrimitiveKind => switch (U) {
+                Discriminator => true,
+                DataKind => false,
+                PrimitiveKind => true,
+                StructureKind => false,
+                else => false,
+            },
+            StructureKind => switch (U) {
+                Discriminator => true,
+                DataKind => false,
+                PrimitiveKind => false,
+                StructureKind => true,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    /// Cast node discriminant enums between types.
+    /// * Compile time checked via subtype relation `ir.discriminants.isSubstitutableFor`.
+    /// * Runtime checks for specific discriminant.
+    pub fn cast(comptime T: type, value: anytype) ?T {
+        const U = comptime @TypeOf(value);
+        const u = @intFromEnum(value);
+
+        // Ensure a valid *type* conversion. Ie, Discriminator can become DataKind, PrimitiveKind, or StructureKind.
+        if (comptime !isSubstitutableFor(U, T)) {
+            @compileError("ir.discriminants.cast: Cannot cast " ++ @typeName(U) ++ " to " ++ @typeName(T));
+        }
+
+        if (isEnumVariant(T, u)) {
+            return @enumFromInt(u);
+        } else {
+            return null;
+        }
+    }
+
+    /// Cast node discriminant enums between types.
+    /// * Compile time checked via subtype relation `ir.discriminants.isSubstitutableFor`.
+    /// * Runtime checked in safe modes via zig enum validation.
+    pub fn force(comptime T: type, value: anytype) T {
+        const U = comptime @TypeOf(value);
+
+        // Ensure a valid *type* conversion. Ie, Discriminator can become DataKind, PrimitiveKind, or StructureKind.
+        if (comptime !isSubstitutableFor(U, T)) {
+            @compileError("ir.discriminants.force: Cannot cast " ++ @typeName(U) ++ " to " ++ @typeName(T));
+        }
+
+        // Whether this is valid still depends on the value. Ie, a single Discriminator is not valid as both a DataKind and a PrimitiveKind, despite being type compatible.
+        return @enumFromInt(@intFromEnum(value));
+    }
+
+    /// Convert an integer value to a node discriminant enum, if it is valid.
+    pub fn fromInt(comptime T: type, value: anytype) ?T {
+        if (comptime !isValidType(T)) {
+            @compileError("ir.discriminants.fromInt: Cannot cast to " ++ @typeName(T));
+        }
+
+        if (isEnumVariant(T, value)) {
+            return @enumFromInt(value);
+        } else {
+            return null;
+        }
     }
 };
 
@@ -1255,7 +1132,9 @@ pub const Node = struct {
                         return error.InvalidNodeKind;
                     }
                 },
-                else => @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type)),
+                else => {
+                    @compileError("Unexpected type for structure " ++ struct_name ++ " field decl " ++ decl.name ++ ": " ++ @typeName(decl.type));
+                },
             }
         }
 
@@ -1267,6 +1146,8 @@ pub const Node = struct {
         };
     }
 
+    /// Create a data buffer node outside of a context, given a buffer of bytes.
+    /// * Allocator should be that of the context that will own the node.
     pub fn buffer(allocator: std.mem.Allocator, init: []const u8) !Node {
         var arr = try pl.ArrayList(u8).initCapacity(allocator, init.len);
         errdefer arr.deinit(allocator);
@@ -1279,6 +1160,8 @@ pub const Node = struct {
         };
     }
 
+    /// Create a ref list node outside of a context, given a list of references.
+    /// * Allocator should be that of the context that will own the node.
     pub fn list(allocator: std.mem.Allocator, element_kind: Discriminator, init: []const Ref) !Node {
         var arr = try pl.ArrayList(Ref).initCapacity(allocator, init.len);
         errdefer arr.deinit(allocator);
@@ -1294,16 +1177,169 @@ pub const Node = struct {
 
 /// An untagged union of all the data types that can be stored in an ir node.
 pub const Data = union {
+    /// An arbitrary integer value, such as an index into an array.
+    primitive: u64,
     /// A symbolic name, such as a variable name or a function name.
     name: []const u8,
     /// A source location.
     source: Source,
     /// Arbitrary data, such as a string body.
     buffer: pl.ArrayList(u8),
-    /// An arbitrary integer value, such as an index into an array.
-    primitive: u64,
     /// Arbitrary list of graph refs, such as a list of types.
     ref_list: pl.ArrayList(Ref),
+};
+
+/// The tag of a node, which indicates the overall node shape, be it data, structure, or collection.
+pub const Tag = enum(u3) {
+    /// The tag for an empty or invalid node.
+    /// Discriminator is ignored, and should always be initialized to nil.
+    nil,
+    /// The tag for a node that contains unstructured data, such as a name, source, or similar.
+    /// Discriminator always carries a specific kind, such as `name`, `source`, etc.
+    data,
+    /// The tag for a node that contains a primitive, such as an integer, index, or opcode.
+    /// Discriminator may carry a specific kind, or nil to indicate untyped bytes.
+    primitive,
+    /// The tag for a node that contains a structure, such as a function, block, or instruction.
+    /// Discriminator always carries a specific kind, such as `type`, `effect`, or `function`.
+    structure,
+    /// The tag for a node that is simply a list of other nodes.
+    /// Discriminator may carry a specific kind, or nil to indicate a heterogeneous collection.
+    collection,
+};
+
+/// The type of primitive data nodes definition structure.
+pub const Primitives: type = @TypeOf(primitives);
+
+/// The type of the ir structures definition structure.
+pub const Structures: type = @TypeOf(structures);
+
+/// The discriminator of a node, which indicates the specific kind of value it contains.
+/// * Variant names are the field names of `ir.structures`, `ir.primitives`, `ir.Data` without `ref_list` or `primitive`, and `nil`.
+pub const Discriminator: type = Discriminator: {
+    const data_fields = std.meta.fieldNames(Data);
+    const primitive_fields = std.meta.fieldNames(Primitives);
+    const structure_fields = std.meta.fieldNames(Structures);
+
+    var fields = [1]std.builtin.Type.EnumField{undefined} ** (primitive_fields.len + structure_fields.len + data_fields.len + 1);
+    fields[0] = .{ .name = "nil", .value = 0 };
+
+    var i = 1;
+
+    for (data_fields[0..], 0..) |field, j| {
+        fields[i] = .{ .name = field, .value = j + 1000 };
+        i += 1;
+    }
+
+    for (primitive_fields[0..], 0..) |field, j| {
+        fields[i] = .{ .name = field, .value = j + 2000 };
+        i += 1;
+    }
+
+    for (structure_fields[0..], 0..) |field, j| {
+        fields[i] = .{ .name = field, .value = j + 3000 };
+        i += 1;
+    }
+
+    break :Discriminator @Type(.{
+        .@"enum" = std.builtin.Type.Enum{
+            .tag_type = u13,
+            .fields = &fields,
+            .decls = &.{},
+            .is_exhaustive = true,
+        },
+    });
+};
+
+/// The kind of data that can be stored in a `Data` node.
+/// * Variant names are the field names of `ir.Data` without `ref_list` or `primitive`, as well as `nil`.
+pub const DataKind: type = DataKind: {
+    const data_fields = std.meta.fieldNames(Data);
+
+    const ignored = .{ "ref_list", "primitive" };
+
+    var fields = [1]std.builtin.Type.EnumField{undefined} ** ((data_fields.len - ignored.len) + 1);
+    var i = 1;
+    fields[0] = .{ .name = "nil", .value = 0 };
+
+    field_loop: for (data_fields) |field_name| {
+        for (ignored) |ignore| {
+            if (std.mem.eql(u8, field_name, ignore)) continue :field_loop;
+        }
+
+        fields[i] = .{
+            .name = field_name,
+            .value = i + 1000,
+        };
+
+        i += 1;
+    }
+
+    break :DataKind @Type(.{
+        .@"enum" = std.builtin.Type.Enum{
+            .tag_type = u13,
+            .fields = &fields,
+            .decls = &.{},
+            .is_exhaustive = true,
+        },
+    });
+};
+
+/// Convert a `DataKind` to the type of data it represents.
+pub fn DataType(comptime kind: DataKind) type {
+    comptime return @FieldType(Data, @tagName(kind));
+}
+
+/// The kind of primitives that can be stored in a `Primitive` node.
+/// * Variant names are the field names of `ir.primitives`, as well as `nil`.
+pub const PrimitiveKind: type = Primitive: {
+    const generated_fields = std.meta.fieldNames(Primitives);
+
+    var fields = [1]std.builtin.Type.EnumField{undefined} ** (generated_fields.len + 1);
+
+    fields[0] = .{ .name = "nil", .value = 0 };
+
+    for (generated_fields, 1..) |field_name, i| {
+        fields[i] = .{
+            .name = field_name,
+            .value = 2000 + i,
+        };
+    }
+
+    break :Primitive @Type(.{
+        .@"enum" = std.builtin.Type.Enum{
+            .tag_type = u13,
+            .fields = &fields,
+            .decls = &.{},
+            .is_exhaustive = true,
+        },
+    });
+};
+
+/// The kind of structures that can be stored in a `Structure` node.
+/// * Variant names are the field names of `ir.structures`, as well as `nil`.
+pub const StructureKind: type = Structure: {
+    const generated_fields = std.meta.fieldNames(Structures);
+
+    var fields = [1]std.builtin.Type.EnumField{undefined} ** (generated_fields.len + 1);
+
+    fields[0] = .{ .name = "nil", .value = 0 };
+
+    for (generated_fields, 1..) |field_name, i| {
+        fields[i] = .{
+            .name = field_name,
+            .value = 3000 + i,
+        };
+    }
+
+    break :Structure @Type(.{
+        .@"enum" = std.builtin.Type.Enum{
+            .tag_type = u13,
+            .fields = &fields,
+            .decls = &.{},
+            .is_exhaustive = true,
+        },
+    });
 };
 
 /// Identity of a builtin construct such as a type constructor, type, etc.
@@ -1326,6 +1362,117 @@ pub const Builtin: type = builtin: {
             .is_exhaustive = true,
         },
     });
+};
+
+/// Comptime data structure describing the primitive data nodes in the ir. Type is `ir.Primitives`.
+pub const primitives = .{
+    // IR-specific instruction operation.
+    .operation = Operation,
+    // Bytecode instruction opcode; for use in intrinsics and final assembly.
+    .opcode = bytecode.Instruction.OpCode,
+    // A variant describing the kind of a type.
+    .kind_tag = KindTag,
+    // An index into a collection, such as a list or array.
+    .index = u64,
+};
+
+/// Bitwise conversion functions for primitive data nodes.
+pub const primitive_converters = struct {
+    pub fn operation(op: Operation) u64 {
+        return @intFromEnum(op);
+    }
+
+    pub fn opcode(op: bytecode.Instruction.OpCode) u64 {
+        return @intFromEnum(op);
+    }
+
+    pub fn kind_tag(tag: KindTag) u64 {
+        return @intFromEnum(tag);
+    }
+
+    pub fn index(idx: u64) u64 {
+        return idx;
+    }
+};
+
+/// Comptime data structure describing the kinds of structural nodes in the ir. Type is `ir.Structures`.
+pub const structures = .{
+    .kind = .{
+        .output_tag = .{ .primitive, .kind_tag },
+        .input_kinds = .{ .collection, .kind },
+    },
+    .constructor = .{
+        .kind = .{ .structure, .kind },
+    },
+    .type = .{
+        .constructor = .{ .structure, .constructor },
+        .input_types = .{ .collection, .type },
+    },
+    .effect = .{
+        .handler_types = .{ .collection, .type },
+    },
+    .constant = .{
+        .type = .{ .structure, .type },
+        .value = .any,
+    },
+    .global = .{ .type = .{ .structure, .type }, .initializer = .{ .structure, .constant } },
+    .local = .{ .type = .{ .structure, .type } },
+    .handler = .{
+        .parent_block = .{ .structure, .block }, // the block that this handler is alive within
+        .function = .{ .structure, .function }, // the function that implements the handler
+        .handled_effect = .{ .structure, .effect }, // the effect that this handler can handle
+        .cancellation_type = .{ .structure, .type }, // the type that this handler can cancel the effect with
+    },
+    .function = .{
+        .parent_handler = .{ .structure, .handler }, // the handler that this function is a part of, if any
+        .body_block = .{ .structure, .block },
+        .type = .{ .structure, .type },
+    },
+    .block = .{
+        .parent = .{ .structure, .nil }, // either a block, function, or constant
+        .locals = .{ .collection, .local },
+        .handlers = .{ .collection, .handler },
+        .contents = .{ .collection, .nil }, // a collection of either blocks or instructions
+        .type = .{ .structure, .type }, // the type of data yielded by the block
+    },
+    .instruction = .{
+        .parent = .{ .structure, .block }, // the block that contains this instruction
+        .operation = .{ .primitive, .operation }, // the operation performed by this instruction
+        .type = .{ .structure, .type }, // the type of data yielded by the instruction
+    },
+    .ctrl_edge = .{
+        .source = .{ .structure, .nil }, // either a block or an instruction
+        .destination = .{ .structure, .nil }, // either a block or an instruction
+        .source_index = .{ .primitive, .index }, // the index of the edge in the source
+        .destination_index = .{ .primitive, .index }, // the index of the edge in the destination
+    },
+    .data_edge = .{
+        .source = .{ .structure, .nil }, // either a block or an instruction
+        .destination = .{ .structure, .nil }, // either a block or an instruction
+        .source_index = .{ .primitive, .index }, // the index of the edge in the source
+        .destination_index = .{ .primitive, .index }, // the index of the edge in the destination
+    },
+    .global_symbol = .{
+        .name = .{ .data, .name },
+        .node = .any,
+    },
+    .debug_symbols = .{
+        .name = .{ .collection, .name },
+        .node = .any,
+    },
+    .debug_sources = .{
+        .source = .{ .collection, .source },
+        .node = .any,
+    },
+    .foreign = .{
+        .address = .{ .primitive, .index }, // the address of the foreign function
+    },
+    .builtin = .{
+        .address = .{ .primitive, .index }, // the address of the builtin function
+    },
+    .intrinsic = .{
+        .data = .{ .data, .nil }, // the data of the intrinsic function; usually, a bytecode opcode
+    },
 };
 
 /// initializers for builtin constructs. See `ir.Context.Root.getBuiltin`.
