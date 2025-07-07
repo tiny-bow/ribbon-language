@@ -57,7 +57,7 @@ pub const BytecodeTarget = struct {
     pub fn target(self: *BytecodeTarget) Target {
         return Target{
             .data = @ptrCast(self),
-            .vtable = &.{
+            .vtable = comptime &.{
                 .runJob = @ptrCast(&runJob),
                 .freeArtifact = @ptrCast(&freeArtifact),
                 .deinit = @ptrCast(&deinit),
