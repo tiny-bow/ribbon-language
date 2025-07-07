@@ -401,7 +401,7 @@ pub const Root = struct {
             }
         }
 
-        // == Process this node now that its children are canonical ==
+        // Process this node now that its children are canonical
         final_ref = if (child.interned_refs.contains(child_ref))
             // If the original node was interned, try to intern our remapped copy.
             // `internNodeUnchecked` will either create a new node or return the
@@ -2036,31 +2036,38 @@ test "ir integration - child context creation" {
     defer root_ctx.deinit();
 
     // Create child context
-    const child_ctx_for_creation_test = try root_ctx.inner.root.createContext();
+    const child_ctx = try root_ctx.inner.root.createContext();
 
     // Verify child context properties
-    try testing.expect(!child_ctx_for_creation_test.isRoot());
-    try testing.expectEqual(root_ctx, child_ctx_for_creation_test.getRootContext());
-    try testing.expect(child_ctx_for_creation_test.id.toInt() != 0);
+    try testing.expect(!child_ctx.isRoot());
+    try testing.expectEqual(root_ctx, child_ctx.getRootContext());
+    try testing.expect(child_ctx.id.toInt() != 0);
 
     // Test that we can create nodes in child context
-    const test_node_in_child = try child_ctx_for_creation_test.addPrimitive(@as(u64, 999));
+    const test_node_in_child = try child_ctx.addPrimitive(@as(u64, 999));
     try testing.expect(test_node_in_child != ir.Ref.nil);
-    try testing.expectEqual(child_ctx_for_creation_test.id, test_node_in_child.id.context);
+    try testing.expectEqual(child_ctx.id, test_node_in_child.id.context);
 
     // Destroy this child context before we test merging with a new one
     {
         const root = root_ctx.asRoot().?;
         root.mutex.lock();
-        root.destroyContext(child_ctx_for_creation_test.id);
+        root.destroyContext(child_ctx.id);
         root.mutex.unlock();
     }
+}
 
-    // -- Test Root.merge --
+test "ir integration - merging child context into root" {
+    const gpa = testing.allocator;
+
+    const root_ctx = try ir.Context.init(gpa);
+    defer root_ctx.deinit();
+
+    // Create child context
     const child_ctx = try root_ctx.asRoot().?.createContext();
     const child_id = child_ctx.id;
 
-    // 1. Populate root and child contexts with a mix of shared and unique nodes
+    // Populate root and child contexts with a mix of shared and unique nodes
     const root_shared_node = try root_ctx.internPrimitive(@as(u64, 42));
 
     const child_unique_node = try child_ctx.internPrimitive(@as(u64, 123));
@@ -2068,7 +2075,6 @@ test "ir integration - child context creation" {
 
     // Create a list in the child that references other child nodes
     const child_list_refs = [_]ir.Ref{ child_unique_node, child_shared_node };
-    // CORRECTED LINE: Used .index as the Discriminator for the collection of primitives.
     const child_list = try child_ctx.internList(.index, &child_list_refs);
 
     // Add UserData to the list node in the child context
@@ -2076,7 +2082,7 @@ test "ir integration - child context creation" {
     const child_userdata = try child_ctx.getUserData(child_list);
     try child_userdata.addData(.test_key, @constCast(&child_userdata_val));
 
-    // 2. Perform the merge
+    // Perform the merge
     {
         const root = root_ctx.asRoot().?;
         root.mutex.lock();
@@ -2084,9 +2090,7 @@ test "ir integration - child context creation" {
         try root.merge(child_ctx);
     }
 
-    // 3. Verify the results of the merge in the root context
-
-    // 3a. Verify child context was destroyed
+    // Verify child context was destroyed
     {
         const root = root_ctx.asRoot().?;
         root.mutex.lock();
@@ -2094,7 +2098,7 @@ test "ir integration - child context creation" {
         try testing.expect(root.getContext(child_id) == null);
     }
 
-    // 3b. Find the nodes in the root context and verify their new refs
+    // Find the nodes in the root context and verify their new refs
     const merged_unique_node = try root_ctx.internPrimitive(@as(u64, 123));
     const merged_shared_node = try root_ctx.internPrimitive(@as(u64, 42));
 
@@ -2104,9 +2108,8 @@ test "ir integration - child context creation" {
     // The shared node should have been mapped to the pre-existing root node
     try testing.expectEqual(root_shared_node, merged_shared_node);
 
-    // 3c. Find the merged list and verify its children and UserData
+    // Find the merged list and verify its children and UserData
     const merged_list_refs = [_]ir.Ref{ merged_unique_node, merged_shared_node };
-    // CORRECTED LINE: Used .index here as well for consistency in verification.
     const merged_list = try root_ctx.internList(.index, &merged_list_refs);
 
     // The list itself should now be in the root context
