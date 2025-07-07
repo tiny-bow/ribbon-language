@@ -8,14 +8,14 @@ const std = @import("std");
 const log = std.log.scoped(.Core);
 
 const pl = @import("platform");
-const Id = @import("Id");
-const Buffer = @import("Buffer");
+const common = @import("common");
+const Id = common.Id;
+const Buffer = common.Buffer;
 const Stack = @import("Stack");
 
 test {
     std.testing.refAllDeclsRecursive(@This());
 }
-
 
 /// Set of `platform.MAX_REGISTERS` virtual registers for a function call.
 pub const RegisterArray: type = [pl.MAX_REGISTERS]RegisterBits;
@@ -34,8 +34,6 @@ pub const InstructionOffset = i32;
 /// The type of a frame-relative stack offset within a Ribbon bytecode program.
 pub const StackOffset = i32;
 
-
-
 /// The address of an instruction in a Ribbon bytecode program.
 pub const InstructionAddr: type = [*]const InstructionBits;
 /// The address of an instruction in a Ribbon bytecode program, while it is being constructed.
@@ -46,24 +44,87 @@ pub const InstructionBits: type = std.meta.Int(.unsigned, pl.bitsFromBytes(pl.BY
 /// The bits of a register, represented by a 64-bit unsigned integer.
 pub const RegisterBits: type = std.meta.Int(.unsigned, pl.REGISTER_SIZE_BITS);
 
-
 /// A bytecode binary unit. Not necessarily self contained; may reference other units.
-/// Light wrapper for `Header`.
+/// Light wrapper for `core.Header`.
+///
+/// See `bytecode` module for construction methods.
 pub const Bytecode = packed struct(u64) {
     /// The bytecode unit header.
     header: *const Header,
 
     /// De-initialize the bytecode unit, freeing the memory that it owns.
-    pub fn deinit(b: Bytecode, allocator: std.mem.Allocator) void {
-        allocator.free(@as(InstructionAddr, @ptrCast(b.header))[0..b.header.size]);
+    pub fn deinit(self: Bytecode) void {
+        const buffer = @as([*]const u8, @ptrCast(self.header))[0 .. self.header.size + @sizeOf(Header)];
+        std.posix.munmap(@alignCast(buffer));
     }
 };
 
+pub const StaticId = Id.of(anyopaque, pl.STATIC_ID_BITS);
+pub const ConstantId = Id.of(Constant, pl.STATIC_ID_BITS);
+pub const GlobalId = Id.of(Global, pl.STATIC_ID_BITS);
+pub const FunctionId = Id.of(Function, pl.STATIC_ID_BITS);
+pub const BuiltinAddressId = Id.of(BuiltinAddress, pl.STATIC_ID_BITS);
+pub const ForeignAddressId = Id.of(ForeignAddress, pl.STATIC_ID_BITS);
+pub const HandlerId = Id.of(Handler, pl.STATIC_ID_BITS);
+pub const EffectId = Id.of(Effect, pl.STATIC_ID_BITS);
+pub const HandlerSetId = Id.of(HandlerSet, pl.STATIC_ID_BITS);
+
+pub fn isTypedStaticId(comptime T: type) bool {
+    comptime return switch (T) {
+        ConstantId,
+        GlobalId,
+        FunctionId,
+        BuiltinAddressId,
+        ForeignAddressId,
+        HandlerId,
+        EffectId,
+        HandlerSetId,
+        => true,
+        else => false,
+    };
+}
+
+pub fn isStaticId(comptime T: type) bool {
+    comptime return T == StaticId or isTypedStaticId(T);
+}
+
+pub fn StaticTypeFromId(comptime T: type) type {
+    return T.Value;
+}
+
+pub fn StaticTypeFromSymbolKind(comptime K: SymbolKind) type {
+    return switch (K) {
+        .constant => Constant,
+        .global => Global,
+        .function => Function,
+        .builtin => BuiltinAddress,
+        .foreign_address => ForeignAddress,
+        .effect => Effect,
+        .handler_set => HandlerSet,
+    };
+}
+
+pub fn symbolKindFromId(comptime T: type) SymbolKind {
+    return switch (T) {
+        ConstantId => .constant,
+        GlobalId => .global,
+        FunctionId => .function,
+        BuiltinAddressId => .builtin,
+        ForeignAddressId => .foreign_address,
+        HandlerId => .handler_set,
+        EffectId => .effect,
+        HandlerSetId => .handler_set,
+        else => @compileError("symbolKindFromId: unsupported type `" ++ @typeName(T) ++ "`"),
+    };
+}
+
+pub const UpvalueId = Id.of(Upvalue, pl.LOCAL_ID_BITS);
+
 /// A Ribbon constant value definition.
-pub const Constant = Buffer.new(u8, .constant);
+pub const Constant = Buffer.Bytes;
 
 /// A Ribbon global variable definition.
-pub const Global = Buffer.new(u8, .mutable);
+pub const Global = Buffer.MutBytes;
 
 /// Designates a specific Ribbon effect, runtime-wide.
 /// EffectId is used to bind to one of these within individual bytecode units.
@@ -89,7 +150,6 @@ pub const Function = extern struct {
     /// The stack window size of the function.
     stack_size: u16,
 };
-
 
 /// Represents the type of function referenced by a `CallFrame`.
 pub const Abi = enum(u8) {
@@ -120,7 +180,6 @@ pub const Abi = enum(u8) {
         };
     }
 };
-
 
 /// A Ribbon builtin value definition.
 ///
@@ -173,8 +232,7 @@ pub const BuiltinAddress = packed struct {
 pub const ForeignAddress = *anyopaque;
 
 /// A frame-local stack value offset into the frame of the parent function of a handler set.
-pub const Upvalue = enum(StackOffset) {_};
-
+pub const Upvalue = enum(StackOffset) { _ };
 
 /// `cancel` configuration for a `HandlerSet`.
 pub const Cancellation = extern struct {
@@ -189,33 +247,33 @@ pub const Cancellation = extern struct {
 /// A Ribbon effect handler set definition. Data is relative to the function.
 pub const HandlerSet = extern struct {
     /// The effect type's each handler is for.
-    effects: Id.Buffer(Id.of(Effect), .constant),
+    effects: Buffer.short(EffectId, .constant),
     /// The handler set's effects.
-    handlers: Id.Buffer(Handler, .constant),
+    handlers: Buffer.short(Handler, .constant),
     /// The handler set's upvalue offsets.
-    upvalues: Id.Buffer(Upvalue, .constant),
+    upvalues: Buffer.short(Upvalue, .constant),
     /// Frame-relative stack offset for the evidence this handler set carries.
     evidence: StackOffset,
     /// Cancellation configuration for this handler set.
     cancellation: Cancellation,
 
     /// Get a pointer to a `Handler` from its `id`.
-    pub fn getHandler(self: *const HandlerSet, id: Id.of(Handler)) *const Handler {
+    pub fn getHandler(self: *const HandlerSet, id: HandlerId) *const Handler {
         return &self.handlers.asSlice()[id.toInt()];
     }
 
     /// Get an `Upvalue` offset from its `id`.
-    pub fn getUpvalue(self: *const HandlerSet, id: Id.of(Upvalue)) Upvalue {
+    pub fn getUpvalue(self: *const HandlerSet, id: UpvalueId) Upvalue {
         return self.upvalues.asSlice()[id.toInt()];
     }
 
     /// Validate a `Handler` id.
-    pub fn validateHandler(self: *const HandlerSet, id: Id.of(Handler)) bool {
+    pub fn validateHandler(self: *const HandlerSet, id: HandlerId) bool {
         return self.handlers.asSlice().len > id.toInt();
     }
 
     /// Validate an `Upvalue` id.
-    pub fn validateUpvalue(self: *const HandlerSet, id: Id.of(Upvalue)) bool {
+    pub fn validateUpvalue(self: *const HandlerSet, id: UpvalueId) bool {
         return self.upvalues.asSlice().len > id.toInt();
     }
 };
@@ -295,111 +353,118 @@ pub const Extents = packed struct(u128) {
 /// The addresses are resolved at *link time*, so where they actually point is environment-dependent;
 /// ownership varies.
 pub const AddressTable = extern struct {
-    /// Constant value bindings section.
-    constants: Id.Buffer(*const Constant, .constant) = .empty,
-    /// Global value bindings section.
-    globals: Id.Buffer(*const Global, .constant) = .empty,
-    /// Function value bindings section.
-    functions: Id.Buffer(*const Function, .constant) = .empty,
-    /// Builtin function value bindings section.
-    builtin_addresses: Id.Buffer(*const BuiltinAddress, .constant) = .empty,
-    /// C ABI value bindings section.
-    foreign_addresses: Id.Buffer(*const ForeignAddress, .constant) = .empty,
-    /// Effect handler set bindings section.
-    handler_sets: Id.Buffer(*const HandlerSet, .constant) = .empty,
-    /// Effect identity bindings section.
-    effects: Id.Buffer(*const Effect, .constant) = .empty,
+    /// The kind of symbol stored in the adjacent address buffer slot.
+    kinds: Buffer.of(SymbolKind, .constant) = .empty,
+    /// The actual addresses of the symbols in this table.
+    addresses: Buffer.of(*const anyopaque, .constant) = .empty,
 
-    /// Get a pointer to a `Constant` from its `id`.
-    /// * Does not perform any validation outside of debug mode
-    pub fn getConstant(self: *const AddressTable, id: Id.of(Constant)) *const Constant {
-        return self.constants.asSlice()[id.toInt()];
+    /// Get the SymbolKind of an address by its id.
+    /// * Does not perform any validation outside of safe modes
+    pub fn getKind(self: *const AddressTable, id: StaticId) SymbolKind {
+        return self.kinds.asSlice()[id.toInt()];
     }
 
-    /// Get a pointer to a `Global` from its `id`.
-    /// * Does not perform any validation outside of debug mode
-    pub fn getGlobal(self: *const AddressTable, id: Id.of(Global)) *const Global {
-        return self.globals.asSlice()[id.toInt()];
+    /// Get the address of a static value by its id.
+    /// * Does not perform any validation outside of safe modes
+    pub fn getAddress(self: *const AddressTable, id: StaticId) *const anyopaque {
+        return self.addresses.asSlice()[id.toInt()];
     }
 
-    /// Get a pointer to a `Function` from its `id`.
-    /// * Does not perform any validation outside of debug mode
-    pub fn getFunction(self: *const AddressTable, id: Id.of(Function)) *const Function {
-        return self.functions.asSlice()[id.toInt()];
+    /// Get the address of a typed static by its id.
+    /// * Does not perform bounds checking or type checking outside of safe modes
+    pub fn get(self: *const AddressTable, id: anytype) *const StaticTypeFromId(@TypeOf(id)) {
+        const T = @TypeOf(id);
+
+        const addr = self.getAddress(id.cast(anyopaque));
+
+        if (comptime T == StaticId) {
+            return addr;
+        } else {
+            const kind = self.getKind(id.cast(anyopaque));
+            const id_kind = comptime symbolKindFromId(T);
+
+            std.debug.assert(kind == id_kind);
+
+            return @ptrCast(@alignCast(addr));
+        }
     }
 
-    /// Get a pointer to a `BuiltinAddress` from its `id`.
-    /// * Does not perform any validation outside of debug mode
-    pub fn getBuiltinAddress(self: *const AddressTable, id: Id.of(BuiltinAddress)) *const BuiltinAddress {
-        return self.builtin_addresses.asSlice()[id.toInt()];
+    /// Determine if the provided id exists and has the given kind.
+    pub fn validateSymbol(self: *const AddressTable, id: StaticId) bool {
+        return self.addresses.len > id.toInt();
     }
 
-    /// Get a pointer to a `ForeignAddress` from its `id`.
-    /// * Does not perform any validation outside of debug mode
-    pub fn getForeignAddress(self: *const AddressTable, id: Id.of(ForeignAddress)) *const ForeignAddress {
-        return self.foreign_addresses.asSlice()[id.toInt()];
+    /// Determine if the provided id exists and has the given kind.
+    pub fn validateSymbolKind(self: *const AddressTable, kind: SymbolKind, id: StaticId) bool {
+        const kinds = self.kinds.asSlice();
+        const index = id.toInt();
+
+        return kinds.len > index and kinds[index] == kind;
     }
 
-    /// Get a pointer to a `HandlerSet` from its `id`.
-    /// * Does not perform any validation outside of debug mode
-    pub fn getHandlerSet(self: *const AddressTable, id: Id.of(HandlerSet)) *const HandlerSet {
-        return self.handler_sets.asSlice()[id.toInt()];
+    /// Determine if the provided id exists and has the given kind.
+    pub fn validate(self: *const AddressTable, id: anytype) bool {
+        const T = @TypeOf(id);
+
+        if (comptime T == StaticId) {
+            return id.toInt() < self.addresses.len;
+        } else {
+            const id_kind = comptime symbolKindFromId(T);
+
+            if (self.tryGetKind(id)) |kind| {
+                @branchHint(.likely);
+
+                return kind == id_kind;
+            }
+
+            return false;
+        }
     }
 
-    /// Get a pointer to a `Handler` from its `id`.
-    /// * Does not perform any validation outside of debug mode
-    pub fn getHandler(self: *const AddressTable, s: Id.of(HandlerSet), h: Id.of(Handler)) *const Handler {
-        return self.getHandlerSet(s).getHandler(h);
+    /// Get the SymbolKind of an address by its id, if it is bound.
+    pub fn tryGetKind(self: *const AddressTable, id: StaticId) ?SymbolKind {
+        const kinds = self.kinds.asSlice();
+        const index = id.toInt();
+
+        if (kinds.len > index) {
+            return kinds[index];
+        } else {
+            @branchHint(.unlikely);
+
+            return null;
+        }
     }
 
-    /// Get a pointer to an `Effect` from its `id`.
-    /// * Does not perform any validation outside of debug mode
-    pub fn getEffect(self: *const AddressTable, id: Id.of(Effect)) *const Effect {
-        return self.effects.asSlice()[id.toInt()];
+    /// Get the address of a static value by its id, if it is bound.
+    pub fn tryGetAddress(self: *const AddressTable, id: StaticId) ?*const anyopaque {
+        const addresses = self.addresses.asSlice();
+        const index = id.toInt();
+
+        if (addresses.len > index) {
+            return addresses[index];
+        } else {
+            @branchHint(.unlikely);
+
+            return null;
+        }
     }
 
+    /// Get the address of a typed static by its id, if it is bound.
+    pub fn tryGet(self: *const AddressTable, id: StaticId) ?*const StaticTypeFromId(id) {
+        if (self.tryGetAddress(id)) |address| {
+            @branchHint(.likely);
 
+            const kind = self.getKind(id);
+            const id_kind = comptime symbolKindFromId(@TypeOf(id));
 
-    /// Validate a `Constant` id.
-    pub fn validateConstant(self: *const AddressTable, id: Id.of(Constant)) bool {
-        return self.constants.asSlice().len > id.toInt();
-    }
+            if (kind == id_kind) {
+                @branchHint(.likely);
 
-    /// Validate a `Global` id.
-    pub fn validateGlobal(self: *const AddressTable, id: Id.of(Global)) bool {
-        return self.globals.asSlice().len > id.toInt();
-    }
+                return @ptrCast(@alignCast(address));
+            }
+        }
 
-    /// Validate a `Function` id.
-    pub fn validateFunction(self: *const AddressTable, id: Id.of(Function)) bool {
-        return self.functions.asSlice().len > id.toInt();
-    }
-
-    /// Validate a `BuiltinAddress` id.
-    pub fn validateBuiltinAddress(self: *const AddressTable, id: Id.of(BuiltinAddress)) bool {
-        return self.builtin_addresses.asSlice().len > id.toInt();
-    }
-
-    /// Validate a `ForeignAddress` id.
-    pub fn validateForeignAddress(self: *const AddressTable, id: Id.of(ForeignAddress)) bool {
-        return self.foreign_addresses.asSlice().len > id.toInt();
-    }
-
-    /// Validate a `HandlerSet` id.
-    pub fn validateHandlerSet(self: *const AddressTable, id: Id.of(HandlerSet)) bool {
-        return self.handler_sets.asSlice().len > id.toInt();
-    }
-
-    /// Validate a `Handler` id.
-    pub fn validateHandler(self: *const AddressTable, s: Id.of(HandlerSet), h: Id.of(Handler)) bool {
-        if (!self.validateHandlerSet(s)) return false;
-
-        return self.getHandlerSet(s).validateHandler(h);
-    }
-
-    /// Validate an `Effect` id.
-    pub fn validateEffect(self: *const AddressTable, id: Id.of(Effect)) bool {
-        return self.effects.asSlice().len > id.toInt();
+        return null;
     }
 };
 
@@ -412,34 +477,24 @@ pub const AddressTable = extern struct {
 ///
 ///
 /// `*` Within Ribbon's compiler, not Zig's
-pub const SymbolTable = packed struct(u128) {
+pub const SymbolTable = extern struct {
     /// This symbol table's keys.
-    keys: Id.Buffer(SymbolTable.Key, .constant) = .empty,
+    keys: Buffer.of(SymbolTable.Key, .constant) = .empty,
     /// This symbol table's values.
-    values: Id.Buffer(SymbolTable.Value, .constant) = .empty,
+    values: Buffer.of(StaticId, .constant) = .empty,
 
     /// One half of a key/value pair used for address resolution in a `SymbolTable`.
     ///
     /// See `Value`.
-    pub const Key = packed struct(u128) {
+    pub const Key = packed struct {
         /// The symbol text's hash value.
         hash: u64,
         /// The symbol's text value.
-        name: Id.Buffer(u8, .constant),
-    };
-
-    /// One half of a key/value pair used for address resolution in the `SymbolTable`.
-    ///
-    /// See `Key`.
-    pub const Value = packed struct(u32) {
-        /// The kind of value bound to the symbol.
-        kind: SymbolKind,
-        /// The id (within a reference `AddressTable`) of the value bound to the symbol.
-        id: Id.of(anyopaque),
+        name: Buffer.short(u8, .constant),
     };
 
     /// Get the id of a symbol by name.
-    pub fn lookupId(self: SymbolTable, name: []const u8) ?SymbolTable.Value {
+    pub fn lookupId(self: SymbolTable, name: []const u8) ?StaticId {
         const hash = pl.hash64(name);
 
         for (self.keys.asSlice(), 0..) |key, i| {
@@ -463,41 +518,25 @@ pub const Header = extern struct {
     /// The total size of the program.
     size: u64 = @sizeOf(Header),
     /// Address table used by instructions this header owns.
-    addresses: AddressTable = .{},
+    address_table: AddressTable = .{},
     /// Symbol bindings for the address table; what this program calls different addresses.
     ///
     /// Not necessarily a complete listing for all bindings;
     /// only what it wants to be known externally.
-    symbols: SymbolTable = .{},
+    symbol_table: SymbolTable = .{},
 
     /// Get an address from an ID.
     /// * Does not perform any validation outside of debug mode
-    pub fn get(self: *const Header, id: anytype) *const @TypeOf(id).Value {
-        return switch (comptime SymbolKind.fromType(@TypeOf(id).Value)) {
-            .constant => self.addresses.getConstant(id),
-            .global => self.addresses.getGlobal(id),
-            .function => self.addresses.getFunction(id),
-            .builtin => self.addresses.getBuiltinAddress(id),
-            .foreign_address => self.addresses.getForeignAddress(id),
-            .handler_set => self.addresses.getHandlerSet(id),
-            .effect => self.addresses.getEffect(id),
-        };
+    pub fn get(self: *const Header, id: anytype) *const StaticTypeFromId(@TypeOf(id)) {
+        return self.address_table.get(id);
     }
 
     /// Get the address of a symbol by name, in a type-generic manner.
     /// * **Note**: This uses the raw table to lookup a symbol. While we do store symbol hashes to
     /// speed this up a bit, for large symbol tables it is likely better to use a hashmap.
-    pub fn lookupAddress(self: *const Header, name: []const u8) ?struct {SymbolKind, *const anyopaque} {
-        const value = self.symbols.lookupId(name) orelse return null;
-        return switch (value.kind) {
-            .constant => .{ value.kind, @ptrCast(self.addresses.getConstant(value.id.cast(Constant))) },
-            .global => .{ value.kind, @ptrCast(self.addresses.getGlobal(value.id.cast(Global))) },
-            .function => .{ value.kind, @ptrCast(self.addresses.getFunction(value.id.cast(Function))) },
-            .builtin => .{ value.kind, @ptrCast(self.addresses.getBuiltinAddress(value.id.cast(BuiltinAddress))) },
-            .foreign_address => .{ value.kind, @ptrCast(self.addresses.getForeignAddress(value.id.cast(ForeignAddress))) },
-            .handler_set => .{ value.kind, @ptrCast(self.addresses.getHandlerSet(value.id.cast(HandlerSet))) },
-            .effect => .{ value.kind, @ptrCast(self.addresses.getEffect(value.id.cast(Effect))) },
-        };
+    pub fn lookupAddress(self: *const Header, name: []const u8) ?struct { SymbolKind, *const anyopaque } {
+        const id = self.symbol_table.lookupId(name) orelse return null;
+        return .{ self.address_table.getKind(id), self.address_table.getAddress(id) };
     }
 
     /// Get the address of a symbol within a given type by name.
@@ -508,8 +547,7 @@ pub const Header = extern struct {
 
         const erased = self.lookupAddress(name) orelse return null;
 
-        return if (erased.kind == K) @ptrCast(@alignCast(erased.ptr))
-        else {
+        return if (erased.kind == K) @ptrCast(@alignCast(erased.ptr)) else {
             @branchHint(.unlikely);
             return error.TypeError;
         };
@@ -541,7 +579,6 @@ pub const Register = enum(std.math.IntFittingRange(0, pl.MAX_REGISTERS)) {
     pub const native_ret: Register = .r0;
     pub const native_cancelled_frame: Register = .r1;
 
-
     /// Creates a `Register` from an integer value.
     pub fn r(value: anytype) Register {
         return @enumFromInt(value);
@@ -559,7 +596,6 @@ pub const Register = enum(std.math.IntFittingRange(0, pl.MAX_REGISTERS)) {
         return @intFromEnum(self) * pl.REGISTER_SIZE_BYTES;
     }
 };
-
 
 /// Represents an evidence structure.
 pub const Evidence = extern struct {
@@ -609,12 +645,10 @@ pub const BuiltinSignal = enum(i64) {
     // The built-in function is cancelling a computation it was prompted by.
     cancel = 1,
 
-
     // Misc signals
 
     /// An unexpected error has occurred in a built-in function; runtime should panic.
     panic = std.math.maxInt(i64),
-
 
     // Standard errors
 
@@ -627,7 +661,6 @@ pub const BuiltinSignal = enum(i64) {
     /// The built-in function has encountered a stack overflow.
     underflow = -3,
 };
-
 
 /// The type of procedures that can operate as "built-in" functions
 /// (those provided by the host environment) within Ribbon's `core.Fiber`.
@@ -661,13 +694,13 @@ pub const AllocatedBuiltinFunction = extern struct {
     }
 
     /// Get the function's machine code as a slice.
-    pub fn toSlice(self: AllocatedBuiltinFunction) []const align(pl.PAGE_SIZE) u8 {
+    pub fn toSlice(self: AllocatedBuiltinFunction) []align(pl.PAGE_SIZE) const u8 {
         return self.ptr[0..self.len];
     }
 };
 
 /// All errors that can occur during execution of an Rvm fiber.
-pub const Error = error {
+pub const Error = error{
     /// Indicates that a guest function call reached an invalid state.
     Unreachable,
     /// Indicates that a built-in function call requested the fiber to trap.
@@ -681,7 +714,6 @@ pub const Error = error {
     /// Indicates that a guest function attempted to call a missing effect handler.
     MissingEvidence,
 };
-
 
 /// Low level fiber memory constants and types.
 pub const mem = comptime_memorySize: {
@@ -725,7 +757,7 @@ pub const mem = comptime_memorySize: {
                 \\[Fiber.mem] - field "{s}" (of type `{s}`) in `FiberHeader` has incorrect alignment for its memory block;
                 \\              it is {d} but it should be == {}"
                 \\
-                , .{fieldName, @typeName(S), alignment, REQUIRED_ALIGNMENT}));
+            , .{ fieldName, @typeName(S), alignment, REQUIRED_ALIGNMENT }));
         }
 
         // ensure that we haven't screwed this up somehow
@@ -759,20 +791,18 @@ pub const mem = comptime_memorySize: {
         var finalFields: [k]std.builtin.Type.EnumField = undefined;
 
         for (finalFieldNames, 0..) |fieldName, i| {
-            finalFields[i] = std.builtin.Type.EnumField {
+            finalFields[i] = std.builtin.Type.EnumField{
                 .name = fieldName,
                 .value = i,
             };
         }
 
-        break :data_fields @Type(std.builtin.Type {
-            .@"enum" = .{
-                .tag_type = u8,
-                .fields = &finalFields,
-                .decls = &.{},
-                .is_exhaustive = true,
-            }
-        });
+        break :data_fields @Type(std.builtin.Type{ .@"enum" = .{
+            .tag_type = u8,
+            .fields = &finalFields,
+            .decls = &.{},
+            .is_exhaustive = true,
+        } });
     };
 
     break :comptime_memorySize struct {
@@ -802,7 +832,7 @@ pub const mem = comptime_memorySize: {
 
         /// Byte block type representing a full `Fiber`, with its `mem.FiberHeader` and stacks' memory blocks.
         pub const FiberBuffer: type = extern struct {
-            bytes: [SIZE] u8 align(REQUIRED_ALIGNMENT),
+            bytes: [SIZE]u8 align(REQUIRED_ALIGNMENT),
         };
 
         pub const DataFields = DATA_FIELDS;
@@ -827,7 +857,7 @@ comptime {
             if (i == j) continue;
 
             if (o1 == o2) {
-                @compileError(std.fmt.comptimePrint("Fiber memory offset {d} collides with {d}", .{i, j}));
+                @compileError(std.fmt.comptimePrint("Fiber memory offset {d} collides with {d}", .{ i, j }));
             }
         }
     }
@@ -850,7 +880,7 @@ pub const Fiber = extern struct {
     pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!Fiber {
         const buf = try allocator.allocAdvancedWithRetAddr(u8, mem.ALIGNMENT, mem.SIZE, @returnAddress());
 
-        log.debug("allocated address range {x} to {x} for {s}", .{@intFromPtr(buf.ptr), @intFromPtr(buf.ptr) + buf.len, @typeName(Fiber)});
+        log.debug("allocated address range {x} to {x} for {s}", .{ @intFromPtr(buf.ptr), @intFromPtr(buf.ptr) + buf.len, @typeName(Fiber) });
 
         const header: *mem.FiberHeader = @ptrCast(buf.ptr);
 
@@ -865,7 +895,7 @@ pub const Fiber = extern struct {
             @field(header, fieldName) = .init(@alignCast(buf.ptr + memoryOffset));
         }
 
-        return Fiber {
+        return Fiber{
             .header = header,
         };
     }

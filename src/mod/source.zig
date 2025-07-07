@@ -229,7 +229,7 @@ pub const IndentationDelta = enum(i8) {
 pub const TokenData = packed union {
     /// a sequence of characters that do not fit the other categories,
     /// and contain no control characters or whitespace.
-    sequence: common.Id.Buffer(u8, .constant),
+    sequence: common.Buffer.short(u8, .constant),
     /// \n
     linebreak: void,
     /// A relative change in indentation level.
@@ -680,6 +680,12 @@ pub const SyntaxError = error{
     UnexpectedToken,
 } || LexicalError;
 
+/// Id indicating the type of a syntax tree node.
+pub const SyntaxTreeType = common.Id.of(SyntaxTree, 16);
+
+/// A buffer of syntax tree nodes, used to store the results of parsing.
+pub const SyntaxTreeBuffer = common.Buffer.of(SyntaxTree, .constant);
+
 /// A concrete syntax tree node yielded by the meta language parser.
 pub const SyntaxTree = struct {
     /// The source location where the expression began.
@@ -687,11 +693,11 @@ pub const SyntaxTree = struct {
     /// The source precedence of this expression.
     precedence: i16,
     /// The type of the expression.
-    type: common.Id.of(SyntaxTree),
+    type: SyntaxTreeType,
     /// The token that generated this expression.
     token: Token,
     /// Subexpressions of this expression, if any.
-    operands: common.Id.Buffer(SyntaxTree, .constant),
+    operands: SyntaxTreeBuffer,
 
     /// Deinitialize the sub-tree of this expression and free all memory allocated for it.
     pub fn deinit(self: *SyntaxTree, allocator: std.mem.Allocator) void {
@@ -799,7 +805,7 @@ pub fn PatternModifier(comptime P: type) type {
 
         pub fn process(self: *const Self, q: Q) bool {
             const result = self.processCallback(q, switch (P) {
-                common.Id.Buffer(u8, .constant) => struct {
+                common.Buffer.short(u8, .constant) => struct {
                     pub fn callback(a: P, b: Q) bool {
                         return std.mem.eql(u8, a.asSlice(), b.asSlice());
                     }
@@ -848,7 +854,7 @@ pub fn PatternModifier(comptime P: type) type {
 
 pub const TokenPattern = union(TokenType) {
     pub const QueryType = *const Token;
-    sequence: PatternModifier(common.Id.Buffer(u8, .constant)),
+    sequence: PatternModifier(common.Buffer.short(u8, .constant)),
     linebreak: void,
     indentation: PatternModifier(IndentationDelta),
     special: PatternModifier(struct {

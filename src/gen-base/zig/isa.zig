@@ -249,15 +249,15 @@ pub const Operand = enum {
     pub fn writeShorthandType(self: Operand, writer: anytype) !void {
         switch (self) {
             .register => try writer.writeAll("Register"),
-            .upvalue => try writer.writeAll("Id.of(Upvalue)"),
-            .global => try writer.writeAll("Id.of(Global)"),
-            .function => try writer.writeAll("Id.of(Function)"),
+            .upvalue => try writer.writeAll("UpvalueId"),
+            .global => try writer.writeAll("GlobalId"),
+            .function => try writer.writeAll("FunctionId"),
             .abi => try writer.writeAll("Abi"),
-            .builtin => try writer.writeAll("Id.of(BuiltinAddress)"),
-            .foreign => try writer.writeAll("Id.of(ForeignAddress)"),
-            .effect => try writer.writeAll("Id.of(Effect)"),
-            .handler_set => try writer.writeAll("Id.of(HandlerSet)"),
-            .constant => try writer.writeAll("Id.of(Constant)"),
+            .builtin => try writer.writeAll("BuiltinAddressId"),
+            .foreign => try writer.writeAll("ForeignAddressId"),
+            .effect => try writer.writeAll("EffectId"),
+            .handler_set => try writer.writeAll("HandlerSetId"),
+            .constant => try writer.writeAll("ConstantId"),
             .byte => try writer.writeAll("u8"),
             .short => try writer.writeAll("u16"),
             .int => try writer.writeAll("u32"),
@@ -303,14 +303,14 @@ pub const Operand = enum {
         return switch (self) {
             .register => 1,
             .upvalue => 1,
-            .global => 2,
-            .function => 2,
+            .global => 4,
+            .function => 4,
             .abi => 1,
-            .builtin => 2,
-            .foreign => 2,
-            .effect => 2,
-            .handler_set => 2,
-            .constant => 2,
+            .builtin => 4,
+            .foreign => 4,
+            .effect => 4,
+            .handler_set => 4,
+            .constant => 4,
             .byte => 1,
             .short => 2,
             .int => 4,
@@ -496,18 +496,18 @@ pub const CATEGORIES: []const Category = &.{
             ),
             .mnemonic(
                 "call",
-                \\Various ways of calling functions, in all cases taking up to max({.byte}) number of arguments.
-                \\Arguments are expected to be {.register} values, encoded in the instruction stream after the call instruction.
+                \\Various ways of calling functions, in all cases taking up to max({.byte}) - 1 number of arguments.
+                \\Arguments are expected to be {.register} values, encoded in the instruction stream after the call instruction. Number of arguments is in this next word as the first byte.
                 \\* {.register} is not instruction-aligned; padding bytes may need to be added and accounted for following the arguments, to ensure the next instruction is aligned
             ,
                 &.{
-                    .variable(.mnemonic, "Calls the function in {1} using {2}, placing the result in {0}", &.{ .register, .register, .abi, .byte }),
-                    .variable(.suffix("c"), "Calls the function at {1} using {2}, placing the result in {0}", &.{ .register, .function, .abi, .byte }),
+                    .variable(.mnemonic, "Calls the function in {1} using {2}, placing the result in {0}", &.{ .register, .register, .abi }),
+                    .variable(.suffix("c"), "Calls the function at {1} using {2}, placing the result in {0}", &.{ .register, .function, .abi }),
                     .variable(
                         .override("prompt"),
                         \\Calls the effect handler designated by {1} using {2}, placing the result in {0}.
                     ,
-                        &.{ .register, .effect, .abi, .byte },
+                        &.{ .register, .effect, .abi },
                     ),
                 },
             ),

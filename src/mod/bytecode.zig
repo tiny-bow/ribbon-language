@@ -2,8 +2,9 @@
 //! This is a namespace for Ribbon bytecode data types, and the builder.
 //!
 //! The focal points are:
-//! * `Instruction` - this is the data type representing un-encoded Ribbon bytecode instructions
-//! * `Builder` - the main API for creating Ribbon bytecode functions; other types in this namespace are subordinate to it.
+//! * `Instruction` - this is the data type representing un-encoded Ribbon bytecode instructions, as well as the namespace for both un-encoded and encoded opcodes and operand sets
+//! * `Table` - the main API for creating Ribbon `Bytecode` units
+//! * `Builder` - the main API for creating Ribbon bytecode functions
 const bytecode = @This();
 
 const std = @import("std");
@@ -65,14 +66,27 @@ pub const Encoder = struct {
 
     pub const Error = Writer.Error;
 
-    /// Get the current offset's address with the encoded memory.
-    pub fn getCurrentAddress(self: *Encoder) [*]u8 {
-        return self.writer.getCurrentAddress();
+    /// Initialize a new Encoder with a `VirtualWriter`.
+    pub fn init() error{OutOfMemory}!Encoder {
+        const writer = try Writer.init();
+        return Encoder{
+            .writer = writer,
+        };
+    }
+
+    /// Deinitialize the Encoder, freeing any memory it owns.
+    pub fn deinit(self: *Encoder) void {
+        self.writer.deinit();
     }
 
     /// Finalize the Encoder's writer, returning the posix pages as a read-only buffer.
     pub fn finalize(self: *Encoder) error{BadEncoding}!pl.VirtualMemory {
         return self.writer.finalize(.read_only);
+    }
+
+    /// Get the current offset's address with the encoded memory.
+    pub fn getCurrentAddress(self: *Encoder) [*]u8 {
+        return self.writer.getCurrentAddress();
     }
 
     /// Returns the size of the uncommitted region of memory.
@@ -83,6 +97,21 @@ pub const Encoder = struct {
     /// Returns the available capacity in the current page.
     pub fn availableCapacity(self: *Encoder) []u8 {
         return self.writer.availableCapacity();
+    }
+
+    /// Same as `std.mem.Allocator.create`, but allocates from the virtual address space of the writer.
+    pub fn create(self: *Encoder, comptime T: type) Error!*T {
+        return self.writer.create(T);
+    }
+
+    /// Same as `std.mem.Allocator.alloc`, but allocates from the virtual address space of the writer.
+    pub fn alloc(self: *Encoder, comptime T: type, len: usize) Error![]T {
+        return self.writer.alloc(T, len);
+    }
+
+    /// Same as `std.mem.Allocator.dupe`, but copies a slice into the virtual address space of the writer.
+    pub fn dupe(self: *Encoder, comptime T: type, slice: []const T) Error![]T {
+        return self.writer.dupe(T, slice);
     }
 
     /// Writes as much of a slice of bytes to the encoder as will fit without an allocation.
@@ -195,7 +224,7 @@ pub const Builder = struct {
     /// The allocator used by this function.
     allocator: std.mem.Allocator,
     /// The function's unique identifier.
-    id: Id.of(core.Function),
+    id: core.FunctionId,
     /// The function's stack window size.
     stack_size: usize = 0,
     /// The function's stack window alignment.
@@ -204,7 +233,7 @@ pub const Builder = struct {
     blocks: pl.ArrayList(*const Block) = .empty,
 
     /// Initialize a new builder for a bytecode function.
-    pub fn init(allocator: std.mem.Allocator, id: Id.of(core.Function)) !*const Builder {
+    pub fn init(allocator: std.mem.Allocator, id: core.FunctionId) !*const Builder {
         const self = try allocator.create(Builder);
 
         self.* = Builder{
@@ -230,14 +259,14 @@ pub const Builder = struct {
     }
 
     /// Create a new basic block within this function, returning a pointer to it.
-    pub fn createBlock(ptr: *const Builder) error{ NameCollision, TooManyBlocks, OutOfMemory }!*const Block {
+    pub fn createBlock(ptr: *const Builder) !*const Block {
         const self = @constCast(ptr);
 
         const index = self.blocks.items.len;
 
-        if (index > Id.MAX_INT) {
-            log.err("bytecode.Builder.createBlock: Cannot create more than {d} blocks in function {}", .{ Id.MAX_INT, self.id });
-            return error.TooManyBlocks;
+        if (index > BlockId.MAX_INT) {
+            log.err("bytecode.Builder.createBlock: Cannot create more than {d} blocks in function {}", .{ BlockId.MAX_INT, self.id });
+            return error.OutOfMemory;
         }
 
         const block = try Block.init(self, .fromInt(index));
@@ -261,6 +290,8 @@ pub const Builder = struct {
     }
 };
 
+pub const BlockId = Id.of(Block, 16);
+
 /// A bytecode basic block in unencoded form.
 ///
 /// A basic block is a straight-line sequence of instructions with no *local*
@@ -277,7 +308,7 @@ pub const Block = struct {
     /// The function this block belongs to.
     function: *const Builder,
     /// The unique(-within-`function`) identifier for this block.
-    id: Id.of(Block),
+    id: BlockId,
     /// The instructions making up the body of this block, in un-encoded form.
     body: pl.ArrayList(Instruction.Basic) = .empty,
     /// The instruction that terminates this block.
@@ -289,7 +320,7 @@ pub const Block = struct {
     /// terminal in higher-level code.
     terminator: ?Instruction.Term = null,
 
-    fn init(function: *const Builder, id: Id.of(Block)) error{OutOfMemory}!*const Block {
+    fn init(function: *const Builder, id: BlockId) error{OutOfMemory}!*const Block {
         const allocator = function.allocator;
         const self = try allocator.create(Block);
 
@@ -386,272 +417,10 @@ pub const Table = struct {
     /// Binds bytecode ids to addresses for the function being compiled
     address_table: AddressTable = .{},
 
-    /// Get an id and symbol kind for a given name, if it is bound in this table.
-    pub fn getGenericId(self: *const Table, name: []const u8) ?core.SymbolTable.Value {
-        return self.symbol_table.getGeneric(name);
-    }
-
-    /// Get a constant id for a given name, if it is bound in this table.
-    pub fn getConstantId(self: *const Table, name: []const u8) ?Id.of(core.Constant) {
-        return self.symbol_table.getConstant(name);
-    }
-
-    /// Get a global id for a given name, if it is bound in this table.
-    pub fn getGlobalId(self: *const Table, name: []const u8) ?Id.of(core.Global) {
-        return self.symbol_table.getGlobal(name);
-    }
-
-    /// Get a function id for a given name, if it is bound in this table.
-    pub fn getFunctionId(self: *const Table, name: []const u8) ?Id.of(core.Function) {
-        return self.symbol_table.getFunction(name);
-    }
-
-    /// Get a builtin address id for a given name, if it is bound in this table.
-    pub fn getBuiltinAddressId(self: *const Table, name: []const u8) ?Id.of(core.BuiltinAddress) {
-        return self.symbol_table.getBuiltinAddress(name);
-    }
-
-    /// Get a foreign address id for a given name, if it is bound in this table.
-    pub fn getForeignAddressId(self: *const Table, name: []const u8) ?Id.of(core.ForeignAddress) {
-        return self.symbol_table.getForeignAddress(name);
-    }
-
-    /// Get a handler set id for a given name, if it is bound in this table.
-    pub fn getHandlerSetId(self: *const Table, name: []const u8) ?Id.of(core.HandlerSet) {
-        return self.symbol_table.getHandlerSet(name);
-    }
-
-    /// Get an effect id for a given name, if it is bound in this table.
-    pub fn getEffectId(self: *const Table, name: []const u8) ?Id.of(core.Effect) {
-        return self.symbol_table.getEffect(name);
-    }
-
-    /// Get a constant by id.
-    /// * only checked in safe mode
-    pub fn getConstantById(self: *const Table, id: Id.of(core.Constant)) *const core.Constant {
-        return self.address_table.getConstant(id);
-    }
-
-    /// Get a global by id.
-    /// * only checked in safe mode
-    pub fn getGlobalById(self: *const Table, id: Id.of(core.Global)) *const core.Global {
-        return self.address_table.getGlobal(id);
-    }
-
-    /// Get a function by id.
-    /// * only checked in safe mode
-    pub fn getFunctionById(self: *const Table, id: Id.of(core.Function)) *const core.Function {
-        return self.address_table.getFunction(id);
-    }
-
-    /// Get a builtin address by id.
-    /// * only checked in safe mode
-    pub fn getBuiltinAddressById(self: *const Table, id: Id.of(core.BuiltinAddress)) *const core.BuiltinAddress {
-        return self.address_table.getBuiltinAddress(id);
-    }
-
-    /// Get a foreign address by id.
-    /// * only checked in safe mode
-    pub fn getForeignAddressById(self: *const Table, id: Id.of(core.ForeignAddress)) *const core.ForeignAddress {
-        return self.address_table.getForeignAddress(id);
-    }
-
-    /// Get a handler set by id.
-    /// * only checked in safe mode
-    pub fn getHandlerSetById(self: *const Table, id: Id.of(core.HandlerSet)) *const core.HandlerSet {
-        return self.address_table.getHandlerSet(id);
-    }
-
-    /// Get an effect by id.
-    /// * only checked in safe mode
-    pub fn getEffectById(self: *const Table, id: Id.of(core.Effect)) *const core.Effect {
-        return self.address_table.getEffect(id);
-    }
-
-    /// Get a constant by name.
-    pub fn getConstantByName(self: *const Table, name: []const u8) ?*const core.Constant {
-        return if (self.symbol_table.getConstant(name)) |v| self.address_table.getConstant(v) else null;
-    }
-
-    /// Get a global by name.
-    pub fn getGlobalByName(self: *const Table, name: []const u8) ?*const core.Global {
-        return if (self.symbol_table.getGlobal(name)) |v| self.address_table.getGlobal(v) else null;
-    }
-
-    /// Get a function by name.
-    pub fn getFunctionByName(self: *const Table, name: []const u8) ?*const core.Function {
-        return if (self.symbol_table.getFunction(name)) |v| self.address_table.getFunction(v) else null;
-    }
-
-    /// Get a builtin address by name.
-    pub fn getBuiltinAddressByName(self: *const Table, name: []const u8) ?*const core.BuiltinAddress {
-        return if (self.symbol_table.getBuiltinAddress(name)) |v| self.address_table.getBuiltinAddress(v) else null;
-    }
-
-    /// Get a foreign address by name.
-    pub fn getForeignAddressByName(self: *const Table, name: []const u8) ?*const core.ForeignAddress {
-        return if (self.symbol_table.getForeignAddress(name)) |v| self.address_table.getForeignAddress(v) else null;
-    }
-
-    /// Get a handler set by name.
-    pub fn getHandlerSetByName(self: *const Table, name: []const u8) ?*const core.HandlerSet {
-        return if (self.symbol_table.getHandlerSet(name)) |v| self.address_table.getHandlerSet(v) else null;
-    }
-
-    /// Get an effect by name.
-    pub fn getEffectByName(self: *const Table, name: []const u8) ?*const core.Effect {
-        return if (self.symbol_table.getEffect(name)) |v| self.address_table.getEffect(v) else null;
-    }
-
-    /// Bind the provided fully qualified name to a newly-created id and the provided constant, within this table.
-    pub fn bindConstant(self: *Table, allocator: std.mem.Allocator, name: []const u8, constant: *const core.Constant) !Id.of(core.Constant) {
-        if (self.validateConstantName(name)) return error.DuplicateBinding;
-
-        const id = try self.address_table.bindConstant(allocator, constant);
-        try self.symbol_table.bindConstant(allocator, name, id);
-        return id;
-    }
-
-    /// Bind the provided fully qualified name to a newly-created id and the provided global, within this table.
-    pub fn bindGlobal(self: *Table, allocator: std.mem.Allocator, name: []const u8, global: *const core.Global) !Id.of(core.Global) {
-        if (self.validateGlobalName(name)) return error.DuplicateBinding;
-
-        const id = try self.address_table.bindGlobal(allocator, global);
-        try self.symbol_table.bindGlobal(allocator, name, id);
-        return id;
-    }
-
-    /// Bind the provided fully qualified name to a newly-created id and the provided function, within this table.
-    pub fn bindFunction(self: *Table, allocator: std.mem.Allocator, name: []const u8, function: *const core.Function) !Id.of(core.Function) {
-        if (self.validateFunctionName(name)) return error.DuplicateBinding;
-
-        const id = try self.address_table.bindFunction(allocator, function);
-        try self.symbol_table.bindFunction(allocator, name, id);
-        return id;
-    }
-
-    /// Bind the provided fully qualified name to a newly-created id and the provided builtin address, within this table.
-    pub fn bindBuiltinAddress(self: *Table, allocator: std.mem.Allocator, name: []const u8, builtin_address: *const core.BuiltinAddress) !Id.of(core.BuiltinAddress) {
-        if (self.validateBuiltinAddressName(name)) return error.DuplicateBinding;
-
-        const id = try self.address_table.bindBuiltinAddress(allocator, builtin_address);
-        try self.symbol_table.bindBuiltinAddress(allocator, name, id);
-        return id;
-    }
-
-    /// Bind the provided fully qualified name to a newly-created id and the provided foreign address, within this table.
-    pub fn bindForeignAddress(self: *Table, allocator: std.mem.Allocator, name: []const u8, foreign_address: *const core.ForeignAddress) !Id.of(core.ForeignAddress) {
-        if (self.validateForeignAddressName(name)) return error.DuplicateBinding;
-
-        const id = try self.address_table.bindForeignAddress(allocator, foreign_address);
-        try self.symbol_table.bindForeignAddress(allocator, name, id);
-        return id;
-    }
-
-    /// Bind the provided fully qualified name to a newly-created id and the provided handler set, within this table.
-    pub fn bindHandlerSet(self: *Table, allocator: std.mem.Allocator, name: []const u8, handler_set: *const core.HandlerSet) !Id.of(core.HandlerSet) {
-        if (self.validateHandlerSetName(name)) return error.DuplicateBinding;
-
-        const id = try self.address_table.bindHandlerSet(allocator, handler_set);
-        try self.symbol_table.bindHandlerSet(allocator, name, id);
-        return id;
-    }
-
-    /// Bind the provided fully qualified name to a newly-created id and the provided effect, within this table.
-    pub fn bindEffect(self: *Table, allocator: std.mem.Allocator, name: []const u8, effect: *const core.Effect) !Id.of(core.Effect) {
-        if (self.validateEffectName(name)) return error.DuplicateBinding;
-
-        const id = try self.address_table.bindEffect(allocator, effect);
-        try self.symbol_table.bindEffect(allocator, name, id);
-        return id;
-    }
-
-    /// Validate that the given name binds some value.
-    pub fn validateGenericName(self: *const Table, name: []const u8) bool {
-        return self.symbol_table.getGeneric(name) != null;
-    }
-
-    /// Validate that the given name binds a constant id.
-    pub fn validateConstantName(self: *const Table, name: []const u8) bool {
-        return self.symbol_table.validateConstant(name);
-    }
-
-    /// Validate that the given name binds a global id.
-    pub fn validateGlobalName(self: *const Table, name: []const u8) bool {
-        return self.symbol_table.validateGlobal(name);
-    }
-
-    /// Validate that the given name binds a function id.
-    pub fn validateFunctionName(self: *const Table, name: []const u8) bool {
-        return self.symbol_table.validateFunction(name);
-    }
-
-    /// Validate that the given name binds a builtin address id.
-    pub fn validateBuiltinAddressName(self: *const Table, name: []const u8) bool {
-        return self.symbol_table.validateBuiltinAddress(name);
-    }
-
-    /// Validate that the given name binds a foreign address id.
-    pub fn validateForeignAddressName(self: *const Table, name: []const u8) bool {
-        return self.symbol_table.validateForeignAddress(name);
-    }
-
-    /// Validate that the given name binds a handler set id.
-    pub fn validateHandlerSetName(self: *const Table, name: []const u8) bool {
-        return self.symbol_table.validateHandlerSet(name);
-    }
-
-    /// Validate that the given name binds an effect id.
-    pub fn validateEffectName(self: *const Table, name: []const u8) bool {
-        return self.symbol_table.validateEffect(name);
-    }
-
-    /// Ensure that a given constant id is valid.
-    pub fn validateConstantId(self: *const Table, id: Id.of(core.Constant)) bool {
-        return self.address_table.validateConstant(id);
-    }
-
-    /// Ensure that a given global id is valid.
-    pub fn validateGlobalId(self: *const Table, id: Id.of(core.Global)) bool {
-        return self.address_table.validateGlobal(id);
-    }
-
-    /// Ensure that a given function id is valid.
-    pub fn validateFunctionId(self: *const Table, id: Id.of(core.Function)) bool {
-        return self.address_table.validateFunction(id);
-    }
-
-    /// Ensure that a given builtin address id is valid.
-    pub fn validateBuiltinAddressId(self: *const Table, id: Id.of(core.BuiltinAddress)) bool {
-        return self.address_table.validateBuiltinAddress(id);
-    }
-
-    /// Ensure that a given foreign address id is valid.
-    pub fn validateForeignAddressId(self: *const Table, id: Id.of(core.ForeignAddress)) bool {
-        return self.address_table.validateForeignAddress(id);
-    }
-
-    /// Ensure that a given handler set id is valid.
-    pub fn validateHandlerSetId(self: *const Table, id: Id.of(core.HandlerSet)) bool {
-        return self.address_table.validateHandlerSet(id);
-    }
-
-    /// Ensure that a given effect id is valid.
-    pub fn validateEffectId(self: *const Table, id: Id.of(core.Effect)) bool {
-        return self.address_table.validateEffect(id);
-    }
-
     /// Clear the symbol and address table entries, retaining the current memory capacity.
     pub fn clear(self: *Table) void {
         self.symbol_table.clear();
         self.address_table.clear();
-    }
-
-    /// Copies the current state of this table into the provided buffer and returns a `core.Header` wrapping the copy.
-    pub fn write(self: *const Table, buf: []u8, out: *core.Header) usize { // TODO: use an encoder pattern like other modules
-        var offset = self.symbol_table.write(buf, &out.symbols);
-        offset += self.address_table.write(buf[offset..], &out.addresses);
-        return offset;
     }
 
     /// Deinitialize the symbol and address table, freeing all memory.
@@ -659,191 +428,72 @@ pub const Table = struct {
         self.symbol_table.deinit(allocator);
         self.address_table.deinit(allocator);
     }
+
+    /// Bind a fully qualified name to an address, returning the address table id of the static.
+    pub fn bind(
+        self: *Table,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        address: anytype,
+    ) !core.StaticId {
+        const PtrT = @TypeOf(address);
+        const PtrT_info = @typeInfo(PtrT);
+        if (comptime PtrT_info != .pointer or PtrT_info.pointer.size != .one) {
+            @compileError("bytecode.Table.bind: Address must be a single value pointer type, got " ++ @typeName(PtrT));
+        }
+
+        const T = PtrT_info.pointer.child;
+        const kind = comptime core.symbolKindFromId(T);
+
+        const id = try self.address_table.bind(allocator, kind, @ptrCast(address));
+
+        try self.symbol_table.bind(allocator, name, id);
+
+        return id;
+    }
+
+    /// Copies the current state of this table into the provided buffer and returns a `core.Bytecode` wrapping the copy.
+    pub fn encode(self: *const Table) !core.Bytecode {
+        var encoder = Encoder{
+            .writer = try Writer.init(),
+        };
+
+        const header = try encoder.create(core.Header);
+
+        const start = encoder.getCurrentAddress();
+
+        const symbol_table = try self.symbol_table.encode(&encoder);
+        const address_table = try self.address_table.encode(&encoder);
+
+        const end = encoder.getCurrentAddress();
+
+        const size = @intFromPtr(end) - @intFromPtr(start);
+
+        header.* = .{
+            .size = size,
+            .symbol_table = symbol_table,
+            .address_table = address_table,
+        };
+
+        _ = try encoder.finalize();
+
+        return .{ .header = header };
+    }
 };
 
 /// A mirror of `core.SymbolTable` that is extensible.
 pub const SymbolTable = struct {
-    /// Binds *fully-qualified* names to AddressTable ids
-    map: std.StringArrayHashMapUnmanaged(core.SymbolTable.Value) = .empty, // TODO why is this not in pl?
+    /// Binds fully-qualified names to AddressTable ids
+    map: pl.StringArrayMap(core.StaticId) = .empty,
 
     /// Bind a fully qualified name to an address table id of a constant.
-    pub fn bindConstant(self: *SymbolTable, allocator: std.mem.Allocator, name: []const u8, id: Id.of(core.Constant)) !void {
-        try self.map.putNoClobber(allocator, name, .{ .kind = .constant, .id = id.cast(anyopaque) });
-    }
-
-    /// Bind a fully qualified name to an address table id of a global.
-    pub fn bindGlobal(self: *SymbolTable, allocator: std.mem.Allocator, name: []const u8, id: Id.of(core.Global)) !void {
-        try self.map.putNoClobber(allocator, name, .{ .kind = .global, .id = id.cast(anyopaque) });
-    }
-
-    /// Bind a fully qualified name to an address table id of a function.
-    pub fn bindFunction(self: *SymbolTable, allocator: std.mem.Allocator, name: []const u8, id: Id.of(core.Function)) !void {
-        try self.map.putNoClobber(allocator, name, .{ .kind = .function, .id = id.cast(anyopaque) });
-    }
-
-    /// Bind a fully qualified name to an address table id of a builtin address.
-    pub fn bindBuiltinAddress(self: *SymbolTable, allocator: std.mem.Allocator, name: []const u8, id: Id.of(core.BuiltinAddress)) !void {
-        try self.map.putNoClobber(allocator, name, .{ .kind = .builtin, .id = id.cast(anyopaque) });
-    }
-
-    /// Bind a fully qualified name to an address table id of a foreign address.
-    pub fn bindForeignAddress(self: *SymbolTable, allocator: std.mem.Allocator, name: []const u8, id: Id.of(core.ForeignAddress)) !void {
-        try self.map.putNoClobber(allocator, name, .{ .kind = .foreign_address, .id = id.cast(anyopaque) });
-    }
-
-    /// Bind a fully qualified name to an address table id of a handler set.
-    pub fn bindHandlerSet(self: *SymbolTable, allocator: std.mem.Allocator, name: []const u8, id: Id.of(core.HandlerSet)) !void {
-        try self.map.putNoClobber(allocator, name, .{ .kind = .handler_set, .id = id.cast(anyopaque) });
-    }
-
-    /// Bind a fully qualified name to an address table id of an effect.
-    pub fn bindEffect(self: *SymbolTable, allocator: std.mem.Allocator, name: []const u8, id: Id.of(core.Effect)) !void {
-        try self.map.putNoClobber(allocator, name, .{ .kind = .effect, .id = id.cast(anyopaque) });
+    pub fn bind(self: *SymbolTable, allocator: std.mem.Allocator, name: []const u8, id: core.StaticId) !void {
+        try self.map.put(allocator, name, id);
     }
 
     /// Get the address table id associated with the given fully qualified name.
-    pub fn getGeneric(self: *const SymbolTable, name: []const u8) ?core.SymbolTable.Value {
+    pub fn get(self: *const SymbolTable, name: []const u8) ?core.StaticId {
         return self.map.get(name);
-    }
-
-    /// Get the address table constant id associated with the given fully qualified name.
-    pub fn getConstant(self: *const SymbolTable, name: []const u8) ?Id.of(core.Constant) {
-        const entry = self.map.get(name);
-
-        if (entry) |v| {
-            if (v.kind == .constant) {
-                return v.id.cast(core.Constant);
-            }
-        }
-
-        return null;
-    }
-
-    /// Get the address table global id associated with the given fully qualified name.
-    pub fn getGlobal(self: *const SymbolTable, name: []const u8) ?Id.of(core.Global) {
-        const entry = self.map.get(name);
-
-        if (entry) |v| {
-            if (v.kind == .global) {
-                return v.id.cast(core.Global);
-            }
-        }
-
-        return null;
-    }
-
-    /// Get the address table function id associated with the given fully qualified name.
-    pub fn getFunction(self: *const SymbolTable, name: []const u8) ?Id.of(core.Function) {
-        const entry = self.map.get(name);
-
-        if (entry) |v| {
-            if (v.kind == .function) {
-                return v.id.cast(core.Function);
-            }
-        }
-
-        return null;
-    }
-
-    /// Get the address table builtin address id associated with the given fully qualified name.
-    pub fn getBuiltinAddress(self: *const SymbolTable, name: []const u8) ?Id.of(core.BuiltinAddress) {
-        const entry = self.map.get(name);
-
-        if (entry) |v| {
-            if (v.kind == .builtin) {
-                return v.id.cast(core.BuiltinAddress);
-            }
-        }
-
-        return null;
-    }
-
-    /// Get the address table foreign address id associated with the given fully qualified name.
-    pub fn getForeignAddress(self: *const SymbolTable, name: []const u8) ?Id.of(core.ForeignAddress) {
-        const entry = self.map.get(name);
-
-        if (entry) |v| {
-            if (v.kind == .foreign_address) {
-                return v.id.cast(core.ForeignAddress);
-            }
-        }
-
-        return null;
-    }
-
-    /// Get the address table handler set id associated with the given fully qualified name.
-    pub fn getHandlerSet(self: *const SymbolTable, name: []const u8) ?Id.of(core.HandlerSet) {
-        const entry = self.map.get(name);
-
-        if (entry) |v| {
-            if (v.kind == .handler_set) {
-                return v.id.cast(core.HandlerSet);
-            }
-        }
-
-        return null;
-    }
-
-    /// Get the address table effect id associated with the given fully qualified name.
-    pub fn getEffect(self: *const SymbolTable, name: []const u8) ?Id.of(core.Effect) {
-        const entry = self.map.get(name);
-
-        if (entry) |v| {
-            if (v.kind == .effect) {
-                return v.id.cast(core.Effect);
-            }
-        }
-
-        return null;
-    }
-
-    /// Ensure that a given name binds some value, returning the type if it does.
-    pub fn validateGeneric(self: *const SymbolTable, name: []const u8) ?core.SymbolKind {
-        const entry = self.map.get(name);
-        if (entry) |v| return v.kind;
-        return null;
-    }
-
-    /// Validate that the given name binds a constant id.
-    pub fn validateConstant(self: *const SymbolTable, name: []const u8) bool {
-        const entry = self.map.get(name);
-        return if (entry) |e| e.kind == .constant else false;
-    }
-
-    /// Validate that the given name binds a global id.
-    pub fn validateGlobal(self: *const SymbolTable, name: []const u8) bool {
-        const entry = self.map.get(name);
-        return if (entry) |e| e.kind == .global else false;
-    }
-
-    /// Validate that the given name binds a function id.
-    pub fn validateFunction(self: *const SymbolTable, name: []const u8) bool {
-        const entry = self.map.get(name);
-        return if (entry) |e| e.kind == .function else false;
-    }
-
-    /// Validate that the given name binds a builtin address id.
-    pub fn validateBuiltinAddress(self: *const SymbolTable, name: []const u8) bool {
-        const entry = self.map.get(name);
-        return if (entry) |e| e.kind == .builtin else false;
-    }
-
-    /// Validate that the given name binds a foreign address id.
-    pub fn validateForeignAddress(self: *const SymbolTable, name: []const u8) bool {
-        const entry = self.map.get(name);
-        return if (entry) |e| e.kind == .foreign_address else false;
-    }
-
-    /// Validate that the given name binds a handler set id.
-    pub fn validateHandlerSet(self: *const SymbolTable, name: []const u8) bool {
-        const entry = self.map.get(name);
-        return if (entry) |e| e.kind == .handler_set else false;
-    }
-
-    /// Validate that the given name binds an effect id.
-    pub fn validateEffect(self: *const SymbolTable, name: []const u8) bool {
-        const entry = self.map.get(name);
-        return if (entry) |e| e.kind == .effect else false;
     }
 
     /// Clears all entries in the symbol table, retaining the current memory capacity.
@@ -851,47 +501,31 @@ pub const SymbolTable = struct {
         self.map.clearRetainingCapacity();
     }
 
-    /// Copies the current state of this table into the provided buffer and returns a `core.SymbolTable` wrapping the copy.
-    pub fn write(self: *const SymbolTable, buf: []u8, out: *core.SymbolTable) usize { // TODO: use an encoder pattern like other modules
-        const key_size = comptime @sizeOf(core.SymbolTable.Key);
-        const val_size = comptime @sizeOf(core.SymbolTable.Value);
+    /// Writes the current state of this address table into the provided encoder,
+    /// returning a new `core.SymbolTable` referencing the new buffers.
+    pub fn encode(self: *const SymbolTable, encoder: *Encoder) !core.SymbolTable {
+        const new_keys = try encoder.alloc(core.SymbolTable.Key, self.map.count());
+        const new_values = try encoder.alloc(core.StaticId, self.map.count());
 
-        var bytes_len: usize = 0;
-        for (self.map.keys()) |key_ptr| {
-            bytes_len += key_ptr.len;
-        }
-
-        const total_len = bytes_len + (key_size + val_size) * self.map.count();
-        std.debug.assert(buf.len >= total_len);
-
-        var bytes_offset: usize = 0;
-
-        const key_buf: []core.SymbolTable.Key = @alignCast(std.mem.bytesAsSlice(core.SymbolTable.Key, buf[bytes_len .. bytes_len + key_size * self.map.count()]));
-        const val_buf: []core.SymbolTable.Value = @alignCast(std.mem.bytesAsSlice(core.SymbolTable.Value, buf[bytes_len + key_size * self.map.count() .. total_len]));
-
-        var it = self.map.iterator();
         var i: usize = 0;
+        var it = self.map.iterator();
         while (it.next()) |entry| {
-            const key_copy = buf[bytes_offset .. bytes_offset + entry.key_ptr.len];
-            bytes_offset += entry.key_ptr.len;
-            @memcpy(key_copy, entry.key_ptr.*);
+            const new_name = try encoder.dupe(u8, entry.key_ptr.*);
 
-            key_buf[i] = core.SymbolTable.Key{
-                .hash = pl.hash64(entry.key_ptr.*),
-                .name = .fromSlice(key_copy),
+            new_keys[i] = .{
+                .hash = pl.hash64(new_name),
+                .name = .fromSlice(new_name),
             };
 
-            val_buf[i] = entry.value_ptr.*;
+            new_values[i] = entry.value_ptr.*;
 
             i += 1;
         }
 
-        out.* = core.SymbolTable{
-            .keys = .fromSlice(key_buf),
-            .values = .fromSlice(val_buf),
+        return .{
+            .keys = .fromSlice(new_keys),
+            .values = .fromSlice(new_values),
         };
-
-        return total_len;
     }
 
     /// Deinitializes the symbol table, freeing all memory.
@@ -902,246 +536,120 @@ pub const SymbolTable = struct {
 
 /// A mirror of `core.AddressTable` that is extensible.
 pub const AddressTable = struct {
-    /// Constant value bindings section.
-    constants: pl.ArrayList(*const core.Constant) = .empty,
-    /// Global value bindings section.
-    globals: pl.ArrayList(*const core.Global) = .empty,
-    /// Function value bindings section.
-    functions: pl.ArrayList(*const core.Function) = .empty,
-    /// Builtin function value bindings section.
-    builtin_addresses: pl.ArrayList(*const core.BuiltinAddress) = .empty,
-    /// C ABI value bindings section.
-    foreign_addresses: pl.ArrayList(*const core.ForeignAddress) = .empty,
-    /// Effect handler set bindings section.
-    handler_sets: pl.ArrayList(*const core.HandlerSet) = .empty,
-    /// Effect identity bindings section.
-    effects: pl.ArrayList(*const core.Effect) = .empty,
+    data: pl.MultiArrayList(struct {
+        kind: core.SymbolKind,
+        address: *const anyopaque,
+    }) = .empty,
 
-    /// Bind a constant pointer into this address table, yielding an id to refer to it by in future.
-    /// * Id returned is unique to this address table and any `core.AddressTable` produced with it; it cannot be used with others.
-    pub fn bindConstant(self: *AddressTable, allocator: std.mem.Allocator, constant: *const core.Constant) !Id.of(core.Constant) {
-        const idx = self.constants.items.len;
-        try self.constants.append(allocator, constant);
-        return Id.of(core.Constant).fromInt(idx);
-    }
-
-    /// Bind a global pointer into this address table, yielding an id to refer to it by in future.
-    /// * Id returned is unique to this address table and any `core.AddressTable` produced with it; it cannot be used with others.
-    pub fn bindGlobal(self: *AddressTable, allocator: std.mem.Allocator, global: *const core.Global) !Id.of(core.Global) {
-        const idx = self.globals.items.len;
-        try self.globals.append(allocator, global);
-        return Id.of(core.Global).fromInt(idx);
-    }
-
-    /// Bind a function pointer into this address table, yielding an id to refer to it by in future.
-    /// * Id returned is unique to this address table and any `core.AddressTable` produced with it; it cannot be used with others.
-    pub fn bindFunction(self: *AddressTable, allocator: std.mem.Allocator, function: *const core.Function) !Id.of(core.Function) {
-        const idx = self.functions.items.len;
-        try self.functions.append(allocator, function);
-        return Id.of(core.Function).fromInt(idx);
-    }
-
-    /// Bind a builtin address pointer into this address table, yielding an id to refer to it by in future.
-    /// * Id returned is unique to this address table and any `core.AddressTable` produced with it; it cannot be used with others.
-    pub fn bindBuiltinAddress(self: *AddressTable, allocator: std.mem.Allocator, builtin_address: *const core.BuiltinAddress) !Id.of(core.BuiltinAddress) {
-        const idx = self.builtin_addresses.items.len;
-        try self.builtin_addresses.append(allocator, builtin_address);
-        return Id.of(core.BuiltinAddress).fromInt(idx);
-    }
-
-    /// Bind a foreign address pointer into this address table, yielding an id to refer to it by in future.
-    /// * Id returned is unique to this address table and any `core.AddressTable` produced with it; it cannot be used with others.
-    pub fn bindForeignAddress(self: *AddressTable, allocator: std.mem.Allocator, foreign_address: *const core.ForeignAddress) !Id.of(core.ForeignAddress) {
-        const idx = self.foreign_addresses.items.len;
-        try self.foreign_addresses.append(allocator, foreign_address);
-        return Id.of(core.ForeignAddress).fromInt(idx);
-    }
-
-    /// Bind a handler set pointer into this address table, yielding an id to refer to it by in future.
-    /// * Id returned is unique to this address table and any `core.AddressTable` produced with it; it cannot be used with others.
-    pub fn bindHandlerSet(self: *AddressTable, allocator: std.mem.Allocator, handler_set: *const core.HandlerSet) !Id.of(core.HandlerSet) {
-        const idx = self.handler_sets.items.len;
-        try self.handler_sets.append(allocator, handler_set);
-        return Id.of(core.HandlerSet).fromInt(idx);
-    }
-
-    /// Bind a effect pointer into this address table, yielding an id to refer to it by in future.
-    /// * Id returned is unique to this address table and any `core.AddressTable` produced with it; it cannot be used with others.
-    pub fn bindEffect(self: *AddressTable, allocator: std.mem.Allocator, effect: *const core.Effect) !Id.of(core.Effect) {
-        const idx = self.effects.items.len;
-        try self.effects.append(allocator, effect);
-        return Id.of(core.Effect).fromInt(idx);
-    }
-
-    /// Get the constant pointer associated with the given id.
-    /// * only checked in safe mode
-    pub fn getConstant(self: *const AddressTable, id: Id.of(core.Constant)) *const core.Constant {
-        return self.constants.items[id.toInt()];
-    }
-
-    /// Get the global pointer associated with the given id.
-    /// * only checked in safe mode
-    pub fn getGlobal(self: *const AddressTable, id: Id.of(core.Global)) *const core.Global {
-        return self.globals.items[id.toInt()];
-    }
-
-    /// Get the function pointer associated with the given id.
-    /// * only checked in safe mode
-    pub fn getFunction(self: *const AddressTable, id: Id.of(core.Function)) *const core.Function {
-        return self.functions.items[id.toInt()];
-    }
-
-    /// Get the builtin address pointer associated with the given id.
-    /// * only checked in safe mode
-    pub fn getBuiltinAddress(self: *const AddressTable, id: Id.of(core.BuiltinAddress)) *const core.BuiltinAddress {
-        return self.builtin_addresses.items[id.toInt()];
-    }
-
-    /// Get the foreign address pointer associated with the given id.
-    /// * only checked in safe mode
-    pub fn getForeignAddress(self: *const AddressTable, id: Id.of(core.ForeignAddress)) *const core.ForeignAddress {
-        return self.foreign_addresses.items[id.toInt()];
-    }
-
-    /// Get the handler set pointer associated with the given id.
-    /// * only checked in safe mode
-    pub fn getHandlerSet(self: *const AddressTable, id: Id.of(core.HandlerSet)) *const core.HandlerSet {
-        return self.handler_sets.items[id.toInt()];
-    }
-
-    /// Get the effect pointer associated with the given id.
-    /// * only checked in safe mode
-    pub fn getEffect(self: *const AddressTable, id: Id.of(core.Effect)) *const core.Effect {
-        return self.effects.items[id.toInt()];
-    }
-
-    /// Ensure that a given constant id is valid.
-    pub fn validateConstant(self: *const AddressTable, id: Id.of(core.Constant)) bool {
-        return id.toInt() < self.constants.items.len;
-    }
-
-    /// Ensure that a given global id is valid.
-    pub fn validateGlobal(self: *const AddressTable, id: Id.of(core.Global)) bool {
-        return id.toInt() < self.globals.items.len;
-    }
-
-    /// Ensure that a given function id is valid.
-    pub fn validateFunction(self: *const AddressTable, id: Id.of(core.Function)) bool {
-        return id.toInt() < self.functions.items.len;
-    }
-
-    /// Ensure that a given builtin address id is valid.
-    pub fn validateBuiltinAddress(self: *const AddressTable, id: Id.of(core.BuiltinAddress)) bool {
-        return id.toInt() < self.builtin_addresses.items.len;
-    }
-
-    /// Ensure that a given foreign address id is valid.
-    pub fn validateForeignAddress(self: *const AddressTable, id: Id.of(core.ForeignAddress)) bool {
-        return id.toInt() < self.foreign_addresses.items.len;
-    }
-
-    /// Ensure that a given handler set id is valid.
-    pub fn validateHandlerSet(self: *const AddressTable, id: Id.of(core.HandlerSet)) bool {
-        return id.toInt() < self.handler_sets.items.len;
-    }
-
-    /// Ensure that a given effect id is valid.
-    pub fn validateEffect(self: *const AddressTable, id: Id.of(core.Effect)) bool {
-        return id.toInt() < self.effects.items.len;
-    }
-
-    /// Clears all sections of the address table, retaining the current memory capacity.
+    /// Clear all entries in the address table, retaining the current memory capacity.
     pub fn clear(self: *AddressTable) void {
-        self.constants.clearRetainingCapacity();
-        self.globals.clearRetainingCapacity();
-        self.functions.clearRetainingCapacity();
-        self.builtin_addresses.clearRetainingCapacity();
-        self.foreign_addresses.clearRetainingCapacity();
-        self.handler_sets.clearRetainingCapacity();
-        self.effects.clearRetainingCapacity();
+        self.data.clearRetainingCapacity();
     }
 
-    /// Deinitializes the address table, freeing all memory.
+    /// Deinitialize the address table, freeing all memory it owns.
     pub fn deinit(self: *AddressTable, allocator: std.mem.Allocator) void {
-        self.constants.deinit(allocator);
-        self.globals.deinit(allocator);
-        self.functions.deinit(allocator);
-        self.builtin_addresses.deinit(allocator);
-        self.foreign_addresses.deinit(allocator);
-        self.handler_sets.deinit(allocator);
-        self.effects.deinit(allocator);
+        self.data.deinit(allocator);
     }
 
-    /// Copies the current state of this table into the provided buffer and returns a `core.AddressTable` wrapping the copy.
-    pub fn write(self: *const AddressTable, buf: []u8, out: *core.AddressTable) usize { // TODO: use an encoder pattern like other modules
-        const ptr_size = @sizeOf(*anyopaque);
+    /// Get the SymbolKind of an address by its id.
+    pub fn getKind(self: *const AddressTable, id: core.StaticId) ?core.SymbolKind {
+        const index = id.toInt();
 
-        const constant_bytes = self.constants.items.len * ptr_size;
-        const global_bytes = self.globals.items.len * ptr_size;
-        const function_bytes = self.functions.items.len * ptr_size;
-        const builtin_bytes = self.builtin_addresses.items.len * ptr_size;
-        const foreign_bytes = self.foreign_addresses.items.len * ptr_size;
-        const handler_bytes = self.handler_sets.items.len * ptr_size;
-        const effect_bytes = self.effects.items.len * ptr_size;
+        if (index < self.data.len) {
+            return self.data.items(.kind)[index];
+        } else {
+            return null;
+        }
+    }
 
-        const offset = constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes + handler_bytes + effect_bytes;
+    /// Get the address of a static value by its id.
+    pub fn getAddress(self: *const AddressTable, id: core.StaticId) ?*const anyopaque {
+        const index = id.toInt();
 
-        std.debug.assert(buf.len >= offset);
+        if (index < self.data.len) {
+            return self.data.items(.address)[index];
+        } else {
+            return null;
+        }
+    }
 
-        const constants = buf[0..constant_bytes];
-        const globals = buf[constant_bytes .. constant_bytes + global_bytes];
-        const functions = buf[constant_bytes + global_bytes .. constant_bytes + global_bytes + function_bytes];
-        const builtin_addresses = buf[constant_bytes + global_bytes + function_bytes .. constant_bytes + global_bytes + function_bytes + builtin_bytes];
-        const foreign_addresses = buf[constant_bytes + global_bytes + function_bytes + builtin_bytes .. constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes];
-        const handler_sets = buf[constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes .. constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes + handler_bytes];
-        const effects = buf[constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes + handler_bytes .. constant_bytes + global_bytes + function_bytes + builtin_bytes + foreign_bytes + handler_bytes + effect_bytes];
+    /// Get the address of a typed static by its id.
+    pub fn get(self: *const AddressTable, id: anytype) ?*const core.StaticTypeFromId(id) {
+        const T = @TypeOf(id);
 
-        @memcpy(constants, std.mem.sliceAsBytes(self.constants.items));
-        @memcpy(globals, std.mem.sliceAsBytes(self.globals.items));
-        @memcpy(functions, std.mem.sliceAsBytes(self.functions.items));
-        @memcpy(builtin_addresses, std.mem.sliceAsBytes(self.builtin_addresses.items));
-        @memcpy(foreign_addresses, std.mem.sliceAsBytes(self.foreign_addresses.items));
-        @memcpy(handler_sets, std.mem.sliceAsBytes(self.handler_sets.items));
-        @memcpy(effects, std.mem.sliceAsBytes(self.effects.items));
+        const addr = self.getAddress(id) orelse return null;
 
-        out.* = .{
-            .constants = .fromSlice(@alignCast(std.mem.bytesAsSlice(*const core.Constant, constants))),
-            .globals = .fromSlice(@alignCast(std.mem.bytesAsSlice(*const core.Global, globals))),
-            .functions = .fromSlice(@alignCast(std.mem.bytesAsSlice(*const core.Function, functions))),
-            .builtin_addresses = .fromSlice(@alignCast(std.mem.bytesAsSlice(*const core.BuiltinAddress, builtin_addresses))),
-            .foreign_addresses = .fromSlice(@alignCast(std.mem.bytesAsSlice(*const core.ForeignAddress, foreign_addresses))),
-            .handler_sets = .fromSlice(@alignCast(std.mem.bytesAsSlice(*const core.HandlerSet, handler_sets))),
-            .effects = .fromSlice(@alignCast(std.mem.bytesAsSlice(*const core.Effect, effects))),
+        if (comptime T == core.StaticId) {
+            return addr;
+        } else {
+            const kind = self.getKind(id).?;
+            const id_kind = comptime core.symbolKindFromId(T);
+
+            std.debug.assert(kind == id_kind);
+
+            return @ptrCast(@alignCast(addr));
+        }
+    }
+
+    /// Bind an address to a static id with the given kind.
+    pub fn bind(self: *AddressTable, allocator: std.mem.Allocator, kind: core.SymbolKind, address: *const anyopaque) !core.StaticId {
+        const index = self.data.len;
+
+        if (index > core.StaticId.MAX_INT) {
+            log.err("bytecode.AddressTable.bind: Cannot bind more than {d} symbols", .{core.StaticId.MAX_INT});
+            return error.OutOfMemory;
+        }
+
+        try self.data.append(allocator, .{
+            .kind = kind,
+            .address = address,
+        });
+
+        return .fromInt(index);
+    }
+
+    /// Determine if the provided id exists and has the given kind.
+    pub fn validateSymbol(self: *const AddressTable, id: core.StaticId) bool {
+        return self.data.len > id.toInt();
+    }
+
+    /// Determine if the provided id exists and has the given kind.
+    pub fn validateSymbolKind(self: *const AddressTable, kind: core.SymbolKind, id: core.StaticId) bool {
+        const index = id.toInt();
+
+        if (index < self.data.len) {
+            return self.data.items(.kind)[index] == kind;
+        } else {
+            return false;
+        }
+    }
+
+    /// Determine if the provided id exists and has the given kind.
+    pub fn validate(self: *const AddressTable, id: anytype) bool {
+        const T = @TypeOf(id);
+
+        if (comptime T == core.StaticId) {
+            return self.validateSymbol(id);
+        } else {
+            return self.validateSymbolKind(comptime core.symbolKindFromId(T), id);
+        }
+    }
+
+    /// Writes the current state of this address table into the provided encoder,
+    /// returning a new `core.AddressTable` referencing the new buffers.
+    pub fn encode(self: *const AddressTable, encoder: *Encoder) !core.AddressTable {
+        const new_kinds = try encoder.alloc(core.SymbolKind, self.data.len);
+        const new_addresses = try encoder.alloc(*const anyopaque, self.data.len);
+
+        const old_kinds = self.data.items(.kind);
+        const old_addresses = self.data.items(.address);
+
+        @memcpy(new_kinds, old_kinds);
+        @memcpy(new_addresses, old_addresses);
+
+        return .{
+            .kinds = .fromSlice(new_kinds),
+            .addresses = .fromSlice(new_addresses),
         };
-
-        return offset;
-    }
-
-    // validate mirror
-    comptime {
-        outer: for (std.meta.fieldNames(core.AddressTable)) |core_field| {
-            for (std.meta.fieldNames(AddressTable)) |comp_field| {
-                if (std.mem.eql(u8, core_field, comp_field)) continue :outer;
-            } else {
-                @compileError("missing field " ++ core_field ++ " in backend.AddressTable");
-            }
-        }
-
-        outer: for (std.meta.fieldNames(AddressTable)) |comp_field| {
-            for (std.meta.fieldNames(core.AddressTable)) |core_field| {
-                if (std.mem.eql(u8, core_field, comp_field)) continue :outer;
-            } else {
-                @compileError("extra field " ++ comp_field ++ " in backend.AddressTable");
-            }
-        }
-
-        for (std.meta.fieldNames(AddressTable)) |field| {
-            const our_type = @typeInfo(@FieldType(@FieldType(AddressTable, field), "items")).pointer.child;
-            const core_type = @FieldType(core.AddressTable, field).ValueType;
-
-            if (our_type != core_type) {
-                @compileError("type mismatch for field " ++ field ++ ": expected " ++ @typeName(core_type) ++ ", got " ++ @typeName(our_type));
-            }
-        }
     }
 };

@@ -6,9 +6,9 @@ const isa = @import("isa");
 const pl = @import("platform");
 const std = @import("std");
 
-const log = std.log.scoped(.@"gen");
+const log = std.log.scoped(.gen);
 
-pub const std_options = std.Options {
+pub const std_options = std.Options{
     .log_level = .info,
 };
 
@@ -35,7 +35,8 @@ pub fn main() !void {
             \\Usage: {s} <type> <path>
             \\* path: output file path
             \\* type: one of {s}
-            , .{args[0], OUTPUT_NAMES} ,
+        ,
+            .{ args[0], OUTPUT_NAMES },
         );
         return error.InvalidArgCount;
     }
@@ -45,7 +46,7 @@ pub fn main() !void {
             break @field(OutputTypes, name);
         }
     } else {
-        log.err("Invalid output type `{s}`; expected one of `markdown`, `types`, `assembly`", .{ args[1] });
+        log.err("Invalid output type `{s}`; expected one of `markdown`, `types`, `assembly`", .{args[1]});
         return error.InvalidArg;
     };
 
@@ -93,8 +94,6 @@ pub fn main() !void {
     }
 }
 
-
-
 // Assembly generation
 
 const InstrDef = struct {
@@ -121,7 +120,7 @@ const InstrDef = struct {
                     const instrName = stream.getWritten();
 
                     if (!defs.contains(instrName)) {
-                        std.debug.print("Error [instructions.asm]: Missing bytecode instruction `{s}`\n", .{ instrName });
+                        std.debug.print("Error [instructions.asm]: Missing bytecode instruction `{s}`\n", .{instrName});
 
                         dumpDefs(defs);
 
@@ -172,7 +171,6 @@ const InstrDef = struct {
     }
 };
 
-
 fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.Category, text: []const u8) !std.StringArrayHashMap(InstrDef) {
     // split file into non-empty lines, then, in a loop:
     // find first line with no leading whitespace
@@ -215,10 +213,10 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.C
 
             if (line[lineEnd] != ':') {
                 if (!inBlock) {
-                    log.debug("discarding line {} as macro", .{ l });
+                    log.debug("discarding line {} as macro", .{l});
                     continue;
                 } else {
-                    std.debug.print("Error[instructions.asm:{}]: line should end with `:`, or be indented under such a line", .{ l });
+                    std.debug.print("Error[instructions.asm:{}]: line should end with `:`, or be indented under such a line", .{l});
                     std.process.exit(1);
                 }
             }
@@ -226,8 +224,8 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.C
             log.debug("processing as instruction def", .{});
 
             if (inBlock) {
-                log.debug("Adding InstrDef for {s}", .{ name });
-                try defs.put(name, InstrDef {
+                log.debug("Adding InstrDef for {s}", .{name});
+                try defs.put(name, InstrDef{
                     .name = name,
                     .line_origin = l,
                     .block = try blockLines.toOwnedSlice(),
@@ -239,16 +237,16 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.C
 
             name = line[0..lineEnd];
         } else if (inBlock) {
-            log.debug("adding line to block for {s}", .{ name });
+            log.debug("adding line to block for {s}", .{name});
             try blockLines.append(std.mem.trimLeft(u8, line, " \t"));
         } else {
-            log.info("discarding line {} as macro", .{ l });
+            log.info("discarding line {} as macro", .{l});
             continue;
         }
     } else {
         if (inBlock) {
-            log.debug("Adding final InstrDef for {s}", .{ name });
-            try defs.put(name, InstrDef {
+            log.debug("Adding final InstrDef for {s}", .{name});
+            try defs.put(name, InstrDef{
                 .name = name,
                 .line_origin = l,
                 .block = try blockLines.toOwnedSlice(),
@@ -256,11 +254,10 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.C
         }
     }
 
-
     if (defs.count() == 0) {
         std.debug.print(
             "Error[instructions.asm / gen.zig]: no valid instruction definitions found\nsource text was:\n{s}{s}\n\n",
-            .{text[0..@min(text.len, 256)], if (text.len > 256) "\n..." else ""},
+            .{ text[0..@min(text.len, 256)], if (text.len > 256) "\n..." else "" },
         );
         std.process.exit(1);
     }
@@ -271,7 +268,7 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.C
 }
 
 fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
-    try writer.print("%define OP_SIZE 0x{x}\n\n", .{ pl.OPCODE_SIZE });
+    try writer.print("%define OP_SIZE 0x{x}\n\n", .{pl.OPCODE_SIZE});
 
     inline for (comptime std.meta.fieldNames(core.mem.FiberHeader)) |fieldName| {
         const baseOffset = @offsetOf(core.mem.FiberHeader, fieldName);
@@ -371,7 +368,7 @@ fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
         if (comptime T == assembler.Register) {
             try writer.print("%define {s} {s}\n", .{ decl.name, @tagName(d) });
 
-            inline for (comptime &.{.{"int", 32}, .{"short", 16}, .{"byte", 8}}) |sub| {
+            inline for (comptime &.{ .{ "int", 32 }, .{ "short", 16 }, .{ "byte", 8 } }) |sub| {
                 try writer.print("%define {s}_{s} {s}\n", .{ decl.name, sub[0], @tagName(d.toBitSize(sub[1])) });
             }
         } else {
@@ -382,7 +379,6 @@ fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
             try writer.writeAll("\n");
         }
     }
-
 
     try writer.writeAll(
         \\
@@ -487,7 +483,7 @@ fn generateAssemblyBody(categories: []const isa.Category, impls: *const std.Stri
                 const name = stream.getWritten();
 
                 if (impls.get(name)) |instr| {
-                    try writer.print("{s}:\n", .{ name });
+                    try writer.print("{s}:\n", .{name});
                     for (instr.block) |line| {
                         try writer.writeAll(line);
                         try writer.writeAll("\n");
@@ -535,7 +531,7 @@ fn generateAssemblyJumpTable(categories: []const isa.Category, writer: anytype) 
         }
     }
 
-    try writer.print("\nR_JUMP_TABLE_LENGTH equ 0x{x} ; {d}\n\n\n", .{opcode, opcode});
+    try writer.print("\nR_JUMP_TABLE_LENGTH equ 0x{x} ; {d}\n\n\n", .{ opcode, opcode });
 }
 
 fn generateAssemblyTemplate(categories: []const isa.Category, writer: anytype) !void {
@@ -567,8 +563,6 @@ fn generateAssemblyTemplate(categories: []const isa.Category, writer: anytype) !
         try writer.writeAll("\n");
     }
 }
-
-
 
 // Types generation
 
@@ -730,13 +724,12 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
                 try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
                 try writer.writeAll("\" = packed struct { ");
 
-
                 var size: usize = 0;
                 var wordOffset: usize = 2;
 
                 for (instruction.operands, 0..) |operand, i| {
                     const operandSize = operand.sizeOf();
-                    const remSize = isa.Operand.totalSizeNoPadding(instruction.operands[i + 1..]);
+                    const remSize = isa.Operand.totalSizeNoPadding(instruction.operands[i + 1 ..]);
 
                     if (isa.wordBoundaryHeuristic(operand, remSize, wordOffset)) {
                         break;
@@ -747,15 +740,15 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
 
                     try writer.writeAll(switch (operand) {
                         .register => "core.Register",
-                        .upvalue => "Id.of(core.Upvalue)",
-                        .global => "Id.of(core.Global)",
-                        .function => "Id.of(core.Function)",
+                        .upvalue => "core.UpvalueId",
+                        .global => "core.GlobalId",
+                        .function => "core.FunctionId",
                         .abi => "core.Abi",
-                        .builtin => "Id.of(core.BuiltinAddress)",
-                        .foreign => "Id.of(core.ForeignAddress)",
-                        .effect => "Id.of(core.Effect)",
-                        .handler_set => "Id.of(core.HandlerSet)",
-                        .constant => "Id.of(core.Constant)",
+                        .builtin => "core.BuiltinAddressId",
+                        .foreign => "core.ForeignAddressId",
+                        .effect => "core.EffectId",
+                        .handler_set => "core.HandlerSetId",
+                        .constant => "core.ConstantId",
                         .byte => "u8",
                         .short => "u16",
                         .int => "u32",
@@ -767,7 +760,6 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
                     wordOffset += operandSize;
                     size += operandSize;
                 }
-
 
                 try writer.writeAll("};\n\n");
 
@@ -1007,15 +999,15 @@ fn generateMarkdownIntro(writer: anytype) !void {
 
     try headerWriter.print(
         \\# Ribbon ISA v{}.{}.{}
-        , .{ isa.VERSION.major, isa.VERSION.minor, isa.VERSION.patch },
+    ,
+        .{ isa.VERSION.major, isa.VERSION.minor, isa.VERSION.patch },
     );
 
-
     if (isa.VERSION.pre) |pre| {
-        try headerWriter.print(" <sub><code>{s}</code></sub>", .{ pre });
+        try headerWriter.print(" <sub><code>{s}</code></sub>", .{pre});
 
         if (isa.VERSION.build) |build| {
-            try headerWriter.print("\n<sub>build</sub> <code>{s}</code>", .{ build });
+            try headerWriter.print("\n<sub>build</sub> <code>{s}</code>", .{build});
         }
     }
 
@@ -1061,7 +1053,7 @@ fn generateMarkdownSyntax(writer: anytype) !void {
         try operand.writeContextualReference(writer);
         try writer.writeAll(" | `");
         try operand.writeShortcode(writer);
-        try writer.print("` | {d} bits |\n", .{ operand.sizeOf() * 8 });
+        try writer.print("` | {d} bits |\n", .{operand.sizeOf() * 8});
     }
 
     try writer.writeAll("\n\n\n");
@@ -1113,19 +1105,20 @@ fn generateMarkdownBody(categories: []const isa.Category, writer: anytype) !void
         \\we have a grand total of `{}` unique instructions.
         \\
         \\
-        , .{ categories.len, countMnemonics(categories), averageMnemonicInstructions(categories), countInstructions(categories) },
+    ,
+        .{ categories.len, countMnemonics(categories), averageMnemonicInstructions(categories), countInstructions(categories) },
     );
 
     try generateMarkdownInstructionToc(categories, writer);
 
     var opcode: u16 = 0;
     for (categories) |*category| {
-        try writer.print("### {s}\n\n", .{ category.name });
+        try writer.print("### {s}\n\n", .{category.name});
 
         try formatMnemonicDescription(null, null, category.description, writer);
 
         for (category.mnemonics) |*mnemonic| {
-            try writer.print("#### {s}\n\n", .{ mnemonic.name });
+            try writer.print("#### {s}\n\n", .{mnemonic.name});
 
             try formatMnemonicDescription(null, null, mnemonic.description, writer);
 
@@ -1183,7 +1176,6 @@ fn formatInstructionArgument(argument: []const u8, operands: []const isa.Operand
             return error.InvalidOperandIndex;
         }
 
-
         try writer.writeByte('`');
         _ = try isa.formatOperand(operandIndex, operands, writer);
         try writer.writeByte('`');
@@ -1200,7 +1192,7 @@ fn formatInstructionOperands(space: []const u8, tail: []const u8, instruction: *
 
     for (instruction.operands, 0..) |operand, i| {
         const operandSize = operand.sizeOf();
-        const remSize = isa.Operand.totalSizeNoPadding(instruction.operands[i + 1..]);
+        const remSize = isa.Operand.totalSizeNoPadding(instruction.operands[i + 1 ..]);
 
         if (isa.wordBoundaryHeuristic(operand, remSize, wordOffset)) {
             if (wordOffset < 8) {
@@ -1268,7 +1260,7 @@ fn formatMnemonicArgument(argument: []const u8, writer: anytype) !bool {
         if (@inComptime()) {
             @compileLog("unknown arg", argument);
         } else {
-            log.err("unknown arg: `{s}`", .{ argument });
+            log.err("unknown arg: `{s}`", .{argument});
         }
 
         return error.InvalidMnemonicArg;
@@ -1294,7 +1286,7 @@ fn formatInstructionDescription(linePrefix: ?[]const u8, sanitizeBreak: ?[]const
         }
     };
 
-    return formatDescriptionWith(linePrefix, sanitizeBreak, description, writer, Ctx { .operands = operands });
+    return formatDescriptionWith(linePrefix, sanitizeBreak, description, writer, Ctx{ .operands = operands });
 }
 
 fn formatDescriptionWith(linePrefix: ?[]const u8, sanitizeBreak: ?[]const u8, formatString: []const u8, writer: anytype, ctx: anytype) !void {
@@ -1336,7 +1328,7 @@ fn formatDescriptionWith(linePrefix: ?[]const u8, sanitizeBreak: ?[]const u8, fo
                 if (@inComptime()) {
                     @compileLog("unknown arg", arg, argStart, argEnd);
                 } else {
-                    log.err("unknown arg: `{s}`", .{ arg });
+                    log.err("unknown arg: `{s}`", .{arg});
                 }
                 return error.UnknownArg;
             }
@@ -1374,7 +1366,7 @@ fn writeKebab(name: []const u8, writer: anytype) !void {
 }
 
 fn writeLink(name: []const u8, writer: anytype) !void {
-    try writer.print("[{s}](#", .{ name });
+    try writer.print("[{s}](#", .{name});
     try writeKebab(name, writer);
     try writer.writeByte(')');
 }
@@ -1389,7 +1381,8 @@ fn paste(generatorName: []const u8, header: []const u8, commentPre: []const u8, 
         \\{s} See `{s}` for the template; `codegen.zig/#{s}` for the generator {s}
         \\
         \\{s}
-        , .{
+    ,
+        .{
             commentPre,
             commentPost,
             commentPre,

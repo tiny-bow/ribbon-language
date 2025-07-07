@@ -909,9 +909,9 @@ pub const Ref = packed struct(u64) {
 const RefMap = pl.UniqueReprMap(Ref, Ref, 80); // NOTE: cannot be exported due to `std.testing.refAllDeclsRecursive`
 
 /// Uniquely identifies a child context in an ir.
-pub const ContextId = common.Id.ofSize(Context, 16);
+pub const ContextId = common.Id.of(Context, 16);
 /// Uniquely identifies a node in an unknown ir context.
-pub const NodeId = common.Id.ofSize(Node, 32);
+pub const NodeId = common.Id.of(Node, 32);
 
 /// Uniquely identifies a node in a specific ir context.
 pub const Id = packed struct {

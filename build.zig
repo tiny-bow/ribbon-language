@@ -198,7 +198,7 @@ pub fn build(b: *std.Build) !void {
     bytecode_mod.addImport("VirtualWriter", VirtualWriter_mod);
 
     core_mod.addImport("platform", platform_mod);
-    core_mod.addImport("Id", Id_mod);
+    core_mod.addImport("common", common_mod);
     core_mod.addImport("Buffer", Buffer_mod);
     core_mod.addImport("Stack", Stack_mod);
 

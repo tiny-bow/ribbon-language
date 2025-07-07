@@ -20,8 +20,8 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-pub const BytecodeId = common.Id.ofSize(core.Bytecode, 32);
-pub const CompilerId = common.Id.ofSize(Compilation, 32);
+pub const BytecodeId = common.Id.of(core.Bytecode, 32);
+pub const CompilerId = common.Id.of(Compilation, 32);
 
 pub const Context = struct {
     compiler: *backend.Compiler,
@@ -1729,7 +1729,7 @@ pub fn getExpr(
 
 /// rml concrete syntax tree types.
 pub const cst_types = gen: {
-    var fresh = common.Id.of(source.SyntaxTree).fromInt(0);
+    var fresh = source.SyntaxTreeType.fromInt(0);
 
     break :gen .{
         .Int = fresh.next(),
@@ -1849,7 +1849,7 @@ pub fn nuds() [10]source.Nud {
                                 .precedence = bp,
                                 .type = cst_types.Lambda,
                                 .token = token,
-                                .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                                .operands = .fromSlice(buff),
                             };
                         } else {
                             log.debug("function: expected dot token, found {}; panic", .{next_tok});
@@ -2076,7 +2076,7 @@ pub fn nuds() [10]source.Nud {
                             .precedence = bp,
                             .type = cst_types.String,
                             .token = token,
-                            .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                            .operands = .fromSlice(buff),
                         };
                     } else if (require_symbol) {
                         log.debug("single_quote: require symbol token {}", .{content});
@@ -2358,7 +2358,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Decl,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.decl,
@@ -2393,7 +2393,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Set,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.set,
@@ -2430,7 +2430,7 @@ pub fn leds() [17]source.Led {
                             .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
-                            .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                            .operands = .fromSlice(buff),
                         };
                     };
                     errdefer rhs.deinit(parser.allocator);
@@ -2449,7 +2449,7 @@ pub fn leds() [17]source.Led {
                             .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
-                            .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(new_operands),
+                            .operands = .fromSlice(new_operands),
                         };
                     } else if (lhs.type == cst_types.List) {
                         log.debug("list: lhs is a list, concatenating rhs", .{});
@@ -2463,7 +2463,7 @@ pub fn leds() [17]source.Led {
                             .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
-                            .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(new_operands),
+                            .operands = .fromSlice(new_operands),
                         };
                     } else if (rhs.type == cst_types.List) {
                         log.debug("list: rhs is a list, concatenating lhs", .{});
@@ -2477,7 +2477,7 @@ pub fn leds() [17]source.Led {
                             .precedence = bp,
                             .type = cst_types.List,
                             .token = token,
-                            .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(new_operands),
+                            .operands = .fromSlice(new_operands),
                         };
                     } else {
                         log.debug("list: creating new list", .{});
@@ -2492,7 +2492,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.List,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.list,
@@ -2546,7 +2546,7 @@ pub fn leds() [17]source.Led {
                             .precedence = bp,
                             .type = cst_types.Seq,
                             .token = token,
-                            .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(new_operands),
+                            .operands = .fromSlice(new_operands),
                         };
                     } else if (lhs.type == cst_types.Seq) {
                         log.debug("seq: lhs is a seq, concatenating rhs", .{});
@@ -2560,7 +2560,7 @@ pub fn leds() [17]source.Led {
                             .precedence = bp,
                             .type = cst_types.Seq,
                             .token = token,
-                            .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(new_operands),
+                            .operands = .fromSlice(new_operands),
                         };
                     } else if (rhs.type == cst_types.Seq) {
                         log.debug("seq: rhs is a seq, concatenating lhs", .{});
@@ -2574,7 +2574,7 @@ pub fn leds() [17]source.Led {
                             .precedence = bp,
                             .type = cst_types.Seq,
                             .token = token,
-                            .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(new_operands),
+                            .operands = .fromSlice(new_operands),
                         };
                     } else {
                         log.debug("seq: creating new seq", .{});
@@ -2589,7 +2589,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Seq,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.seq,
@@ -2632,7 +2632,7 @@ pub fn leds() [17]source.Led {
                             .precedence = bp,
                             .type = cst_types.Apply,
                             .token = token,
-                            .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(new_operands),
+                            .operands = .fromSlice(new_operands),
                         };
                     } else {
                         log.debug("apply: lhs is not an apply, creating new apply", .{});
@@ -2650,10 +2650,10 @@ pub fn leds() [17]source.Led {
                             .location = token.location,
                             .tag = .sequence,
                             .data = source.TokenData{
-                                .sequence = common.Id.Buffer(u8, .constant).fromSlice(" "),
+                                .sequence = .fromSlice(" "),
                             },
                         },
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.apply,
@@ -2684,7 +2684,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.mul,
@@ -2715,7 +2715,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.div,
@@ -2746,7 +2746,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.add,
@@ -2777,7 +2777,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.sub,
@@ -2813,7 +2813,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.eq,
@@ -2849,7 +2849,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.neq,
@@ -2885,7 +2885,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.lt,
@@ -2921,7 +2921,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.gt,
@@ -2957,7 +2957,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.leq,
@@ -2993,7 +2993,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.geq,
@@ -3025,7 +3025,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.logical_and,
@@ -3057,7 +3057,7 @@ pub fn leds() [17]source.Led {
                         .precedence = bp,
                         .type = cst_types.Binary,
                         .token = token,
-                        .operands = common.Id.Buffer(source.SyntaxTree, .constant).fromSlice(buff),
+                        .operands = .fromSlice(buff),
                     };
                 }
             }.logical_or,
