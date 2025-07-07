@@ -39,7 +39,7 @@ To serve these creators, Ribbon provides:
 
 Ribbon is an embeddable programming language, designed to resolve the long-standing tension between high-level developer experience and low-level systems access. It combines influences from the latest in academic research and industry practice to offer performance without sacrificing usability. It is designed for building and extending realtime applications like games and data analytics tools, as well as providing a language-design toolkit for DSLs and academic pursuits.
 
-We are in a focused development phase, with a `0.1.0` release targeted for **Q4 2025**. This first major release will deliver a feature-complete bytecode compiler and runtime. This will establish the foundational baseline for building the Ribbon ecosystem. From this point forward, API stability and the native backend will become the primary focal points of compiler development. This will allow development of the standard library to begin in earnest and enable the community to create the first experimental applications.
+We are in a focused development phase, with a `0.1.0` release targeted for **Q4 2025**. This first major release will deliver a feature-complete bytecode compiler and interpreter. This will establish the foundational baseline for building the Ribbon ecosystem. From this point forward, API stability as well as the JIT and native backends will become the primary focal points of compiler development. This will allow development of the standard library to begin in earnest and enable the community to create the first experimental applications.
 
 
 
