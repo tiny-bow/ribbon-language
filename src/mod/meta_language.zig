@@ -20,14 +20,12 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-pub const BytecodeId = common.Id.of(core.Bytecode, 32);
-pub const CompilerId = common.Id.of(Compilation, 32);
+pub const BytecodeId = backend.ArtifactId;
+pub const CompilerId = backend.ArtifactId;
 
 pub const Context = struct {
     compiler: *backend.Compiler,
     compilations: pl.UniqueReprArrayMap(CompilerId, *Compilation, false) = .empty,
-    artifacts: pl.UniqueReprArrayMap(BytecodeId, backend.Artifact, false) = .empty,
-    fresh_id: BytecodeId = .fromInt(0),
 
     pub fn init(allocator: std.mem.Allocator) !Context {
         return Context{
@@ -36,38 +34,19 @@ pub const Context = struct {
     }
 
     pub fn deinit(self: *Context) void {
-        for (self.artifacts.values()) |artifact| {
-            artifact.deinit();
-        }
-
         self.compiler.deinit();
     }
 
-    pub fn takeArtifact(self: *Context, id: BytecodeId) ?backend.Artifact {
-        const artifact = self.artifacts.get(id) orelse return null;
-
-        _ = self.artifacts.swapRemove(id);
-
-        return artifact;
-    }
-
     pub fn getArtifact(self: *Context, id: BytecodeId) ?backend.Artifact {
-        return self.artifacts.get(id);
+        return self.compiler.getArtifact(id);
     }
 
-    pub fn addArtifact(self: *Context, artifact: backend.Artifact) !BytecodeId {
-        const id = self.fresh_id;
-        self.fresh_id = self.fresh_id.next();
-
-        try self.artifacts.put(self.compiler.allocator, id, artifact);
-
-        return id;
+    pub fn addArtifact(self: *Context, artifact: core.Bytecode) !BytecodeId {
+        return self.compiler.addArtifact(artifact.header);
     }
 
     pub fn delArtifact(self: *Context, id: BytecodeId) void {
-        const artifact = self.takeArtifact(id) orelse return;
-
-        artifact.deinit();
+        self.compiler.freeArtifact(id);
     }
 
     pub fn createCompiler(self: *Context) !*Compilation {
@@ -88,11 +67,104 @@ pub const Context = struct {
         return compiler;
     }
 
-    pub fn resolveCompilation(self: *Context, compilation: *Compilation) !BytecodeId {
+    pub fn resolveCompilation(self: *Context, compilation: *Compilation) !struct { BytecodeId, core.Bytecode } {
         const artifact = try self.compiler.compileJob(compilation.job);
-
-        return self.addArtifact(artifact);
+        return .{ artifact.id, core.Bytecode{ .header = @alignCast(@ptrCast(artifact.value)) } };
     }
+};
+
+pub const builtins = struct {
+    pub fn value_type(compilation: *Compilation) !ir.Ref {
+        const ctx = compilation.job.context;
+
+        return ir.builders.struct_type(
+            ctx,
+            try compilation.getBuiltin(.c_symbol),
+            &.{
+                try ir.builders.symbol(ctx, "obj"), // FIXME: its annoying having to do `ir.builders.foo(ctx,` everywhere; abstract to `ctx.build(foo`, and then `compilation.build(foo`.
+                try ir.builders.symbol(ctx, "ptr"),
+                try ir.builders.symbol(ctx, "tag"),
+                try ir.builders.symbol(ctx, "nan"),
+            },
+            &.{
+                try ir.builders.integer_type(ctx, .unsigned, @bitSizeOf(Value.Obj)),
+                try ir.builders.integer_type(ctx, .unsigned, @bitSizeOf(Value.PtrBits)),
+                try ir.builders.integer_type(ctx, .unsigned, @bitSizeOf(Value.Tag)),
+                try ir.builders.integer_type(ctx, .unsigned, @bitSizeOf(Value.NanBits)),
+            },
+        );
+    }
+};
+
+pub const BytecodeBuiltin = bytecode_builtin: {
+    const decls = std.meta.declarations(builtins);
+    var fields = [1]std.builtin.Type.EnumField{undefined} ** decls.len;
+
+    for (decls, 0..) |decl, i| {
+        fields[i] = .{
+            .name = decl.name,
+            .value = i + 10_000, // avoid colliding with ir.Builtin values
+        };
+    }
+
+    break :bytecode_builtin @Type(.{
+        .@"enum" = std.builtin.Type.Enum{
+            .tag_type = u32,
+            .fields = &fields,
+            .decls = &.{},
+            .is_exhaustive = true,
+        },
+    });
+};
+
+pub const Builtin = builtin: {
+    const ir_builtins: []const std.builtin.Type.EnumField = std.meta.fields(ir.Builtin);
+    const bytecode_builtins: []const std.builtin.Type.EnumField = std.meta.fields(BytecodeBuiltin);
+    var fields = [1]std.builtin.Type.EnumField{undefined} ** (ir_builtins.len + bytecode_builtins.len);
+
+    for (ir_builtins, 0..) |builtin, i| {
+        fields[i] = .{
+            .name = builtin.name,
+            .value = builtin.value,
+        };
+    }
+
+    for (bytecode_builtins, ir_builtins.len..) |builtin, i| {
+        fields[i] = .{
+            .name = builtin.name,
+            .value = builtin.value,
+        };
+    }
+
+    break :builtin @Type(.{
+        .@"enum" = std.builtin.Type.Enum{
+            .tag_type = u32,
+            .fields = &fields,
+            .decls = &.{},
+            .is_exhaustive = true,
+        },
+    });
+};
+
+pub fn identifyBuiltin(builtin: Builtin) union(enum) { bytecode: BytecodeBuiltin, ir: ir.Builtin } {
+    const i = @intFromEnum(builtin);
+    return if (i < 10_000) .{ .ir = @enumFromInt(i) } else .{ .bytecode = @enumFromInt(i) };
+}
+
+pub const BuiltinInitializer = fn (*Compilation) anyerror!ir.Ref;
+
+/// Get the initializer function for a given builtin construct.
+pub fn getBuiltinInitializer(builtin: BytecodeBuiltin) *const BuiltinInitializer {
+    return builtin_table[@intFromEnum(builtin)];
+}
+
+pub const builtin_table = builtin_table: {
+    const field_names = std.meta.fieldNames(BytecodeBuiltin);
+    var functions = [1]*const fn (*Compilation) anyerror!ir.Ref{undefined} ** field_names.len;
+    for (field_names, 0..) |field_name, i| {
+        functions[i] = @field(builtins, field_name);
+    }
+    break :builtin_table functions;
 };
 
 pub const Compilation = struct {
@@ -100,51 +172,26 @@ pub const Compilation = struct {
     context: *Context,
     job: *backend.Job,
     arena: std.heap.ArenaAllocator,
-    builtin: struct {
-        value_data_type: ir.Ref = .nil,
-        value_type: ir.Ref = .nil,
-    } = .{},
+    builtin: pl.StringMap(ir.Ref) = .{},
 
-    pub fn getBuiltin(self: *Compilation, comptime builtin: std.meta.FieldEnum(@TypeOf(self.builtin))) !ir.Ref {
-        const name = comptime @tagName(builtin);
-        const initializer = comptime @field(builtin_initializers, name);
-        const ref: *ir.Ref = &@field(self.builtin, name);
+    pub fn getBuiltin(self: *Compilation, builtin: Builtin) !ir.Ref {
+        const gop = try self.builtin.getOrPut(self.arena.allocator(), @tagName(builtin));
 
-        if (ref.* == ir.Ref.nil) {
-            ref.* = try initializer(self);
+        if (!gop.found_existing) {
+            const ref = switch (identifyBuiltin(builtin)) {
+                .ir => |ir_builtin| try self.job.context.getBuiltin(ir_builtin),
+                .bytecode => |bytecode_builtin| bytecode: {
+                    const initializer = getBuiltinInitializer(bytecode_builtin);
+
+                    break :bytecode try initializer(self);
+                },
+            };
+
+            gop.value_ptr.* = ref;
         }
 
-        return ref.*;
+        return gop.value_ptr.*;
     }
-
-    pub const builtin_initializers = struct {
-        pub fn value_type(self: *Compilation) !ir.Ref {
-            const graph = self.job.context;
-
-            const kind_tag = try graph.internPrimitive(ir.KindTag.data);
-            const kind = try graph.internStructure(.kind, .{
-                .output_tag = kind_tag,
-                .input_kinds = ir.Ref.nil,
-            });
-
-            const constructor = try graph.addStructure(.constructor, .{
-                .kind = kind,
-            });
-
-            const ud = try self.job.context.getUserData(constructor);
-
-            ud.computeLayout = &struct {
-                pub fn value_layout(_: ir.Ref, _: []const ir.Ref) !struct { u64, pl.Alignment } {
-                    return .{ 8, 8 };
-                }
-            }.value_layout;
-
-            return graph.internStructure(.type, .{
-                .constructor = constructor,
-                .input_types = ir.Ref.nil,
-            });
-        }
-    };
 
     pub fn addSource(self: *Compilation, source_name: []const u8, src: []const u8) !void {
         if (try getExpr(self.arena.allocator(), .{}, source_name, src)) |x| {
@@ -181,7 +228,7 @@ pub const Compilation = struct {
                     .value = try graph.internBuffer(x),
                 });
             },
-            .identifier => |x| return self.getLocal(x),
+            .identifier => |x| return self.getLocal(x), // TODO: handle nil, true, false etc
             .symbol => pl.todo(noreturn, "symbol expr"),
             .seq => {
                 // const block = try graph.addLocalStructure(.block, .{
@@ -237,16 +284,16 @@ pub const Value = packed struct(u64) {
     val_bits: Data,
     /// Tag bits are used when the value is not an f64, and serve as a second discriminant, between immediates.
     tag_bits: Tag,
-    /// The following bits are used by f64 as the sign and exponent, but when we encode other values,
+    /// Nan bits are used by f64 as the sign and exponent, but when we encode other values,
     /// these are all 1s, forming the first discriminant of the value.
-    nan_bits: u13,
+    nan_bits: NanBits,
 
     /// Payload of a `Value` that is not an f64.
     pub const Data = packed struct(u48) {
         /// The lower 3 bits are used to store the third discriminant, between the pointer types.
         obj_bits: Obj,
         /// All pointers must be aligned to 8 bytes, freeing up the lower 3 bits for the discriminant.
-        ptr_bits: u45,
+        ptr_bits: PtrBits,
 
         /// Same as @bitcast but the type is known.
         pub fn asBits(self: @This()) u48 {
@@ -264,9 +311,15 @@ pub const Value = packed struct(u64) {
         }
     };
 
-    const NAN_FILL: u13 = 0b1_11111111111_1; // signalling NaN bits; sign is irrelevant but prefer keeping it on as this makes nil all ones
-    const NAN_MASK: u13 = 0b0_11111111111_0; // we dont care about sign or signal when checking for nans
-    const PTR_FILL: u45 = 0b111111111111111111111111111111111111111111111;
+    const NAN_FILL: NanBits = 0b1_11111111111_1; // signalling NaN bits; sign is irrelevant but prefer keeping it on as this makes nil all ones
+    const NAN_MASK: NanBits = 0b0_11111111111_0; // we dont care about sign or signal when checking for nans
+    const PTR_FILL: PtrBits = 0b111111111111111111111111111111111111111111111;
+
+    /// Nan bits are used by f64 as the sign and exponent, but when we encode other values,
+    /// these are all 1s, forming the first discriminant of the value.
+    pub const NanBits = u13;
+    /// All pointers must be aligned to 8 bytes, freeing up the lower 3 bits for the discriminant.
+    pub const PtrBits = u45;
 
     /// The tag bits distinguish between different types of immediate values, separating them from f64 and object.
     pub const Tag = enum(u3) {

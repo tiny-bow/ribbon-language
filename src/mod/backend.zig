@@ -13,14 +13,11 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-pub const Artifact = packed struct {
-    target: Target,
-    value: *anyopaque,
+pub const ArtifactId = Id.of(core.ForeignAddressId, 64);
 
-    /// Free the artifact, returning it to the target.
-    pub fn deinit(self: Artifact) void {
-        self.target.freeArtifact(self);
-    }
+pub const Artifact = packed struct {
+    id: ArtifactId,
+    value: *const anyopaque,
 };
 
 pub const Target = packed struct {
@@ -29,39 +26,79 @@ pub const Target = packed struct {
 
     pub const Error = anyerror;
 
+    /// Run a compilation job on this target.
     pub fn runJob(self: Target, job: *Job) Target.Error!Artifact {
-        return @call(.auto, self.vtable.runJob, .{ self.data, job });
+        return self.vtable.runJob(self.data, job);
     }
 
-    pub fn freeArtifact(self: Target, artifact: Artifact) void {
-        @call(.auto, self.vtable.freeArtifact, .{ self.data, artifact });
+    /// Add a compiled artifact and get its ID.
+    pub fn addArtifact(self: Target, artifact: *const anyopaque) Target.Error!ArtifactId {
+        return self.vtable.addArtifact(self.data, artifact);
     }
 
+    /// Get an artifact by its ID.
+    pub fn getArtifact(self: Target, id: ArtifactId) ?Artifact {
+        return self.vtable.getArtifact(self.data, id);
+    }
+
+    /// Free a compiled artifact, returning it to the target.
+    pub fn freeArtifact(self: Target, id: ArtifactId) void {
+        self.vtable.freeArtifact(self.data, id);
+    }
+
+    /// Deinitialize the target, freeing all memory it owns.
     pub fn deinit(self: Target, compiler: *Compiler) void {
-        @call(.auto, self.vtable.deinit, .{ self.data, compiler });
+        self.vtable.deinit(self.data, compiler);
+    }
+
+    /// Cast the target to a specific type.
+    /// * Does not check the type outside of safe modes
+    pub fn forceType(self: Target, comptime T: type) *T {
+        std.debug.assert(self.vtable.type_id == pl.TypeId.of(T));
+        return @ptrCast(self.data);
+    }
+
+    /// Cast the target to a specific type, checking the type at runtime.
+    pub fn castType(self: Target, comptime T: type) ?*T {
+        if (self.vtable.type_id == pl.TypeId.of(T)) {
+            return @ptrCast(self.data);
+        } else {
+            return null;
+        }
     }
 
     pub const VTable = struct {
+        type_id: pl.TypeId,
         runJob: *const fn (self: *anyopaque, job: *Job) Target.Error!Artifact,
-        freeArtifact: *const fn (self: *anyopaque, artifact: Artifact) void,
+        addArtifact: *const fn (self: *anyopaque, artifact: *const anyopaque) Target.Error!ArtifactId,
+        getArtifact: *const fn (self: *anyopaque, id: ArtifactId) ?Artifact,
+        freeArtifact: *const fn (self: *anyopaque, id: ArtifactId) void,
         deinit: *const fn (self: *anyopaque, compiler: *Compiler) void,
+
+        /// Create a vtable for a specific target type.
+        pub fn of(comptime T: type) VTable {
+            comptime return .{
+                .type_id = pl.TypeId.of(T),
+                .runJob = @ptrCast(&T.runJob),
+                .addArtifact = @ptrCast(&T.addArtifact),
+                .getArtifact = @ptrCast(&T.getArtifact),
+                .freeArtifact = @ptrCast(&T.freeArtifact),
+                .deinit = @ptrCast(&T.deinit),
+            };
+        }
     };
 };
 
 /// The default target for compiling Ribbon IR into bytecode.
 pub const BytecodeTarget = struct {
-    /// Addresses of bytecode values already compiled.
-    table: bytecode.Table = .{},
+    compiler: *Compiler,
+    artifacts: pl.UniqueReprMap(ArtifactId, core.Bytecode, 80) = .{},
 
     /// Get a `backend.Target` object from this bytecode target.
     pub fn target(self: *BytecodeTarget) Target {
         return Target{
             .data = @ptrCast(self),
-            .vtable = comptime &.{
-                .runJob = @ptrCast(&runJob),
-                .freeArtifact = @ptrCast(&freeArtifact),
-                .deinit = @ptrCast(&deinit),
-            },
+            .vtable = comptime &Target.VTable.of(@This()),
         };
     }
 
@@ -70,36 +107,54 @@ pub const BytecodeTarget = struct {
         const self = try compiler.allocator.create(BytecodeTarget);
         errdefer compiler.allocator.destroy(self);
 
-        self.* = BytecodeTarget{};
+        self.* = BytecodeTarget{ .compiler = compiler };
 
         return self;
     }
 
     /// Deinitialize the bytecode target, freeing all memory it owns.
     pub fn deinit(self: *BytecodeTarget, compiler: *Compiler) void {
-        self.table.deinit(compiler.allocator);
         compiler.allocator.destroy(self);
     }
 
     /// Given a compilation job, compile the IR in its context into a bytecode artifact.
     pub fn runJob(self: *BytecodeTarget, job: *Job) Target.Error!Artifact {
-        // Compile the IR context into bytecode.
-        // TODO: ...
-        const compiled = pl.todo(*core.Bytecode, .{job});
+        // TODO: Compile the IR context into bytecode.
+        const compiled = pl.todo(core.Bytecode, .{job});
 
-        // Create an artifact to return.
+        try self.artifacts.put(self.compiler.allocator, job.id, compiled);
+
         return Artifact{
-            .target = self.target(),
-            .value = @ptrCast(compiled),
+            .id = job.id,
+            .value = @ptrCast(compiled.header),
+        };
+    }
+
+    /// Add a compiled bytecode artifact and get its ID.
+    pub fn addArtifact(self: *BytecodeTarget, artifact: *anyopaque) Target.Error!ArtifactId {
+        const compiled: core.Bytecode = .{ .header = @alignCast(@ptrCast(artifact)) };
+        const id = self.compiler.fresh_id.next();
+
+        try self.artifacts.put(self.compiler.allocator, id, compiled);
+
+        return id;
+    }
+
+    /// Get an artifact by its ID.
+    pub fn getArtifact(self: *BytecodeTarget, id: ArtifactId) ?Artifact {
+        const compiled = self.artifacts.get(id) orelse return null;
+
+        return Artifact{
+            .id = id,
+            .value = @ptrCast(compiled.header),
         };
     }
 
     /// Free compiled bytecode artifacts.
-    pub fn freeArtifact(self: *BytecodeTarget, artifact: Artifact) void {
-        // Free the target-specific data at the opaque pointer in the artifact.
-        std.debug.assert(artifact.target == self.target());
-        // TODO: ...
-        pl.todo(noreturn, .{});
+    pub fn freeArtifact(self: *BytecodeTarget, id: ArtifactId) void {
+        if (self.artifacts.fetchRemove(id)) |kv| {
+            kv.value.deinit();
+        }
     }
 };
 
@@ -112,6 +167,8 @@ pub const Compiler = struct {
     context: *ir.Context,
     /// the target for this compiler to translate ir into
     target: Target,
+    /// state for generating unique job/artifact ids
+    fresh_id: ArtifactId = .fromInt(0),
 
     /// Create an ir compiler instance.
     /// * This will create a new IR context, and use the same allocator for the IR and compiled data.
@@ -158,12 +215,18 @@ pub const Compiler = struct {
     /// Create a new compilation job for the given IR context.
     /// * Actual compilation is done when the job is returned to the compiler.
     pub fn createJob(self: *Compiler) !*Job {
-        const ctx = try self.context.getRoot().createContext();
+        const root = self.context.getRoot();
+
+        root.mutex.lock();
+        defer root.mutex.unlock();
+
+        const ctx = try root.createContext();
 
         const job = try self.allocator.create(Job);
         errdefer self.allocator.destroy(job);
 
         job.* = Job{
+            .id = self.fresh_id.next(),
             .root = self,
             .context = ctx,
         };
@@ -174,17 +237,47 @@ pub const Compiler = struct {
     /// Compile the given job, returning the resulting artifact.
     pub fn compileJob(self: *Compiler, job: *Job) Target.Error!Artifact {
         std.debug.assert(job.root == self);
+        const root = self.context.getRoot();
+
+        root.mutex.lock();
+        defer root.mutex.unlock();
 
         const out = try self.target.runJob(job);
 
-        // TODO: merge the job's context into the compiler state.
-        // we do this when the job succeeds, so that the compiler state is a record of what was compiled.
-        // hurdles:
-        // * no ir merge function as of now
-        // * jobs may use a different allocator than the compiler
-        // * the job context may reference values in the compiler's context (?)
+        try root.merge(job.context);
 
         return out;
+    }
+
+    /// Get the target for this compiler, cast to a specific type.
+    /// * Does not check the type outside of safe modes.
+    pub fn getTarget(self: *Compiler, comptime T: type) *T {
+        std.debug.assert(self.target.vtable.type_id == pl.TypeId.of(T));
+        return @ptrCast(self.target.data);
+    }
+
+    /// Get the target for this compiler, cast to a specific type, checking the type at runtime.
+    pub fn castTarget(self: *Compiler, comptime T: type) ?*T {
+        if (self.target.vtable.type_id == pl.TypeId.of(T)) {
+            return @ptrCast(self.target.data);
+        } else {
+            return null;
+        }
+    }
+
+    /// Get a compiled artifact by its ID.
+    pub fn getArtifact(self: *Compiler, id: ArtifactId) ?Artifact {
+        return self.target.getArtifact(id);
+    }
+
+    /// Add a compiled artifact and get its ID.
+    pub fn addArtifact(self: *Compiler, artifact: *const anyopaque) Target.Error!ArtifactId {
+        return self.target.addArtifact(artifact);
+    }
+
+    /// Free a compiled artifact, returning it to the target.
+    pub fn freeArtifact(self: *Compiler, id: ArtifactId) void {
+        self.target.freeArtifact(id);
     }
 };
 
@@ -192,6 +285,8 @@ pub const Compiler = struct {
 pub const Job = struct {
     /// The root compiler storing common state between jobs
     root: *Compiler,
+    /// Identifies the job, used to ensure that the job is not reused after it has been compiled.
+    id: ArtifactId,
     /// The ir segment being compiled
     context: *ir.Context,
 

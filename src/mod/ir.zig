@@ -152,6 +152,12 @@ pub const Operation = enum(u8) {
     /// * The out-bound data edge is the return value of the prompt.
     prompt,
 
+    /// Combine r-values to create a composite r-value.
+    /// * The type of the instruction is the type of the composite value.
+    /// * The in-bound data edges are the r-values to combine.
+    /// * The out-bound data edge is the composite r-value.
+    compose,
+
     /// Get the value of a local variable.
     /// * The first in-bound data edge is the l-value of the local variable to get,
     /// the second is the value to set it to.
@@ -551,11 +557,11 @@ pub const Context = struct {
     }
 
     /// Get the ref associated with a builtin identity.
-    pub fn getBuiltin(self: *Context, comptime builtin: Builtin) !Ref {
+    pub fn getBuiltin(self: *Context, builtin: Builtin) !Ref {
         const gop = try self.builtin.getOrPut(self.gpa, builtin);
 
         if (!gop.found_existing) {
-            const initializer = @field(builtins, @tagName(builtin));
+            const initializer = getBuiltinInitializer(builtin);
 
             gop.value_ptr.* = try initializer(self);
         }
@@ -1512,12 +1518,28 @@ pub const Builtin: type = builtin: {
 
     break :builtin @Type(.{
         .@"enum" = std.builtin.Type.Enum{
-            .tag_type = u8,
+            .tag_type = u32,
             .fields = &fields,
             .decls = &.{},
             .is_exhaustive = true,
         },
     });
+};
+
+/// Get the initializer function for a given builtin construct.
+pub fn getBuiltinInitializer(builtin: Builtin) *const BuiltinInitializer {
+    return builtin_table[@intFromEnum(builtin)];
+}
+
+pub const BuiltinInitializer = fn (*Context) anyerror!Ref;
+
+pub const builtin_table = builtin_table: {
+    const field_names = std.meta.fieldNames(Builtin);
+    var functions = [1]*const fn (*Context) anyerror!Ref{undefined} ** field_names.len;
+    for (field_names, 0..) |field_name, i| {
+        functions[i] = @field(builtins, field_name);
+    }
+    break :builtin_table functions;
 };
 
 /// Comptime data structure describing the primitive data nodes in the ir. Type is `ir.Primitives`.
@@ -1708,6 +1730,14 @@ pub const builtins = struct {
             }),
         });
     }
+
+    pub fn c_symbol(ctx: *Context) !Ref {
+        return builders.symbol(ctx, "c");
+    }
+
+    pub fn packed_symbol(ctx: *Context) !Ref {
+        return builders.symbol(ctx, "packed");
+    }
 };
 
 pub const builders = struct {
@@ -1756,10 +1786,10 @@ pub const builders = struct {
         });
     }
 
-    pub fn symbol_type(ctx: *Context, name: []const u8) !Ref {
+    pub fn symbol(ctx: *Context, name: []const u8) !Ref {
         return ctx.internStructure(.type, .{
             .constructor = try ctx.getBuiltin(.symbol_constructor),
-            .input_types = try ctx.internList(.type, &.{try ctx.internData(.name, name)}),
+            .input_types = try ctx.internList(.type, &.{try ctx.internData(.name, name)}), // FIXME: create internName and internSource
         });
     }
 
@@ -1851,7 +1881,7 @@ test "ir integration - struct type creation with packed layout" {
     const field3_name = try ctx.internData(.name, "z");
 
     // Create packed layout symbol
-    const packed_layout = try builders.symbol_type(ctx, "packed");
+    const packed_layout = try builders.symbol(ctx, "packed");
 
     // Create the struct type with packed layout and three fields
     const field_names = [_]ir.Ref{ field1_name, field2_name, field3_name };
@@ -1987,7 +2017,7 @@ test "ir integration - builtin types and operations" {
     try testing.expect(i32_type.id.node != u64_type.id.node);
 
     // Test symbol type creation
-    const symbol_type = try builders.symbol_type(ctx, "my_symbol");
+    const symbol_type = try builders.symbol(ctx, "my_symbol");
     try testing.expect(symbol_type != ir.Ref.nil);
 }
 
