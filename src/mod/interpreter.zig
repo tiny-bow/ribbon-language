@@ -245,6 +245,89 @@ fn SignalSubset(comptime isLoop: bool) type {
     return if (isLoop) LoopSignalErr else StepSignalErr;
 }
 
+fn invokeForeign(self: *core.mem.FiberHeader, current: anytype, registerId: core.Register, functionOpaquePtr: *const anyopaque, argumentRegisterIds: []const core.Register) !void {
+    _ = self;
+
+    if (argumentRegisterIds.len > pl.MAX_FOREIGN_ARGUMENTS) {
+        @branchHint(.cold);
+        return error.Overflow;
+    }
+
+    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
+    for (argumentRegisterIds, 0..) |reg, i| {
+        arguments[i] = current.callFrame.vregs[reg.getIndex()];
+    }
+
+    const retVal = pl.callForeign(functionOpaquePtr, arguments);
+
+    current.callFrame.vregs[registerId.getIndex()] = retVal;
+}
+
+fn invokeInternal(self: *core.mem.FiberHeader, current: anytype, registerId: core.Register, functionOpaquePtr: *const anyopaque, argumentRegisterIds: []const core.Register) !void {
+    switch (core.InternalFunctionKind.fromAddress(functionOpaquePtr)) {
+        .bytecode => {
+            const functionPtr: *const core.Function = @ptrCast(@alignCast(functionOpaquePtr));
+
+            if (@intFromBool(self.calls.hasSpace(1)) & @intFromBool(self.data.hasSpace(functionPtr.stack_size)) == 0) {
+                @branchHint(.cold);
+                return error.Overflow;
+            }
+
+            const data = self.data.allocSlice(functionPtr.stack_size);
+
+            const newRegisters = self.registers.allocPtr();
+
+            self.calls.push(core.CallFrame{
+                .function = functionOpaquePtr,
+                .evidence = null,
+                .set_frame = self.sets.top(),
+                .data = data.ptr,
+                .vregs = newRegisters,
+                .ip = current.function.extents.base,
+                .output = registerId,
+            });
+
+            for (argumentRegisterIds, 0..) |reg, i| {
+                newRegisters[i] = current.callFrame.vregs[reg.getIndex()];
+            }
+        },
+        .builtin => {
+            const functionPtr: *const core.BuiltinFunction = @as(*const core.BuiltinAddress, @ptrCast(@alignCast(functionOpaquePtr))).asFunction();
+
+            const arguments = current.tempRegisters[0..argumentRegisterIds.len];
+            for (argumentRegisterIds, 0..) |reg, i| {
+                arguments[i] = current.callFrame.vregs[reg.getIndex()];
+            }
+
+            const result = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
+            switch (result) {
+                .cancel => |cancelInfo| {
+                    const cancelledSet = cancelInfo.set_frame;
+
+                    cancelledSet.call.ip = cancelledSet.handler_set.cancellation.address;
+                    cancelledSet.call.vregs[cancelledSet.handler_set.cancellation.register.getIndex()] = cancelInfo.value;
+
+                    self.calls.top_ptr = @ptrCast(cancelledSet.call);
+                    self.registers.top_ptr = @ptrCast(cancelledSet.call.vregs);
+
+                    while (@intFromPtr(self.sets.top()) >= @intFromPtr(cancelledSet.handler_set)) {
+                        const setFrame = self.sets.popPtr();
+                        for (setFrame.handler_set.effects.asSlice()) |effectId| {
+                            const effectIndex = current.function.header.get(effectId).toIndex();
+                            const evidencePointerSlot = &self.evidence[effectIndex];
+
+                            self.data.top_ptr = pl.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
+
+                            evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
+                        }
+                    }
+                },
+                .@"return" => |retVal| current.callFrame.vregs[registerId.getIndex()] = retVal,
+            }
+        },
+    }
+}
+
 fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || SignalSubset(isLoop))!void {
     log.debug("begin {s}", .{if (isLoop) "loop" else "step"});
 
@@ -377,204 +460,104 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             continue :dispatch try state.step(self);
         },
 
-        .call => { // Calls the function in Ry using A, placing the result in Rx
+        .call => { // Calls the internal function in Ry using A, placing the result in Rx
             const registerIdX = current.instruction.data.call.Rx;
             const registerIdY = current.instruction.data.call.Ry;
-            const abi = current.instruction.data.call.A;
+            const argumentCount = current.instruction.data.call.I;
+
             const argsBase: [*]const core.Register = @ptrCast(@alignCast(current.callFrame.ip));
-            const argumentCount = argsBase[0].getIndex();
-            const argumentRegisterIds = argsBase[1..argumentCount];
+            const argumentRegisterIds = argsBase[0..argumentCount];
 
             const functionOpaquePtr: *const anyopaque = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            const newIp: core.InstructionAddr = pl.alignTo(pl.offsetPointer(current.callFrame.ip, (argumentCount + 1) * @sizeOf(core.Register)), @alignOf(core.InstructionBits));
+            const newIp: core.InstructionAddr = pl.alignTo(
+                pl.offsetPointer(current.callFrame.ip, argumentCount * @sizeOf(core.Register)),
+                @alignOf(core.InstructionBits),
+            );
             std.debug.assert(current.function.extents.boundsCheck(newIp));
             current.callFrame.ip = newIp;
 
-            switch (abi) {
-                .bytecode => {
-                    const functionPtr: *const core.Function = @ptrCast(@alignCast(functionOpaquePtr));
-
-                    if (@intFromBool(self.calls.hasSpace(1)) & @intFromBool(self.data.hasSpace(functionPtr.stack_size)) == 0) {
-                        @branchHint(.cold);
-                        return error.Overflow;
-                    }
-
-                    const data = self.data.allocSlice(functionPtr.stack_size);
-
-                    const newRegisters = self.registers.allocPtr();
-
-                    self.calls.push(core.CallFrame{
-                        .function = functionOpaquePtr,
-                        .evidence = null,
-                        .set_frame = self.sets.top(),
-                        .data = data.ptr,
-                        .vregs = newRegisters,
-                        .ip = current.function.extents.base,
-                        .output = registerIdX,
-                    });
-
-                    for (argumentRegisterIds, 0..) |reg, i| {
-                        newRegisters[i] = current.callFrame.vregs[reg.getIndex()];
-                    }
-                },
-                .builtin => {
-                    const functionPtr: *const core.BuiltinFunction = @as(*const core.BuiltinAddress, @ptrCast(@alignCast(functionOpaquePtr))).asFunction();
-
-                    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
-                    for (argumentRegisterIds, 0..) |reg, i| {
-                        arguments[i] = current.callFrame.vregs[reg.getIndex()];
-                    }
-
-                    const result = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
-                    switch (result) {
-                        .cancel => |cancelInfo| {
-                            const cancelledSet = cancelInfo.set_frame;
-
-                            cancelledSet.call.ip = cancelledSet.handler_set.cancellation.address;
-                            cancelledSet.call.vregs[cancelledSet.handler_set.cancellation.register.getIndex()] = cancelInfo.value;
-
-                            self.calls.top_ptr = @ptrCast(cancelledSet.call);
-                            self.registers.top_ptr = @ptrCast(cancelledSet.call.vregs);
-
-                            while (@intFromPtr(self.sets.top()) >= @intFromPtr(cancelledSet.handler_set)) {
-                                const setFrame = self.sets.popPtr();
-                                for (setFrame.handler_set.effects.asSlice()) |effectId| {
-                                    const effectIndex = current.function.header.get(effectId).toIndex();
-                                    const evidencePointerSlot = &self.evidence[effectIndex];
-
-                                    self.data.top_ptr = pl.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
-
-                                    evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
-                                }
-                            }
-                        },
-                        .@"return" => |retVal| current.callFrame.vregs[registerIdX.getIndex()] = retVal,
-                    }
-                },
-                .foreign => {
-                    if (argumentRegisterIds.len > pl.MAX_FOREIGN_ARGUMENTS) {
-                        @branchHint(.cold);
-                        return error.Overflow;
-                    }
-
-                    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
-                    for (argumentRegisterIds, 0..) |reg, i| {
-                        arguments[i] = current.callFrame.vregs[reg.getIndex()];
-                    }
-
-                    const retVal = pl.callForeign(functionOpaquePtr, arguments);
-
-                    current.callFrame.vregs[registerIdX.getIndex()] = retVal;
-                },
-            }
+            try invokeInternal(self, current, registerIdX, functionOpaquePtr, argumentRegisterIds);
 
             continue :dispatch try state.step(self);
         },
-        .call_c => { // Calls the function at F using A, placing the result in R
+        .call_c => { // Calls  internal function at F using A, placing the result in R
             const registerId = current.instruction.data.call_c.R;
-            const functionId = current.instruction.data.call_c.F.cast(anyopaque);
-            const abi = current.instruction.data.call_c.A;
-            const argsBase: [*]const core.Register = @ptrCast(@alignCast(current.callFrame.ip));
-            const argumentCount = argsBase[0].getIndex();
-            const argumentRegisterIds = argsBase[1..argumentCount];
+            const functionId = current.instruction.data.call_c.F;
+            const argumentCount = current.instruction.data.call_c.I;
 
-            const newIp: core.InstructionAddr = pl.alignTo(pl.offsetPointer(current.callFrame.ip, (argumentCount + 1) * @sizeOf(core.Register)), @alignOf(core.InstructionBits));
+            const argsBase: [*]const core.Register = @ptrCast(@alignCast(current.callFrame.ip));
+            const argumentRegisterIds = argsBase[0..argumentCount];
+
+            const functionOpaquePtr = current.function.header.get(functionId.cast(anyopaque));
+
+            const newIp: core.InstructionAddr = pl.alignTo(
+                pl.offsetPointer(current.callFrame.ip, argumentCount * @sizeOf(core.Register)),
+                @alignOf(core.InstructionBits),
+            );
             std.debug.assert(current.function.extents.boundsCheck(newIp));
             current.callFrame.ip = newIp;
 
-            switch (abi) {
-                .bytecode => {
-                    const functionPtr = current.function.header.get(functionId.cast(core.Function));
+            try invokeInternal(self, current, registerId, functionOpaquePtr, argumentRegisterIds);
 
-                    if (@intFromBool(self.calls.hasSpace(1)) & @intFromBool(self.data.hasSpace(functionPtr.stack_size)) == 0) {
-                        @branchHint(.cold);
-                        return error.Overflow;
-                    }
+            continue :dispatch try state.step(self);
+        },
 
-                    const data = self.data.allocSlice(functionPtr.stack_size);
+        .f_call => { // Calls the c abi function in Ry using A, placing the result in Rx
+            const registerIdX = current.instruction.data.call.Rx;
+            const registerIdY = current.instruction.data.call.Ry;
+            const argumentCount = current.instruction.data.call.I;
 
-                    const newRegisters = self.registers.allocPtr();
+            const argsBase: [*]const core.Register = @ptrCast(@alignCast(current.callFrame.ip));
+            const argumentRegisterIds = argsBase[0..argumentCount];
 
-                    self.calls.push(core.CallFrame{
-                        .function = functionPtr,
-                        .evidence = null,
-                        .data = data.ptr,
-                        .vregs = newRegisters,
-                        .set_frame = self.sets.top(),
-                        .ip = functionPtr.extents.base,
-                        .output = registerId,
-                    });
+            const functionOpaquePtr: *const anyopaque = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
 
-                    for (argumentRegisterIds, 0..) |reg, i| {
-                        newRegisters[i] = current.callFrame.vregs[reg.getIndex()];
-                    }
-                },
-                .builtin => {
-                    const functionPtr: *const core.BuiltinFunction = current.function.header.get(functionId.cast(core.BuiltinAddress)).asFunction();
+            const newIp: core.InstructionAddr = pl.alignTo(
+                pl.offsetPointer(current.callFrame.ip, argumentCount * @sizeOf(core.Register)),
+                @alignOf(core.InstructionBits),
+            );
+            std.debug.assert(current.function.extents.boundsCheck(newIp));
+            current.callFrame.ip = newIp;
 
-                    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
-                    for (argumentRegisterIds, 0..) |reg, i| {
-                        arguments[i] = current.callFrame.vregs[reg.getIndex()];
-                    }
+            try invokeForeign(self, current, registerIdX, functionOpaquePtr, argumentRegisterIds);
 
-                    const result = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
-                    switch (result) {
-                        .cancel => |cancelVal| {
-                            const cancelledSet = cancelVal.set_frame;
+            continue :dispatch try state.step(self);
+        },
+        .f_call_c => { // Calls the c abi function at F using A, placing the result in R
+            const registerId = current.instruction.data.call_c.R;
+            const functionId = current.instruction.data.call_c.F;
+            const argumentCount = current.instruction.data.call_c.I;
 
-                            cancelledSet.call.ip = cancelledSet.handler_set.cancellation.address;
-                            cancelledSet.call.vregs[cancelledSet.handler_set.cancellation.register.getIndex()] = cancelVal.value;
+            const argsBase: [*]const core.Register = @ptrCast(@alignCast(current.callFrame.ip));
+            const argumentRegisterIds = argsBase[0..argumentCount];
 
-                            self.calls.top_ptr = @ptrCast(cancelledSet.call);
-                            self.registers.top_ptr = @ptrCast(cancelledSet.call.vregs);
+            const functionOpaquePtr = current.function.header.get(functionId.cast(anyopaque));
 
-                            while (@intFromPtr(self.sets.top()) >= @intFromPtr(cancelledSet.handler_set)) {
-                                const setFrame = self.sets.popPtr();
-                                for (setFrame.handler_set.effects.asSlice()) |effectId| {
-                                    const effectIndex = current.function.header.get(effectId).toIndex();
-                                    const evidencePointerSlot = &self.evidence[effectIndex];
+            const newIp: core.InstructionAddr = pl.alignTo(
+                pl.offsetPointer(current.callFrame.ip, argumentCount * @sizeOf(core.Register)),
+                @alignOf(core.InstructionBits),
+            );
+            std.debug.assert(current.function.extents.boundsCheck(newIp));
+            current.callFrame.ip = newIp;
 
-                                    self.data.top_ptr = pl.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
-
-                                    evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
-                                }
-                            }
-                        },
-                        .@"return" => |retVal| current.callFrame.vregs[registerId.getIndex()] = retVal,
-                    }
-                },
-                .foreign => {
-                    if (argumentRegisterIds.len > pl.MAX_FOREIGN_ARGUMENTS) {
-                        @branchHint(.cold);
-                        return error.Overflow;
-                    }
-
-                    const functionPtr = current.function.header.get(functionId.cast(core.ForeignAddress)).*;
-
-                    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
-                    for (argumentRegisterIds, 0..) |reg, i| {
-                        arguments[i] = current.callFrame.vregs[reg.getIndex()];
-                    }
-
-                    const retVal = pl.callForeign(functionPtr, arguments);
-
-                    current.callFrame.vregs[registerId.getIndex()] = retVal;
-                },
-            }
+            try invokeForeign(self, current, registerId, functionOpaquePtr, argumentRegisterIds);
 
             continue :dispatch try state.step(self);
         },
 
         .prompt => { // Calls the effect handler designated by E using A, placing the result in R
             const registerId = current.instruction.data.prompt.R;
-            const abi = current.instruction.data.prompt.A;
             const promptId = current.instruction.data.prompt.E;
-            const argsBase: [*]const core.Register = @ptrCast(@alignCast(current.callFrame.ip));
-            const argumentCount = argsBase[0].getIndex();
-            const argumentRegisterIds = argsBase[1..argumentCount];
+            const argumentCount = current.instruction.data.prompt.I;
 
-            const newIp: core.InstructionAddr = pl.alignTo(pl.offsetPointer(current.callFrame.ip, (argumentCount + 1) * @sizeOf(core.Register)), @alignOf(core.InstructionBits));
+            const argsBase: [*]const core.Register = @ptrCast(@alignCast(current.callFrame.ip));
+            const argumentRegisterIds = argsBase[0..argumentCount];
+
+            const newIp: core.InstructionAddr = pl.alignTo(
+                pl.offsetPointer(current.callFrame.ip, argumentCount * @sizeOf(core.Register)),
+                @alignOf(core.InstructionBits),
+            );
             std.debug.assert(current.function.extents.boundsCheck(newIp));
             current.callFrame.ip = newIp;
 
@@ -587,7 +570,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const handler = evidencePtr.handler;
 
-            switch (abi) {
+            const functionOpaquePtr = handler.function;
+
+            switch (core.InternalFunctionKind.fromAddress(functionOpaquePtr)) {
                 .bytecode => {
                     const functionPtr = handler.toPointer(*const core.Function);
 
@@ -647,30 +632,6 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
                         },
                         .@"return" => |retVal| current.callFrame.vregs[registerId.getIndex()] = retVal,
                     }
-                },
-                .foreign => {
-                    // TODO: document the fact that we are not assuming the foreign function
-                    // knows about prompting, and not passing it the evidence.
-                    // TODO: re-evaluate if this is the best strategy for foreign prompt.
-                    // it might be nicer to pass the evidence here; but this method allows
-                    // code to classify arbitrary foreign functions as side effects;
-                    // they just can never cancel or do anything contextual within the Ribbon fiber.
-                    // Could potentially introduce another abi for "ribbon-aware foreign".
-                    if (argumentRegisterIds.len > pl.MAX_FOREIGN_ARGUMENTS) {
-                        @branchHint(.cold);
-                        return error.Overflow;
-                    }
-
-                    const arguments = current.tempRegisters[0..argumentRegisterIds.len];
-                    for (argumentRegisterIds, 0..) |reg, i| {
-                        arguments[i] = current.callFrame.vregs[reg.getIndex()];
-                    }
-
-                    const functionPtr = handler.toPointer(core.ForeignAddress);
-
-                    const retVal = pl.callForeign(functionPtr, arguments);
-
-                    current.callFrame.vregs[registerId.getIndex()] = retVal;
                 },
             }
 

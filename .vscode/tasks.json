@@ -161,6 +161,19 @@
                 "isDefault": false
             },
             "problemMatcher": [],
+        },
+        {
+            "label": "export isa",
+            "detail": "Copy Isa.md to ../language-design/doc/Bytecode VM/",
+            "type": "shell",
+            "command": "cp ./zig-out/tmp/Isa.md ../language-design/doc/Bytecode\\ VM/Isa.md",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": [],
+            "dependsOrder": "sequence",
+            "dependsOn": "isa",
         }
     ]
 }

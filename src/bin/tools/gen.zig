@@ -743,7 +743,6 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
                         .upvalue => "core.UpvalueId",
                         .global => "core.GlobalId",
                         .function => "core.FunctionId",
-                        .abi => "core.Abi",
                         .builtin => "core.BuiltinAddressId",
                         .foreign => "core.ForeignAddressId",
                         .effect => "core.EffectId",

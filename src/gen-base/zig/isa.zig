@@ -161,8 +161,6 @@ pub const Operand = enum {
     global,
     /// The operand is a static reference to a function in the current program.
     function,
-    /// The operand is a static discriminator indicating the abi with which to call a function.
-    abi,
     /// The operand is a static reference to a builtin value in the current program.
     builtin,
     /// The operand is a static reference to a C ABI value in the current program.
@@ -225,7 +223,6 @@ pub const Operand = enum {
             .upvalue,
             .global,
             .function,
-            .abi,
             .builtin,
             .foreign,
             .effect,
@@ -252,7 +249,6 @@ pub const Operand = enum {
             .upvalue => try writer.writeAll("UpvalueId"),
             .global => try writer.writeAll("GlobalId"),
             .function => try writer.writeAll("FunctionId"),
-            .abi => try writer.writeAll("Abi"),
             .builtin => try writer.writeAll("BuiltinAddressId"),
             .foreign => try writer.writeAll("ForeignAddressId"),
             .effect => try writer.writeAll("EffectId"),
@@ -284,7 +280,6 @@ pub const Operand = enum {
             .register => 'R',
             .upvalue => 'U',
             .global => 'G',
-            .abi => 'A',
             .function => 'F',
             .builtin => 'B',
             .foreign => 'X',
@@ -305,7 +300,6 @@ pub const Operand = enum {
             .upvalue => 1,
             .global => 4,
             .function => 4,
-            .abi => 1,
             .builtin => 4,
             .foreign => 4,
             .effect => 4,
@@ -496,18 +490,20 @@ pub const CATEGORIES: []const Category = &.{
             ),
             .mnemonic(
                 "call",
-                \\Various ways of calling functions, in all cases taking up to max({.byte}) - 1 number of arguments.
-                \\Arguments are expected to be {.register} values, encoded in the instruction stream after the call instruction. Number of arguments is in this next word as the first byte.
+                \\Various ways of calling functions, in all cases taking up to max({.byte}) number of arguments.
+                \\Arguments are expected to be {.register} values, encoded in the instruction stream after the call instruction.
                 \\* {.register} is not instruction-aligned; padding bytes may need to be added and accounted for following the arguments, to ensure the next instruction is aligned
             ,
                 &.{
-                    .variable(.mnemonic, "Calls the function in {1} using {2}, placing the result in {0}", &.{ .register, .register, .abi }),
-                    .variable(.suffix("c"), "Calls the function at {1} using {2}, placing the result in {0}", &.{ .register, .function, .abi }),
+                    .variable(.mnemonic, "Calls the bytecode or builtin function in {1} using {2} argument registers, placing the result in {0}", &.{ .register, .register, .byte }),
+                    .variable(.suffix("c"), "Calls the bytecode or builtin function at {1} using {2} argument registers, placing the result in {0}", &.{ .register, .function, .byte }),
+                    .variable(.prefix("f"), "Calls the foreign function in {1} using {2} argument registers, placing the result in {0}", &.{ .register, .register, .byte }),
+                    .variable(.wrap("f", "c"), "Calls the foreign function at {1} using {2} argument registers, placing the result in {0}", &.{ .register, .foreign, .byte }),
                     .variable(
                         .override("prompt"),
-                        \\Calls the effect handler designated by {1} using {2}, placing the result in {0}.
+                        \\Calls the bytecode or builtin effect handler designated by {1} using {2} argument registers, placing the result in {0}.
                     ,
-                        &.{ .register, .effect, .abi },
+                        &.{ .register, .effect, .byte },
                     ),
                 },
             ),

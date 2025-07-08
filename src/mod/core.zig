@@ -138,8 +138,25 @@ pub const Effect = enum(std.math.IntFittingRange(0, pl.MAX_EFFECT_TYPES)) {
 /// A minimal valid header for core.Function
 pub const EMPTY_HEADER: *const Header = &Header{};
 
+/// Ribbon provides an abstraction for the disambiguation of bytecode and builtin functions.
+/// When you take the address of a function, the type is lost; but we can recover it by inspecting the first byte at the address for this marker type.
+pub const InternalFunctionKind = enum(u8) {
+    /// A bytecode function.
+    bytecode,
+    /// A builtin function.
+    builtin,
+
+    /// Get the internal function kind from an internal function address.
+    pub fn fromAddress(addr: *const anyopaque) InternalFunctionKind {
+        return @enumFromInt(@as(*const u8, @ptrCast(addr)).*);
+    }
+};
+
 /// A Ribbon function definition.
 pub const Function = extern struct {
+    /// Static marker differentiating bytecode and builtin functions.
+    /// * This must remain as the first field and must not be mutated.
+    kind: InternalFunctionKind = .bytecode,
     /// The `Header` that owns this function,
     /// which we rely on to resolve the ids encoded in the function's instructions.
     header: *const Header,
@@ -151,40 +168,13 @@ pub const Function = extern struct {
     stack_size: u16,
 };
 
-/// Represents the type of function referenced by a `CallFrame`.
-pub const Abi = enum(u8) {
-    /// A bytecode function.
-    bytecode,
-    /// A built-in function.
-    builtin,
-    /// A C ABI function.
-    foreign,
-
-    /// Comptime function to convert `Abi` to a Zig type.
-    pub fn Pointer(comptime self: Abi) type {
-        return switch (self) {
-            .bytecode => *const Function,
-            .builtin => *const BuiltinFunction,
-            .foreign => ForeignAddress,
-        };
-    }
-
-    /// Comptime function to convert a Zig type to `Abi`.
-    pub fn fromType(comptime T: type) Abi {
-        return switch (T) {
-            *const Function => .bytecode,
-            *const BuiltinFunction => .builtin,
-            *const anyopaque => .foreign,
-            ForeignAddress => .foreign,
-            else => @compileError("Abi.fromType: unsupported type `" ++ @typeName(T) ++ "`"),
-        };
-    }
-};
-
 /// A Ribbon builtin value definition.
 ///
 /// BuiltinAddress can be handled as either a buffer or a pointer via simple bit truncation
 pub const BuiltinAddress = packed struct {
+    /// Static marker differentiating bytecode and builtin functions.
+    /// * This must remain as the first field and must not be mutated.
+    kind: InternalFunctionKind = .builtin,
     /// The builtin is a data buffer.
     data: Buffer.MutBytes,
 
