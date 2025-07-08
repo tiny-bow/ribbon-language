@@ -35,6 +35,12 @@ pub const UserData = struct {
     /// Any opaque data can be stored here, bound with comptime-known names.
     bindings: pl.StringArrayMap(pl.Any) = .empty,
 
+    /// Deinitialize the user data, freeing all memory it owns.
+    fn deinit(self: *UserData) void {
+        self.bindings.deinit(self.context.gpa);
+        self.context.arena.allocator().destroy(self);
+    }
+
     /// Store an arbitrary address in the user data map, bound to a comptime-known key.
     /// * Cannnot take ownership of the value, as it is type erased. It must be valid for the lifetime of the userdata.
     pub fn addData(self: *UserData, comptime key: pl.EnumLiteral, value: anytype) !void {
@@ -216,38 +222,8 @@ pub const Root = struct {
     /// * All Root methods assume that the root mutex is already locked by the caller.
     mutex: std.Thread.Mutex = .{},
 
-    /// Get a pointer to the Context this Root is stored in.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
-    pub fn getRootContext(self: *Root) *Context {
-        const inner: *@FieldType(Context, "inner") = @fieldParentPtr("root", self);
-        return @fieldParentPtr("inner", inner);
-    }
-
-    /// Deinitialize the root context, freeing all memory it owns.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
-    pub fn deinit(self: *Root) void {
-        const root_ctx = self.getRootContext();
-
-        var it = self.children.valueIterator();
-        while (it.next()) |child_ptr| child_ptr.*.destroy();
-
-        self.children.deinit(root_ctx.gpa);
-
-        root_ctx.destroy();
-    }
-
-    /// Clear the root data, retaining the graph memory for reuse.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
-    pub fn clear(self: *Root) void {
-        var it = self.children.valueIterator();
-        while (it.next()) |child_ptr| child_ptr.*.destroy();
-
-        self.fresh_ctx = .fromInt(1);
-        self.children.clearRetainingCapacity();
-    }
-
-    /// Create a new context.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
+    /// Create a new child context, returning its pointer.
+    /// * Caller must hold a lock on the root mutex for this call.
     pub fn createContext(self: *Root) !*Context {
         const root_ctx = self.getRootContext();
 
@@ -270,8 +246,8 @@ pub const Root = struct {
         return child;
     }
 
-    /// Destroy a context by its id.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
+    /// Destroy a child context, freeing all of its memory.
+    /// * Caller must hold a lock on the root mutex for this call.
     pub fn destroyContext(self: *Root, id: ContextId) void {
         const child = self.children.get(id) orelse return;
         child.destroy();
@@ -279,149 +255,196 @@ pub const Root = struct {
         _ = self.children.remove(id);
     }
 
-    /// Get a context by its id.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
+    /// Get a pointer to a child context, if it exists.
+    /// * Caller must hold a lock on the root mutex for this call.
     pub fn getContext(self: *Root, id: ContextId) ?*Context {
         return self.children.get(id);
     }
 
-    /// Global node reference lookup.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
-    pub fn getNode(self: *Root, ref: Ref) ?*const Data {
-        if (self.getContext(ref.id.context)) |ctx| {
-            return ctx.getLocalNode(ref);
-        } else {
-            return self.getRootContext().getLocalNode(ref);
-        }
-    }
-
-    /// Global node reference lookup.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
-    pub fn getNodeMut(self: *Root, ref: Ref) ?*Data {
-        if (self.getContext(ref.id.context)) |ctx| {
-            return ctx.getLocalNodeMut(ref);
-        } else {
-            return self.getRootContext().getLocalNodeMut(ref);
-        }
-    }
-
-    /// Global userdata lookup.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
-    pub fn getUserData(self: *Root, ref: Ref) error{OutOfMemory}!*UserData {
-        if (self.getContext(ref.id.context)) |ctx| {
-            return ctx.getLocalUserData(ref);
-        } else {
-            return self.getRootContext().getLocalUserData(ref);
-        }
-    }
-
-    /// Global userdata removal.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
-    pub fn delUserData(self: *Root, ref: Ref) void {
-        if (self.getContext(ref.id.context)) |ctx| {
-            return ctx.delLocalUserData(ref);
-        } else {
-            return self.getRootContext().delLocalUserData(ref);
-        }
+    /// Get the context of this Root.
+    pub fn getRootContext(self: *Root) *Context {
+        const inner: *@FieldType(Context, "inner") = @fieldParentPtr("root", self);
+        return @fieldParentPtr("inner", inner);
     }
 
     /// Merges the nodes from a child context into this Root's context.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
-    pub fn merge(self: *Root, child: *Context) !void {
-        std.debug.assert(!child.isRoot());
-        std.debug.assert(child.getRoot() == self);
-
+    /// * Caller must hold a lock on the root mutex for this call.
+    pub fn merge(self: *Root, child_ctx: *Context) !void {
+        std.debug.assert(!child_ctx.isRoot() and child_ctx.getRootContext() == self.getRootContext());
         const root_ctx = self.getRootContext();
 
-        // This map will store the result of merging each node from the child context.
-        // The key is the original child Ref, the value is the final, canonical root Ref.
         var merged_refs: RefMap = .{};
         defer merged_refs.deinit(root_ctx.gpa);
 
-        // We process every node from the child context.
-        var it = child.nodes.iterator();
+        // Iterate all nodes in the child context and copy them to the root.
+        // The copyNode function is recursive and will handle dependencies, so a simple
+        // iteration over all nodes ensures everything is copied.
+        var it = child_ctx.nodes.iterator();
         while (it.next()) |entry| {
-            _ = try self.ensureNodeMerged(child, &merged_refs, entry.key_ptr.*);
+            // We only need to call copyNode; if it's already been copied as a
+            // dependency of another node, it will return quickly from the cache.
+            _ = try self._copyNode(child_ctx, &merged_refs, entry.key_ptr.*);
         }
 
-        // Now that all nodes are merged and remapped, merge UserData.
-        var userdata_it = child.userdata.iterator();
-        while (userdata_it.next()) |child_entry| {
-            const child_ref = child_entry.key_ptr.*;
-            const child_userdata = child_entry.value_ptr.*;
-
-            // Get the canonical root ref from our merge map.
-            const root_ref = merged_refs.get(child_ref).?;
-            const root_userdata = try root_ctx.getLocalUserData(root_ref);
-
-            if (child_userdata.computeLayout) |f| root_userdata.computeLayout = f;
-            if (child_userdata.display) |f| root_userdata.display = f;
-
-            var bindings_it = child_userdata.bindings.iterator();
-            while (bindings_it.next()) |binding_entry| {
-                try root_userdata.bindings.put(
-                    root_ctx.gpa,
-                    binding_entry.key_ptr.*,
-                    binding_entry.value_ptr.*,
-                );
-            }
-        }
-
-        _ = self.destroyContext(child.id);
+        self.destroyContext(child_ctx.id);
     }
 
-    /// Helper function to recursively ensure a node and its dependencies are merged.
-    /// This is the core of the bottom-up merge. It uses a cache (`merged_refs`)
-    /// to avoid processing the same node multiple times.
-    /// * All Root methods assume that the root mutex is already locked by the caller.
-    fn ensureNodeMerged(
+    fn _copyNode(
         self: *Root,
-        child: *const Context,
+        child_ctx: *const Context,
         merged_refs: *RefMap,
         child_ref: Ref,
     ) !Ref {
-        // If we've already processed this node, return its cached canonical Ref.
-        if (merged_refs.get(child_ref)) |cached_ref| {
-            return cached_ref;
+        // Base case: If nil or already copied, return immediately.
+        if (child_ref == Ref.nil) return Ref.nil;
+
+        if (merged_refs.get(child_ref)) |cached_root_ref| {
+            return cached_root_ref;
         }
 
         const root_ctx = self.getRootContext();
-        const node_to_merge = child.nodes.get(child_ref).?;
+        const child_node = child_ctx.nodes.getPtr(child_ref).?;
 
-        var final_ref: ?Ref = null;
+        const was_interned = child_ctx.isLocalInternedNode(child_ref);
+        const was_immutable = child_ctx.isLocalImmutableNode(child_ref);
+        const old_mutability: pl.Mutability = if (was_immutable) .constant else .mutable;
 
-        // Create a deep copy of the node to work with. We will modify its
-        // internal refs before adding it to the root context.
-        var node_copy = try node_to_merge.dupe(root_ctx.gpa);
-        // We need to deinitialize the copy if we fail before `final_ref`
-        errdefer if (final_ref == null) {
-            node_copy.deinit(root_ctx.gpa);
-        };
+        // Potentially cyclic nodes (which can contain refs to other nodes) must be
+        // handled with the "Create, Cache, Populate" strategy. This applies only
+        // to non-interned structures and collections.
+        const is_potentially_cyclic = child_node.kind.getTag() == .structure or child_node.kind.getTag() == .collection;
 
-        // == Recurse: Ensure all children are merged first ==
-        if (node_copy.kind.getTag() == .structure or node_copy.kind.getTag() == .collection) {
-            for (node_copy.bytes.ref_list.items) |*ref_ptr| {
-                // Recursively merge the child and update the pointer in our copy
-                // to the new canonical ref.
-                ref_ptr.* = try self.ensureNodeMerged(child, merged_refs, ref_ptr.*);
+        if (!was_interned and is_potentially_cyclic) {
+            // 1. CREATE SHELL: Create a node with an empty ref_list.
+            const root_ref = try root_ctx._addNodeUnchecked(.mutable, .{
+                .kind = child_node.kind,
+                .content = .{ .ref_list = .{} },
+            });
+
+            // 2. CACHE IMMEDIATELY
+            try merged_refs.put(root_ctx.gpa, child_ref, root_ref);
+
+            // 3. POPULATE using low-level, non-locking operations.
+            const root_node_mut = root_ctx._getNodeMut(root_ref).?;
+
+            for (child_node.content.ref_list.items, 0..) |original_child_ref, i| {
+                const new_child_ref = try self._copyNode(child_ctx, merged_refs, original_child_ref);
+
+                // Manually append the copied child to the list.
+                try root_node_mut.content.ref_list.append(root_ctx.gpa, new_child_ref);
+
+                if (new_child_ref != Ref.nil) {
+                    // Manually create the def->use link using the non-locking local primitive.
+                    const users = try root_ctx._getLocalNodeUsersMut(new_child_ref);
+                    try users.put(root_ctx.gpa, Use{ .ref = root_ref, .index = i }, {});
+                }
+            }
+
+            // 4. MERGE USERDATA
+            try self._copyUserData(child_ctx, root_ctx, child_ref, root_ref);
+
+            // 5. IMMUTABLE HANDLING we have to create the node in a mutable state to populate, now we set it to immutable if it needed.
+            if (was_immutable) try root_ctx.immutable_refs.put(root_ctx.gpa, root_ref, {});
+
+            return root_ref;
+        } else {
+            // --- "Build then Add" for primitives, data, and all interned nodes ---
+            // These are treated as values and are assumed to be acyclic. The original
+            // logic is sound for them.
+
+            var new_root_node: Node = undefined;
+            var new_node_owns_memory = false;
+            defer if (new_node_owns_memory) new_root_node.deinit(root_ctx.gpa);
+
+            switch (child_node.kind.getTag()) {
+                .nil, .primitive => {
+                    new_root_node = child_node.*;
+                },
+                .data => {
+                    new_root_node = child_node.*;
+                    if (child_node.kind.getDiscriminator() == .buffer) {
+                        new_root_node.content.buffer = try child_node.content.buffer.clone(root_ctx.gpa);
+                        new_node_owns_memory = true;
+                    }
+                },
+                // This case now only handles INTERNED structure/collection nodes.
+                .structure, .collection => {
+                    var new_ref_list = try child_node.content.ref_list.clone(root_ctx.gpa);
+                    errdefer new_ref_list.deinit(root_ctx.gpa);
+
+                    // Recursively copy children. This is safe as interned nodes form a DAG.
+                    for (new_ref_list.items) |*ref_in_list| {
+                        ref_in_list.* = try self._copyNode(child_ctx, merged_refs, ref_in_list.*);
+                    }
+
+                    new_root_node = .{
+                        .kind = child_node.kind,
+                        .content = .{ .ref_list = new_ref_list },
+                    };
+                    new_node_owns_memory = true;
+                },
+            }
+
+            const root_ref = if (was_interned)
+                try root_ctx._internNodeUnchecked(new_root_node)
+            else
+                // This path should now only be taken by primitives and data nodes.
+                try root_ctx._addNodeUnchecked(old_mutability, new_root_node);
+
+            // Disarm the defer. Ownership of memory is now with the context.
+            new_node_owns_memory = false;
+
+            // Cache the result for subsequent lookups.
+            try merged_refs.put(root_ctx.gpa, child_ref, root_ref);
+
+            // MERGE USERDATA: Copy associated UserData.
+            try self._copyUserData(child_ctx, root_ctx, child_ref, root_ref);
+
+            return root_ref;
+        }
+    }
+
+    fn _copyUserData(
+        self: *Root,
+        child_ctx: *const Context,
+        root_ctx: *Context,
+        child_ref: Ref,
+        root_ref: Ref,
+    ) !void {
+        _ = self; // self is unused, but keeps the function within the Root's namespace
+        if (child_ctx.userdata.get(child_ref)) |child_ud_ptr| {
+            const root_ud = try root_ctx.getLocalUserData(root_ref);
+
+            // Merge vtable pointers (child takes precedence)
+            if (child_ud_ptr.computeLayout) |ptr| root_ud.computeLayout = ptr;
+            if (child_ud_ptr.display) |ptr| root_ud.display = ptr;
+
+            // Merge bindings map (element-level overwrite)
+            var binding_it = child_ud_ptr.bindings.iterator();
+            while (binding_it.next()) |entry| {
+                // The pl.Any value is a simple pointer, so we just copy it.
+                try root_ud.bindings.put(root_ctx.gpa, entry.key_ptr.*, entry.value_ptr.*);
             }
         }
+    }
 
-        // Process this node now that its children are canonical
-        final_ref = if (child.interned_refs.contains(child_ref))
-            // If the original node was interned, try to intern our remapped copy.
-            // `internNodeUnchecked` will either create a new node or return the
-            // ref to an existing equivalent one, taking ownership of `node_copy`'s memory.
-            try root_ctx.internNodeUnchecked(node_copy)
-        else
-            // If it was not interned, just add it directly. `addNodeUnchecked`
-            // also takes ownership of `node_copy`'s memory.
-            try root_ctx.addNodeUnchecked(node_copy);
+    fn _deinit(self: *Root) void {
+        const root_ctx = self.getRootContext();
 
-        // Cache the result for the original child_ref.
-        try merged_refs.put(root_ctx.gpa, child_ref, final_ref.?);
+        var it = self.children.valueIterator();
+        while (it.next()) |child_ptr| child_ptr.*.destroy();
 
-        return final_ref.?;
+        self.children.deinit(root_ctx.gpa);
+
+        root_ctx.destroy();
+    }
+
+    fn _clear(self: *Root) void {
+        var it = self.children.valueIterator();
+        while (it.next()) |child_ptr| child_ptr.*.destroy();
+
+        self.fresh_ctx = .fromInt(1);
+        self.children.clearRetainingCapacity();
     }
 };
 
@@ -445,16 +468,22 @@ pub const Context = struct {
     arena: std.heap.ArenaAllocator,
     /// contains all graph nodes in this context.
     nodes: pl.UniqueReprMap(Ref, Node, 80) = .empty,
-    /// Maps constant value nodes to references.
-    interner: pl.HashMap(Node, Ref, NodeHasher, 80) = .empty,
-    /// Flags whether a node is interned or not.
-    interned_refs: pl.UniqueReprSet(Ref, 80) = .empty,
-    /// Used to generate context-unique ids for nodes.
-    fresh_node: NodeId = .fromInt(1),
+    /// The def->use edges of nodes.
+    users: pl.UniqueReprMap(Ref, pl.UniqueReprSet(Use, 80), 80) = .empty,
     /// Maps specific refs to user defined data, used for miscellaneous operations like layout computation, display, etc.
     userdata: pl.UniqueReprMap(Ref, *UserData, 80) = .empty,
     /// Maps builtin structures to their definition references.
     builtin: pl.UniqueReprMap(Builtin, Ref, 80) = .empty,
+    /// Maps constant value nodes to references.
+    interner: pl.HashMap(Node, Ref, NodeHasher, 80) = .empty,
+    /// Flags whether a node is interned or not.
+    interned_refs: RefSet = .empty,
+    /// Flags whether a node is immutable or not.
+    immutable_refs: RefSet = .empty,
+    /// Flags whether a node is builtin or not.
+    builtin_refs: RefSet = .empty,
+    /// Used to generate context-unique ids for nodes.
+    fresh_node: NodeId = .fromInt(1),
     /// Api wrapper for IR builder functions.
     builder: Builder = .{},
 
@@ -477,36 +506,54 @@ pub const Context = struct {
 
     /// Clear the context, retaining the graph memory for reuse.
     pub fn clear(self: *Context) void {
+        if (self.asRoot()) |root| root.mutex.lock();
+        defer if (self.asRoot()) |root| root.mutex.unlock();
+
+        self.fresh_node = .fromInt(1);
+
+        var node_it = self.nodes.valueIterator();
+        while (node_it.next()) |node| node.deinit(self.gpa);
+
+        var userdata_it = self.userdata.valueIterator();
+        while (userdata_it.next()) |ptr2ptr| ptr2ptr.*.deinit();
+
+        var users_it = self.users.valueIterator();
+        while (users_it.next()) |set| set.deinit(self.gpa);
+
         self.nodes.clearRetainingCapacity();
+        self.users.clearRetainingCapacity();
+        self.interner.clearRetainingCapacity();
+        self.interned_refs.clearRetainingCapacity();
+        self.immutable_refs.clearRetainingCapacity();
+        self.builtin_refs.clearRetainingCapacity();
+        self.userdata.clearRetainingCapacity();
+        self.builtin.clearRetainingCapacity();
+
         _ = self.arena.reset(.retain_capacity);
 
-        if (self.asRoot()) |root| {
-            root.mutex.lock();
-            defer root.mutex.unlock();
-
-            root.clear();
-        }
+        if (self.asRoot()) |root| root._clear();
     }
 
-    /// Destroy the context, freeing all memory it owns.
-    /// * This is called by `Context.deinit` in roots, and by `Root.destroyContext` for child contexts.
     fn destroy(self: *Context) void {
         var node_it = self.nodes.valueIterator();
         while (node_it.next()) |node| node.deinit(self.gpa);
 
         var userdata_it = self.userdata.valueIterator();
-        while (userdata_it.next()) |ptr2ptr| {
-            ptr2ptr.*.bindings.deinit(self.gpa);
-            self.arena.allocator().destroy(ptr2ptr.*);
-        }
+        while (userdata_it.next()) |ptr2ptr| ptr2ptr.*.deinit();
+
+        var users_it = self.users.valueIterator();
+        while (users_it.next()) |set| set.deinit(self.gpa);
 
         self.nodes.deinit(self.gpa);
+        self.users.deinit(self.gpa);
         self.interner.deinit(self.gpa);
         self.interned_refs.deinit(self.gpa);
+        self.immutable_refs.deinit(self.gpa);
+        self.builtin_refs.deinit(self.gpa);
         self.userdata.deinit(self.gpa);
         self.builtin.deinit(self.gpa);
 
-        self.arena.deinit(); // NOTE: this also frees self
+        self.arena.deinit(); // this also frees self
     }
 
     /// Deinitialize the context, freeing all memory it owns.
@@ -516,7 +563,7 @@ pub const Context = struct {
         root.mutex.lock();
 
         if (self.isRoot()) {
-            root.deinit();
+            root._deinit();
         } else {
             defer root.mutex.unlock();
 
@@ -565,7 +612,11 @@ pub const Context = struct {
         if (!gop.found_existing) {
             const initializer = getBuiltinInitializer(builtin);
 
-            gop.value_ptr.* = try initializer(self);
+            const ref = try initializer(self);
+
+            gop.value_ptr.* = ref;
+
+            try self.builtin_refs.put(self.gpa, ref, {});
         }
 
         return gop.value_ptr.*;
@@ -594,15 +645,24 @@ pub const Context = struct {
             root.mutex.lock();
             defer root.mutex.unlock();
 
-            return root.getUserData(ref);
+            if (root.getContext(ref.id.context)) |ctx| {
+                return ctx.getLocalUserData(ref);
+            } else {
+                return root.getRootContext().getLocalUserData(ref);
+            }
         }
     }
 
     /// Delete a userdata for a specific reference.
     pub fn delLocalUserData(self: *Context, ref: Ref) void {
-        if (!self.userdata.remove(ref)) {
-            log.debug("Tried to delete non-existing userdata: {}", .{ref});
-        }
+        const userdata = self.userdata.get(ref) orelse {
+            log.debug("Tried to delete non-existing local userdata: {}", .{ref});
+            return;
+        };
+
+        userdata.deinit();
+
+        _ = self.userdata.remove(ref);
     }
 
     /// Delete a userdata for a specific reference.
@@ -615,19 +675,48 @@ pub const Context = struct {
             root.mutex.lock();
             defer root.mutex.unlock();
 
-            root.delUserData(ref);
+            if (root.getContext(ref.id.context)) |ctx| {
+                return ctx.delLocalUserData(ref);
+            } else {
+                return root.getRootContext().delLocalUserData(ref);
+            }
         }
     }
 
+    /// Adds a use->def back-link.
+    fn _link(self: *Context, user_ref: Ref, operand_index: u64, used_ref: Ref) !void {
+        if (used_ref == Ref.nil) return;
+        std.debug.assert(user_ref.node_kind.getTag() == .structure or user_ref.node_kind.getTag() == .collection);
+
+        const users = try self._getNodeUsersMut(used_ref);
+
+        try users.put(self.gpa, Use{ .ref = user_ref, .index = operand_index }, {});
+    }
+
+    /// Removes a use->def back-link.
+    fn _unlink(self: *Context, user_ref: Ref, operand_index: u64, used_ref: Ref) void {
+        if (used_ref == Ref.nil) return;
+        std.debug.assert(user_ref.node_kind.getTag() == .structure or user_ref.node_kind.getTag() == .collection);
+
+        // failure here is allocation failure, but that can only happen if the node doesn't exist anyway
+        const users = self._getNodeUsersMut(used_ref) catch return;
+
+        _ = users.remove(Use{ .ref = user_ref, .index = operand_index });
+
+        const user_node = self._getNodeMut(user_ref) orelse return;
+
+        user_node.content.ref_list.items[operand_index] = Ref.nil;
+    }
+
     /// Get a field of a structure data node bound by this reference.
-    pub fn getField(self: *Context, ref: Ref, comptime field: anytype) !Ref {
+    pub fn getField(self: *Context, ref: Ref, comptime field: pl.EnumLiteral) !?Ref {
         if (ref.node_kind.getTag() != .structure) {
             return error.InvalidNodeKind;
         }
 
         const field_name = comptime @tagName(field);
 
-        const local_data = self.getNode(ref) orelse return error.InvalidReference;
+        const local_data = self.getNodeData(ref) orelse return error.InvalidReference;
 
         const structure_kind: StructureKind = @enumFromInt(@intFromEnum(ref.node_kind.getDiscriminator()));
 
@@ -648,7 +737,92 @@ pub const Context = struct {
             }
         }
 
-        unreachable;
+        return null;
+    }
+
+    /// Get an element of a collection data node bound by index.
+    pub fn getElement(self: *Context, ref: Ref, index: u64) !?Ref {
+        if (ref.node_kind.getTag() != .collection) {
+            return error.InvalidNodeKind;
+        }
+
+        const local_data = self.getNodeData(ref) orelse return error.InvalidReference;
+
+        if (index < local_data.ref_list.items.len) {
+            return local_data.ref_list.items[index];
+        } else {
+            return null;
+        }
+    }
+
+    fn _setOperand(self: *Context, ref: Ref, index: u64, value: Ref) !void {
+        std.debug.assert(ref.node_kind.getTag() == .collection or ref.node_kind.getTag() == .structure);
+
+        const local_data = self._getNodeDataMut(ref) orelse return error.InvalidReference;
+
+        if (index < local_data.ref_list.items.len) {
+            const slot = &local_data.ref_list.items[index];
+
+            if (slot.* == value) return;
+
+            self._unlink(ref, index, slot.*);
+            try self._link(ref, index, value);
+
+            slot.* = value;
+        } else if (index == local_data.ref_list.items.len) {
+            const slot = try local_data.ref_list.addOne(self.gpa);
+
+            try self._link(ref, index, value);
+
+            slot.* = value;
+        } else {
+            return error.InvalidGraphState;
+        }
+    }
+
+    /// Set a field of a structure data node bound by this reference.
+    /// * Runtime type checking is not performed.
+    /// * If the field does not exist, this is an error.
+    pub fn setField(self: *Context, ref: Ref, comptime field: pl.EnumLiteral, value: Ref) !void {
+        if (ref.node_kind.getTag() != .structure) {
+            return error.InvalidNodeKind;
+        }
+
+        const field_name = comptime @tagName(field);
+
+        const structure_kind: StructureKind = @enumFromInt(@intFromEnum(ref.node_kind.getDiscriminator()));
+
+        if (structure_kind == .nil) return error.InvalidGraphState;
+
+        outer: inline for (comptime std.meta.fieldNames(StructureKind)[1..]) |kind_name| {
+            const kind = comptime @field(StructureKind, kind_name);
+
+            if (kind == structure_kind) {
+                const struct_info = comptime @field(structures, kind_name);
+                const struct_fields = comptime std.meta.fieldNames(@TypeOf(struct_info));
+
+                const index = comptime for (struct_fields, 0..) |name, i| {
+                    if (std.mem.eql(u8, name, field_name)) break i;
+                } else continue :outer;
+
+                return self._setOperand(ref, index, value);
+            }
+        }
+
+        return error.InvalidGraphState;
+    }
+
+    /// Set an element of a collection data node bound by index.
+    /// * Runtime type checking is not performed.
+    /// * If the index is out of bounds, it must be equal to the length of the collection,
+    ///   in which case the element is appended to the collection.
+    /// * If the index is greater than the length of the collection, this is an error.
+    pub fn setElement(self: *Context, ref: Ref, index: u64, value: Ref) !void {
+        if (ref.node_kind.getTag() != .collection) {
+            return error.InvalidNodeKind;
+        }
+
+        try self._setOperand(ref, index, value);
     }
 
     /// Get a ref list from a structure or list node bound by this reference.
@@ -657,9 +831,78 @@ pub const Context = struct {
             return error.InvalidNodeKind;
         }
 
-        const local_data = self.getNode(ref) orelse return error.InvalidReference;
+        const local_data = self.getNodeData(ref) orelse return error.InvalidReference;
 
         return local_data.ref_list.items;
+    }
+
+    /// Determine if a node is interned, given its reference.
+    pub fn isLocalBuiltinNode(self: *const Context, ref: Ref) bool {
+        return self.builtin_refs.contains(ref);
+    }
+
+    /// Determine if a node is interned, given its reference.
+    pub fn isLocalInternedNode(self: *const Context, ref: Ref) bool {
+        return self.interned_refs.contains(ref);
+    }
+
+    /// Determine if a node is immutable, given its reference.
+    pub fn isLocalImmutableNode(self: *const Context, ref: Ref) bool {
+        return self.immutable_refs.contains(ref);
+    }
+
+    /// Determine if a node is interned, given its reference.
+    pub fn isBuiltinNode(self: *Context, ref: Ref) bool {
+        if (ref.id.context == self.id) {
+            return self.isLocalBuiltinNode(ref);
+        } else {
+            const root = self.getRoot();
+
+            root.mutex.lock();
+            defer root.mutex.unlock();
+
+            if (root.getContext(ref.id.context)) |ctx| {
+                return ctx.isLocalBuiltinNode(ref);
+            } else {
+                return root.getRootContext().isLocalBuiltinNode(ref);
+            }
+        }
+    }
+
+    /// Determine if a node is interned, given its reference.
+    pub fn isInternedNode(self: *Context, ref: Ref) bool {
+        if (ref.id.context == self.id) {
+            return self.isLocalInternedNode(ref);
+        } else {
+            const root = self.getRoot();
+
+            root.mutex.lock();
+            defer root.mutex.unlock();
+
+            if (root.getContext(ref.id.context)) |ctx| {
+                return ctx.isLocalInternedNode(ref);
+            } else {
+                return root.getRootContext().isLocalInternedNode(ref);
+            }
+        }
+    }
+
+    /// Determine if a node is immutable, given its reference.
+    pub fn isImmutableNode(self: *Context, ref: Ref) bool {
+        if (ref.id.context == self.id) {
+            return self.isLocalImmutableNode(ref);
+        } else {
+            const root = self.getRoot();
+
+            root.mutex.lock();
+            defer root.mutex.unlock();
+
+            if (root.getContext(ref.id.context)) |ctx| {
+                return ctx.isLocalImmutableNode(ref);
+            } else {
+                return root.getRootContext().isLocalImmutableNode(ref);
+            }
+        }
     }
 
     /// Compute the layout of a type node by reference.
@@ -668,8 +911,8 @@ pub const Context = struct {
             return error.InvalidNodeKind;
         }
 
-        const ref_constructor = try self.getField(ref, .constructor);
-        const ref_input_types = try self.getField(ref, .input_types);
+        const ref_constructor = try self.getField(ref, .constructor) orelse return error.InvalidGraphState;
+        const ref_input_types = try self.getField(ref, .input_types) orelse return error.InvalidGraphState;
 
         const input_types = try self.getChildren(ref_input_types);
 
@@ -682,28 +925,48 @@ pub const Context = struct {
         }
     }
 
-    /// Intern a node within the context, returning a reference to it.
-    /// * This performs no validation on the node kind or value.
-    /// * If the node already exists in this context, it will return the existing reference and deinitialize the input node.
-    /// * Modifying nodes added this way is unsafe.
-    pub fn internNodeUnchecked(self: *Context, node: Node) !Ref {
+    fn _internNode(self: *Context, node: Node) !Ref {
+        try self._ensureConstantRefs(node);
+
+        return self._internNodeUnchecked(node);
+    }
+
+    fn _addNode(self: *Context, mutability: pl.Mutability, node: Node) !Ref {
+        if (mutability == .constant) try self._ensureConstantRefs(node);
+
+        return self._addNodeUnchecked(mutability, node);
+    }
+
+    fn _ensureConstantRefs(self: *Context, node: Node) !void {
+        const tag = node.kind.getTag();
+        if (tag.containsReferences()) {
+            for (node.content.ref_list.items) |content_ref| {
+                if (content_ref != Ref.nil and !self.isImmutableNode(content_ref)) {
+                    log.debug("Attempted to create an immutable node that references a mutable node {}", .{content_ref});
+                    return error.ImmutableNodeReferencesMutable;
+                }
+            }
+        }
+    }
+
+    fn _internNodeUnchecked(self: *Context, node: Node) !Ref {
         const gop = try self.interner.getOrPut(self.gpa, node);
 
         if (!gop.found_existing) {
-            gop.value_ptr.* = try self.addNodeUnchecked(node);
-
-            try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
+            gop.value_ptr.* = try self._addNodeUnchecked(.constant, node);
         } else {
-            var old_node = node;
-            old_node.deinit(self.gpa);
+            var input_node = node;
+            input_node.deinit(self.gpa);
         }
+
+        try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
 
         return gop.value_ptr.*;
     }
 
-    /// Add a node to the context, returning a reference to it.
-    /// * This performs no validation on the node kind or value.
-    pub fn addNodeUnchecked(self: *Context, node: Node) !Ref {
+    fn _addNodeUnchecked(self: *Context, mutability: pl.Mutability, node: Node) !Ref {
+        const tag = node.kind.getTag();
+
         const ref = Ref{
             .node_kind = node.kind,
             .id = self.genId(),
@@ -711,7 +974,42 @@ pub const Context = struct {
 
         try self.nodes.put(self.gpa, ref, node);
 
+        if (tag == .structure or tag == .collection) {
+            for (node.content.ref_list.items, 0..) |used_ref, i| {
+                try self._link(ref, i, used_ref);
+            }
+        }
+
+        if (mutability == .constant) {
+            try self.immutable_refs.put(self.gpa, ref, {});
+        }
+
         return ref;
+    }
+
+    /// Delete a local node from this context, given its reference.
+    /// * This will deinitialize the node, freeing any memory it owns.
+    /// * Nodes relying on this node will be invalidated.
+    /// * If the node does not exist, this is a no-op.
+    /// * If the node is interned, this is a no-op.
+    pub fn delLocalNode(self: *Context, ref: Ref) void {
+        if (self.isLocalImmutableNode(ref)) {
+            log.debug("Tried to delete an immutable node: {}", .{ref});
+            return;
+        }
+
+        const node = self.nodes.getPtr(ref) orelse return;
+        defer node.deinit(self.gpa);
+
+        _ = self.nodes.remove(ref);
+        _ = self.users.remove(ref);
+
+        const users = self.getNodeUsers(ref) catch return;
+
+        var user_it = users.keyIterator();
+        while (user_it.next()) |user| {
+            self._unlink(user.ref, user.index, ref);
+        }
     }
 
     /// Delete a node from the context, given its reference.
@@ -719,37 +1017,41 @@ pub const Context = struct {
     /// * Nodes relying on this node will be invalidated.
     /// * If the node does not exist, this is a no-op.
     /// * If the node is interned, this is a no-op.
-    pub fn delLocalNode(self: *Context, ref: Ref) void {
-        if (self.interned_refs.contains(ref)) {
-            log.debug("Tried to delete an interned node: {}", .{ref});
-            return;
+    pub fn delNode(self: *Context, ref: Ref) void {
+        if (ref.id.context == self.id) {
+            self.delLocalNode(ref);
+        } else {
+            const root = self.getRoot();
+
+            root.mutex.lock();
+            defer root.mutex.unlock();
+
+            if (root.getContext(ref.id.context)) |ctx| {
+                return ctx.delLocalNode(ref);
+            } else {
+                return root.getRootContext().delLocalNode(ref);
+            }
         }
-
-        const node = self.nodes.getPtr(ref) orelse return;
-        node.deinit(self.gpa);
-        _ = self.nodes.remove(ref);
     }
 
-    /// Get an immutable pointer to raw node data, given its reference.
-    pub fn getLocalNode(self: *Context, ref: Ref) ?*const Data {
-        return &(self.nodes.getPtr(ref) orelse return null).bytes;
+    /// Get an immutable pointer to a raw node, given its reference.
+    pub fn getLocalNode(self: *Context, ref: Ref) ?*const Node {
+        return self.nodes.getPtr(ref);
     }
 
-    /// Get a mutable pointer to raw node data, given its reference.
-    /// * This will return null if the node is interned, as interned nodes are immutable.
-    pub fn getLocalNodeMut(self: *Context, ref: Ref) ?*Data {
+    fn _getLocalNodeMut(self: *Context, ref: Ref) ?*Node {
         const node = self.nodes.getPtr(ref) orelse return null;
 
-        if (self.interned_refs.contains(ref)) {
-            log.debug("Tried to get mutable pointer to an interned node: {}", .{ref});
+        if (self.isLocalImmutableNode(ref)) {
+            log.debug("Tried to get mutable pointer to an immutable node: {}", .{ref});
             return null;
         }
 
-        return &node.bytes;
+        return node;
     }
 
-    /// Get a mutable pointer to raw node data, given its reference.
-    pub fn getNode(self: *Context, ref: Ref) ?*const Data {
+    /// Get an immutable pointer to a raw node, given its reference.
+    pub fn getNode(self: *Context, ref: Ref) ?*const Node {
         if (ref.id.context == self.id) {
             return self.getLocalNode(ref);
         } else {
@@ -758,56 +1060,136 @@ pub const Context = struct {
             root.mutex.lock();
             defer root.mutex.unlock();
 
-            return root.getNode(ref);
+            if (root.getContext(ref.id.context)) |ctx| {
+                return ctx.getLocalNode(ref);
+            } else {
+                return root.getRootContext().getLocalNode(ref);
+            }
         }
     }
 
-    /// Get a mutable pointer to raw node data, given its reference.
-    /// * This will return null if the node is interned, as interned nodes are immutable.
-    pub fn getNodeMut(self: *Context, ref: Ref) ?*Data {
+    fn _getNodeMut(self: *Context, ref: Ref) ?*Node {
         if (ref.id.context == self.id) {
-            return self.getLocalNodeMut(ref);
+            return self._getLocalNodeMut(ref);
         } else {
             const root = self.getRoot();
 
             root.mutex.lock();
             defer root.mutex.unlock();
 
-            return root.getNodeMut(ref);
+            if (root.getContext(ref.id.context)) |ctx| {
+                return ctx._getLocalNodeMut(ref);
+            } else {
+                return root.getRootContext()._getLocalNodeMut(ref);
+            }
         }
+    }
+
+    /// Get a list of all the users of a node, given its reference.
+    pub fn getLocalNodeUsers(self: *Context, ref: Ref) !*const pl.UniqueReprSet(Use, 80) {
+        std.debug.assert(ref.id.context == self.id);
+
+        const gop = try self.users.getOrPut(self.gpa, ref);
+
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+
+        return gop.value_ptr;
+    }
+
+    /// Get a list of all the users of a node, given its reference.
+    pub fn getNodeUsers(self: *Context, ref: Ref) !*const pl.UniqueReprSet(Use, 80) {
+        if (ref.id.context == self.id) {
+            return self.getLocalNodeUsers(ref);
+        } else {
+            const root = self.getRoot();
+
+            root.mutex.lock();
+            defer root.mutex.unlock();
+
+            if (root.getContext(ref.id.context)) |ctx| {
+                return ctx.getLocalNodeUsers(ref);
+            } else {
+                return root.getRootContext().getLocalNodeUsers(ref);
+            }
+        }
+    }
+
+    fn _getLocalNodeUsersMut(self: *Context, ref: Ref) !*pl.UniqueReprSet(Use, 80) {
+        std.debug.assert(ref.id.context == self.id);
+
+        const gop = try self.users.getOrPut(self.gpa, ref);
+
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+
+        return gop.value_ptr;
+    }
+
+    fn _getNodeUsersMut(self: *Context, ref: Ref) !*pl.UniqueReprSet(Use, 80) {
+        if (ref.id.context == self.id) {
+            return self._getLocalNodeUsersMut(ref);
+        } else {
+            const root = self.getRoot();
+
+            root.mutex.lock();
+            defer root.mutex.unlock();
+
+            if (root.getContext(ref.id.context)) |ctx| {
+                return ctx._getLocalNodeUsersMut(ref);
+            } else {
+                return root.getRootContext()._getLocalNodeUsersMut(ref);
+            }
+        }
+    }
+
+    /// Get an immutable pointer to raw node data, given its reference.
+    pub fn getLocalNodeData(self: *Context, ref: Ref) ?*const Data {
+        return &(self.getLocalNode(ref) orelse return null).content;
+    }
+
+    fn _getLocalNodeDataMut(self: *Context, ref: Ref) ?*Data {
+        return &(self._getLocalNodeMut(ref) orelse return null).content;
+    }
+
+    /// Get an immutable pointer to raw node data, given its reference.
+    pub fn getNodeData(self: *Context, ref: Ref) ?*const Data {
+        return &(self.getNode(ref) orelse return null).content;
+    }
+
+    fn _getNodeDataMut(self: *Context, ref: Ref) ?*Data {
+        return &(self._getNodeMut(ref) orelse return null).content;
     }
 
     /// Create a new primitive node in the context, given a primitive kind and value.
     /// * The value must be a primitive type, such as an integer, index, or opcode. See `ir.primitives`.
-    pub fn addPrimitive(self: *Context, value: anytype) !Ref {
+    pub fn addPrimitive(self: *Context, mutability: pl.Mutability, value: anytype) !Ref {
         const node = try Node.primitive(value);
 
-        return self.addNodeUnchecked(node);
+        return self._addNode(mutability, node);
     }
 
     /// Create a new structure node in the context, given a structure kind and an initializer.
     /// * The initializer must be a struct with the same fields as the structure kind. See `ir.structure`.
-    pub fn addStructure(self: *Context, comptime kind: StructureKind, value: anytype) !Ref {
+    pub fn addStructure(self: *Context, mutability: pl.Mutability, comptime kind: StructureKind, value: anytype) !Ref {
         var node = try Node.structure(self.gpa, kind, value);
         errdefer node.deinit(self.gpa);
 
-        return self.addNodeUnchecked(node);
+        return self._addNode(mutability, node);
     }
 
     /// Add a data buffer to the context.
-    pub fn addBuffer(self: *Context, value: []const u8) !Ref {
+    pub fn addBuffer(self: *Context, mutability: pl.Mutability, value: []const u8) !Ref {
         var node = try Node.buffer(self.gpa, value);
         errdefer node.deinit(self.gpa);
 
-        return self.addNodeUnchecked(node);
+        return self._addNode(mutability, node);
     }
 
     /// Add a ref list to the context.
-    pub fn addList(self: *Context, element_kind: Discriminator, value: []const Ref) !Ref {
+    pub fn addList(self: *Context, mutability: pl.Mutability, element_kind: Discriminator, value: []const Ref) !Ref {
         var node = try Node.list(self.gpa, element_kind, value);
         errdefer node.deinit(self.gpa);
 
-        return self.addNodeUnchecked(node);
+        return self._addNode(mutability, node);
     }
 
     /// Intern a primitive value in the context, given a primitive kind and value.
@@ -817,7 +1199,7 @@ pub const Context = struct {
     pub fn internPrimitive(self: *Context, value: anytype) !Ref {
         const node = try Node.primitive(value);
 
-        return self.internNodeUnchecked(node);
+        return self._internNode(node);
     }
 
     /// Intern a structure node in the context, given a structure kind and an initializer.
@@ -828,7 +1210,7 @@ pub const Context = struct {
         var node = try Node.structure(self.gpa, kind, value);
         errdefer node.deinit(self.gpa);
 
-        return self.internNodeUnchecked(node);
+        return self._internNode(node);
     }
 
     /// Intern a name value in the context.
@@ -844,7 +1226,7 @@ pub const Context = struct {
 
             gop.key_ptr.* = node;
 
-            gop.value_ptr.* = try self.addNodeUnchecked(node);
+            gop.value_ptr.* = try self._addNode(.constant, node);
 
             try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
         }
@@ -865,7 +1247,7 @@ pub const Context = struct {
 
             gop.key_ptr.* = node;
 
-            gop.value_ptr.* = try self.addNodeUnchecked(node);
+            gop.value_ptr.* = try self._addNode(.constant, node);
 
             try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
         }
@@ -889,7 +1271,7 @@ pub const Context = struct {
 
             gop.key_ptr.* = node;
 
-            gop.value_ptr.* = try self.addNodeUnchecked(node);
+            gop.value_ptr.* = try self._addNode(.constant, node);
 
             try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
         }
@@ -911,11 +1293,11 @@ pub const Context = struct {
 
             const node = Node{
                 .kind = NodeKind.collection(element_kind),
-                .bytes = .{ .ref_list = arr },
+                .content = .{ .ref_list = arr },
             };
 
             gop.key_ptr.* = node;
-            gop.value_ptr.* = try self.addNodeUnchecked(node);
+            gop.value_ptr.* = try self._addNode(.constant, node);
 
             try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
         }
@@ -938,6 +1320,9 @@ pub const Ref = packed struct(u64) {
 
 /// `platform.UniqueReprMap` for `Ref` to `Ref`.
 const RefMap = pl.UniqueReprMap(Ref, Ref, 80); // NOTE: cannot be exported due to `std.testing.refAllDeclsRecursive`
+
+/// `platform.UniqueReprSet` for `Ref`.
+const RefSet = pl.UniqueReprSet(Ref, 80); // NOTE: cannot be exported due to `std.testing.refAllDeclsRecursive`
 
 /// Uniquely identifies a child context in an ir.
 pub const ContextId = common.Id.of(Context, 16);
@@ -1021,12 +1406,12 @@ pub const NodeHasher = struct {
             .nil => false,
             .data => switch (discriminants.force(DataKind, a.kind.getDiscriminator())) {
                 .nil => false,
-                .name => std.mem.eql(u8, a.bytes.name, b.bytes.name),
-                .source => a.bytes.source.eql(&b.bytes.source),
-                .buffer => std.mem.eql(u8, a.bytes.buffer.items, b.bytes.buffer.items),
+                .name => std.mem.eql(u8, a.content.name, b.content.name),
+                .source => a.content.source.eql(&b.content.source),
+                .buffer => std.mem.eql(u8, a.content.buffer.items, b.content.buffer.items),
             },
-            .primitive => a.bytes.primitive == b.bytes.primitive,
-            .structure, .collection => std.mem.eql(Ref, a.bytes.ref_list.items, b.bytes.ref_list.items),
+            .primitive => a.content.primitive == b.content.primitive,
+            .structure, .collection => std.mem.eql(Ref, a.content.ref_list.items, b.content.ref_list.items),
         };
     }
 
@@ -1038,12 +1423,12 @@ pub const NodeHasher = struct {
             .nil => {},
             .data => switch (discriminants.force(DataKind, n.kind.getDiscriminator())) {
                 .nil => {},
-                .name => hasher.update(n.bytes.name),
-                .source => n.bytes.source.hash(&hasher),
-                .buffer => hasher.update(n.bytes.buffer.items),
+                .name => hasher.update(n.content.name),
+                .source => n.content.source.hash(&hasher),
+                .buffer => hasher.update(n.content.buffer.items),
             },
-            .primitive => hasher.update(std.mem.asBytes(&n.bytes.primitive)),
-            .structure, .collection => hasher.update(std.mem.sliceAsBytes(n.bytes.ref_list.items)),
+            .primitive => hasher.update(std.mem.asBytes(&n.content.primitive)),
+            .structure, .collection => hasher.update(std.mem.sliceAsBytes(n.content.ref_list.items)),
         }
 
         return hasher.final();
@@ -1159,7 +1544,7 @@ pub fn ListHasher(comptime element_kind: Discriminator) type {
         pub fn eql(b: []const Ref, a: Node) bool {
             if (a.kind.getTag() != .collection or a.kind.getDiscriminator() != element_kind) return false;
 
-            return std.mem.eql(Ref, a.bytes.ref_list.items, b);
+            return std.mem.eql(Ref, a.content.ref_list.items, b);
         }
 
         pub fn hash(n: []const Ref) u64 {
@@ -1178,7 +1563,7 @@ pub const NameHasher = struct {
     pub fn eql(b: []const u8, a: Node) bool {
         if (a.kind != NodeKind.data(.name)) return false;
 
-        return std.mem.eql(u8, a.bytes.name, b);
+        return std.mem.eql(u8, a.content.name, b);
     }
 
     pub fn hash(n: []const u8) u64 {
@@ -1196,7 +1581,7 @@ pub const SourceHasher = struct {
     pub fn eql(a: Source, b: Node) bool {
         if (b.kind != NodeKind.data(.source)) return false;
 
-        return a.eql(&b.bytes.source);
+        return a.eql(&b.content.source);
     }
 
     pub fn hash(n: Source) u64 {
@@ -1214,7 +1599,7 @@ pub const BufferHasher = struct {
     pub fn eql(b: []const u8, a: Node) bool {
         if (a.kind != NodeKind.data(.buffer)) return false;
 
-        return std.mem.eql(u8, a.bytes.buffer.items, b);
+        return std.mem.eql(u8, a.content.buffer.items, b);
     }
 
     pub fn hash(n: []const u8) u64 {
@@ -1226,38 +1611,52 @@ pub const BufferHasher = struct {
     }
 };
 
+/// Represents a def->use edge in the ir graph.
+pub const Use = packed struct(u128) {
+    /// The node referencing this definition.
+    ref: Ref,
+    /// The index of the use within the referencing node.
+    index: u64,
+};
+
 /// Body data type for data nodes.
 pub const Node = struct {
     /// The kind of the data stored here.
     kind: NodeKind,
     /// The untagged union of the data that can be stored here.
-    bytes: Data,
+    content: Data,
 
     /// Creates a deep copy of the node, duplicating any owned memory.
     pub fn dupe(self: *const Node, allocator: std.mem.Allocator) !Node {
         var new_node = self.*;
+
         switch (self.kind.getTag()) {
             .data => switch (discriminants.force(DataKind, self.kind.getDiscriminator())) {
                 // Buffer is the only data kind that owns memory
-                .buffer => new_node.bytes.buffer = try self.bytes.buffer.clone(allocator),
-                else => {},
+                .buffer => new_node.content.buffer = try self.content.buffer.clone(allocator),
+                // Name and Source are always interned
+                .nil, .name, .source => {},
             },
             // Structures and collections both use ref_list, which owns memory
             .structure, .collection => {
-                new_node.bytes.ref_list = try self.bytes.ref_list.clone(allocator);
+                new_node.content.ref_list = try self.content.ref_list.clone(allocator);
             },
             .nil, .primitive => {},
         }
+
         return new_node;
     }
 
-    fn deinit(self: *Node, gpa: std.mem.Allocator) void {
+    /// Deinitialize the node, freeing any owned memory.
+    /// * This is a no-op for nodes that do not own memory.
+    /// * This should only be called on nodes that were created outside of a context and never added to one.
+    pub fn deinit(self: *Node, allocator: std.mem.Allocator) void {
         switch (self.kind.getTag()) {
             .data => switch (self.kind.getDiscriminator()) {
-                .buffer => self.bytes.buffer.deinit(gpa),
+                .buffer => self.content.buffer.deinit(allocator),
                 else => {},
             },
-            .structure, .collection => self.bytes.ref_list.deinit(gpa),
+            .structure, .collection => self.content.ref_list.deinit(allocator),
             else => {},
         }
     }
@@ -1266,7 +1665,7 @@ pub const Node = struct {
     pub fn data(comptime kind: DataKind, value: DataType(kind)) !Node {
         return Node{
             .kind = NodeKind.data(kind),
-            .bytes = @unionInit(Data, @tagName(kind), value),
+            .content = @unionInit(Data, @tagName(kind), value),
         };
     }
 
@@ -1283,7 +1682,7 @@ pub const Node = struct {
 
                 return Node{
                     .kind = NodeKind.primitive(@field(PrimitiveKind, field)),
-                    .bytes = .{ .primitive = converter(value) },
+                    .content = .{ .primitive = converter(value) },
                 };
             }
         } else {
@@ -1338,7 +1737,7 @@ pub const Node = struct {
                     {
                         ref_list.appendAssumeCapacity(init_value);
                     } else {
-                        log.err("Unexpected node kind for structure {s} field decl {s}: expected {}, got {}", .{
+                        log.debug("Unexpected node kind for structure {s} field decl {s}: expected {}, got {}", .{
                             struct_name,
                             decl.name,
                             node_kind,
@@ -1356,7 +1755,7 @@ pub const Node = struct {
 
         return Node{
             .kind = NodeKind.structure(kind),
-            .bytes = .{
+            .content = .{
                 .ref_list = ref_list,
             },
         };
@@ -1372,7 +1771,7 @@ pub const Node = struct {
 
         return Node{
             .kind = NodeKind.data(.buffer),
-            .bytes = .{ .buffer = arr },
+            .content = .{ .buffer = arr },
         };
     }
 
@@ -1386,7 +1785,7 @@ pub const Node = struct {
 
         return Node{
             .kind = NodeKind.collection(element_kind),
-            .bytes = .{ .ref_list = arr },
+            .content = .{ .ref_list = arr },
         };
     }
 };
@@ -1423,6 +1822,14 @@ pub const Tag = enum(u3) {
     /// The tag for a node that is simply a list of other nodes.
     /// Discriminator may carry a specific kind, or nil to indicate a heterogeneous collection.
     collection,
+
+    /// Determine if a node with this tag can contain references to other nodes.
+    pub fn containsReferences(self: Tag) bool {
+        return switch (self) {
+            .nil, .data, .primitive => false,
+            .structure, .collection => true,
+        };
+    }
 };
 
 /// The type of primitive data nodes definition structure.
@@ -1654,7 +2061,10 @@ pub const structures = .{
         .type = .{ .structure, .type },
         .value = .any,
     },
-    .global = .{ .type = .{ .structure, .type }, .initializer = .{ .structure, .constant } },
+    .global = .{
+        .type = .{ .structure, .type },
+        .initializer = .{ .structure, .constant },
+    },
     .local = .{ .type = .{ .structure, .type } },
     .handler = .{
         .parent_block = .{ .structure, .block }, // the block that this handler is alive within
@@ -1710,7 +2120,7 @@ pub const structures = .{
         .address = .{ .primitive, .index }, // the address of the builtin function
     },
     .intrinsic = .{
-        .data = .{ .data, .nil }, // the data of the intrinsic function; usually, a bytecode opcode
+        .data = .any, // the data of the intrinsic function; usually, a bytecode opcode
     },
 };
 
@@ -1724,7 +2134,7 @@ pub const builtins = struct {
     }
 
     pub fn interned_bytes_constructor(ctx: *Context) !Ref {
-        return ctx.addStructure(.constructor, .{
+        return ctx.internStructure(.constructor, .{
             .kind = try ctx.getBuiltin(.primitive_kind),
         });
     }
@@ -1757,7 +2167,7 @@ pub const builtins = struct {
     pub fn integer_constructor(ctx: *Context) !Ref {
         const k_primitive = try ctx.getBuiltin(.primitive_kind);
 
-        return ctx.addStructure(.constructor, .{
+        return ctx.internStructure(.constructor, .{
             .kind = try ctx.internStructure(.kind, .{
                 .output_tag = try ctx.internPrimitive(KindTag.primitive),
                 .input_kinds = try ctx.internList(.kind, &.{ k_primitive, k_primitive }),
@@ -1771,13 +2181,13 @@ pub const builtins = struct {
             .input_kinds = try ctx.internList(.kind, &.{try ctx.getBuiltin(.primitive_kind)}),
         });
 
-        return ctx.addStructure(.constructor, .{
+        return ctx.internStructure(.constructor, .{
             .kind = k_arrow,
         });
     }
 
     pub fn struct_constructor(ctx: *Context) !Ref {
-        return ctx.addStructure(.constructor, .{
+        return ctx.internStructure(.constructor, .{
             .kind = try ctx.internStructure(.kind, .{
                 .output_tag = try ctx.internPrimitive(KindTag.structure),
                 .input_kinds = try ctx.internList(.kind, &.{
@@ -1826,7 +2236,7 @@ pub const Builder = struct {
     pub fn type_set_constructor(self: *Builder, key_kind: Ref) !Ref {
         const ctx = self.getContext();
 
-        return ctx.addStructure(.constructor, .{
+        return ctx.internStructure(.constructor, .{
             .kind = try self.type_set_kind(key_kind),
         });
     }
@@ -1834,7 +2244,7 @@ pub const Builder = struct {
     pub fn type_map_constructor(self: *Builder, key_set_kind: Ref, val_set_kind: Ref) !Ref {
         const ctx = self.getContext();
 
-        return ctx.addStructure(.constructor, .{
+        return ctx.internStructure(.constructor, .{
             .kind = try self.type_map_kind(key_set_kind, val_set_kind),
         });
     }
@@ -1913,6 +2323,37 @@ pub const Builder = struct {
     }
 };
 
+/// Performs a depth-first search from a starting node to detect cycles. I.e., if ref is reachable from itself
+/// `visiting` is the set of nodes in the current recursion stack.
+/// * This function assumes that the caller holds a lock on the context's root mutex
+pub fn detectCycle(ctx: *Context, visiting: *RefSet, ref: Ref) !bool {
+    if (ref == Ref.nil) return false;
+
+    if (visiting.contains(ref)) return true;
+
+    const tag = ref.node_kind.getTag();
+
+    if (tag != .collection or tag != .structure) {
+        if (ref.id.context != ctx.id) {
+            const root = ctx.getRoot();
+            const other_context = if (root.getContext(ref.id.context)) |cx| cx else root.getRootContext();
+
+            return detectCycle(other_context, visiting, ref);
+        }
+
+        if (ctx.getLocalNode(ref)) |node| {
+            try visiting.put(ctx.gpa, ref, {});
+            defer _ = visiting.remove(ref);
+
+            for (node.content.ref_list.items) |child_ref| {
+                if (try detectCycle(ctx, visiting, child_ref)) return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 const testing = std.testing;
 
 test "ir integration - basic context operations" {
@@ -1923,7 +2364,7 @@ test "ir integration - basic context operations" {
     defer ctx.deinit();
 
     // Test basic node creation
-    const int_node = try ctx.addPrimitive(@as(u64, 42));
+    const int_node = try ctx.addPrimitive(.constant, @as(u64, 42));
     const name_node = try ctx.internName("test_variable");
 
     // Verify nodes were created
@@ -1931,11 +2372,11 @@ test "ir integration - basic context operations" {
     try testing.expect(name_node != ir.Ref.nil);
 
     // Test data retrieval
-    const int_data = ctx.getNode(int_node);
+    const int_data = ctx.getNodeData(int_node);
     try testing.expect(int_data != null);
     try testing.expectEqual(@as(u64, 42), int_data.?.primitive);
 
-    const name_data = ctx.getNode(name_node);
+    const name_data = ctx.getNodeData(name_node);
     try testing.expect(name_data != null);
     try testing.expectEqualStrings("test_variable", name_data.?.name);
 }
@@ -1972,8 +2413,8 @@ test "ir integration - struct type creation with packed layout" {
     try testing.expectEqual(ir.StructureKind.type, ir.discriminants.force(ir.StructureKind, struct_type.node_kind.getDiscriminator()));
 
     // Verify we can get the constructor and input types
-    const constructor = try ctx.getField(struct_type, .constructor);
-    const input_types = try ctx.getField(struct_type, .input_types);
+    const constructor = try ctx.getField(struct_type, .constructor) orelse return error.InvalidGraphState;
+    const input_types = try ctx.getField(struct_type, .input_types) orelse return error.InvalidGraphState;
 
     try testing.expect(constructor != ir.Ref.nil);
     try testing.expect(input_types != ir.Ref.nil);
@@ -2015,7 +2456,7 @@ test "ir integration - user data management" {
     defer ctx.deinit();
 
     // Create a test node
-    const test_ref = try ctx.addPrimitive(@as(u64, 42));
+    const test_ref = try ctx.addPrimitive(.constant, @as(u64, 42));
 
     // Get user data for the node
     const userdata = try ctx.getUserData(test_ref);
@@ -2043,20 +2484,20 @@ test "ir integration - list and collection operations" {
     defer ctx.deinit();
 
     // Create some test references
-    const ref1 = try ctx.addPrimitive(@as(u64, 1));
-    const ref2 = try ctx.addPrimitive(@as(u64, 2));
-    const ref3 = try ctx.addPrimitive(@as(u64, 3));
+    const ref1 = try ctx.addPrimitive(.constant, @as(u64, 1));
+    const ref2 = try ctx.addPrimitive(.constant, @as(u64, 2));
+    const ref3 = try ctx.addPrimitive(.constant, @as(u64, 3));
 
     const refs = [_]ir.Ref{ ref1, ref2, ref3 };
 
     // Create a list
-    const list_ref = try ctx.addList(.index, &refs);
+    const list_ref = try ctx.addList(.constant, .index, &refs);
     try testing.expect(list_ref != ir.Ref.nil);
     try testing.expectEqual(ir.Tag.collection, list_ref.node_kind.getTag());
 
     // Get children from the list
     const children = try ctx.getChildren(list_ref);
-    try testing.expectEqual(@as(usize, 3), children.len);
+    try testing.expectEqual(@as(u64, 3), children.len);
     try testing.expectEqual(ref1, children[0]);
     try testing.expectEqual(ref2, children[1]);
     try testing.expectEqual(ref3, children[2]);
@@ -2151,7 +2592,7 @@ test "ir integration - child context creation" {
     try testing.expect(child_ctx.id.toInt() != 0);
 
     // Test that we can create nodes in child context
-    const test_node_in_child = try child_ctx.addPrimitive(@as(u64, 999));
+    const test_node_in_child = try child_ctx.addPrimitive(.constant, @as(u64, 999));
     try testing.expect(test_node_in_child != ir.Ref.nil);
     try testing.expectEqual(child_ctx.id, test_node_in_child.id.context);
 
@@ -2186,6 +2627,7 @@ test "ir integration - merging child context into root" {
 
     // Add UserData to the list node in the child context
     const child_userdata_val: u32 = 54321;
+    // An enum literal is needed for the key
     const child_userdata = try child_ctx.getUserData(child_list);
     try child_userdata.addData(.test_key, @constCast(&child_userdata_val));
 
@@ -2193,11 +2635,12 @@ test "ir integration - merging child context into root" {
     {
         const root = root_ctx.asRoot().?;
         root.mutex.lock();
-        defer root.mutex.unlock();
+        // Don't defer unlock here, merge might call functions that need the lock
         try root.merge(child_ctx);
+        root.mutex.unlock();
     }
 
-    // Verify child context was destroyed
+    // Verify child context was destroyed by checking if it's still in the root's map
     {
         const root = root_ctx.asRoot().?;
         root.mutex.lock();
@@ -2233,4 +2676,190 @@ test "ir integration - merging child context into root" {
     const retrieved_data = merged_userdata.getData(u32, .test_key);
     try testing.expect(retrieved_data != null);
     try testing.expectEqual(child_userdata_val, retrieved_data.?.*);
+}
+
+test "ir integration - merging child context with cyclic nodes" {
+    const gpa = testing.allocator;
+
+    const root_ctx = try ir.Context.init(gpa);
+    defer root_ctx.deinit();
+
+    // Create a child context to build our cyclic graph in.
+    const child_ctx = try root_ctx.asRoot().?.createContext();
+    const child_id = child_ctx.id;
+
+    // --- Create a cyclic graph in the child context ---
+    // This graph represents a simple loop: loop_header -> loop_body -> loop_header
+
+    const type_type = try child_ctx.internStructure(.type, .{
+        .constructor = ir.Ref.nil,
+        .input_types = ir.Ref.nil,
+    });
+    const op_branch = try child_ctx.internPrimitive(ir.Operation.unconditional_branch);
+    const zero = try child_ctx.internPrimitive(@as(u64, 0));
+
+    // 1. Create two blocks: a loop header and a loop body.
+    const loop_header = try child_ctx.addStructure(.mutable, .block, .{
+        .parent = ir.Ref.nil,
+        .locals = ir.Ref.nil,
+        .handlers = ir.Ref.nil,
+        .contents = ir.Ref.nil,
+        .type = type_type,
+    });
+    const loop_body = try child_ctx.addStructure(.mutable, .block, .{
+        .parent = ir.Ref.nil,
+        .locals = ir.Ref.nil,
+        .handlers = ir.Ref.nil,
+        .contents = ir.Ref.nil,
+        .type = type_type,
+    });
+
+    // 2. Create the instruction in the header that branches to the body.
+    const branch_to_body_inst = try child_ctx.addStructure(.mutable, .instruction, .{
+        .parent = loop_header,
+        .operation = op_branch,
+        .type = type_type,
+    });
+    const branch_to_body_edge = try child_ctx.addStructure(.mutable, .ctrl_edge, .{
+        .source = branch_to_body_inst,
+        .destination = loop_body, // Header -> Body
+        .source_index = zero,
+        .destination_index = zero,
+    });
+
+    // 3. Create the instruction in the body that branches back to the header (the loop).
+    const branch_to_header_inst = try child_ctx.addStructure(.mutable, .instruction, .{
+        .parent = loop_body,
+        .operation = op_branch,
+        .type = type_type,
+    });
+    const branch_to_header_edge = try child_ctx.addStructure(.mutable, .ctrl_edge, .{
+        .source = branch_to_header_inst,
+        .destination = loop_header, // Body -> Header <--- The cyclic reference!
+        .source_index = zero,
+        .destination_index = zero,
+    });
+
+    // To make the graph fully connected, populate the blocks' contents.
+    const header_contents = try child_ctx.addList(.mutable, .instruction, &.{branch_to_body_inst});
+    try child_ctx.setField(loop_header, .contents, header_contents);
+
+    const body_contents = try child_ctx.addList(.mutable, .instruction, &.{branch_to_header_inst});
+    try child_ctx.setField(loop_body, .contents, body_contents);
+
+    // Suppress "unused variable" warnings. Their creation and linking into the graph
+    // via other nodes is their purpose.
+    _ = branch_to_body_edge;
+    _ = branch_to_header_edge;
+
+    // At this point, `child_ctx` contains a clear cyclic graph:
+    // loop_header -> branch_to_body_inst -> branch_to_body_edge -> loop_body
+    // loop_body   -> branch_to_header_inst -> branch_to_header_edge -> loop_header
+
+    // Perform the merge. The old implementation would stack overflow.
+    {
+        const root = root_ctx.asRoot().?;
+        root.mutex.lock();
+        try root.merge(child_ctx);
+        root.mutex.unlock();
+    }
+
+    // --- Verification in the Root Context ---
+    try testing.expect(root_ctx.asRoot().?.getContext(child_id) == null);
+
+    // Find the merged blocks. We'll identify them by their structure.
+    var merged_blocks = std.ArrayList(ir.Ref).init(gpa);
+    defer merged_blocks.deinit();
+
+    var root_it = root_ctx.nodes.keyIterator();
+    while (root_it.next()) |ref| {
+        if (ref.node_kind.getTag() == .structure and
+            ir.discriminants.force(ir.StructureKind, ref.node_kind.getDiscriminator()) == .block)
+        {
+            try merged_blocks.append(ref.*);
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), merged_blocks.items.len);
+
+    // We don't know the order, so we find the header by looking for the one
+    // that is the destination of the other's edge.
+    const block_A = merged_blocks.items[0];
+    const block_B = merged_blocks.items[1];
+
+    const getBranchDest = struct {
+        fn getBranchDest(ctx: *ir.Context, block_ref: ir.Ref) !ir.Ref {
+            const contents_list_ref = try ctx.getField(block_ref, .contents) orelse return error.TestFailed;
+            const contents = try ctx.getChildren(contents_list_ref);
+            const inst_ref = contents[0];
+            const users = try ctx.getNodeUsers(inst_ref);
+
+            // Iterate users to find the actual control edge, since the instruction
+            // is also used by the block's `contents` list.
+            var edge_ref: ?ir.Ref = null;
+            var it = users.keyIterator();
+            while (it.next()) |use| {
+                if (use.ref.node_kind.getTag() == .structure and
+                    ir.discriminants.force(ir.StructureKind, use.ref.node_kind.getDiscriminator()) == .ctrl_edge)
+                {
+                    edge_ref = use.ref;
+                    break;
+                }
+            }
+
+            if (edge_ref == null) {
+                log.debug("Could not find control edge user for instruction {}", .{inst_ref});
+                return error.TestFailed;
+            }
+
+            return try ctx.getField(edge_ref.?, .destination) orelse return error.TestFailed;
+        }
+    }.getBranchDest;
+
+    const dest_of_A = try getBranchDest(root_ctx, block_A);
+    const dest_of_B = try getBranchDest(root_ctx, block_B);
+
+    var merged_header: ir.Ref = undefined;
+    var merged_body: ir.Ref = undefined;
+
+    if (dest_of_A == block_B and dest_of_B == block_A) {
+        // This is the cycle we expect. Arbitrarily assign.
+        merged_header = block_A;
+        merged_body = block_B;
+    } else {
+        return error.TestFailed;
+    }
+}
+
+test "ir integration - immutable nodes cannot reference mutable nodes" {
+    const gpa = testing.allocator;
+    const ctx = try ir.Context.init(gpa);
+    defer ctx.deinit();
+
+    // 1. Create a mutable node.
+    // This will be the reference that our immutable nodes will illegally point to.
+    const mutable_list = try ctx.addList(.mutable, .nil, &.{});
+
+    // 2. Define the structure for our test nodes.
+    const illegal_struct_value = .{
+        .data = mutable_list, // <-- The illegal reference
+    };
+
+    // 3. Test failure case 1: Trying to create a non-interned, but immutable, node.
+    // We expect this to fail because illegal_struct_value.contents points to a mutable ref.
+    // The internal call to _addNode should trigger _ensureConstantRefs, which should fail.
+    const immutable_add_result = ctx.addStructure(.constant, .intrinsic, illegal_struct_value);
+    try testing.expectError(error.ImmutableNodeReferencesMutable, immutable_add_result);
+
+    // 4. Test failure case 2: Trying to intern a node.
+    // We expect this to also fail for the same reason.
+    // The internal call to _internNode should trigger _ensureConstantRefs, which should fail.
+    const intern_result = ctx.internStructure(.intrinsic, illegal_struct_value);
+    try testing.expectError(error.ImmutableNodeReferencesMutable, intern_result);
+
+    // 5. Sanity Check: Confirm that creating a mutable version of the same node SUCCEEDS.
+    // This ensures our test isn't failing for some other reason.
+    const mutable_add_result = ctx.addStructure(.mutable, .intrinsic, illegal_struct_value);
+    try testing.expect(mutable_add_result != error.ImmutableNodeReferencesMutable);
+    const success_ref = try mutable_add_result;
+    try testing.expect(success_ref != ir.Ref.nil);
 }
