@@ -455,6 +455,8 @@ pub const Context = struct {
     userdata: pl.UniqueReprMap(Ref, *UserData, 80) = .empty,
     /// Maps builtin structures to their definition references.
     builtin: pl.UniqueReprMap(Builtin, Ref, 80) = .empty,
+    /// Api wrapper for IR builder functions.
+    builder: Builder = .{},
 
     /// Create a root context with the given allocator.
     pub fn init(gpa: std.mem.Allocator) !*Context {
@@ -1683,15 +1685,11 @@ pub const builtins = struct {
     }
 
     pub fn data_type_set_kind(ctx: *Context) !Ref {
-        return builders.type_set_kind(
-            ctx,
-            try ctx.getBuiltin(.data_kind),
-        );
+        return ctx.builder.type_set_kind(try ctx.getBuiltin(.data_kind));
     }
 
     pub fn data_type_map_kind(ctx: *Context) !Ref {
-        return builders.type_map_kind(
-            ctx,
+        return ctx.builder.type_map_kind(
             try ctx.getBuiltin(.data_type_set_kind),
             try ctx.getBuiltin(.data_type_set_kind),
         );
@@ -1732,23 +1730,31 @@ pub const builtins = struct {
     }
 
     pub fn c_symbol(ctx: *Context) !Ref {
-        return builders.symbol(ctx, "c");
+        return ctx.builder.symbol("c");
     }
 
     pub fn packed_symbol(ctx: *Context) !Ref {
-        return builders.symbol(ctx, "packed");
+        return ctx.builder.symbol("packed");
     }
 };
 
-pub const builders = struct {
-    pub fn type_set_kind(ctx: *Context, key_kind: Ref) !Ref {
+pub const Builder = struct {
+    fn getContext(self: *Builder) *Context {
+        return @alignCast(@fieldParentPtr("builder", self));
+    }
+
+    pub fn type_set_kind(self: *Builder, key_kind: Ref) !Ref {
+        const ctx = self.getContext();
+
         return ctx.internStructure(.kind, .{
             .output_tag = try ctx.internPrimitive(KindTag.set),
             .input_kinds = try ctx.internList(.kind, &.{key_kind}),
         });
     }
 
-    pub fn type_map_kind(ctx: *Context, key_set_kind: Ref, val_set_kind: Ref) !Ref {
+    pub fn type_map_kind(self: *Builder, key_set_kind: Ref, val_set_kind: Ref) !Ref {
+        const ctx = self.getContext();
+
         return ctx.internStructure(.kind, .{
             .output_tag = try ctx.internPrimitive(KindTag.map),
             .input_kinds = try ctx.internList(.kind, &.{
@@ -1758,19 +1764,25 @@ pub const builders = struct {
         });
     }
 
-    pub fn type_set_constructor(ctx: *Context, key_kind: Ref) !Ref {
+    pub fn type_set_constructor(self: *Builder, key_kind: Ref) !Ref {
+        const ctx = self.getContext();
+
         return ctx.addStructure(.constructor, .{
-            .kind = try builders.type_set_kind(ctx, key_kind),
+            .kind = try self.type_set_kind(key_kind),
         });
     }
 
-    pub fn type_map_constructor(ctx: *Context, key_set_kind: Ref, val_set_kind: Ref) !Ref {
+    pub fn type_map_constructor(self: *Builder, key_set_kind: Ref, val_set_kind: Ref) !Ref {
+        const ctx = self.getContext();
+
         return ctx.addStructure(.constructor, .{
-            .kind = try builders.type_map_kind(ctx, key_set_kind, val_set_kind),
+            .kind = try self.type_map_kind(key_set_kind, val_set_kind),
         });
     }
 
-    pub fn integer_type(ctx: *Context, signedness: pl.Signedness, bit_size: pl.Alignment) !Ref {
+    pub fn integer_type(self: *Builder, signedness: pl.Signedness, bit_size: pl.Alignment) !Ref {
+        const ctx = self.getContext();
+
         return ctx.internStructure(.type, .{
             .constructor = try ctx.getBuiltin(.integer_constructor),
             .input_types = try ctx.internList(.type, &.{
@@ -1786,30 +1798,35 @@ pub const builders = struct {
         });
     }
 
-    pub fn symbol(ctx: *Context, name: []const u8) !Ref {
+    pub fn symbol(self: *Builder, name: []const u8) !Ref {
+        const ctx = self.getContext();
+
         return ctx.internStructure(.type, .{
             .constructor = try ctx.getBuiltin(.symbol_constructor),
             .input_types = try ctx.internList(.type, &.{try ctx.internData(.name, name)}), // FIXME: create internName and internSource
         });
     }
 
-    pub fn type_set_type(ctx: *Context, key_kind: Ref, keys: []const Ref) !Ref {
+    pub fn type_set_type(self: *Builder, key_kind: Ref, keys: []const Ref) !Ref {
+        const ctx = self.getContext();
+
         return ctx.internStructure(.type, .{
-            .constructor = try builders.type_set_constructor(ctx, key_kind),
+            .constructor = try self.type_set_constructor(key_kind),
             .input_types = try ctx.internList(.type, keys),
         });
     }
 
-    pub fn type_map_type(ctx: *Context, key_kind: Ref, val_kind: Ref, keys: []const Ref, vals: []const Ref) !Ref {
+    pub fn type_map_type(self: *Builder, key_kind: Ref, val_kind: Ref, keys: []const Ref, vals: []const Ref) !Ref {
+        const ctx = self.getContext();
+
         return ctx.internStructure(.type, .{
-            .constructor = try builders.type_map_constructor(
-                ctx,
-                try builders.type_set_kind(ctx, key_kind),
-                try builders.type_set_kind(ctx, val_kind),
+            .constructor = try self.type_map_constructor(
+                try self.type_set_kind(key_kind),
+                try self.type_set_kind(val_kind),
             ),
             .input_types = try ctx.internList(.type, &.{
-                try builders.type_set_type(ctx, key_kind, keys),
-                try builders.type_set_type(ctx, val_kind, vals),
+                try self.type_set_type(key_kind, keys),
+                try self.type_set_type(val_kind, vals),
             }),
         });
     }
@@ -1817,15 +1834,16 @@ pub const builders = struct {
     /// * Note: While the frontend type system uses marker types to distinguish the order of structure fields,
     /// here we do not use unordered sets; thus the order of the lists is used to encode the order.
     /// * The `layout` must be a symbol of the set `{'c, 'packed}`
-    pub fn struct_type(ctx: *Context, layout: Ref, names: []const Ref, types: []const Ref) !Ref {
+    pub fn struct_type(self: *Builder, layout: Ref, names: []const Ref, types: []const Ref) !Ref {
+        const ctx = self.getContext();
+
         const k_data = try ctx.getBuiltin(.data_kind);
 
         return ctx.internStructure(.type, .{
             .constructor = try ctx.getBuiltin(.struct_constructor),
             .input_types = try ctx.internList(.type, &.{
                 layout,
-                try builders.type_map_type(
-                    ctx,
+                try self.type_map_type(
                     k_data,
                     k_data,
                     names,
@@ -1871,9 +1889,9 @@ test "ir integration - struct type creation with packed layout" {
     defer ctx.deinit();
 
     // Create basic types for struct fields
-    const u32_type = try builders.integer_type(ctx, .unsigned, 32);
-    const u16_type = try builders.integer_type(ctx, .unsigned, 16);
-    const u8_type = try builders.integer_type(ctx, .unsigned, 8);
+    const u32_type = try ctx.builder.integer_type(.unsigned, 32);
+    const u16_type = try ctx.builder.integer_type(.unsigned, 16);
+    const u8_type = try ctx.builder.integer_type(.unsigned, 8);
 
     // Create field names
     const field1_name = try ctx.internData(.name, "x");
@@ -1881,13 +1899,13 @@ test "ir integration - struct type creation with packed layout" {
     const field3_name = try ctx.internData(.name, "z");
 
     // Create packed layout symbol
-    const packed_layout = try builders.symbol(ctx, "packed");
+    const packed_layout = try ctx.builder.symbol("packed");
 
     // Create the struct type with packed layout and three fields
     const field_names = [_]ir.Ref{ field1_name, field2_name, field3_name };
     const field_types = [_]ir.Ref{ u32_type, u16_type, u8_type };
 
-    const struct_type = try builders.struct_type(ctx, packed_layout, &field_names, &field_types);
+    const struct_type = try ctx.builder.struct_type(packed_layout, &field_names, &field_types);
 
     // Verify the struct type was created
     try testing.expect(struct_type != ir.Ref.nil);
@@ -2007,8 +2025,8 @@ test "ir integration - builtin types and operations" {
     try testing.expect(primitive_kind != ir.Ref.nil);
 
     // Test integer type creation
-    const i32_type = try builders.integer_type(ctx, .signed, 32);
-    const u64_type = try builders.integer_type(ctx, .unsigned, 64);
+    const i32_type = try ctx.builder.integer_type(.signed, 32);
+    const u64_type = try ctx.builder.integer_type(.unsigned, 64);
 
     try testing.expect(i32_type != ir.Ref.nil);
     try testing.expect(u64_type != ir.Ref.nil);
@@ -2017,7 +2035,7 @@ test "ir integration - builtin types and operations" {
     try testing.expect(i32_type.id.node != u64_type.id.node);
 
     // Test symbol type creation
-    const symbol_type = try builders.symbol(ctx, "my_symbol");
+    const symbol_type = try ctx.builder.symbol("my_symbol");
     try testing.expect(symbol_type != ir.Ref.nil);
 }
 

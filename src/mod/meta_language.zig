@@ -77,20 +77,19 @@ pub const builtins = struct {
     pub fn value_type(compilation: *Compilation) !ir.Ref {
         const ctx = compilation.job.context;
 
-        return ir.builders.struct_type(
-            ctx,
+        return ctx.builder.struct_type(
             try compilation.getBuiltin(.c_symbol),
             &.{
-                try ir.builders.symbol(ctx, "obj"), // FIXME: its annoying having to do `ir.builders.foo(ctx,` everywhere; abstract to `ctx.build(foo`, and then `compilation.build(foo`.
-                try ir.builders.symbol(ctx, "ptr"),
-                try ir.builders.symbol(ctx, "tag"),
-                try ir.builders.symbol(ctx, "nan"),
+                try ctx.builder.symbol("obj"),
+                try ctx.builder.symbol("ptr"),
+                try ctx.builder.symbol("tag"),
+                try ctx.builder.symbol("nan"),
             },
             &.{
-                try ir.builders.integer_type(ctx, .unsigned, @bitSizeOf(Value.Obj)),
-                try ir.builders.integer_type(ctx, .unsigned, @bitSizeOf(Value.PtrBits)),
-                try ir.builders.integer_type(ctx, .unsigned, @bitSizeOf(Value.Tag)),
-                try ir.builders.integer_type(ctx, .unsigned, @bitSizeOf(Value.NanBits)),
+                try ctx.builder.integer_type(.unsigned, @bitSizeOf(Value.Obj)),
+                try ctx.builder.integer_type(.unsigned, @bitSizeOf(Value.PtrBits)),
+                try ctx.builder.integer_type(.unsigned, @bitSizeOf(Value.Tag)),
+                try ctx.builder.integer_type(.unsigned, @bitSizeOf(Value.NanBits)),
             },
         );
     }
