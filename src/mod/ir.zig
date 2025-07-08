@@ -1953,9 +1953,9 @@ test "ir integration - struct type creation with packed layout" {
     const u8_type = try ctx.builder.integer_type(.unsigned, 8);
 
     // Create field names
-    const field1_name = try ctx.internName("x");
-    const field2_name = try ctx.internName("y");
-    const field3_name = try ctx.internName("z");
+    const field1_name = try ctx.builder.symbol("x");
+    const field2_name = try ctx.builder.symbol("y");
+    const field3_name = try ctx.builder.symbol("z");
 
     // Create packed layout symbol
     const packed_layout = try ctx.builder.symbol("packed");
