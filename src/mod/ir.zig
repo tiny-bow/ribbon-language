@@ -777,14 +777,6 @@ pub const Context = struct {
         }
     }
 
-    /// Create a new data node in the context, given a data kind and data.
-    pub fn addData(self: *Context, comptime kind: DataKind, value: DataType(kind)) !Ref {
-        var node = try Node.data(kind, value);
-        errdefer node.deinit(self.gpa);
-
-        return self.addNodeUnchecked(node);
-    }
-
     /// Create a new primitive node in the context, given a primitive kind and value.
     /// * The value must be a primitive type, such as an integer, index, or opcode. See `ir.primitives`.
     pub fn addPrimitive(self: *Context, value: anytype) !Ref {
@@ -818,17 +810,6 @@ pub const Context = struct {
         return self.addNodeUnchecked(node);
     }
 
-    /// Intern a data node in the context, given a data kind and data.
-    /// * If the node already exists in this context, it will return the existing reference.
-    /// * Modifying nodes added this way is unsafe.
-    /// * Prefer `internLocalBuffer` for buffer data, as it is more efficient and avoids ownership issues.
-    pub fn internData(self: *Context, comptime kind: DataKind, value: DataType(kind)) !Ref {
-        var node = try Node.data(kind, value);
-        errdefer node.deinit(self.gpa);
-
-        return self.internNodeUnchecked(node);
-    }
-
     /// Intern a primitive value in the context, given a primitive kind and value.
     /// * If the node already exists in this context, it will return the existing reference.
     /// * Modifying nodes added this way is unsafe.
@@ -848,6 +829,48 @@ pub const Context = struct {
         errdefer node.deinit(self.gpa);
 
         return self.internNodeUnchecked(node);
+    }
+
+    /// Intern a name value in the context.
+    /// * If the node already exists in this context, it will return the existing reference.
+    /// * Modifying nodes added this way is unsafe.
+    pub fn internName(self: *Context, value: []const u8) !Ref {
+        const gop = try self.interner.getOrPutAdapted(self.gpa, value, NameHasher);
+
+        if (!gop.found_existing) {
+            const arr = try self.arena.allocator().dupe(u8, value);
+
+            const node = try Node.data(.name, arr);
+
+            gop.key_ptr.* = node;
+
+            gop.value_ptr.* = try self.addNodeUnchecked(node);
+
+            try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
+        }
+
+        return gop.value_ptr.*;
+    }
+
+    /// Intern a `Source` value in the context.
+    /// * If the node already exists in this context, it will return the existing reference.
+    /// * Modifying nodes added this way is unsafe.
+    pub fn internSource(self: *Context, value: Source) !Ref {
+        const gop = try self.interner.getOrPutAdapted(self.gpa, value, SourceHasher);
+
+        if (!gop.found_existing) {
+            const owned_value = try value.dupe(self.arena.allocator());
+
+            const node = try Node.data(.source, owned_value);
+
+            gop.key_ptr.* = node;
+
+            gop.value_ptr.* = try self.addNodeUnchecked(node);
+
+            try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
+        }
+
+        return gop.value_ptr.*;
     }
 
     /// Intern a data buffer in the context.
@@ -1148,6 +1171,42 @@ pub fn ListHasher(comptime element_kind: Discriminator) type {
         }
     };
 }
+
+/// 64-bit context providing eql and hash functions for `Node` and `[]const u8` types.
+/// This is used by the interner to map constant value nodes to their references.
+pub const NameHasher = struct {
+    pub fn eql(b: []const u8, a: Node) bool {
+        if (a.kind != NodeKind.data(.name)) return false;
+
+        return std.mem.eql(u8, a.bytes.name, b);
+    }
+
+    pub fn hash(n: []const u8) u64 {
+        var hasher = std.hash.Fnv1a_64.init();
+        hasher.update(std.mem.asBytes(&ir.NodeKind.data(.name)));
+        hasher.update(n);
+
+        return hasher.final();
+    }
+};
+
+/// 64-bit context providing eql and hash functions for `Node` and `Source` types.
+/// This is used by the interner to map constant value nodes to their references.
+pub const SourceHasher = struct {
+    pub fn eql(a: Source, b: Node) bool {
+        if (b.kind != NodeKind.data(.source)) return false;
+
+        return a.eql(&b.bytes.source);
+    }
+
+    pub fn hash(n: Source) u64 {
+        var hasher = std.hash.Fnv1a_64.init();
+        hasher.update(std.mem.asBytes(&ir.NodeKind.data(.source)));
+        n.hash(&hasher);
+
+        return hasher.final();
+    }
+};
 
 /// 64-bit context providing eql and hash functions for `Node` and `[]const u8` types.
 /// This is used by the interner to map constant value nodes to their references.
@@ -1803,7 +1862,7 @@ pub const Builder = struct {
 
         return ctx.internStructure(.type, .{
             .constructor = try ctx.getBuiltin(.symbol_constructor),
-            .input_types = try ctx.internList(.type, &.{try ctx.internData(.name, name)}), // FIXME: create internName and internSource
+            .input_types = try ctx.internList(.type, &.{try ctx.internName(name)}),
         });
     }
 
@@ -1865,7 +1924,7 @@ test "ir integration - basic context operations" {
 
     // Test basic node creation
     const int_node = try ctx.addPrimitive(@as(u64, 42));
-    const name_node = try ctx.addData(.name, "test_variable");
+    const name_node = try ctx.internName("test_variable");
 
     // Verify nodes were created
     try testing.expect(int_node != ir.Ref.nil);
@@ -1894,9 +1953,9 @@ test "ir integration - struct type creation with packed layout" {
     const u8_type = try ctx.builder.integer_type(.unsigned, 8);
 
     // Create field names
-    const field1_name = try ctx.internData(.name, "x");
-    const field2_name = try ctx.internData(.name, "y");
-    const field3_name = try ctx.internData(.name, "z");
+    const field1_name = try ctx.internName("x");
+    const field2_name = try ctx.internName("y");
+    const field3_name = try ctx.internName("z");
 
     // Create packed layout symbol
     const packed_layout = try ctx.builder.symbol("packed");
