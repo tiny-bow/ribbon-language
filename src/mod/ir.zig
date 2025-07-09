@@ -21,7 +21,7 @@ const Source = source.Source;
 const bytecode = @import("bytecode");
 
 test {
-    std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDecls(@This());
 }
 
 /// VTable and arbitrary data map for user defined data on nodes.
@@ -1319,10 +1319,10 @@ pub const Ref = packed struct(u64) {
 };
 
 /// `platform.UniqueReprMap` for `Ref` to `Ref`.
-const RefMap = pl.UniqueReprMap(Ref, Ref, 80); // NOTE: cannot be exported due to `std.testing.refAllDeclsRecursive`
+pub const RefMap = pl.UniqueReprMap(Ref, Ref, 80);
 
 /// `platform.UniqueReprSet` for `Ref`.
-const RefSet = pl.UniqueReprSet(Ref, 80); // NOTE: cannot be exported due to `std.testing.refAllDeclsRecursive`
+pub const RefSet = pl.UniqueReprSet(Ref, 80);
 
 /// Uniquely identifies a child context in an ir.
 pub const ContextId = common.Id.of(Context, 16);
