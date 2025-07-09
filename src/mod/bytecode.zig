@@ -15,6 +15,7 @@ const core = @import("core");
 const Id = @import("Id");
 const Interner = @import("Interner");
 const VirtualWriter = @import("VirtualWriter");
+const Buffer = @import("Buffer");
 
 pub const Instruction = @import("Instruction");
 
@@ -258,6 +259,32 @@ pub const Encoder = struct {
         try self.writeInt(u48, data.toBits(code), .little);
     }
 
+    /// A fixup is a placeholder for an instruction that will have an operand filled later.
+    pub const Fixup = struct {
+        /// The instruction bits that will be modified later.
+        instr: *core.InstructionBits,
+        /// The bit-offset of the operand within the instruction bits.
+        bit_position: u64,
+    };
+
+    /// Encodes a branch instruction with a placeholder value and returns the address of the placeholder.
+    pub fn instrBr(self: *Encoder, comptime code: Instruction.OpCode, data: Instruction.SetType(code)) Error!Fixup {
+        if (comptime !Instruction.isBranch(code)) {
+            @compileError("instrBr can only be used with branch-family opcodes.");
+        }
+
+        const base: *core.InstructionBits = @ptrCast(self.getCurrentAddress());
+
+        try self.instr(code, data);
+
+        const bit_position = @bitSizeOf(Instruction.OpCode) + @bitOffsetOf(Instruction.SetType(code), "I");
+
+        return .{
+            .instr = base,
+            .bit_position = bit_position,
+        };
+    }
+
     /// Encodes a call-family instruction followed by its argument registers.
     /// This handles writing the instruction word, the argument registers, and any
     /// necessary padding to re-align the instruction stream.
@@ -372,6 +399,8 @@ pub const Builder = struct {
         return block;
     }
 
+    pub const BlockMap = pl.UniqueReprMap(BlockId, core.MutInstructionAddr, 80);
+
     pub fn encode(ptr: *const Builder, encoder: *Encoder) Encoder.Error!void {
         const self = @constCast(ptr);
 
@@ -380,8 +409,43 @@ pub const Builder = struct {
             return error.BadEncoding;
         }
 
+        var fixups = Block.FixupMap{};
+        defer fixups.deinit(self.allocator);
+
+        var blocks = BlockMap{};
+        defer blocks.deinit(self.allocator);
+
         for (self.blocks.items) |block| {
-            try block.encode(encoder);
+            const addr = encoder.getCurrentAddress();
+
+            try blocks.put(self.allocator, block.id, @alignCast(@ptrCast(addr)));
+
+            try block.encode(encoder, &fixups);
+        }
+
+        var fixup_it = fixups.iterator();
+
+        while (fixup_it.next()) |entry| {
+            const dest_block_id = entry.key_ptr.*;
+            const dest_entry = blocks.get(dest_block_id) orelse {
+                log.debug("bytecode.Builder.finalize: Block {} not found in fixup map", .{dest_block_id});
+                return error.BadEncoding;
+            };
+
+            const fixup_set = entry.value_ptr.items;
+            for (fixup_set) |fixup| {
+                const original_bits = fixup.instr.*;
+                const block_relative_offset = @as(i32, @intCast(@intFromPtr(dest_entry))) - @as(i32, @intCast(@intFromPtr(fixup.instr)));
+
+                // we now need to erase the existing 32 bits at `fixup.bit_position`
+                const mask = @as(u64, 0xFFFF_FFFF) << @intCast(fixup.bit_position);
+                const cleared = original_bits & ~mask; // clear the 32-bit region
+                const inserted = @as(u32, @bitCast(block_relative_offset)) << @intCast(fixup.bit_position);
+                // insert the new operand
+                const new_instr = cleared | inserted;
+
+                fixup.instr.* = new_instr;
+            }
         }
     }
 };
@@ -406,7 +470,7 @@ pub const Block = struct {
     /// The unique(-within-`function`) identifier for this block.
     id: BlockId,
     /// The instructions making up the body of this block, in un-encoded form.
-    body: pl.ArrayList(Instruction.Basic) = .empty,
+    body: pl.ArrayList(Proto) = .empty,
     /// The instruction that terminates this block.
     /// * Adding any instruction when this is non-`null` is a `BadEncoding` error
     /// * For all other purposes, `null` is semantically equivalent to `unreachable`
@@ -415,6 +479,19 @@ pub const Block = struct {
     /// handler *that is known to always cancel*, we can treat the `prompt` as
     /// terminal in higher-level code.
     terminator: ?Instruction.Term = null,
+
+    /// Simple intermediate for storing instructions in a block stream.
+    pub const Proto = struct {
+        inner: Instruction.Basic,
+        additional: AdditionalInfo = .none,
+
+        pub const AdditionalInfo = union(enum) {
+            none,
+            wide_imm: u64,
+            call_args: Buffer.fixed(core.Register, pl.MAX_REGISTERS),
+            branch_target: BlockId,
+        };
+    };
 
     fn init(function: *const Builder, id: BlockId) error{OutOfMemory}!*const Block {
         const allocator = function.allocator;
@@ -437,12 +514,41 @@ pub const Block = struct {
         self.body.deinit(allocator);
     }
 
+    pub const FixupMap = pl.UniqueReprMap(BlockId, pl.ArrayList(Encoder.Fixup), 80);
+
     /// Write this block's instructions into the provided bytecode encoder.
-    pub fn encode(ptr: *const Block, encoder: *Encoder) Encoder.Error!void {
+    pub fn encode(ptr: *const Block, encoder: *Encoder, fixups: *FixupMap) Encoder.Error!void {
         const self: *Block = @constCast(ptr);
 
-        for (self.body.items) |basic| {
-            try encoder.instrPre(basic.upcast());
+        for (self.body.items) |proto| {
+            const full_code = proto.inner.code.upcast();
+
+            @setEvalBranchQuota(10_000); // a lot of comptime work ahead
+
+            // We need to switch over the instruction code to find the proper function to call.
+            inline for (comptime std.meta.fieldNames(Instruction.BasicOpCode)) |field_name| {
+                const comptime_code = @field(Instruction.OpCode, field_name);
+
+                if (comptime_code == full_code) {
+                    if (comptime Instruction.isCall(comptime_code)) {
+                        try encoder.instrCall(comptime_code, @field(proto.inner.data, field_name), proto.additional.call_args.asSlice());
+                    } else if (comptime Instruction.isWide(comptime_code)) {
+                        try encoder.instrWithImm64(comptime_code, @field(proto.inner.data, field_name), proto.additional.wide_imm);
+                    } else if (comptime Instruction.isBranch(comptime_code)) {
+                        const fixup = try encoder.instrBr(comptime_code, @field(proto.inner.data, field_name));
+
+                        const gop = try fixups.getOrPut(self.function.allocator, proto.additional.branch_target);
+
+                        if (!gop.found_existing) gop.value_ptr.* = .{};
+
+                        try gop.value_ptr.append(self.function.allocator, fixup);
+                    } else {
+                        try encoder.instrPre(proto.inner.upcast());
+                    }
+
+                    break;
+                }
+            }
         }
 
         if (self.terminator) |term| {
@@ -471,10 +577,10 @@ pub const Block = struct {
 
         switch (code.downcast()) {
             .basic => |b| {
-                try self.body.append(self.function.allocator, Instruction.Basic{
+                try self.body.append(self.function.allocator, Proto{ .inner = Instruction.Basic{
                     .code = b,
                     .data = Instruction.BasicOpData.fromBits(data),
-                });
+                } });
             },
             .term => |t| {
                 self.terminator = Instruction.Term{
@@ -503,6 +609,67 @@ pub const Block = struct {
     /// See also `instr`, which takes the individual components of an instruction separately.
     pub fn instrPre(ptr: *const Block, instruction: Instruction) error{ BadEncoding, OutOfMemory }!void {
         return ptr.composeInstr(instruction.code, instruction.data);
+    }
+
+    /// Encodes a branch instruction with a placeholder value and returns the address of the placeholder.
+    pub fn instrBr(
+        ptr: *const Block,
+        comptime code: Instruction.BasicOpCode,
+        data: Instruction.SetType(code),
+    ) !Encoder.Fixup {
+        const self: *Block = @constCast(ptr);
+
+        if (comptime !Instruction.isBranch(code.upcast())) @compileError("instrBr can only be used with branch-family opcodes.");
+
+        try self.body.append(self.function.allocator, Proto{
+            .inner = Instruction.Basic{
+                .code = code,
+                .data = Instruction.BasicOpData.fromBits(data),
+            },
+            .additional = .{ .branch_target = BlockId.fromInt(0) }, // Placeholder for the target block
+        });
+    }
+
+    /// Encodes a call-family instruction followed by its argument registers.
+    /// This handles writing the instruction word, the argument registers, and any
+    /// necessary padding to re-align the instruction stream.
+    pub fn instrCall(
+        ptr: *const Block,
+        comptime code: Instruction.BasicOpCode,
+        data: Instruction.SetType(code.upcast()),
+        args: []const core.Register,
+    ) !void {
+        const self: *Block = @constCast(ptr);
+
+        if (comptime !Instruction.isCall(code.upcast())) @compileError("instrCall can only be used with call-family opcodes.");
+
+        try self.body.append(self.function.allocator, Proto{
+            .inner = Instruction.Basic{
+                .code = code,
+                .data = Instruction.BasicOpData.fromBits(data),
+            },
+            .additional = .{ .call_args = .fromSlice(args) },
+        });
+    }
+
+    /// Encodes an instruction that is followed by a 64-bit immediate value.
+    pub fn instrWithImm64(
+        ptr: *const Block,
+        comptime code: Instruction.BasicOpCode,
+        data: Instruction.SetType(code.upcast()),
+        imm64: u64,
+    ) !void {
+        const self: *Block = @constCast(ptr);
+
+        if (comptime !Instruction.isWide(code.upcast())) @compileError("instrWithImm64 used with an incompatible opcode.");
+
+        try self.body.append(self.function.allocator, Proto{
+            .inner = Instruction.Basic{
+                .code = code,
+                .data = Instruction.BasicOpData.fromBits(data),
+            },
+            .additional = .{ .wide_imm = imm64 },
+        });
     }
 };
 

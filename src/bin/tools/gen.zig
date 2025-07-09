@@ -716,6 +716,7 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
 
     var is_wide = [1]bool{false} ** 1024;
     var is_call = [1]bool{false} ** 1024;
+    var is_branch = [1]bool{false} ** 1024;
 
     var opcode: u16 = 0;
     for (categories) |*category| {
@@ -736,6 +737,8 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
 
                     if (std.mem.eql(u8, mnemonic.name, "call")) {
                         is_call[opcode] = true;
+                    } else if (std.mem.eql(u8, mnemonic.name, "br")) {
+                        is_branch[opcode] = true;
                     }
 
                     if (isa.wordBoundaryHeuristic(operand, remSize, wordOffset)) {
@@ -778,21 +781,28 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
 
     try writer.print(
         \\/// Determine if an instruction is a wide instruction.
-        \\pub fn isWide(comptime code: OpCode) bool {{
+        \\pub fn isWide(code: OpCode) bool {{
         \\    const is_wide = [_]bool{any};
         \\    return is_wide[@intFromEnum(code)];
         \\}}
         \\
         \\/// Determine if an instruction is a call instruction.
-        \\pub fn isCall(comptime code: OpCode) bool {{
+        \\pub fn isCall(code: OpCode) bool {{
         \\    const is_call = [_]bool{any};
         \\    return is_call[@intFromEnum(code)];
+        \\}}
+        \\
+        \\/// Determine if an instruction is a branch instruction.
+        \\pub fn isBranch(code: OpCode) bool {{
+        \\    const is_branch = [_]bool{any};
+        \\    return is_branch[@intFromEnum(code)];
         \\}}
         \\
     ,
         .{
             is_wide[0..opcode],
             is_call[0..opcode],
+            is_branch[0..opcode],
         },
     );
 

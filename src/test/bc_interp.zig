@@ -14,7 +14,7 @@ test "basic integration" {
     try entry.instr(.@"return", .{ .R = .r7 });
 
     var encoder = try ribbon.bytecode.Encoder.init();
-    defer encoder.writer.deinit();
+    defer encoder.deinit();
 
     try b.encode(&encoder);
 

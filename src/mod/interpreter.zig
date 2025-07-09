@@ -279,7 +279,7 @@ fn invokeInternal(self: *core.mem.FiberHeader, current: anytype, registerId: cor
                 .set_frame = self.sets.top(),
                 .data = data.ptr,
                 .vregs = newRegisters,
-                .ip = current.function.extents.base,
+                .ip = functionPtr.extents.base,
                 .output = registerId,
             });
 
@@ -466,10 +466,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const functionOpaquePtr: *const anyopaque = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            const newIp: core.InstructionAddr = pl.alignTo(
-                pl.offsetPointer(current.callFrame.ip, argumentCount * @sizeOf(core.Register)),
-                @alignOf(core.InstructionBits),
-            );
+            const arg_byte_count = argumentCount * @sizeOf(core.Register);
+            const arg_word_count = (arg_byte_count + @sizeOf(core.InstructionBits) - 1) / @sizeOf(core.InstructionBits);
+            const newIp = current.callFrame.ip + arg_word_count;
             std.debug.assert(current.function.extents.boundsCheck(newIp));
             current.callFrame.ip = newIp;
 
@@ -487,10 +486,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const functionOpaquePtr = current.function.header.get(functionId.cast(anyopaque));
 
-            const newIp: core.InstructionAddr = pl.alignTo(
-                pl.offsetPointer(current.callFrame.ip, argumentCount * @sizeOf(core.Register)),
-                @alignOf(core.InstructionBits),
-            );
+            const arg_byte_count = argumentCount * @sizeOf(core.Register);
+            const arg_word_count = (arg_byte_count + @sizeOf(core.InstructionBits) - 1) / @sizeOf(core.InstructionBits);
+            const newIp = current.callFrame.ip + arg_word_count;
             std.debug.assert(current.function.extents.boundsCheck(newIp));
             current.callFrame.ip = newIp;
 
@@ -509,10 +507,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const functionOpaquePtr: *const anyopaque = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            const newIp: core.InstructionAddr = pl.alignTo(
-                pl.offsetPointer(current.callFrame.ip, argumentCount * @sizeOf(core.Register)),
-                @alignOf(core.InstructionBits),
-            );
+            const arg_byte_count = argumentCount * @sizeOf(core.Register);
+            const arg_word_count = (arg_byte_count + @sizeOf(core.InstructionBits) - 1) / @sizeOf(core.InstructionBits);
+            const newIp = current.callFrame.ip + arg_word_count;
             std.debug.assert(current.function.extents.boundsCheck(newIp));
             current.callFrame.ip = newIp;
 
@@ -530,10 +527,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const functionOpaquePtr = current.function.header.get(functionId.cast(anyopaque));
 
-            const newIp: core.InstructionAddr = pl.alignTo(
-                pl.offsetPointer(current.callFrame.ip, argumentCount * @sizeOf(core.Register)),
-                @alignOf(core.InstructionBits),
-            );
+            const arg_byte_count = argumentCount * @sizeOf(core.Register);
+            const arg_word_count = (arg_byte_count + @sizeOf(core.InstructionBits) - 1) / @sizeOf(core.InstructionBits);
+            const newIp = current.callFrame.ip + arg_word_count;
             std.debug.assert(current.function.extents.boundsCheck(newIp));
             current.callFrame.ip = newIp;
 
@@ -550,10 +546,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const argsBase: [*]const core.Register = @ptrCast(@alignCast(current.callFrame.ip));
             const argumentRegisterIds = argsBase[0..argumentCount];
 
-            const newIp: core.InstructionAddr = pl.alignTo(
-                pl.offsetPointer(current.callFrame.ip, argumentCount * @sizeOf(core.Register)),
-                @alignOf(core.InstructionBits),
-            );
+            const arg_byte_count = argumentCount * @sizeOf(core.Register);
+            const arg_word_count = (arg_byte_count + @sizeOf(core.InstructionBits) - 1) / @sizeOf(core.InstructionBits);
+            const newIp = current.callFrame.ip + arg_word_count;
             std.debug.assert(current.function.extents.boundsCheck(newIp));
             current.callFrame.ip = newIp;
 
