@@ -441,12 +441,13 @@ pub const Builder = struct {
             const fixup_set = entry.value_ptr.items;
             for (fixup_set) |fixup| {
                 const original_bits = fixup.instr.*;
-                const block_relative_offset: i32 = @intCast(@as(isize, @intCast(@intFromPtr(dest_entry))) - @as(isize, @intCast(@intFromPtr(fixup.instr))));
+                const relative_offset_bytes = @as(isize, @bitCast(@intFromPtr(dest_entry))) - @as(isize, @bitCast(@intFromPtr(fixup.instr)));
+                const relative_offset_words: i32 = @intCast(@divExact(relative_offset_bytes, @sizeOf(core.InstructionBits)));
 
                 // we now need to erase the existing 32 bits at `fixup.bit_position`
                 const mask = @as(u64, 0xFFFF_FFFF) << @intCast(fixup.bit_position);
                 const cleared = original_bits & ~mask; // clear the 32-bit region
-                const inserted = @as(u64, @as(u32, @bitCast(block_relative_offset))) << @intCast(fixup.bit_position);
+                const inserted = @as(u64, @as(u32, @bitCast(relative_offset_words))) << @intCast(fixup.bit_position);
                 // insert the new operand
                 const new_instr = cleared | inserted;
 
@@ -1071,9 +1072,9 @@ test "Builder branch fixup" {
 
     const expected_body =
         \\    bit_copy8c r0 i8:1
-        \\    br_if r0 i32:18
+        \\    br_if r0 i32:3
         \\    nop
-        \\    br i32:8
+        \\    br i32:1
         \\    return r0
         \\
     ;
@@ -1322,11 +1323,11 @@ test "Builder complex branching" {
     const disas_body = output[first_line_end + 1 ..];
 
     const expected_body =
-        \\    br i32:8
+        \\    br i32:1
         \\    bit_copy8c r0 i8:1
-        \\    br_if r0 i32:8
+        \\    br_if r0 i32:1
         \\    nop
-        \\    br i32:ffffffe8
+        \\    br i32:fffffffd
         \\    return r0
         \\
     ;

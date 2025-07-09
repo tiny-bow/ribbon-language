@@ -431,7 +431,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: core.InstructionOffset = @bitCast(current.instruction.data.br.I);
             std.debug.assert(offset != 0);
 
-            const newIp: core.InstructionAddr = pl.offsetPointer(current.callFrame.ip, offset);
+            // The IP was advanced by decode(). Go back one instruction and add the WORD offset.
+            const newIp: core.InstructionAddr = pl.offsetPointerElement(current.callFrame.ip - 1, offset);
+
             std.debug.assert(pl.alignDelta(newIp, @alignOf(core.InstructionBits)) == 0);
             std.debug.assert(current.function.extents.boundsCheck(newIp));
 
@@ -440,18 +442,20 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             continue :dispatch try state.step(self);
         },
         .br_if => { // Applies a signed integer offset I to the instruction pointer, if the value stored in R is non-zero
-            const offset: core.InstructionOffset = @bitCast(current.instruction.data.br.I);
+            const offset: core.InstructionOffset = @bitCast(current.instruction.data.br_if.I);
             std.debug.assert(offset != 0);
 
             const registerId = current.instruction.data.br_if.R;
 
-            const newIp: core.InstructionAddr = pl.offsetPointer(current.callFrame.ip, offset);
+            // The IP was advanced by decode(). Go back one instruction and add the WORD offset.
+            const newIp: core.InstructionAddr = pl.offsetPointerElement(current.callFrame.ip - 1, offset);
+
             std.debug.assert(pl.alignDelta(newIp, @alignOf(core.InstructionBits)) == 0);
             std.debug.assert(current.function.extents.boundsCheck(newIp));
 
-            const register = &current.callFrame.vregs[registerId.getIndex()];
+            const register = current.callFrame.vregs[registerId.getIndex()];
 
-            if (register.* != 0) current.callFrame.ip = newIp;
+            if (register != 0) current.callFrame.ip = newIp;
 
             continue :dispatch try state.step(self);
         },
