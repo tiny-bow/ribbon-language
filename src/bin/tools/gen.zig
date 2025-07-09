@@ -714,6 +714,9 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
         \\
     );
 
+    var is_wide = [1]bool{false} ** 1024;
+    var is_call = [1]bool{false} ** 1024;
+
     var opcode: u16 = 0;
     for (categories) |*category| {
         for (category.mnemonics) |*mnemonic| {
@@ -731,7 +734,12 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
                     const operandSize = operand.sizeOf();
                     const remSize = isa.Operand.totalSizeNoPadding(instruction.operands[i + 1 ..]);
 
+                    if (std.mem.eql(u8, mnemonic.name, "call")) {
+                        is_call[opcode] = true;
+                    }
+
                     if (isa.wordBoundaryHeuristic(operand, remSize, wordOffset)) {
+                        is_wide[opcode] = true;
                         break;
                     }
 
@@ -767,6 +775,26 @@ fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
         }
     }
     try writer.writeAll("};\n\n");
+
+    try writer.print(
+        \\/// Determine if an instruction is a wide instruction.
+        \\pub fn isWide(comptime code: OpCode) bool {{
+        \\    const is_wide = [_]bool{any};
+        \\    return is_wide[@intFromEnum(code)];
+        \\}}
+        \\
+        \\/// Determine if an instruction is a call instruction.
+        \\pub fn isCall(comptime code: OpCode) bool {{
+        \\    const is_call = [_]bool{any};
+        \\    return is_call[@intFromEnum(code)];
+        \\}}
+        \\
+    ,
+        .{
+            is_wide[0..opcode],
+            is_call[0..opcode],
+        },
+    );
 
     try writer.writeAll(
         \\
