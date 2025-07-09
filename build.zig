@@ -130,6 +130,12 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const bc_interp_mod = b.createModule(.{
+        .root_source_file = b.path("src/test/bc_interp.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // setup tool calls //
 
     const gen_tool = b.addExecutable(.{
@@ -182,6 +188,7 @@ pub fn build(b: *std.Build) !void {
     const meta_language_test = b.addTest(.{ .root_module = meta_language_mod });
     const source_test = b.addTest(.{ .root_module = source_mod });
     const ribbon_test = b.addTest(.{ .root_module = ribbon_mod });
+    const bc_interp_test = b.addTest(.{ .root_module = bc_interp_mod });
 
     // add imports //
 
@@ -271,6 +278,12 @@ pub fn build(b: *std.Build) !void {
     ribbon_mod.addImport("meta_language", meta_language_mod);
     ribbon_mod.addImport("source", source_mod);
 
+    bc_interp_mod.addImport("ribbon_language", ribbon_mod);
+    bc_interp_mod.addImport("platform", platform_mod);
+    bc_interp_mod.addImport("common", common_mod);
+    bc_interp_mod.addImport("utils", utils_mod);
+    bc_interp_mod.addImport("repl", repl_mod);
+
     // setup steps //
 
     const install_step = b.default_step;
@@ -317,6 +330,7 @@ pub fn build(b: *std.Build) !void {
     check_step.dependOn(&meta_language_test.step);
     check_step.dependOn(&source_test.step);
     check_step.dependOn(&ribbon_test.step);
+    check_step.dependOn(&bc_interp_test.step);
 
     const test_step = b.step("unit-test", "Run all unit tests");
     test_step.dependOn(&b.addRunArtifact(abi_test).step);
@@ -334,6 +348,7 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&b.addRunArtifact(meta_language_test).step);
     test_step.dependOn(&b.addRunArtifact(source_test).step);
     test_step.dependOn(&b.addRunArtifact(ribbon_test).step);
+    test_step.dependOn(&b.addRunArtifact(bc_interp_test).step);
 
     const docs_step = b.step("docs", "Generate documentation");
 

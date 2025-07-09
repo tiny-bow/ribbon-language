@@ -8,10 +8,9 @@ const core = @import("core");
 const Instruction = @import("Instruction");
 const pl = @import("platform");
 const common = @import("common");
-const bytecode = @import("bytecode");
 
 test {
-    std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDecls(@This());
 }
 
 /// Invokes either a `core.BuiltinFunction` or `core.BuiltinAddress` on the provided fiber, returning the result.
@@ -88,35 +87,32 @@ pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *co
         .underflow => error.Underflow,
     };
 }
+// In src/mod/interpreter.zig
 
 fn getOrInitWrapper() *const core.Function {
     const static = struct {
-        threadlocal var WRAPPER_INSTRUCTION_BUFFER = [_]core.InstructionBits{0x0002};
-        threadlocal var WRAPPER_FUNCTION: core.Function = undefined;
-        threadlocal var WRAPPER_INIT = false;
+        // The function struct and initialization state.
+        threadlocal var buffer = [1]core.InstructionBits{0x0002}; // halt instruction
+        threadlocal var function: core.Function = undefined;
+        threadlocal var init = false;
     };
 
-    if (static.WRAPPER_INIT) {
-        @branchHint(.likely);
-        return &static.WRAPPER_FUNCTION;
-    } else {
-        @branchHint(.cold);
+    if (static.init) return &static.function;
 
-        const buffer = @as(core.InstructionAddr, @ptrCast(&static.WRAPPER_INSTRUCTION_BUFFER));
+    const buffer: [*]core.InstructionBits = @ptrCast(&static.buffer);
 
-        static.WRAPPER_FUNCTION = core.Function{
-            .header = core.EMPTY_HEADER,
-            .extents = .{
-                .base = buffer,
-                .upper = buffer + @sizeOf(@TypeOf(static.WRAPPER_INSTRUCTION_BUFFER)),
-            },
-            .stack_size = 0,
-        };
+    static.function = core.Function{
+        .header = core.EMPTY_HEADER,
+        .extents = .{
+            .base = buffer,
+            .upper = buffer + 1,
+        },
+        .stack_size = 0,
+    };
 
-        static.WRAPPER_INIT = true;
+    static.init = true;
 
-        return &static.WRAPPER_FUNCTION;
-    }
+    return &static.function;
 }
 
 /// Invokes a `core.Function` on the provided fiber, returning the result.
@@ -5629,44 +5625,3 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
         },
     }
 }
-
-// FIXME: this test causes zig to hang; run as a function it is fine?
-// test "interpreter_basic_integration" {
-//     std.debug.print("interpreter_basic_integration\n", .{});
-//     const allocator = std.testing.allocator;
-
-//     const b = try bytecode.Builder.init(allocator, common.Id.of(core.Function).fromInt(0));
-//     defer b.deinit();
-
-//     const entry = try b.createBlock();
-
-//     try entry.instr(.i_add64, .{ .Rx = .r7, .Ry = .r0, .Rz = .r1 });
-//     try entry.instr(.@"return", .{ .R = .r7 });
-
-//     var encoder = bytecode.Encoder { .writer = try bytecode.Writer.init() };
-//     defer encoder.writer.deinit();
-
-//     try b.encode(&encoder);
-
-//     const mem = try encoder.finalize();
-//     defer std.posix.munmap(mem);
-
-//     const instr: []const core.InstructionBits = @ptrCast(mem);
-
-//     const stdout = std.io.getStdOut();
-
-//     try bytecode.disas(mem, stdout.writer());
-
-//     const fiber = try core.Fiber.init(allocator);
-//     defer fiber.deinit(allocator);
-
-//     const function = core.Function {
-//         .header = undefined,
-//         .extents = .{ .base = instr.ptr, .upper = instr.ptr + instr.len },
-//         .stack_size = 0,
-//     };
-
-//     const result = try interpreter.invokeBytecode(fiber, &function, &.{ 3, 2 });
-//     log.info("{} + {} = {}", .{ 3, 2, result });
-//     try std.testing.expectEqual(5, result);
-// }
