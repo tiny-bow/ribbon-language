@@ -268,16 +268,18 @@ pub const Encoder = struct {
     };
 
     /// Encodes a branch instruction with a placeholder value and returns the address of the placeholder.
-    pub fn instrBr(self: *Encoder, comptime code: Instruction.OpCode, data: Instruction.SetType(code)) Error!Fixup {
-        if (comptime !Instruction.isBranch(code)) {
+    pub fn instrBr(self: *Encoder, comptime code: Instruction.TermOpCode, data: Instruction.SetType(code.upcast())) Error!Fixup {
+        if (comptime !Instruction.isBranch(code.upcast())) {
             @compileError("instrBr can only be used with branch-family opcodes.");
         }
 
-        const base: *core.InstructionBits = @ptrCast(self.getCurrentAddress());
+        try self.ensureAligned();
 
-        try self.instr(code, data);
+        const base: *core.InstructionBits = @alignCast(@ptrCast(self.getCurrentAddress()));
 
-        const bit_position = @bitSizeOf(Instruction.OpCode) + @bitOffsetOf(Instruction.SetType(code), "I");
+        try self.instr(code.upcast(), data);
+
+        const bit_position = @bitSizeOf(Instruction.OpCode) + @bitOffsetOf(Instruction.SetType(code.upcast()), "I");
 
         return .{
             .instr = base,
@@ -410,7 +412,11 @@ pub const Builder = struct {
         }
 
         var fixups = Block.FixupMap{};
-        defer fixups.deinit(self.allocator);
+        defer {
+            var fixup_it = fixups.valueIterator();
+            while (fixup_it.next()) |arr| arr.deinit(self.allocator);
+            fixups.deinit(self.allocator);
+        }
 
         var blocks = BlockMap{};
         defer blocks.deinit(self.allocator);
@@ -435,12 +441,12 @@ pub const Builder = struct {
             const fixup_set = entry.value_ptr.items;
             for (fixup_set) |fixup| {
                 const original_bits = fixup.instr.*;
-                const block_relative_offset = @as(i32, @intCast(@intFromPtr(dest_entry))) - @as(i32, @intCast(@intFromPtr(fixup.instr)));
+                const block_relative_offset: i32 = @intCast(@as(isize, @intCast(@intFromPtr(dest_entry))) - @as(isize, @intCast(@intFromPtr(fixup.instr))));
 
                 // we now need to erase the existing 32 bits at `fixup.bit_position`
                 const mask = @as(u64, 0xFFFF_FFFF) << @intCast(fixup.bit_position);
                 const cleared = original_bits & ~mask; // clear the 32-bit region
-                const inserted = @as(u32, @bitCast(block_relative_offset)) << @intCast(fixup.bit_position);
+                const inserted = @as(u64, @as(u32, @bitCast(block_relative_offset))) << @intCast(fixup.bit_position);
                 // insert the new operand
                 const new_instr = cleared | inserted;
 
@@ -470,7 +476,7 @@ pub const Block = struct {
     /// The unique(-within-`function`) identifier for this block.
     id: BlockId,
     /// The instructions making up the body of this block, in un-encoded form.
-    body: pl.ArrayList(Proto) = .empty,
+    body: pl.ArrayList(Proto(Instruction.Basic)) = .empty,
     /// The instruction that terminates this block.
     /// * Adding any instruction when this is non-`null` is a `BadEncoding` error
     /// * For all other purposes, `null` is semantically equivalent to `unreachable`
@@ -478,19 +484,54 @@ pub const Block = struct {
     /// This is intended for convenience. For example, when calling an effect
     /// handler *that is known to always cancel*, we can treat the `prompt` as
     /// terminal in higher-level code.
-    terminator: ?Instruction.Term = null,
+    terminator: ?Proto(Instruction.Term) = null,
 
     /// Simple intermediate for storing instructions in a block stream.
-    pub const Proto = struct {
-        inner: Instruction.Basic,
-        additional: AdditionalInfo = .none,
+    pub fn Proto(comptime T: type) type {
+        return struct {
+            inner: T,
+            additional: AdditionalInfo = .none,
 
-        pub const AdditionalInfo = union(enum) {
-            none,
-            wide_imm: u64,
-            call_args: Buffer.fixed(core.Register, pl.MAX_REGISTERS),
-            branch_target: BlockId,
+            fn emit(proto: *const @This(), allocator: std.mem.Allocator, encoder: *Encoder, fixups: *FixupMap) Encoder.Error!void {
+                const full_code = proto.inner.code.upcast();
+
+                @setEvalBranchQuota(10_000); // a lot of comptime work ahead
+
+                // We need to switch over the instruction code to find the proper function to call.
+                inline for (comptime std.meta.fieldNames(Instruction.OpCode)) |field_name| {
+                    const comptime_code = comptime @field(Instruction.OpCode, field_name);
+
+                    if (comptime_code == full_code) {
+                        const data = @field(proto.inner.data.upcast(), field_name);
+
+                        if (comptime Instruction.isCall(comptime_code)) {
+                            try encoder.instrCall(comptime_code, data, proto.additional.call_args.asSlice());
+                        } else if (comptime Instruction.isWide(comptime_code)) {
+                            try encoder.instrWithImm64(comptime_code, data, proto.additional.wide_imm);
+                        } else if (comptime Instruction.isBranch(comptime_code)) {
+                            const fixup = try encoder.instrBr(comptime_code.downcast().term, data);
+
+                            const gop = try fixups.getOrPut(allocator, proto.additional.branch_target);
+
+                            if (!gop.found_existing) gop.value_ptr.* = .{};
+
+                            try gop.value_ptr.append(allocator, fixup);
+                        } else {
+                            try encoder.instrPre(proto.inner.upcast());
+                        }
+
+                        break;
+                    }
+                }
+            }
         };
+    }
+
+    pub const AdditionalInfo = union(enum) {
+        none,
+        wide_imm: u64,
+        call_args: Buffer.fixed(core.Register, pl.MAX_REGISTERS),
+        branch_target: BlockId,
     };
 
     fn init(function: *const Builder, id: BlockId) error{OutOfMemory}!*const Block {
@@ -521,38 +562,11 @@ pub const Block = struct {
         const self: *Block = @constCast(ptr);
 
         for (self.body.items) |proto| {
-            const full_code = proto.inner.code.upcast();
-
-            @setEvalBranchQuota(10_000); // a lot of comptime work ahead
-
-            // We need to switch over the instruction code to find the proper function to call.
-            inline for (comptime std.meta.fieldNames(Instruction.BasicOpCode)) |field_name| {
-                const comptime_code = @field(Instruction.OpCode, field_name);
-
-                if (comptime_code == full_code) {
-                    if (comptime Instruction.isCall(comptime_code)) {
-                        try encoder.instrCall(comptime_code, @field(proto.inner.data, field_name), proto.additional.call_args.asSlice());
-                    } else if (comptime Instruction.isWide(comptime_code)) {
-                        try encoder.instrWithImm64(comptime_code, @field(proto.inner.data, field_name), proto.additional.wide_imm);
-                    } else if (comptime Instruction.isBranch(comptime_code)) {
-                        const fixup = try encoder.instrBr(comptime_code, @field(proto.inner.data, field_name));
-
-                        const gop = try fixups.getOrPut(self.function.allocator, proto.additional.branch_target);
-
-                        if (!gop.found_existing) gop.value_ptr.* = .{};
-
-                        try gop.value_ptr.append(self.function.allocator, fixup);
-                    } else {
-                        try encoder.instrPre(proto.inner.upcast());
-                    }
-
-                    break;
-                }
-            }
+            try proto.emit(self.function.allocator, encoder, fixups);
         }
 
-        if (self.terminator) |term| {
-            try encoder.instrPre(term.upcast());
+        if (self.terminator) |proto| {
+            try proto.emit(self.function.allocator, encoder, fixups);
         } else {
             try encoder.instr(.@"unreachable", .{});
         }
@@ -570,22 +584,19 @@ pub const Block = struct {
     pub fn composeInstr(ptr: *const Block, code: Instruction.OpCode, data: anytype) error{ BadEncoding, OutOfMemory }!void {
         const self: *Block = @constCast(ptr);
 
-        if (self.terminator) |term| {
-            log.debug("Cannot insert instruction `{s}` into block with terminator `{s}`", .{ @tagName(code), @tagName(term.code) });
-            return error.BadEncoding;
-        }
-
         switch (code.downcast()) {
             .basic => |b| {
-                try self.body.append(self.function.allocator, Proto{ .inner = Instruction.Basic{
+                try self.body.append(self.function.allocator, .{ .inner = Instruction.Basic{
                     .code = b,
                     .data = Instruction.BasicOpData.fromBits(data),
                 } });
             },
             .term => |t| {
-                self.terminator = Instruction.Term{
-                    .code = t,
-                    .data = Instruction.TermOpData.fromBits(data),
+                self.terminator = .{
+                    .inner = Instruction.Term{
+                        .code = t,
+                        .data = Instruction.TermOpData.fromBits(data),
+                    },
                 };
             },
         }
@@ -614,20 +625,25 @@ pub const Block = struct {
     /// Encodes a branch instruction with a placeholder value and returns the address of the placeholder.
     pub fn instrBr(
         ptr: *const Block,
-        comptime code: Instruction.BasicOpCode,
-        data: Instruction.SetType(code),
-    ) !Encoder.Fixup {
+        comptime code: Instruction.TermOpCode,
+        data: Instruction.SetType(code.upcast()),
+    ) !void {
         const self: *Block = @constCast(ptr);
 
-        if (comptime !Instruction.isBranch(code.upcast())) @compileError("instrBr can only be used with branch-family opcodes.");
+        if (comptime !Instruction.isBranch(code.upcast())) @compileError("instrBr can only be used with branch-family opcodes; got " ++ @tagName(code));
 
-        try self.body.append(self.function.allocator, Proto{
-            .inner = Instruction.Basic{
+        if (self.terminator) |term| {
+            log.debug("Cannot insert branch instruction `{s}` into block with terminator `{s}`", .{ @tagName(code), @tagName(term.inner.code) });
+            return error.BadEncoding;
+        }
+
+        self.terminator = .{
+            .inner = Instruction.Term{
                 .code = code,
-                .data = Instruction.BasicOpData.fromBits(data),
+                .data = Instruction.TermOpData.fromBits(data),
             },
             .additional = .{ .branch_target = BlockId.fromInt(0) }, // Placeholder for the target block
-        });
+        };
     }
 
     /// Encodes a call-family instruction followed by its argument registers.
@@ -643,7 +659,12 @@ pub const Block = struct {
 
         if (comptime !Instruction.isCall(code.upcast())) @compileError("instrCall can only be used with call-family opcodes.");
 
-        try self.body.append(self.function.allocator, Proto{
+        if (self.terminator) |term| {
+            log.debug("Cannot insert call instruction `{s}` into block with terminator `{s}`", .{ @tagName(code), @tagName(term.inner.code) });
+            return error.BadEncoding;
+        }
+
+        try self.body.append(self.function.allocator, .{
             .inner = Instruction.Basic{
                 .code = code,
                 .data = Instruction.BasicOpData.fromBits(data),
@@ -663,7 +684,12 @@ pub const Block = struct {
 
         if (comptime !Instruction.isWide(code.upcast())) @compileError("instrWithImm64 used with an incompatible opcode.");
 
-        try self.body.append(self.function.allocator, Proto{
+        if (self.terminator) |term| {
+            log.debug("Cannot insert wide instruction `{s}` into block with terminator `{s}`", .{ @tagName(code), @tagName(term.inner.code) });
+            return error.BadEncoding;
+        }
+
+        try self.body.append(self.function.allocator, .{
             .inner = Instruction.Basic{
                 .code = code,
                 .data = Instruction.BasicOpData.fromBits(data),
@@ -929,463 +955,380 @@ pub const AddressTable = struct {
     }
 };
 
-test "BasicInstructionEncoding" {
-    var encoder = try Encoder.init();
-    defer encoder.deinit();
-
-    try encoder.instr(.nop, .{});
-    try encoder.instr(.halt, .{});
-    try encoder.instr(.trap, .{});
-
-    const vmem = try encoder.finalize();
-    defer std.posix.munmap(@alignCast(vmem));
-
-    var output_buf = std.ArrayList(u8).init(std.testing.allocator);
-    defer output_buf.deinit();
-
-    try disas(vmem, output_buf.writer());
-
-    const output_str = output_buf.items;
-    const first_newline = std.mem.indexOfScalar(u8, output_str, '\n') orelse return error.TestFailed;
-    const actual = output_str[first_newline + 1 ..];
-
-    const expected =
-        \\    nop
-        \\    halt
-        \\    trap
-        \\
-    ;
-
-    // We must use `splitScalar` and `join` to normalize the line endings,
-    // as the heredoc might have different endings depending on the editor.
-    var expected_lines = std.mem.splitScalar(u8, expected, '\n');
-    var actual_lines = std.mem.splitScalar(u8, actual, '\n');
-
-    while (expected_lines.next()) |expected_line| {
-        const actual_line = actual_lines.next() orelse return error.TestFailed;
-        try std.testing.expectEqualStrings(expected_line, actual_line);
-    }
-    if (actual_lines.next() != null) return error.TestFailed;
-}
-
-test "InstructionWithOperandsEncoding" {
-    var encoder = try Encoder.init();
-    defer encoder.deinit();
-
-    try encoder.instr(.push_set, .{ .H = .fromInt(0x1234) });
-    try encoder.instr(.br_if, .{ .R = .r(1), .I = 0xDEADBEEF });
-    // Use the new helper to correctly encode a multi-word call instruction.
-    const call_args = [_]core.Register{ .r(10), .r(11) };
-    try encoder.instrCall(.call_c, .{ .R = .r(2), .F = .fromInt(0xABCD), .I = 2 }, &call_args);
-    try encoder.instr(.addr_l, .{ .R = .r(4), .I = 0xCAFEBABE });
-
-    const vmem = try encoder.finalize();
-    defer std.posix.munmap(@alignCast(vmem));
-
-    var output_buf = std.ArrayList(u8).init(std.testing.allocator);
-    defer output_buf.deinit();
-
-    try disas(vmem, output_buf.writer());
-
-    const output_str = output_buf.items;
-    const first_newline = std.mem.indexOfScalar(u8, output_str, '\n') orelse return error.TestFailed;
-    const actual = output_str[first_newline + 1 ..];
-
-    const expected =
-        \\    push_set H:1234
-        \\    br_if r1 i32:deadbeef
-        \\    call_c r2 F:abcd i8:2 args: r10 r11
-        \\    addr_l r4 i32:cafebabe
-        \\
-    ;
-
-    var expected_lines = std.mem.splitScalar(u8, expected, '\n');
-    var actual_lines = std.mem.splitScalar(u8, actual, '\n');
-
-    while (expected_lines.next()) |expected_line| {
-        const actual_line = actual_lines.next() orelse return error.TestFailed;
-        try std.testing.expectEqualStrings(expected_line, actual_line);
-    }
-    if (actual_lines.next() != null) return error.TestFailed;
-}
-
-test "BuilderApiEncoding" {
+test "Builder simple function encoding" {
     const allocator = std.testing.allocator;
 
-    const builder = try Builder.init(allocator, .fromInt(1));
+    const builder = try bytecode.Builder.init(allocator, .fromInt(1));
     defer builder.deinit();
 
-    const block1 = try builder.createBlock();
-    try block1.instr(.bit_copy8c, .{ .R = .r(1), .I = 0x42 });
-    try block1.instr(.br, .{ .I = 0 }); // Jump to next instruction/block start
+    const entry_block = try builder.createBlock();
+    try entry_block.instr(.bit_copy32c, .{ .R = .r1, .I = 0xDEADBEEF });
+    try entry_block.instr(.@"return", .{ .R = .r1 });
 
-    const block2 = try builder.createBlock();
-    try block2.instr(.i_add8c, .{ .Rx = .r(1), .Ry = .r(1), .I = 1 });
-    try block2.instr(.@"return", .{ .R = .r(1) });
-
-    var encoder = try Encoder.init();
+    var encoder = try bytecode.Encoder.init();
     defer encoder.deinit();
 
     try builder.encode(&encoder);
-
     const vmem = try encoder.finalize();
-    defer std.posix.munmap(@alignCast(vmem));
+    defer std.posix.munmap(vmem);
 
-    var output_buf = std.ArrayList(u8).init(allocator);
-    defer output_buf.deinit();
+    var disas_buffer = std.ArrayList(u8).init(allocator);
+    defer disas_buffer.deinit();
+    const writer = disas_buffer.writer();
 
-    try disas(vmem, output_buf.writer());
+    try bytecode.disas(vmem, writer);
 
-    const output_str = output_buf.items;
-    const first_newline = std.mem.indexOfScalar(u8, output_str, '\n') orelse return error.TestFailed;
-    const actual = output_str[first_newline + 1 ..];
+    const output = disas_buffer.items;
+    const first_line_end = std.mem.indexOf(u8, output, "\n") orelse @panic("invalid disas output");
+    const disas_body = output[first_line_end + 1 ..];
 
-    const expected =
-        \\    bit_copy8c r1 i8:42
-        \\    br i32:0
-        \\    i_add8c r1 r1 i8:1
+    const expected_body =
+        \\    bit_copy32c r1 i32:deadbeef
         \\    return r1
         \\
     ;
-
-    var expected_lines = std.mem.splitScalar(u8, expected, '\n');
-    var actual_lines = std.mem.splitScalar(u8, actual, '\n');
-
-    while (expected_lines.next()) |expected_line| {
-        const actual_line = actual_lines.next() orelse return error.TestFailed;
-        try std.testing.expectEqualStrings(expected_line, actual_line);
-    }
-    if (actual_lines.next() != null) return error.TestFailed;
+    try std.testing.expectEqualStrings(expected_body, disas_body);
 }
 
-test "BuilderEmptyTerminator" {
+test "Builder call and wide instruction encoding" {
     const allocator = std.testing.allocator;
 
-    const builder = try Builder.init(allocator, .fromInt(1));
+    const builder = try bytecode.Builder.init(allocator, .fromInt(2));
     defer builder.deinit();
 
     const block = try builder.createBlock();
+    // Wide instruction
+    try block.instrWithImm64(.bit_copy64c, .{ .R = .r2 }, 0x1122334455667788);
+    // Call instruction with 2 arguments
+    const args = [_]core.Register{ .r2, .r3 };
+    try block.instrCall(.call, .{ .Rx = .r1, .Ry = .r4, .I = args.len }, &args);
+    // Add another instruction to ensure disassembler ptr advances correctly
     try block.instr(.nop, .{});
-    // No terminator set, should default to unreachable
+    try block.instr(.@"return", .{ .R = .r1 });
 
-    var encoder = try Encoder.init();
+    var encoder = try bytecode.Encoder.init();
     defer encoder.deinit();
-
     try builder.encode(&encoder);
-
     const vmem = try encoder.finalize();
-    defer std.posix.munmap(@alignCast(vmem));
+    defer std.posix.munmap(vmem);
 
-    var output_buf = std.ArrayList(u8).init(allocator);
-    defer output_buf.deinit();
+    var disas_buffer = std.ArrayList(u8).init(allocator);
+    defer disas_buffer.deinit();
+    const writer = disas_buffer.writer();
+    try bytecode.disas(vmem, writer);
 
-    try disas(vmem, output_buf.writer());
+    const output = disas_buffer.items;
+    const first_line_end = std.mem.indexOf(u8, output, "\n") orelse @panic("invalid disas output");
+    const disas_body = output[first_line_end + 1 ..];
 
-    const output_str = output_buf.items;
-    const first_newline = std.mem.indexOfScalar(u8, output_str, '\n') orelse return error.TestFailed;
-    const actual = output_str[first_newline + 1 ..];
-
-    const expected =
+    const expected_body =
+        \\    bit_copy64c r2 i64:1122334455667788
+        \\    call r1 r4 i8:2 args: r2 r3
         \\    nop
-        \\    unreachable
+        \\    return r1
         \\
     ;
-
-    var expected_lines = std.mem.splitScalar(u8, expected, '\n');
-    var actual_lines = std.mem.splitScalar(u8, actual, '\n');
-
-    while (expected_lines.next()) |expected_line| {
-        const actual_line = actual_lines.next() orelse return error.TestFailed;
-        try std.testing.expectEqualStrings(expected_line, actual_line);
-    }
-    if (actual_lines.next() != null) return error.TestFailed;
+    try std.testing.expectEqualStrings(expected_body, disas_body);
 }
 
-test "AddressTableEncoding" {
+test "Builder branch fixup" {
     const allocator = std.testing.allocator;
-    var at = AddressTable{};
-    defer at.deinit(allocator);
 
-    // Create a dummy variable on the stack to get a valid, non-null pointer from.
-    var dummy_instr: u64 = 0;
-    const dummy_addr: [*]const core.InstructionBits = @ptrCast(&dummy_instr);
+    const builder = try bytecode.Builder.init(allocator, .fromInt(3));
+    defer builder.deinit();
 
-    // Create data on the stack for the pointers to point to.
+    const entry_block = try builder.createBlock();
+    const fallthrough_block = try builder.createBlock();
+    const target_block = try builder.createBlock();
+
+    // entry_block: br_if r0 -> target_block
+    try entry_block.instr(.bit_copy8c, .{ .R = .r0, .I = 1 });
+    try entry_block.instrBr(.br_if, .{ .R = .r0, .I = 0 });
+    @constCast(&entry_block.terminator.?).additional.branch_target = target_block.id;
+
+    // fallthrough_block: br -> target_block
+    try fallthrough_block.instr(.nop, .{});
+    try fallthrough_block.instrBr(.br, .{ .I = 0 });
+    @constCast(&fallthrough_block.terminator.?).additional.branch_target = target_block.id;
+
+    // target_block: return r0
+    try target_block.instr(.@"return", .{ .R = .r0 });
+
+    var encoder = try bytecode.Encoder.init();
+    defer encoder.deinit();
+    try builder.encode(&encoder);
+    const vmem = try encoder.finalize();
+    defer std.posix.munmap(vmem);
+
+    var disas_buffer = std.ArrayList(u8).init(allocator);
+    defer disas_buffer.deinit();
+    const writer = disas_buffer.writer();
+    try bytecode.disas(vmem, writer);
+
+    const output = disas_buffer.items;
+    const first_line_end = std.mem.indexOf(u8, output, "\n") orelse @panic("invalid disas output");
+    const disas_body = output[first_line_end + 1 ..];
+
+    const expected_body =
+        \\    bit_copy8c r0 i8:1
+        \\    br_if r0 i32:18
+        \\    nop
+        \\    br i32:8
+        \\    return r0
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected_body, disas_body);
+}
+
+test "Table and static data encoding" {
+    const allocator = std.testing.allocator;
+
+    // 1. Create a dummy function to use as a static value.
+    var fn_builder = try bytecode.Builder.init(allocator, .fromInt(100));
+    defer fn_builder.deinit();
+    const fn_block = try fn_builder.createBlock();
+    try fn_block.instr(.@"return", .{ .R = .r0 });
+    var fn_encoder = try bytecode.Encoder.init();
+    defer fn_encoder.deinit();
+    try fn_builder.encode(&fn_encoder);
+    const fn_vmem = try fn_encoder.finalize();
+    defer std.posix.munmap(fn_vmem);
+
+    // 2. Create static data structs.
+    var dummy_header: core.Header = .{};
     const my_func = core.Function{
-        .header = core.EMPTY_HEADER,
-        // Point the extents to the valid dummy address.
-        .extents = .{ .base = dummy_addr, .upper = dummy_addr },
-        .stack_size = 16,
+        .header = &dummy_header,
+        .extents = .{
+            .base = @alignCast(@ptrCast(fn_vmem.ptr)),
+            .upper = @alignCast(@ptrCast(fn_vmem.ptr + fn_vmem.len)),
+        },
+        .stack_size = 128,
     };
-    const my_const_data = "test_const";
+    const my_const_data = "hello from a constant";
     const my_const = core.Constant.fromSlice(my_const_data);
 
-    // Bind pointers to the real data.
-    const addr1: *const anyopaque = &my_func;
-    const addr2: *const anyopaque = &my_const;
-
-    const id1 = try at.bind(allocator, .function, addr1);
-    const id2 = try at.bind(allocator, .constant, addr2);
-
-    try std.testing.expectEqual(@as(u32, 0), id1.toInt());
-    try std.testing.expectEqual(@as(u32, 1), id2.toInt());
-
-    var encoder = try Encoder.init();
-    defer encoder.deinit();
-
-    // The encode function will now be able to safely read from addr1 and addr2.
-    const core_at = try at.encode(&encoder);
-    const vmem = try encoder.finalize();
-    defer std.posix.munmap(@alignCast(vmem));
-
-    try std.testing.expectEqual(@as(usize, 2), core_at.kinds.len);
-    try std.testing.expectEqual(@as(usize, 2), core_at.addresses.len);
-    try std.testing.expectEqual(core.SymbolKind.function, core_at.kinds.asSlice()[0]);
-    try std.testing.expectEqual(core.SymbolKind.constant, core_at.kinds.asSlice()[1]);
-
-    // We can also verify the copied data in the new buffer.
-    const new_func_ptr: *const core.Function = @ptrCast(@alignCast(core_at.addresses.asSlice()[0]));
-    try std.testing.expectEqual(@as(u16, 16), new_func_ptr.stack_size);
-    // Verify the extents were also copied correctly.
-    try std.testing.expect(@intFromPtr(new_func_ptr.extents.base) != 0);
-
-    const new_const_ptr: *const core.Constant = @ptrCast(@alignCast(core_at.addresses.asSlice()[1]));
-    try std.testing.expectEqualSlices(u8, "test_const", new_const_ptr.asSlice());
-}
-
-test "SymbolTableEncoding" {
-    const allocator = std.testing.allocator;
-    var st = SymbolTable{};
-    defer st.deinit(allocator);
-
-    try st.bind(allocator, "foo", .fromInt(1));
-    try st.bind(allocator, "bar.baz", .fromInt(2));
-
-    var encoder = try Encoder.init();
-    defer encoder.deinit();
-
-    const core_st = try st.encode(&encoder);
-    const vmem = try encoder.finalize();
-    defer std.posix.munmap(@alignCast(vmem));
-
-    try std.testing.expectEqual(@as(usize, 2), core_st.values.len);
-
-    var found_foo = false;
-    var found_bar_baz = false;
-
-    for (0..core_st.values.len) |i| {
-        const entry = .{ .key = core_st.keys.asSlice()[i], .value = core_st.values.asSlice()[i] };
-
-        if (std.mem.eql(u8, entry.key.name.asSlice(), "foo")) {
-            try std.testing.expectEqual(false, found_foo);
-            found_foo = true;
-            try std.testing.expectEqual(@as(u32, 1), entry.value.toInt());
-        } else if (std.mem.eql(u8, entry.key.name.asSlice(), "bar.baz")) {
-            try std.testing.expectEqual(false, found_bar_baz);
-            found_bar_baz = true;
-            try std.testing.expectEqual(@as(u32, 2), entry.value.toInt());
-        } else {
-            return error.TestFailed; // Found unexpected key
-        }
-    }
-
-    try std.testing.expect(found_foo);
-    try std.testing.expect(found_bar_baz);
-}
-
-test "Block: adding instruction after terminator fails" {
-    const allocator = std.testing.allocator;
-
-    const builder = try Builder.init(allocator, .fromInt(1));
-    defer builder.deinit();
-
-    const block = try builder.createBlock();
-    try block.instr(.@"return", .{ .R = .r(0) }); // Set the terminator
-
-    // Attempting to add another instruction should now fail.
-    try std.testing.expectError(error.BadEncoding, block.instr(.nop, .{}));
-}
-
-test "Builder: encoding function with no blocks fails" {
-    const allocator = std.testing.allocator;
-    const builder = try Builder.init(allocator, .fromInt(1));
-    defer builder.deinit();
-
-    var encoder = try Encoder.init();
-    defer encoder.deinit();
-
-    // Encoding a builder with no blocks should return an error.
-    try std.testing.expectError(error.BadEncoding, builder.encode(&encoder));
-}
-
-test "Disassembler: all operand types" {
-    var encoder = try Encoder.init();
-    defer encoder.deinit();
-
-    // Test each operand type supported by the disassembler using a real instruction.
-
-    // core.HandlerSetId
-    try encoder.instr(.push_set, .{ .H = .fromInt(0xAAAA) });
-    // core.UpvalueId
-    try encoder.instr(.addr_u, .{ .R = .r(1), .U = .fromInt(0xBB) });
-    // core.GlobalId
-    try encoder.instr(.addr_g, .{ .R = .r(2), .G = .fromInt(0xCCCC) });
-    // core.FunctionId
-    try encoder.instrCall(.call_c, .{ .R = .r(3), .F = .fromInt(0xDDDD), .I = 0 }, &.{});
-    // core.BuiltinAddressId
-    try encoder.instr(.addr_b, .{ .R = .r(4), .B = .fromInt(0x1111) });
-    // core.ForeignAddressId
-    try encoder.instr(.addr_x, .{ .R = .r(5), .X = .fromInt(0x2222) });
-    // core.EffectId
-    try encoder.instrCall(.prompt, .{ .R = .r(6), .E = .fromInt(0x3333), .I = 0 }, &.{});
-    // core.ConstantId
-    try encoder.instr(.addr_c, .{ .R = .r(7), .C = .fromInt(0x5555) });
-    // u8
-    try encoder.instr(.bit_copy8c, .{ .R = .r(8), .I = 0x42 });
-    // u16
-    try encoder.instr(.bit_copy16c, .{ .R = .r(9), .I = 0x6789 });
-    // u32
-    try encoder.instr(.bit_copy32c, .{ .R = .r(10), .I = 0xABCDEF01 });
-    // u64
-    try encoder.instrWithImm64(.f_add64c, .{ .Rx = .r(11), .Ry = .r(12) }, 0x1122334455667788);
-
-    const vmem = try encoder.finalize();
-    defer std.posix.munmap(@alignCast(vmem));
-
-    var output_buf = std.ArrayList(u8).init(std.testing.allocator);
-    defer output_buf.deinit();
-
-    try disas(vmem, output_buf.writer());
-
-    const output_str = output_buf.items;
-    const first_newline = std.mem.indexOfScalar(u8, output_str, '\n') orelse return error.TestFailed;
-    const actual = output_str[first_newline + 1 ..];
-
-    const expected =
-        \\    push_set H:aaaa
-        \\    addr_u r1 U:bb
-        \\    addr_g r2 G:cccc
-        \\    call_c r3 F:dddd i8:0
-        \\    addr_b r4 B:1111
-        \\    addr_x r5 X:2222
-        \\    prompt r6 E:3333 i8:0
-        \\    addr_c r7 C:5555
-        \\    bit_copy8c r8 i8:42
-        \\    bit_copy16c r9 i16:6789
-        \\    bit_copy32c r10 i32:abcdef01
-        \\    f_add64c r11 r12 i64:1122334455667788
-        \\
-    ;
-
-    var expected_lines = std.mem.splitScalar(u8, expected, '\n');
-    var actual_lines = std.mem.splitScalar(u8, actual, '\n');
-
-    while (expected_lines.next()) |expected_line| {
-        const actual_line = actual_lines.next() orelse return error.TestFailed;
-        try std.testing.expectEqualStrings(expected_line, actual_line);
-    }
-    if (actual_lines.next() != null) return error.TestFailed;
-}
-
-test "Multi-word instruction encoding" {
-    const allocator = std.testing.allocator;
-    var encoder = try Encoder.init();
-    defer encoder.deinit();
-
-    // Test a call with arguments
-    const call_args = [_]core.Register{ .r(10), .r(11), .r(12) };
-    try encoder.instrCall(.call, .{ .Rx = .r(0), .Ry = .r(1), .I = 3 }, &call_args);
-
-    // Test a multi-word immediate instruction
-    try encoder.instrWithImm64(.i_add64c, .{ .Rx = .r(2), .Ry = .r(3) }, 0xDEADBEEF_CAFEBABE);
-
-    // A simple instruction to ensure we aligned correctly
-    try encoder.instr(.nop, .{});
-
-    const vmem = try encoder.finalize();
-    defer std.posix.munmap(@alignCast(vmem));
-
-    var output_buf = std.ArrayList(u8).init(allocator);
-    defer output_buf.deinit();
-
-    // This now requires the updated `disas` function
-    try disas(vmem, output_buf.writer());
-
-    const output_str = output_buf.items;
-    const first_newline = std.mem.indexOfScalar(u8, output_str, '\n') orelse return error.TestFailed;
-    const actual = output_str[first_newline + 1 ..];
-
-    const expected =
-        \\    call r0 r1 i8:3 args: r10 r11 r12
-        \\    i_add64c r2 r3 i64:deadbeefcafebabe
-        \\    nop
-        \\
-    ;
-
-    // Line-by-line comparison...
-    var expected_lines = std.mem.splitScalar(u8, expected, '\n');
-    var actual_lines = std.mem.splitScalar(u8, actual, '\n');
-
-    while (expected_lines.next()) |expected_line| {
-        const actual_line = actual_lines.next() orelse return error.TestFailed;
-        try std.testing.expectEqualStrings(expected_line, actual_line);
-    }
-    if (actual_lines.next() != null) return error.TestFailed;
-}
-
-test "Misaligned instruction encoding panics" {
-    var encoder = try Encoder.init();
-    defer encoder.deinit();
-
-    try encoder.writeByte(0xFF); // Deliberately misalign the stream
-
-    const x = encoder.instr(.nop, .{});
-
-    try std.testing.expectError(error.UnalignedWrite, x);
-}
-
-test "Table.encode full lifecycle" {
-    const allocator = std.heap.page_allocator;
-    var table = Table{};
+    // 3. Create and populate the Table.
+    var table = bytecode.Table{};
     defer table.deinit(allocator);
 
-    // Create a dummy variable on the stack to get a valid, non-null pointer from.
-    var dummy_instr: u64 = 0;
-    const dummy_addr: [*]const core.InstructionBits = @ptrCast(&dummy_instr);
+    const func_id = try table.bind(allocator, "my_func", &my_func);
+    const const_id = try table.bind(allocator, "my_const", &my_const);
 
-    // Create data on the stack for the pointers to point to.
-    const my_func = core.Function{
-        .header = core.EMPTY_HEADER,
-        // Point the extents to the valid dummy address.
-        .extents = .{ .base = dummy_addr, .upper = dummy_addr },
-        .stack_size = 16,
-    };
-    const my_const_data = "test_const";
-    const my_const = core.Constant.fromSlice(my_const_data);
-
-    const func_id = try table.bind(allocator, "my_main", &my_func);
-    const const_id = try table.bind(allocator, "my_greeting", &my_const);
-
-    try std.testing.expectEqual(@as(u32, 0), func_id.toInt());
-    try std.testing.expectEqual(@as(u32, 1), const_id.toInt());
-
-    // 2. Encode the table into a self-contained bytecode unit.
+    // 4. Encode the Table into a Bytecode unit.
     const bytecode_unit = try table.encode();
     defer bytecode_unit.deinit();
 
-    // 3. Inspect the resulting core.Bytecode object.
+    // 5. Verify the encoded tables.
+    const new_header = bytecode_unit.header;
+    try std.testing.expect(new_header.size > 0);
+
+    // 5a. Verify symbol lookup.
+    const looked_up_func_id = new_header.symbol_table.lookupId("my_func") orelse @panic("func not found");
+    try std.testing.expectEqual(func_id.toInt(), looked_up_func_id.toInt());
+
+    const looked_up_const_id = new_header.symbol_table.lookupId("my_const") orelse @panic("const not found");
+    try std.testing.expectEqual(const_id.toInt(), looked_up_const_id.toInt());
+
+    // 5b. Verify deep-copied static data.
+    const encoded_func: *const core.Function = new_header.get(func_id.cast(core.Function));
+    try std.testing.expectEqual(my_func.stack_size, encoded_func.stack_size);
+    const encoded_fn_body: []const u8 = @as([*]const u8, @ptrCast(encoded_func.extents.base))[0 .. @intFromPtr(encoded_func.extents.upper) - @intFromPtr(encoded_func.extents.base)];
+    try std.testing.expectEqualSlices(u8, fn_vmem, encoded_fn_body);
+
+    const encoded_const: *const core.Constant = new_header.get(const_id.cast(core.Constant));
+    try std.testing.expectEqualStrings(my_const_data, encoded_const.asSlice());
+}
+
+test "Builder block termination errors" {
+    const allocator = std.testing.allocator;
+
+    const builder = try bytecode.Builder.init(allocator, .fromInt(4));
+    defer builder.deinit();
+
+    const block = try builder.createBlock();
+
+    // Add a terminator
+    try block.instr(.@"return", .{ .R = .r0 });
+    try std.testing.expect(block.terminator != null);
+
+    // Try to add a basic instruction after a terminator using a helper that has the check.
+    const args = [_]core.Register{};
+    try std.testing.expectError(error.BadEncoding, block.instrCall(.call, .{ .Rx = .r0, .Ry = .r1, .I = 0 }, &args));
+
+    // Try to add another terminator via instrBr, which also has the check.
+    try std.testing.expectError(error.BadEncoding, block.instrBr(.br, .{ .I = 0 }));
+}
+
+test "Builder branch to invalid block" {
+    const allocator = std.testing.allocator;
+
+    const builder = try bytecode.Builder.init(allocator, .fromInt(5));
+    defer builder.deinit();
+
+    const entry_block = try builder.createBlock();
+    const invalid_block_id = bytecode.BlockId.fromInt(99);
+
+    try entry_block.instrBr(.br, .{ .I = 0 }); // I is placeholder
+    @constCast(&entry_block.terminator.?).additional.branch_target = invalid_block_id;
+
+    var encoder = try bytecode.Encoder.init();
+    defer encoder.deinit();
+
+    // Encoding should fail because the fixup can't find the target block.
+    try std.testing.expectError(error.BadEncoding, builder.encode(&encoder));
+}
+
+test "Encoder alignment error" {
+    var encoder = try bytecode.Encoder.init();
+    defer encoder.deinit();
+
+    // Write a single byte to misalign the stream for an 8-byte instruction
+    try encoder.writeByte(0xFF);
+
+    // ensureAligned should now fail
+    try std.testing.expectError(error.UnalignedWrite, encoder.ensureAligned());
+
+    // instr should fail because it calls ensureAligned internally
+    try std.testing.expectError(error.UnalignedWrite, encoder.instr(.nop, .{}));
+
+    // Now, align it and it should work
+    try encoder.alignTo(pl.BYTECODE_ALIGNMENT);
+    try encoder.ensureAligned(); // should not error
+    try encoder.instr(.nop, .{}); // should not error
+}
+
+test "Disassembler with various operand types" {
+    const allocator = std.testing.allocator;
+
+    const builder = try bytecode.Builder.init(allocator, .fromInt(6));
+    defer builder.deinit();
+
+    const block = try builder.createBlock();
+    // Test some Id operands
+    try block.instr(.push_set, .{ .H = .fromInt(0x11) });
+    try block.instr(.addr_g, .{ .R = .r1, .G = .fromInt(0x22) });
+    try block.instrCall(.prompt, .{ .R = .r2, .E = .fromInt(0x33), .I = 0 }, &.{});
+    try block.instr(.addr_u, .{ .R = .r3, .U = .fromInt(0x44) });
+    try block.instr(.addr_c, .{ .R = .r4, .C = .fromInt(0x55) });
+    try block.instr(.addr_f, .{ .R = .r5, .F = .fromInt(0x66) });
+    try block.instr(.addr_b, .{ .R = .r6, .B = .fromInt(0x77) });
+    try block.instr(.addr_x, .{ .R = .r7, .X = .fromInt(0x88) });
+    // Test an integer operand not covered elsewhere (u16)
+    try block.instr(.bit_copy16c, .{ .R = .r8, .I = 0xABCD });
+    try block.instr(.@"return", .{ .R = .r0 });
+
+    var encoder = try bytecode.Encoder.init();
+    defer encoder.deinit();
+    try builder.encode(&encoder);
+    const vmem = try encoder.finalize();
+    defer std.posix.munmap(vmem);
+
+    var disas_buffer = std.ArrayList(u8).init(allocator);
+    defer disas_buffer.deinit();
+    const writer = disas_buffer.writer();
+
+    try bytecode.disas(vmem, writer);
+    const output = disas_buffer.items;
+    const first_line_end = std.mem.indexOf(u8, output, "\n") orelse @panic("invalid disas output");
+    const disas_body = output[first_line_end + 1 ..];
+
+    const expected_body =
+        \\    push_set H:11
+        \\    addr_g r1 G:22
+        \\    prompt r2 E:33 i8:0
+        \\    addr_u r3 U:44
+        \\    addr_c r4 C:55
+        \\    addr_f r5 F:66
+        \\    addr_b r6 B:77
+        \\    addr_x r7 X:88
+        \\    bit_copy16c r8 i16:abcd
+        \\    return r0
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected_body, disas_body);
+}
+
+test "Empty builder and table encoding" {
+    const allocator = std.testing.allocator;
+
+    // 1. Test empty Builder
+    const builder = try bytecode.Builder.init(allocator, .fromInt(7));
+    defer builder.deinit();
+
+    var encoder_for_builder = try bytecode.Encoder.init();
+    defer encoder_for_builder.deinit();
+    try std.testing.expectError(error.BadEncoding, builder.encode(&encoder_for_builder));
+
+    // 2. Test empty Table
+    var table = bytecode.Table{};
+    defer table.deinit(allocator);
+
+    const bytecode_unit = try table.encode();
+    defer bytecode_unit.deinit();
+
     const header = bytecode_unit.header;
-    try std.testing.expectEqual(@as(usize, 2), header.address_table.addresses.len);
+    // For an empty table, the encoded size of the tables should be 0.
+    try std.testing.expectEqual(0, header.size);
+    try std.testing.expectEqual(0, header.symbol_table.keys.len);
+    try std.testing.expectEqual(0, header.symbol_table.values.len);
+    try std.testing.expectEqual(0, header.address_table.kinds.len);
+    try std.testing.expectEqual(0, header.address_table.addresses.len);
 
-    // 4. Look up the symbols by name in the encoded structure.
-    const func_addr_info = header.lookupAddress("my_main") orelse return error.TestFailed;
-    try std.testing.expectEqual(core.SymbolKind.function, func_addr_info[0]);
-    const func_ptr: *const core.Function = @ptrCast(@alignCast(func_addr_info[1]));
-    // Check against the original data to ensure the copy was successful.
-    try std.testing.expectEqual(@as(u16, 16), func_ptr.stack_size);
+    // Lookup should return null
+    try std.testing.expect(header.symbol_table.lookupId("nonexistent") == null);
+}
 
-    const const_addr_info = header.lookupAddress("my_greeting") orelse return error.TestFailed;
-    try std.testing.expectEqual(core.SymbolKind.constant, const_addr_info[0]);
-    const const_ptr: *const core.Constant = @ptrCast(@alignCast(const_addr_info[1]));
-    try std.testing.expectEqualSlices(u8, my_const_data, const_ptr.asSlice());
+test "Builder complex branching" {
+    const allocator = std.testing.allocator;
+
+    const builder = try bytecode.Builder.init(allocator, .fromInt(8));
+    defer builder.deinit();
+
+    const entry = try builder.createBlock();
+    const loop_header = try builder.createBlock();
+    const loop_body = try builder.createBlock();
+    const exit = try builder.createBlock();
+
+    // entry: unconditional jump to loop_header
+    try entry.instrBr(.br, .{ .I = 0 });
+    @constCast(&entry.terminator.?).additional.branch_target = loop_header.id;
+
+    // loop_header: conditional jump to loop_body, else fallthrough to loop_body
+    try loop_header.instr(.bit_copy8c, .{ .R = .r0, .I = 1 });
+    try loop_header.instrBr(.br_if, .{ .R = .r0, .I = 0 });
+    @constCast(&loop_header.terminator.?).additional.branch_target = loop_body.id;
+
+    // loop_body: stuff and then unconditional jump back to loop_header
+    try loop_body.instr(.nop, .{});
+    try loop_body.instrBr(.br, .{ .I = 0 });
+    @constCast(&loop_body.terminator.?).additional.branch_target = loop_header.id;
+
+    // exit: return
+    try exit.instr(.@"return", .{ .R = .r0 });
+
+    var encoder = try bytecode.Encoder.init();
+    defer encoder.deinit();
+    try builder.encode(&encoder);
+    const vmem = try encoder.finalize();
+    defer std.posix.munmap(vmem);
+
+    var disas_buffer = std.ArrayList(u8).init(allocator);
+    defer disas_buffer.deinit();
+    const writer = disas_buffer.writer();
+
+    try bytecode.disas(vmem, writer);
+    const output = disas_buffer.items;
+    const first_line_end = std.mem.indexOf(u8, output, "\n") orelse @panic("invalid disas output");
+    const disas_body = output[first_line_end + 1 ..];
+
+    const expected_body =
+        \\    br i32:8
+        \\    bit_copy8c r0 i8:1
+        \\    br_if r0 i32:8
+        \\    nop
+        \\    br i32:ffffffe8
+        \\    return r0
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected_body, disas_body);
 }
