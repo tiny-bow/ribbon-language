@@ -88,20 +88,35 @@ pub fn isStaticId(comptime T: type) bool {
     comptime return T == StaticId or isTypedStaticId(T);
 }
 
-pub fn StaticTypeFromId(comptime T: type) type {
-    return T.Value;
+pub fn sizeOfStaticFromKind(kind: SymbolKind) usize {
+    inline for (comptime std.meta.fieldNames(SymbolKind)) |name| {
+        const sym = comptime @field(SymbolKind, name);
+        const T = SymbolKind.toType(sym);
+
+        if (sym == kind) return @sizeOf(T);
+    } else unreachable;
 }
 
-pub fn StaticTypeFromSymbolKind(comptime K: SymbolKind) type {
-    return switch (K) {
-        .constant => Constant,
-        .global => Global,
-        .function => Function,
-        .builtin => BuiltinAddress,
-        .foreign_address => ForeignAddress,
-        .effect => Effect,
-        .handler_set => HandlerSet,
-    };
+pub fn bitSizeOfStaticFromKind(kind: SymbolKind) usize {
+    inline for (comptime std.meta.fieldNames(SymbolKind)) |name| {
+        const sym = comptime @field(SymbolKind, name);
+        const T = SymbolKind.toType(sym);
+
+        if (sym == kind) return @bitSizeOf(T);
+    } else unreachable;
+}
+
+pub fn alignOfStaticFromKind(kind: SymbolKind) pl.Alignment {
+    inline for (comptime std.meta.fieldNames(SymbolKind)) |name| {
+        const sym = comptime @field(SymbolKind, name);
+        const T = SymbolKind.toType(sym);
+
+        if (sym == kind) return @alignOf(T);
+    } else unreachable;
+}
+
+pub fn StaticTypeFromId(comptime T: type) type {
+    return T.Value;
 }
 
 pub fn symbolKindFromId(comptime T: type) SymbolKind {
@@ -584,6 +599,10 @@ pub const Register = enum(std.math.IntFittingRange(0, pl.MAX_REGISTERS)) {
 
     pub fn getOffset(self: Register) BackingInteger {
         return @intFromEnum(self) * pl.REGISTER_SIZE_BYTES;
+    }
+
+    pub fn format(self: Register, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("r{d}", .{@intFromEnum(self)});
     }
 };
 
