@@ -358,21 +358,33 @@ pub const Extents = packed struct(u128) {
 /// The addresses are resolved at *link time*, so where they actually point is environment-dependent;
 /// ownership varies.
 pub const AddressTable = extern struct {
-    /// The kind of symbol stored in the adjacent address buffer slot.
-    kinds: Buffer.of(SymbolKind, .constant) = .empty,
     /// The actual addresses of the symbols in this table.
-    addresses: Buffer.of(*const anyopaque, .constant) = .empty,
+    addresses: [*]const *const anyopaque,
+    /// The kind of symbol stored in the adjacent address buffer slot.
+    kinds: [*]const SymbolKind,
+    /// The number of symbol/address pairs in this table.
+    len: u32,
+
+    /// Get a slice of all symbol kinds in this address table.
+    pub fn kindSlice(self: *const AddressTable) []const SymbolKind {
+        return self.kinds[0..self.len];
+    }
+
+    /// Get a slice of all addresses in this address table.
+    pub fn addressSlice(self: *const AddressTable) []const *const anyopaque {
+        return self.addresses[0..self.len];
+    }
 
     /// Get the SymbolKind of an address by its id.
     /// * Does not perform any validation outside of safe modes
     pub fn getKind(self: *const AddressTable, id: StaticId) SymbolKind {
-        return self.kinds.asSlice()[id.toInt()];
+        return self.kindSlice()[id.toInt()];
     }
 
     /// Get the address of a static value by its id.
     /// * Does not perform any validation outside of safe modes
     pub fn getAddress(self: *const AddressTable, id: StaticId) *const anyopaque {
-        return self.addresses.asSlice()[id.toInt()];
+        return self.addressSlice()[id.toInt()];
     }
 
     /// Get the address of a typed static by its id.
@@ -396,12 +408,12 @@ pub const AddressTable = extern struct {
 
     /// Determine if the provided id exists and has the given kind.
     pub fn validateSymbol(self: *const AddressTable, id: StaticId) bool {
-        return self.addresses.len > id.toInt();
+        return self.len > id.toInt();
     }
 
     /// Determine if the provided id exists and has the given kind.
     pub fn validateSymbolKind(self: *const AddressTable, kind: SymbolKind, id: StaticId) bool {
-        const kinds = self.kinds.asSlice();
+        const kinds = self.kindSlice();
         const index = id.toInt();
 
         return kinds.len > index and kinds[index] == kind;
@@ -428,7 +440,7 @@ pub const AddressTable = extern struct {
 
     /// Get the SymbolKind of an address by its id, if it is bound.
     pub fn tryGetKind(self: *const AddressTable, id: StaticId) ?SymbolKind {
-        const kinds = self.kinds.asSlice();
+        const kinds = self.kindSlice();
         const index = id.toInt();
 
         if (kinds.len > index) {
@@ -442,7 +454,7 @@ pub const AddressTable = extern struct {
 
     /// Get the address of a static value by its id, if it is bound.
     pub fn tryGetAddress(self: *const AddressTable, id: StaticId) ?*const anyopaque {
-        const addresses = self.addresses.asSlice();
+        const addresses = self.addressSlice();
         const index = id.toInt();
 
         if (addresses.len > index) {
@@ -455,11 +467,11 @@ pub const AddressTable = extern struct {
     }
 
     /// Get the address of a typed static by its id, if it is bound.
-    pub fn tryGet(self: *const AddressTable, id: StaticId) ?*const StaticTypeFromId(id) {
+    pub fn tryGet(self: *const AddressTable, id: anytype) ?*const StaticTypeFromId(@TypeOf(id)) {
         if (self.tryGetAddress(id)) |address| {
             @branchHint(.likely);
 
-            const kind = self.getKind(id);
+            const kind = self.getKind(id.cast(anyopaque));
             const id_kind = comptime symbolKindFromId(@TypeOf(id));
 
             if (kind == id_kind) {
@@ -523,7 +535,7 @@ pub const Header = extern struct {
     /// The total size of the program.
     size: u64 = @sizeOf(Header),
     /// Address table used by instructions this header owns.
-    address_table: AddressTable = .{},
+    address_table: AddressTable = undefined,
     /// Symbol bindings for the address table; what this program calls different addresses.
     ///
     /// Not necessarily a complete listing for all bindings;

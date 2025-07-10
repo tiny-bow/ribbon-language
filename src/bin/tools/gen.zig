@@ -94,6 +94,912 @@ pub fn main() !void {
     }
 }
 
+// Types generation
+
+fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
+    var opcode: u16 = 0;
+    var is_wide = [1]bool{false} ** 1024;
+    var is_call = [1]bool{false} ** 1024;
+    var is_branch = [1]bool{false} ** 1024;
+    var is_basic = [1]bool{false} ** 1024;
+    var is_term = [1]bool{false} ** 1024;
+    var wide_operand_names = [1][]const u8{""} ** 1024;
+    var wide_operand_types = [1]isa.Operand{.word} ** 1024;
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                var wordOffset: usize = 2;
+
+                if (std.mem.eql(u8, mnemonic.name, "call")) {
+                    is_call[opcode] = true;
+                    std.debug.print("call: {}\n", .{instruction.*});
+                } else if (std.mem.eql(u8, mnemonic.name, "br")) {
+                    is_branch[opcode] = true;
+                    std.debug.print("branch: {}\n", .{instruction.*});
+                } else if (instruction.terminal) {
+                    is_term[opcode] = true;
+                    std.debug.print("terminator: {}\n", .{instruction.*});
+                } else operands: for (instruction.operands, 0..) |operand, i| {
+                    const operandSize = operand.sizeOf();
+
+                    if (isa.wordBoundaryHeuristic(operand, wordOffset)) {
+                        is_wide[opcode] = true;
+                        std.debug.print("wide: {}\n", .{instruction.*});
+                        var operand_name = std.ArrayList(u8).init(std.heap.page_allocator);
+                        _ = try isa.formatOperand(i, instruction.operands, operand_name.writer());
+
+                        wide_operand_names[opcode] = operand_name.items;
+                        wide_operand_types[opcode] = operand;
+                        break :operands;
+                    }
+
+                    wordOffset += operandSize;
+                } else {
+                    is_basic[opcode] = true;
+                    std.debug.print("basic: {}\n", .{instruction.*});
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try paste("generateTypes", "", "//", "//", "Instruction_intro.zig", writer);
+
+    try writer.writeAll(
+        \\/// discriminator for instruction identity
+        \\code: OpCode,
+        \\/// operand set for the instruction
+        \\data: OpData,
+        \\
+        \\/// Derive a type from `operand_sets` using the provided opcode.
+        \\pub fn SetType(comptime code: OpCode) type {
+        \\    return @FieldType(OpData, @tagName(code));
+        \\}
+        \\
+        \\/// Determine if a type is from `operand_sets`.
+        \\pub fn isSetType(comptime T: type) bool {
+        \\    comptime {
+        \\        for (std.meta.declarations(operand_sets)) |typeDecl| {
+        \\            const F = @field(operand_sets, typeDecl.name);
+        \\            if (T == F) return true;
+        \\        }
+        \\        return false;
+        \\    }
+        \\}
+        \\
+        \\/// Masks out the operands from encoded instruction bits, leaving only the opcode.
+        \\pub const OPCODE_MASK = @as(core.InstructionBits, std.math.maxInt(std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpCode))));
+        \\
+        \\/// Split an encoded instruction word into its opcode and operand data, and return it as an `Instruction`.
+        \\pub fn fromBits(encodedBits: core.InstructionBits) Instruction {
+        \\    const opcode: std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpCode)) = @truncate(encodedBits & Instruction.OPCODE_MASK);
+        \\    const data: std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpData)) = @truncate(encodedBits >> @bitSizeOf(Instruction.OpCode));
+        \\
+        \\    return Instruction{
+        \\        .code = @enumFromInt(opcode),
+        \\        .data = @bitCast(data),
+        \\    };
+        \\}
+        \\
+        \\
+    );
+
+    try writer.writeAll(
+        \\pub fn WideOperand(comptime code: OpCode) type {
+        \\    return switch(code) {
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                if (is_wide[opcode]) {
+                    try writer.writeAll("        .@\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\" => ");
+                    try writer.writeAll(switch (wide_operand_types[opcode]) {
+                        .register => "core.Register",
+                        .upvalue => "core.UpvalueId",
+                        .global => "core.GlobalId",
+                        .function => "core.FunctionId",
+                        .builtin => "core.BuiltinAddressId",
+                        .foreign => "core.ForeignAddressId",
+                        .effect => "core.EffectId",
+                        .handler_set => "core.HandlerSetId",
+                        .constant => "core.ConstantId",
+                        .byte => "u8",
+                        .short => "u16",
+                        .int => "u32",
+                        .word => "u64",
+                    });
+                    try writer.writeAll(",\n");
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll(
+        \\        else => @compileError("Instruction.WideOperand: no wide operand for opcode " ++ @tagName(code)),
+        \\    };
+        \\}
+        \\
+    );
+
+    try writer.writeAll(
+        \\/// Enumeration identifying all basic block terminating instructions that branch.
+        \\pub const BranchOpCode = enum(u16) {
+        \\    /// convert branch opcode -> full opcode
+        \\    pub fn upcast(self: BranchOpCode) OpCode { return @enumFromInt(@intFromEnum(self)); }
+        \\
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                if (is_branch[opcode]) {
+                    try formatInstructionZigDoc(opcode, instruction, writer);
+                    try writer.writeAll("    @\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\" = 0x");
+                    try formatOpcodeLiteral(opcode, writer);
+                    try writer.writeAll(",\n");
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
+        \\/// Enumeration identifying each instruction that can terminate a basic block, and that is not a branch.
+        \\pub const TermOpCode = enum(u16) {
+        \\    /// convert term opcode -> full opcode
+        \\    pub fn upcast(self: TermOpCode) OpCode { return @enumFromInt(@intFromEnum(self)); }
+        \\
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                if (is_term[opcode]) {
+                    try formatInstructionZigDoc(opcode, instruction, writer);
+                    try writer.writeAll("    @\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\" = 0x");
+                    try formatOpcodeLiteral(opcode, writer);
+                    try writer.writeAll(",\n");
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
+        \\/// Enumeration identifying all instructions that perform a call.
+        \\pub const CallOpCode = enum(u16) {
+        \\    /// convert call opcode -> full opcode
+        \\    pub fn upcast(self: CallOpCode) OpCode { return @enumFromInt(@intFromEnum(self)); }
+        \\
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                if (is_call[opcode]) {
+                    try formatInstructionZigDoc(opcode, instruction, writer);
+                    try writer.writeAll("    @\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\" = 0x");
+                    try formatOpcodeLiteral(opcode, writer);
+                    try writer.writeAll(",\n");
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
+        \\/// Enumeration identifying all instructions that can appear inside a basic block which are larger than a single word, and are not calls.
+        \\pub const WideOpCode = enum(u16) {
+        \\    /// convert wide opcode -> full opcode
+        \\    pub fn upcast(self: WideOpCode) OpCode { return @enumFromInt(@intFromEnum(self)); }
+        \\
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                if (is_wide[opcode]) {
+                    try formatInstructionZigDoc(opcode, instruction, writer);
+                    try writer.writeAll("    @\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\" = 0x");
+                    try formatOpcodeLiteral(opcode, writer);
+                    try writer.writeAll(",\n");
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
+        \\/// Enumeration identifying each instruction that can appear inside a basic block, that is not a call or wide instruction.
+        \\pub const BasicOpCode = enum(u16) {
+        \\    /// convert basic opcode -> full opcode
+        \\    pub fn upcast(self: BasicOpCode) OpCode { return @enumFromInt(@intFromEnum(self)); }
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                if (is_basic[opcode]) {
+                    try formatInstructionZigDoc(opcode, instruction, writer);
+                    try writer.writeAll("    @\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\" = 0x");
+                    try formatOpcodeLiteral(opcode, writer);
+                    try writer.writeAll(",\n");
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll("};\n\n");
+
+    try writer.print(
+        \\/// Enumeration identifying each instruction.
+        \\pub const OpCode = enum(u16) {{
+        \\    /// Determine if this OpCode's associated instruction is wider than a single word.
+        \\    pub fn isWide(code: OpCode) bool {{
+        \\        const is_wide = [_]bool{any};
+        \\        return is_wide[@intFromEnum(code)];
+        \\    }}
+        \\    
+        \\    /// Determine if this OpCode's associated instruction is a call.
+        \\    pub fn isCall(code: OpCode) bool {{
+        \\        const is_call = [_]bool{any};
+        \\        return is_call[@intFromEnum(code)];
+        \\    }}
+        \\    
+        \\    /// Determine if this OpCode's associated instruction is a branch.
+        \\    pub fn isBranch(code: OpCode) bool {{
+        \\        const is_branch = [_]bool{any};
+        \\        return is_branch[@intFromEnum(code)];
+        \\    }}
+        \\    
+        \\    /// Determine if this OpCode's associated instruction is can occur inside a basic block (not a terminator).
+        \\    pub fn isBasic(code: OpCode) bool {{
+        \\        const is_basic = [_]bool{any};
+        \\        return is_basic[@intFromEnum(code)];
+        \\    }}
+        \\    
+        \\    /// Determine if this OpCode's associated instruction is a terminator.
+        \\    pub fn isTerm(code: OpCode) bool {{
+        \\        const is_term = [_]bool{any};
+        \\        return is_term[@intFromEnum(code)];
+        \\    }}
+        \\
+        \\
+    ,
+        .{
+            is_wide[0..opcode],
+            is_call[0..opcode],
+            is_branch[0..opcode],
+            is_basic[0..opcode],
+            is_term[0..opcode],
+        },
+    );
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                try formatInstructionZigDoc(opcode, instruction, writer);
+
+                try writer.writeAll("    @\"");
+                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                try writer.writeAll("\" = 0x");
+                try formatOpcodeLiteral(opcode, writer);
+                try writer.writeAll(",\n");
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
+        \\/// Untagged union of all `operand_sets` types.
+        \\pub const OpData = packed union {
+        \\    /// Extract the operand set for a given opcode.
+        \\    pub fn extractSet(self: OpData, comptime code: OpCode) SetType(code) {
+        \\        inline for (comptime std.meta.fieldNames(OpCode)) |fieldName| {
+        \\            if (code == comptime @field(OpCode, fieldName).upcast()) {
+        \\                return @field(self, fieldName);
+        \\            }
+        \\        }
+        \\
+        \\        unreachable;
+        \\    }
+        \\
+        \\    /// Create an operand data union from the bits of one of its variants
+        \\    pub fn fromBits(set: anytype) OpData {
+        \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set))));
+        \\    }
+        \\
+        \\    /// Create a 48-bit integer from an `OpData` value.
+        \\    /// * **NOTE**: Previously, this was done with a bitcast.
+        \\    /// However, that can sometimes lead to undefined bytes in encoded bytecode streams;
+        \\    /// So now, this uses compile-time reflection to extract the fields of the union,
+        \\    /// and copies them into a 48-bit integer.
+        \\    /// This new process requires an `OpCode` to discriminate the union.
+        \\    pub fn toBits(self: OpData, code: OpCode) u48 {
+        \\        var i: usize = 0;
+        \\        var out: u48 = 0;
+        \\        const bytes = std.mem.asBytes(&out);
+        \\
+        \\        const opcodes = comptime std.meta.fieldNames(Instruction.OpCode);
+        \\        @setEvalBranchQuota(opcodes.len * 32);
+        \\
+        \\        inline for (opcodes) |instrName| {
+        \\            if (code == comptime @field(Instruction.OpCode, instrName)) {
+        \\                const T = @FieldType(Instruction.OpData, instrName);
+        \\                const set = @field(self, instrName);
+        \\
+        \\                inline for (comptime std.meta.fieldNames(T)) |opName| {
+        \\                    const operand = @field(set, opName);
+        \\                    const size = @sizeOf(@FieldType(T, opName));
+        \\                    @memcpy(bytes[i..i + size], std.mem.asBytes(&operand));
+        \\                    i += size;
+        \\                }
+        \\
+        \\                return out;
+        \\            }
+        \\        } else unreachable;
+        \\    }
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                try formatInstructionZigDoc(opcode, instruction, writer);
+
+                try writer.writeAll("    @\"");
+                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                try writer.writeAll("\": operand_sets.@\"");
+                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                try writer.writeAll("\",\n");
+
+                opcode += 1;
+            }
+        }
+    }
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
+        \\/// Namespace of operand set types for each instruction.
+        \\pub const operand_sets = struct {
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                try formatInstructionZigDoc(opcode, instruction, writer);
+
+                try writer.writeAll("    pub const @\"");
+                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                try writer.writeAll("\" = packed struct { ");
+
+                var size: usize = 0;
+                var wordOffset: usize = 2;
+
+                for (instruction.operands, 0..) |operand, i| {
+                    const operandSize = operand.sizeOf();
+
+                    if (isa.wordBoundaryHeuristic(operand, wordOffset)) {
+                        break;
+                    }
+
+                    _ = try isa.formatOperand(i, instruction.operands, writer);
+                    try writer.writeAll(": ");
+
+                    try writer.writeAll(switch (operand) {
+                        .register => "core.Register = .scratch",
+                        .upvalue => "core.UpvalueId = .null",
+                        .global => "core.GlobalId = .null",
+                        .function => "core.FunctionId = .null",
+                        .builtin => "core.BuiltinAddressId = .null",
+                        .foreign => "core.ForeignAddressId = .null",
+                        .effect => "core.EffectId = .null",
+                        .handler_set => "core.HandlerSetId = .null",
+                        .constant => "core.ConstantId = .null",
+                        .byte => "u8 = 0",
+                        .short => "u16 = 0",
+                        .int => "u32 = 0",
+                        .word => unreachable,
+                    });
+
+                    try writer.writeAll(", ");
+
+                    wordOffset += operandSize;
+                    size += operandSize;
+                }
+
+                try writer.writeAll("};\n\n");
+
+                opcode += 1;
+            }
+        }
+    }
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
+        \\
+        \\comptime {
+        \\    for (std.meta.declarations(operand_sets)) |typeDecl| {
+        \\        const bits = @bitSizeOf(@field(operand_sets, typeDecl.name));
+        \\        if (bits > 48) {
+        \\            @compileLog(std.fmt.comptimePrint("Operand set type " ++ @typeName(@field(operand_sets, typeDecl.name)) ++ " is too large to fit in an instruction word; it is {} bits", .{  bits }));
+        \\        }
+        \\    }
+        \\}
+        \\
+    );
+}
+
+// Markdown generation
+
+fn generateMarkdown(categories: []const isa.Category, writer: anytype) !void {
+    var headerBuf: [1024]u8 = undefined;
+
+    var stream = std.io.fixedBufferStream(&headerBuf);
+
+    const headerWriter = stream.writer();
+
+    try headerWriter.print(
+        \\# Ribbon ISA v{}.{}.{}
+    ,
+        .{ isa.VERSION.major, isa.VERSION.minor, isa.VERSION.patch },
+    );
+
+    if (isa.VERSION.pre) |pre| {
+        try headerWriter.print(" <sub><code>{s}</code></sub>", .{pre});
+
+        if (isa.VERSION.build) |build| {
+            try headerWriter.print("\n<sub>build</sub> <code>{s}</code>", .{build});
+        }
+    }
+
+    try headerWriter.writeAll(
+        \\
+        \\- [Overview](#overview)
+        \\- [Instructions](#instructions)
+        \\
+    );
+
+    try paste("generateMarkdown", stream.getWritten(), "<!--", "-->", "Isa_intro.md", writer);
+
+    try writer.writeAll(
+        \\
+        \\
+        \\#### Operand Types
+        \\| Type | Shortcode | Size |
+        \\|-|-|-|
+        \\
+    );
+
+    inline for (comptime std.meta.fieldNames(isa.Operand)) |fieldName| {
+        const operand = @field(isa.Operand, fieldName);
+
+        try writer.writeAll("| ");
+        try operand.writeContextualReference(writer);
+        try writer.writeAll(" | `");
+        try operand.writeShortcode(writer);
+        try writer.print("` | {d} bits |\n", .{operand.sizeOf() * 8});
+    }
+
+    try writer.writeAll("\n\n\n");
+
+    try writer.print(
+        \\## Instructions
+        \\There are `{d}` categories.
+        \\Separated into those categories, there are a total of `{}` mnemonics.
+        \\With an average of `{d}` instructions per mnemonic,
+        \\we have a grand total of `{}` unique instructions.
+        \\
+        \\
+    ,
+        .{ categories.len, countMnemonics(categories), averageMnemonicInstructions(categories), countInstructions(categories) },
+    );
+
+    for (categories) |*category| {
+        try writer.writeAll("- ");
+        try writeLink(category.name, writer);
+        try writer.writeAll("\n");
+        for (category.mnemonics) |*mnemonic| {
+            try writer.writeAll("    + ");
+            try writeLink(mnemonic.name, writer);
+            try writer.writeAll("\n");
+        }
+    }
+
+    try writer.writeAll("\n\n\n");
+
+    var opcode: u16 = 0;
+    for (categories) |*category| {
+        try writer.print("### {s}\n\n", .{category.name});
+
+        try formatMnemonicDescription(null, null, category.description, writer);
+
+        for (category.mnemonics) |*mnemonic| {
+            try writer.print("#### {s}\n\n", .{mnemonic.name});
+
+            try formatMnemonicDescription(null, null, mnemonic.description, writer);
+
+            try writer.writeAll("| Name | Encoding | Description |\n|-|-|-|\n");
+
+            for (mnemonic.instructions) |*instruction| {
+                try writer.writeAll("| ");
+
+                if (instruction.jit_only) {
+                    try writer.writeAll("<em>jit</em><br>");
+                }
+
+                try writer.writeAll("`");
+                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                try writer.writeAll("` | `");
+
+                try formatOpcodeSequence(opcode, "`&nbsp;`", writer);
+                try writer.writeAll("`&nbsp;");
+
+                try writer.writeAll("`");
+                try formatInstructionOperands("`&nbsp;`", "`<br>`", instruction, writer);
+                try writer.writeAll("` | ");
+
+                try formatInstructionDescription(null, "<br>", instruction.description, instruction.operands, writer);
+
+                try writer.writeAll(" |\n");
+
+                opcode += 1;
+            }
+
+            try writer.writeAll("\n");
+        }
+    }
+}
+
+// utility isa functions
+
+fn averageMnemonicInstructions(categories: []const isa.Category) f64 {
+    var total: f64 = 0;
+    var mnemonicsCount: f64 = 0;
+
+    for (categories) |*category| {
+        mnemonicsCount += @floatFromInt(category.mnemonics.len);
+
+        for (category.mnemonics) |*mnemonic| {
+            total += @floatFromInt(mnemonic.instructions.len);
+        }
+    }
+
+    return total / mnemonicsCount;
+}
+
+fn countInstructions(categories: []const isa.Category) usize {
+    var count: usize = 0;
+
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            count += mnemonic.instructions.len;
+        }
+    }
+
+    return count;
+}
+
+fn countMnemonics(categories: []const isa.Category) usize {
+    var count: usize = 0;
+
+    for (categories) |*category| {
+        count += category.mnemonics.len;
+    }
+
+    return count;
+}
+
+// utility text functions
+
+fn writeKebab(name: []const u8, writer: anytype) !void {
+    var i: usize = 0;
+    while (i < name.len) {
+        const ch = name[i];
+        if (ch == ' ') {
+            try writer.writeByte('-');
+        } else {
+            try writer.writeByte(std.ascii.toLower(ch));
+        }
+        i += 1;
+    }
+}
+
+fn writeLink(name: []const u8, writer: anytype) !void {
+    try writer.print("[{s}](#", .{name});
+    try writeKebab(name, writer);
+    try writer.writeByte(')');
+}
+
+fn paste(generatorName: []const u8, header: []const u8, commentPre: []const u8, commentPost: []const u8, comptime path: []const u8, writer: anytype) !void {
+    var genBase = std.io.fixedBufferStream(@embedFile(path));
+
+    const reader = genBase.reader();
+
+    try writer.print(
+        \\{s} This file is generated by `bin/tools/codegen.zig`, do not edit {s}
+        \\{s} See `{s}` for the template; `codegen.zig/#{s}` for the generator {s}
+        \\
+        \\{s}
+    ,
+        .{
+            commentPre,
+            commentPost,
+            commentPre,
+            path,
+            generatorName,
+            commentPost,
+            header,
+        },
+    );
+
+    // the templates have a small disclaimer comment at the top, skip it.
+    for (0..3) |_| try reader.skipUntilDelimiterOrEof('\n');
+
+    try pl.stream(reader, writer);
+
+    try writer.writeAll("\n");
+}
+
+// Generalized isa formatting
+
+fn formatInstructionZigDoc(opcode: u16, instr: *const isa.Instruction, writer: anytype) !void {
+    try writer.writeAll("    /// `");
+    try formatOpcodeLiteral(opcode, writer);
+    try writer.writeAll("`\n");
+
+    try formatInstructionDescription("    /// ", null, instr.description, instr.operands, writer);
+    try writer.writeAll("; `");
+    try formatOpcodeSequence(opcode, " ", writer);
+    try writer.writeAll(" ");
+    try formatInstructionOperands(" ", " + ", instr, writer);
+    try writer.writeAll("`\n");
+}
+
+fn formatOpcodeLiteral(code: u16, writer: anytype) !void {
+    try std.fmt.formatInt(code, 16, .lower, .{ .alignment = .right, .width = 4, .fill = '0' }, writer);
+}
+
+fn formatOpcodeSequence(code: u16, space: []const u8, writer: anytype) !void {
+    const opcodeBytes: *const [2]u8 = @ptrCast(&if (comptime @import("builtin").target.cpu.arch.endian() == .big) @byteSwap(code) else code);
+
+    try writer.print("{x:0>2}{s}{x:0>2}", .{ opcodeBytes[0], space, opcodeBytes[1] });
+}
+
+fn formatInstructionArgument(argument: []const u8, operands: []const isa.Operand, writer: anytype) !bool {
+    if (try formatMnemonicArgument(argument, writer)) {
+        return true;
+    }
+
+    if (std.fmt.parseInt(usize, argument, 10)) |operandIndex| {
+        if (operandIndex > operands.len) {
+            return error.InvalidOperandIndex;
+        }
+
+        try writer.writeByte('`');
+        _ = try isa.formatOperand(operandIndex, operands, writer);
+        try writer.writeByte('`');
+
+        return true;
+    } else |_| {
+        return false;
+    }
+}
+
+fn formatInstructionOperands(space: []const u8, tail: []const u8, instruction: *const isa.Instruction, writer: anytype) !void {
+    var size: usize = 0;
+    var wordOffset: usize = 2;
+
+    for (instruction.operands, 0..) |operand, i| {
+        const operandSize = operand.sizeOf();
+
+        if (isa.wordBoundaryHeuristic(operand, wordOffset)) {
+            if (wordOffset < 8) {
+                for (0..(8 - wordOffset)) |_| {
+                    try writer.writeAll(space);
+                    try writer.writeAll("__");
+                }
+            }
+
+            try writer.writeAll(tail);
+
+            wordOffset = 0;
+        } else if (i > 0) {
+            try writer.writeAll(space);
+        }
+
+        const requiredChars = operand.sizeOf() * 2;
+        var writtenChars = try isa.formatOperand(i, instruction.operands, writer);
+
+        if (writtenChars == 1) {
+            try writer.writeByte('.');
+            writtenChars += 1;
+        }
+
+        if (requiredChars > writtenChars) {
+            for (0..((requiredChars - writtenChars) / 2)) |_| {
+                try writer.writeAll(space);
+                try writer.writeAll("..");
+            }
+        }
+
+        wordOffset += operandSize;
+        size += operandSize;
+    }
+
+    if (wordOffset != 0 and wordOffset != 8) {
+        if (instruction.operands.len > 0) {
+            try writer.writeAll(space);
+        }
+
+        for (0..(8 - wordOffset)) |i| {
+            if (i > 0) try writer.writeAll(space);
+            try writer.writeAll("__");
+        }
+    }
+
+    if (instruction.variable_length) {
+        try writer.writeAll(tail);
+        try writer.writeAll("...");
+    }
+}
+
+fn formatMnemonicArgument(argument: []const u8, writer: anytype) !bool {
+    if (std.mem.startsWith(u8, argument, ".")) {
+        const arg = argument[1..];
+
+        inline for (comptime std.meta.fieldNames(isa.Operand)) |fieldName| {
+            if (std.mem.eql(u8, arg, fieldName)) {
+                try @field(isa.Operand, fieldName).writeContextualReference(writer);
+
+                return true;
+            }
+        }
+
+        if (@inComptime()) {
+            @compileLog("unknown arg", argument);
+        } else {
+            log.err("unknown arg: `{s}`", .{argument});
+        }
+
+        return error.InvalidMnemonicArg;
+    } else {
+        return false;
+    }
+}
+
+fn formatMnemonicDescription(linePrefix: ?[]const u8, sanitizeBreak: ?[]const u8, formatString: []const u8, writer: anytype) !void {
+    try formatDescriptionWith(linePrefix, sanitizeBreak, formatString, writer, struct {
+        pub const formatArgument = formatMnemonicArgument;
+    });
+
+    try writer.writeAll("\n\n");
+}
+
+fn formatInstructionDescription(linePrefix: ?[]const u8, sanitizeBreak: ?[]const u8, description: []const u8, operands: []const isa.Operand, writer: anytype) !void {
+    const Ctx = struct {
+        operands: []const isa.Operand,
+
+        pub fn formatArgument(self: @This(), argument: []const u8, f: anytype) !bool {
+            return formatInstructionArgument(argument, self.operands, f);
+        }
+    };
+
+    return formatDescriptionWith(linePrefix, sanitizeBreak, description, writer, Ctx{ .operands = operands });
+}
+
+fn formatDescriptionWith(linePrefix: ?[]const u8, sanitizeBreak: ?[]const u8, formatString: []const u8, writer: anytype, ctx: anytype) !void {
+    var i: usize = 0;
+
+    if (linePrefix) |pfx| {
+        try writer.writeAll(pfx);
+    }
+
+    while (i < formatString.len) {
+        const ch = formatString[i];
+
+        i += 1;
+
+        if (ch == '{') {
+            const argStart = i;
+
+            const argEnd = while (i < formatString.len) {
+                const ch2 = formatString[i];
+                if (ch2 == '}') {
+                    break i;
+                }
+                i += 1;
+            } else {
+                if (@inComptime()) {
+                    @compileLog("UnclosedFormatArgument", formatString, argStart);
+                } else {
+                    log.err("Unclosed format argument `{s}` in `{s}`", .{ formatString[argStart..], formatString });
+                }
+                return error.UnclosedFormatArgument;
+            };
+
+            const arg: []const u8 = formatString[argStart..argEnd];
+
+            if (try ctx.formatArgument(arg, writer)) {
+                i += 1; // Move past the closing brace
+                continue;
+            } else {
+                if (@inComptime()) {
+                    @compileLog("unknown arg", arg, argStart, argEnd);
+                } else {
+                    log.err("unknown arg: `{s}`", .{arg});
+                }
+                return error.UnknownArg;
+            }
+        } else if (ch == '\n') {
+            if (sanitizeBreak) |san| {
+                try writer.writeAll(san);
+            } else {
+                try writer.writeByte('\n');
+            }
+
+            if (linePrefix) |pfx| {
+                try writer.writeAll(pfx);
+            }
+        } else if (ch == '|') {
+            try writer.writeAll("\\|");
+        } else {
+            try writer.writeByte(ch);
+        }
+    }
+}
+
 // Assembly generation
 
 const InstrDef = struct {
@@ -440,14 +1346,37 @@ fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
 }
 
 fn generateMainAssembly(categories: []const isa.Category, allocator: std.mem.Allocator, writer: anytype) !void {
-    try generateAssemblyJumpTable(categories, writer);
-    try generateAssemblyIntro(writer);
+    try writer.writeAll(
+        \\%define R_JUMP_TABLE rvm_interpreter_jump_table
+        \\%define R_JUMP_TABLE_LENGTH rvm_interpreter_jump_table_length
+        \\
+        \\section .rodata
+        \\align 8
+        \\global R_JUMP_TABLE
+        \\global R_JUMP_TABLE_LENGTH
+        \\R_JUMP_TABLE: dq
+    );
 
-    const impls = try parseInstructionsFile(allocator, categories, @embedFile("instructions.asm"));
-    try generateAssemblyBody(categories, &impls, writer);
-}
+    var opcode: u16 = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                if (opcode != 0) {
+                    try writer.writeAll(", ");
+                } else {
+                    try writer.writeAll(" ");
+                }
 
-fn generateAssemblyIntro(writer: anytype) !void {
+                try writer.writeAll("R_");
+                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.print("\nR_JUMP_TABLE_LENGTH equ 0x{x} ; {d}\n\n\n", .{ opcode, opcode });
+
     var entries = std.io.fixedBufferStream(@embedFile("entry_points.asm"));
 
     const reader = entries.reader();
@@ -464,12 +1393,12 @@ fn generateAssemblyIntro(writer: anytype) !void {
     }
 
     try pl.stream(reader, writer);
-}
 
-fn generateAssemblyBody(categories: []const isa.Category, impls: *const std.StringArrayHashMap(InstrDef), writer: anytype) !void {
+    const impls = try parseInstructionsFile(allocator, categories, @embedFile("instructions.asm"));
+
     try writer.writeAll("\nsection .text\n\n");
 
-    var opcode: u16 = 0;
+    opcode = 0;
     for (categories) |*category| {
         for (category.mnemonics) |*mnemonic| {
             for (mnemonic.instructions) |*instruction| {
@@ -501,39 +1430,6 @@ fn generateAssemblyBody(categories: []const isa.Category, impls: *const std.Stri
     try writer.writeAll("\n\n\n");
 }
 
-fn generateAssemblyJumpTable(categories: []const isa.Category, writer: anytype) !void {
-    try writer.writeAll(
-        \\%define R_JUMP_TABLE rvm_interpreter_jump_table
-        \\%define R_JUMP_TABLE_LENGTH rvm_interpreter_jump_table_length
-        \\
-        \\section .rodata
-        \\align 8
-        \\global R_JUMP_TABLE
-        \\global R_JUMP_TABLE_LENGTH
-        \\R_JUMP_TABLE: dq
-    );
-
-    var opcode: u16 = 0;
-    for (categories) |*category| {
-        for (category.mnemonics) |*mnemonic| {
-            for (mnemonic.instructions) |*instruction| {
-                if (opcode != 0) {
-                    try writer.writeAll(", ");
-                } else {
-                    try writer.writeAll(" ");
-                }
-
-                try writer.writeAll("R_");
-                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-
-                opcode += 1;
-            }
-        }
-    }
-
-    try writer.print("\nR_JUMP_TABLE_LENGTH equ 0x{x} ; {d}\n\n\n", .{ opcode, opcode });
-}
-
 fn generateAssemblyTemplate(categories: []const isa.Category, writer: anytype) !void {
     try writer.writeAll(
         \\%include "ribbon.h.asm"
@@ -562,878 +1458,4 @@ fn generateAssemblyTemplate(categories: []const isa.Category, writer: anytype) !
 
         try writer.writeAll("\n");
     }
-}
-
-// Types generation
-
-fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
-    try generateTypesIntro(writer);
-
-    try writer.writeAll(
-        \\    /// Downcast full instruction -> basic instruction | term instruction
-        \\    pub fn downcast(self: Instruction) union(enum) { basic: Basic, term: Term } {
-        \\        switch (self.code.downcast()) {
-        \\            .basic => |b| return .{ .basic = .{ .code = b, .data = @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(BasicOpData)), @truncate(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @bitCast(self.data))))) } },
-        \\            .term => |t| return .{ .term = .{ .code = t, .data = @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TermOpData)), @truncate(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @bitCast(self.data))))) } },
-        \\        }
-        \\    }
-        \\
-        \\    /// discriminator for instruction identity
-        \\    code: OpCode,
-        \\    /// operand set for the instruction
-        \\    data: OpData,
-        \\
-    );
-
-    try generateTypesCodes(categories, writer);
-    try generateTypesData(categories, writer);
-    try generateTypesUnion(categories, writer);
-    try generateTypesBasicAndTerm(categories, writer);
-}
-
-fn generateTypesIntro(writer: anytype) !void {
-    try paste("generateTypes", "", "//", "//", "Instruction_intro.zig", writer);
-}
-
-fn generateTypesCodes(categories: []const isa.Category, writer: anytype) !void {
-    try writer.writeAll(
-        \\/// Enumeration identifying each instruction.
-        \\pub const OpCode = enum(u16) {
-        \\    /// Downcast full opcode -> basic opcode | term opcode
-        \\    pub fn downcast(self: OpCode) union(enum) { basic: BasicOpCode, term: TermOpCode } {
-        \\        @setEvalBranchQuota(std.meta.fieldNames(OpCode).len * 4);
-        \\
-        \\        inline for (comptime std.meta.fieldNames(BasicOpCode)) |fieldName| {
-        \\            if (self == comptime @field(BasicOpCode, fieldName).upcast()) {
-        \\                 return .{ .basic = @enumFromInt(@intFromEnum(self)) };
-        \\            }
-        \\        }
-        \\
-        \\        inline for (comptime std.meta.fieldNames(TermOpCode)) |fieldName| {
-        \\            if (self == comptime @field(TermOpCode, fieldName).upcast()) {
-        \\                 return .{ .term = @enumFromInt(@intFromEnum(self)) };
-        \\            }
-        \\        }
-        \\
-        \\        unreachable;
-        \\    }
-        \\
-    );
-
-    var opcode: u16 = 0;
-    for (categories) |*category| {
-        for (category.mnemonics) |*mnemonic| {
-            for (mnemonic.instructions) |*instruction| {
-                try generateTypesZigDoc(opcode, instruction, writer);
-
-                try writer.writeAll("    @\"");
-                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-                try writer.writeAll("\" = 0x");
-                try formatOpcodeLiteral(opcode, writer);
-                try writer.writeAll(",\n");
-
-                opcode += 1;
-            }
-        }
-    }
-
-    try writer.writeAll("};\n\n");
-}
-
-fn generateTypesZigDoc(opcode: u16, instr: *const isa.Instruction, writer: anytype) !void {
-    try writer.writeAll("    /// `");
-    try formatOpcodeLiteral(opcode, writer);
-    try writer.writeAll("`\n");
-
-    try formatInstructionDescription("    /// ", null, instr.description, instr.operands, writer);
-    try writer.writeAll("; `");
-    try formatOpcodeSequence(opcode, " ", writer);
-    try writer.writeAll(" ");
-    try formatInstructionOperands(" ", " + ", instr, writer);
-    try writer.writeAll("`\n");
-}
-
-fn generateTypesData(categories: []const isa.Category, writer: anytype) !void {
-    try writer.writeAll(
-        \\/// Like `Instruction`, but specialized to instructions that can occur inside a basic block.
-        \\pub const Basic = struct {
-        \\    /// Discriminator for instruction identity.
-        \\    code: BasicOpCode,
-        \\    /// Operand set for the instruction.
-        \\    data: BasicOpData,
-        \\    /// Convert basic -> full instruction.
-        \\    pub fn upcast(self: Basic) Instruction { return .{ .code = self.code.upcast(), .data = self.data.upcast() }; }
-        \\};
-        \\
-        \\/// Like `Instruction`, but specialized to instructions that can terminate a basic block.
-        \\pub const Term = struct {
-        \\    /// Discriminator for instruction identity.
-        \\    code: TermOpCode,
-        \\    /// Operand set for the instruction.
-        \\    data: TermOpData,
-        \\    /// Convert terminator -> full instruction.
-        \\    pub fn upcast(self: Term) Instruction { return .{ .code = self.code.upcast(), .data = self.data.upcast() }; }
-        \\};
-        \\
-        \\/// Derive a type from `operand_sets` using the provided opcode.
-        \\pub fn SetType(comptime code: OpCode) type {
-        \\    return @FieldType(OpData, @tagName(code));
-        \\}
-        \\
-        \\/// Determine if a type is from `operand_sets`.
-        \\pub fn isSetType(comptime T: type) bool {
-        \\    comptime {
-        \\        for (std.meta.declarations(operand_sets)) |typeDecl| {
-        \\            const F = @field(operand_sets, typeDecl.name);
-        \\            if (T == F) return true;
-        \\        }
-        \\        return false;
-        \\    }
-        \\}
-        \\
-        \\/// Masks out the operands from encoded instruction bits, leaving only the opcode.
-        \\pub const OPCODE_MASK = @as(core.InstructionBits, std.math.maxInt(std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpCode))));
-        \\
-        \\/// Split an encoded instruction word into its opcode and operand data, and return it as an `Instruction`.
-        \\pub fn fromBits(encodedBits: core.InstructionBits) Instruction {
-        \\    const opcode: std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpCode)) = @truncate(encodedBits & Instruction.OPCODE_MASK);
-        \\    const data: std.meta.Int(.unsigned, @bitSizeOf(Instruction.OpData)) = @truncate(encodedBits >> @bitSizeOf(Instruction.OpCode));
-        \\
-        \\    return Instruction{
-        \\        .code = @enumFromInt(opcode),
-        \\        .data = @bitCast(data),
-        \\    };
-        \\}
-        \\
-        \\
-    );
-
-    try writer.writeAll(
-        \\/// Namespace of operand set types for each instruction.
-        \\pub const operand_sets = struct {
-        \\
-    );
-
-    var is_wide = [1]bool{false} ** 1024;
-    var is_call = [1]bool{false} ** 1024;
-    var is_branch = [1]bool{false} ** 1024;
-
-    var opcode: u16 = 0;
-    for (categories) |*category| {
-        for (category.mnemonics) |*mnemonic| {
-            for (mnemonic.instructions) |*instruction| {
-                try generateTypesZigDoc(opcode, instruction, writer);
-
-                try writer.writeAll("    pub const @\"");
-                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-                try writer.writeAll("\" = packed struct { ");
-
-                var size: usize = 0;
-                var wordOffset: usize = 2;
-
-                for (instruction.operands, 0..) |operand, i| {
-                    const operandSize = operand.sizeOf();
-                    const remSize = isa.Operand.totalSizeNoPadding(instruction.operands[i + 1 ..]);
-
-                    if (std.mem.eql(u8, mnemonic.name, "call")) {
-                        is_call[opcode] = true;
-                    } else if (std.mem.eql(u8, mnemonic.name, "br")) {
-                        is_branch[opcode] = true;
-                    }
-
-                    if (isa.wordBoundaryHeuristic(operand, remSize, wordOffset)) {
-                        is_wide[opcode] = true;
-                        break;
-                    }
-
-                    _ = try isa.formatOperand(i, instruction.operands, writer);
-                    try writer.writeAll(": ");
-
-                    try writer.writeAll(switch (operand) {
-                        .register => "core.Register",
-                        .upvalue => "core.UpvalueId",
-                        .global => "core.GlobalId",
-                        .function => "core.FunctionId",
-                        .builtin => "core.BuiltinAddressId",
-                        .foreign => "core.ForeignAddressId",
-                        .effect => "core.EffectId",
-                        .handler_set => "core.HandlerSetId",
-                        .constant => "core.ConstantId",
-                        .byte => "u8",
-                        .short => "u16",
-                        .int => "u32",
-                        .word => unreachable,
-                    });
-
-                    try writer.writeAll(", ");
-
-                    wordOffset += operandSize;
-                    size += operandSize;
-                }
-
-                try writer.writeAll("};\n\n");
-
-                opcode += 1;
-            }
-        }
-    }
-    try writer.writeAll("};\n\n");
-
-    try writer.print(
-        \\/// Determine if an instruction is a wide instruction.
-        \\pub fn isWide(code: OpCode) bool {{
-        \\    const is_wide = [_]bool{any};
-        \\    return is_wide[@intFromEnum(code)];
-        \\}}
-        \\
-        \\/// Determine if an instruction is a call instruction.
-        \\pub fn isCall(code: OpCode) bool {{
-        \\    const is_call = [_]bool{any};
-        \\    return is_call[@intFromEnum(code)];
-        \\}}
-        \\
-        \\/// Determine if an instruction is a branch instruction.
-        \\pub fn isBranch(code: OpCode) bool {{
-        \\    const is_branch = [_]bool{any};
-        \\    return is_branch[@intFromEnum(code)];
-        \\}}
-        \\
-    ,
-        .{
-            is_wide[0..opcode],
-            is_call[0..opcode],
-            is_branch[0..opcode],
-        },
-    );
-
-    try writer.writeAll(
-        \\
-        \\comptime {
-        \\    for (std.meta.declarations(operand_sets)) |typeDecl| {
-        \\        const bits = @bitSizeOf(@field(operand_sets, typeDecl.name));
-        \\        if (bits > 48) {
-        \\            @compileLog(std.fmt.comptimePrint("Operand set type " ++ @typeName(@field(operand_sets, typeDecl.name)) ++ " is too large to fit in an instruction word; it is {} bits", .{  bits }));
-        \\        }
-        \\    }
-        \\}
-        \\
-    );
-}
-
-fn generateTypesUnion(categories: []const isa.Category, writer: anytype) !void {
-    try writer.writeAll(
-        \\/// Untagged union of all `operand_sets` types.
-        \\pub const OpData = packed union {
-        \\    /// Extract the operand set for a given opcode.
-        \\    pub fn extractSet(self: OpData, comptime code: OpCode) SetType(code) {
-        \\        inline for (comptime std.meta.fieldNames(OpCode)) |fieldName| {
-        \\            if (code == comptime @field(OpCode, fieldName).upcast()) {
-        \\                return @field(self, fieldName);
-        \\            }
-        \\        }
-        \\
-        \\        unreachable;
-        \\    }
-        \\
-        \\    /// Create an operand data union from the bits of one of its variants
-        \\    pub fn fromBits(set: anytype) OpData {
-        \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set))));
-        \\    }
-        \\
-        \\    /// Create a 48-bit integer from an `OpData` value.
-        \\    /// * **NOTE**: Previously, this was done with a bitcast.
-        \\    /// However, that can sometimes lead to undefined bytes in encoded bytecode streams;
-        \\    /// So now, this uses compile-time reflection to extract the fields of the union,
-        \\    /// and copies them into a 48-bit integer.
-        \\    /// This new process requires an `OpCode` to discriminate the union.
-        \\    pub fn toBits(self: OpData, code: OpCode) u48 {
-        \\        var i: usize = 0;
-        \\        var out: u48 = 0;
-        \\        const bytes = std.mem.asBytes(&out);
-        \\
-        \\        const opcodes = comptime std.meta.fieldNames(Instruction.OpCode);
-        \\        @setEvalBranchQuota(opcodes.len * 32);
-        \\
-        \\        inline for (opcodes) |instrName| {
-        \\            if (code == comptime @field(Instruction.OpCode, instrName)) {
-        \\                const T = @FieldType(Instruction.OpData, instrName);
-        \\                const set = @field(self, instrName);
-        \\
-        \\                inline for (comptime std.meta.fieldNames(T)) |opName| {
-        \\                    const operand = @field(set, opName);
-        \\                    const size = @sizeOf(@FieldType(T, opName));
-        \\                    @memcpy(bytes[i..i + size], std.mem.asBytes(&operand));
-        \\                    i += size;
-        \\                }
-        \\
-        \\                return out;
-        \\            }
-        \\        } else unreachable;
-        \\    }
-        \\
-        \\
-    );
-
-    var opcode: u16 = 0;
-    for (categories) |*category| {
-        for (category.mnemonics) |*mnemonic| {
-            for (mnemonic.instructions) |*instruction| {
-                try generateTypesZigDoc(opcode, instruction, writer);
-
-                try writer.writeAll("    @\"");
-                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-                try writer.writeAll("\": operand_sets.@\"");
-                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-                try writer.writeAll("\",\n");
-
-                opcode += 1;
-            }
-        }
-    }
-    try writer.writeAll("};\n\n");
-}
-
-fn generateTypesBasicAndTerm(categories: []const isa.Category, writer: anytype) !void {
-    try writer.writeAll(
-        \\/// Enumeration identifying each instruction that can appear inside a basic block.
-        \\pub const BasicOpCode = enum(u16) {
-        \\    /// convert basic opcode -> full opcode
-        \\    pub fn upcast(self: BasicOpCode) OpCode { return @enumFromInt(@intFromEnum(self)); }
-        \\
-    );
-
-    var opcode: u16 = 0;
-    for (categories) |*category| {
-        for (category.mnemonics) |*mnemonic| {
-            for (mnemonic.instructions) |*instruction| {
-                if (!instruction.terminal) {
-                    try generateTypesZigDoc(opcode, instruction, writer);
-
-                    try writer.writeAll("    @\"");
-                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-                    try writer.writeAll("\" = 0x");
-                    try formatOpcodeLiteral(opcode, writer);
-                    try writer.writeAll(",\n");
-                }
-
-                opcode += 1;
-            }
-        }
-    }
-
-    try writer.writeAll("};\n\n");
-
-    try writer.writeAll(
-        \\/// Enumeration identifying each instruction that can terminate a basic block.
-        \\pub const TermOpCode = enum(u16) {
-        \\    /// convert term opcode -> full opcode
-        \\    pub fn upcast(self: TermOpCode) OpCode { return @enumFromInt(@intFromEnum(self)); }
-        \\
-    );
-
-    opcode = 0;
-    for (categories) |*category| {
-        for (category.mnemonics) |*mnemonic| {
-            for (mnemonic.instructions) |*instruction| {
-                if (instruction.terminal) {
-                    try generateTypesZigDoc(opcode, instruction, writer);
-
-                    try writer.writeAll("    @\"");
-                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-                    try writer.writeAll("\" = 0x");
-                    try formatOpcodeLiteral(opcode, writer);
-                    try writer.writeAll(",\n");
-                }
-
-                opcode += 1;
-            }
-        }
-    }
-
-    try writer.writeAll("};\n\n");
-
-    try writer.writeAll(
-        \\/// Untagged union of all `operand_sets` types that can appear in a basic block.
-        \\pub const BasicOpData = packed union {
-        \\    /// convert basic operand data -> full operand data
-        \\    pub fn upcast(self: BasicOpData) OpData { return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @as(std.meta.Int(.unsigned, @bitSizeOf(BasicOpData)), @bitCast(self)))); }
-        \\
-        \\    /// Create an operand data union from the bits of one of its variants
-        \\    pub fn fromBits(set: anytype) BasicOpData {
-        \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(BasicOpData)), @intCast(@as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set)))));
-        \\    }
-        \\
-    );
-
-    opcode = 0;
-    for (categories) |*category| {
-        for (category.mnemonics) |*mnemonic| {
-            for (mnemonic.instructions) |*instruction| {
-                if (!instruction.terminal) {
-                    try generateTypesZigDoc(opcode, instruction, writer);
-
-                    try writer.writeAll("    @\"");
-                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-                    try writer.writeAll("\": operand_sets.@\"");
-                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-                    try writer.writeAll("\",\n");
-                }
-
-                opcode += 1;
-            }
-        }
-    }
-    try writer.writeAll("};\n\n");
-
-    try writer.writeAll(
-        \\/// Untagged union of all `operand_sets` types that can terminate a basic block.
-        \\pub const TermOpData = packed union {
-        \\    /// convert term operand set -> full operand set
-        \\    pub fn upcast(self: TermOpData) OpData { return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @as(std.meta.Int(.unsigned, @bitSizeOf(TermOpData)), @bitCast(self)))); }
-        \\
-        \\    /// Create an operand data union from the bits of one of its variants
-        \\    pub fn fromBits(set: anytype) TermOpData {
-        \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TermOpData)), @intCast(@as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set)))));
-        \\    }
-        \\
-    );
-
-    opcode = 0;
-    for (categories) |*category| {
-        for (category.mnemonics) |*mnemonic| {
-            for (mnemonic.instructions) |*instruction| {
-                if (instruction.terminal) {
-                    try generateTypesZigDoc(opcode, instruction, writer);
-
-                    try writer.writeAll("    @\"");
-                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-                    try writer.writeAll("\": operand_sets.@\"");
-                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-                    try writer.writeAll("\",\n");
-                }
-
-                opcode += 1;
-            }
-        }
-    }
-    try writer.writeAll("};\n\n");
-}
-
-// Markdown generation
-
-fn generateMarkdown(categories: []const isa.Category, writer: anytype) !void {
-    try generateMarkdownIntro(writer);
-    try generateMarkdownSyntax(writer);
-    try generateMarkdownBody(categories, writer);
-}
-
-fn generateMarkdownIntro(writer: anytype) !void {
-    var headerBuf: [1024]u8 = undefined;
-
-    var stream = std.io.fixedBufferStream(&headerBuf);
-
-    const headerWriter = stream.writer();
-
-    try headerWriter.print(
-        \\# Ribbon ISA v{}.{}.{}
-    ,
-        .{ isa.VERSION.major, isa.VERSION.minor, isa.VERSION.patch },
-    );
-
-    if (isa.VERSION.pre) |pre| {
-        try headerWriter.print(" <sub><code>{s}</code></sub>", .{pre});
-
-        if (isa.VERSION.build) |build| {
-            try headerWriter.print("\n<sub>build</sub> <code>{s}</code>", .{build});
-        }
-    }
-
-    try headerWriter.writeAll(
-        \\
-        \\- [Overview](#overview)
-        \\- [Instructions](#instructions)
-        \\
-    );
-
-    try paste("generateMarkdown", stream.getWritten(), "<!--", "-->", "Isa_intro.md", writer);
-}
-
-fn generateMarkdownInstructionToc(categories: []const isa.Category, writer: anytype) !void {
-    for (categories) |*category| {
-        try writer.writeAll("- ");
-        try writeLink(category.name, writer);
-        try writer.writeAll("\n");
-        for (category.mnemonics) |*mnemonic| {
-            try writer.writeAll("    + ");
-            try writeLink(mnemonic.name, writer);
-            try writer.writeAll("\n");
-        }
-    }
-
-    try writer.writeAll("\n\n\n");
-}
-
-fn generateMarkdownSyntax(writer: anytype) !void {
-    try writer.writeAll(
-        \\
-        \\
-        \\#### Operand Types
-        \\| Type | Shortcode | Size |
-        \\|-|-|-|
-        \\
-    );
-
-    inline for (comptime std.meta.fieldNames(isa.Operand)) |fieldName| {
-        const operand = @field(isa.Operand, fieldName);
-
-        try writer.writeAll("| ");
-        try operand.writeContextualReference(writer);
-        try writer.writeAll(" | `");
-        try operand.writeShortcode(writer);
-        try writer.print("` | {d} bits |\n", .{operand.sizeOf() * 8});
-    }
-
-    try writer.writeAll("\n\n\n");
-}
-
-fn averageMnemonicInstructions(categories: []const isa.Category) f64 {
-    var total: f64 = 0;
-    var mnemonicsCount: f64 = 0;
-
-    for (categories) |*category| {
-        mnemonicsCount += @floatFromInt(category.mnemonics.len);
-
-        for (category.mnemonics) |*mnemonic| {
-            total += @floatFromInt(mnemonic.instructions.len);
-        }
-    }
-
-    return total / mnemonicsCount;
-}
-
-fn countInstructions(categories: []const isa.Category) usize {
-    var count: usize = 0;
-
-    for (categories) |*category| {
-        for (category.mnemonics) |*mnemonic| {
-            count += mnemonic.instructions.len;
-        }
-    }
-
-    return count;
-}
-
-fn countMnemonics(categories: []const isa.Category) usize {
-    var count: usize = 0;
-
-    for (categories) |*category| {
-        count += category.mnemonics.len;
-    }
-
-    return count;
-}
-
-fn generateMarkdownBody(categories: []const isa.Category, writer: anytype) !void {
-    try writer.print(
-        \\## Instructions
-        \\There are `{d}` categories.
-        \\Separated into those categories, there are a total of `{}` mnemonics.
-        \\With an average of `{d}` instructions per mnemonic,
-        \\we have a grand total of `{}` unique instructions.
-        \\
-        \\
-    ,
-        .{ categories.len, countMnemonics(categories), averageMnemonicInstructions(categories), countInstructions(categories) },
-    );
-
-    try generateMarkdownInstructionToc(categories, writer);
-
-    var opcode: u16 = 0;
-    for (categories) |*category| {
-        try writer.print("### {s}\n\n", .{category.name});
-
-        try formatMnemonicDescription(null, null, category.description, writer);
-
-        for (category.mnemonics) |*mnemonic| {
-            try writer.print("#### {s}\n\n", .{mnemonic.name});
-
-            try formatMnemonicDescription(null, null, mnemonic.description, writer);
-
-            try writer.writeAll("| Name | Encoding | Description |\n|-|-|-|\n");
-
-            for (mnemonic.instructions) |*instruction| {
-                try writer.writeAll("| ");
-
-                if (instruction.jit_only) {
-                    try writer.writeAll("<em>jit</em><br>");
-                }
-
-                try writer.writeAll("`");
-                try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
-                try writer.writeAll("` | `");
-
-                try formatOpcodeSequence(opcode, "`&nbsp;`", writer);
-                try writer.writeAll("`&nbsp;");
-
-                try writer.writeAll("`");
-                try formatInstructionOperands("`&nbsp;`", "`<br>`", instruction, writer);
-                try writer.writeAll("` | ");
-
-                try formatInstructionDescription(null, "<br>", instruction.description, instruction.operands, writer);
-
-                try writer.writeAll(" |\n");
-
-                opcode += 1;
-            }
-
-            try writer.writeAll("\n");
-        }
-    }
-}
-
-// Generalized isa formatting
-
-fn formatOpcodeLiteral(code: u16, writer: anytype) !void {
-    try std.fmt.formatInt(code, 16, .lower, .{ .alignment = .right, .width = 4, .fill = '0' }, writer);
-}
-
-fn formatOpcodeSequence(code: u16, space: []const u8, writer: anytype) !void {
-    const opcodeBytes: *const [2]u8 = @ptrCast(&if (comptime @import("builtin").target.cpu.arch.endian() == .big) @byteSwap(code) else code);
-
-    try writer.print("{x:0>2}{s}{x:0>2}", .{ opcodeBytes[0], space, opcodeBytes[1] });
-}
-
-fn formatInstructionArgument(argument: []const u8, operands: []const isa.Operand, writer: anytype) !bool {
-    if (try formatMnemonicArgument(argument, writer)) {
-        return true;
-    }
-
-    if (std.fmt.parseInt(usize, argument, 10)) |operandIndex| {
-        if (operandIndex > operands.len) {
-            return error.InvalidOperandIndex;
-        }
-
-        try writer.writeByte('`');
-        _ = try isa.formatOperand(operandIndex, operands, writer);
-        try writer.writeByte('`');
-
-        return true;
-    } else |_| {
-        return false;
-    }
-}
-
-fn formatInstructionOperands(space: []const u8, tail: []const u8, instruction: *const isa.Instruction, writer: anytype) !void {
-    var size: usize = 0;
-    var wordOffset: usize = 2;
-
-    for (instruction.operands, 0..) |operand, i| {
-        const operandSize = operand.sizeOf();
-        const remSize = isa.Operand.totalSizeNoPadding(instruction.operands[i + 1 ..]);
-
-        if (isa.wordBoundaryHeuristic(operand, remSize, wordOffset)) {
-            if (wordOffset < 8) {
-                for (0..(8 - wordOffset)) |_| {
-                    try writer.writeAll(space);
-                    try writer.writeAll("__");
-                }
-            }
-
-            try writer.writeAll(tail);
-
-            wordOffset = 0;
-        } else if (i > 0) {
-            try writer.writeAll(space);
-        }
-
-        const requiredChars = operand.sizeOf() * 2;
-        var writtenChars = try isa.formatOperand(i, instruction.operands, writer);
-
-        if (writtenChars == 1) {
-            try writer.writeByte('.');
-            writtenChars += 1;
-        }
-
-        if (requiredChars > writtenChars) {
-            for (0..((requiredChars - writtenChars) / 2)) |_| {
-                try writer.writeAll(space);
-                try writer.writeAll("..");
-            }
-        }
-
-        wordOffset += operandSize;
-        size += operandSize;
-    }
-
-    if (wordOffset != 0 and wordOffset != 8) {
-        if (instruction.operands.len > 0) {
-            try writer.writeAll(space);
-        }
-
-        for (0..(8 - wordOffset)) |i| {
-            if (i > 0) try writer.writeAll(space);
-            try writer.writeAll("__");
-        }
-    }
-
-    if (instruction.variable_length) {
-        try writer.writeAll(tail);
-        try writer.writeAll("...");
-    }
-}
-
-fn formatMnemonicArgument(argument: []const u8, writer: anytype) !bool {
-    if (std.mem.startsWith(u8, argument, ".")) {
-        const arg = argument[1..];
-
-        inline for (comptime std.meta.fieldNames(isa.Operand)) |fieldName| {
-            if (std.mem.eql(u8, arg, fieldName)) {
-                try @field(isa.Operand, fieldName).writeContextualReference(writer);
-
-                return true;
-            }
-        }
-
-        if (@inComptime()) {
-            @compileLog("unknown arg", argument);
-        } else {
-            log.err("unknown arg: `{s}`", .{argument});
-        }
-
-        return error.InvalidMnemonicArg;
-    } else {
-        return false;
-    }
-}
-
-fn formatMnemonicDescription(linePrefix: ?[]const u8, sanitizeBreak: ?[]const u8, formatString: []const u8, writer: anytype) !void {
-    try formatDescriptionWith(linePrefix, sanitizeBreak, formatString, writer, struct {
-        pub const formatArgument = formatMnemonicArgument;
-    });
-
-    try writer.writeAll("\n\n");
-}
-
-fn formatInstructionDescription(linePrefix: ?[]const u8, sanitizeBreak: ?[]const u8, description: []const u8, operands: []const isa.Operand, writer: anytype) !void {
-    const Ctx = struct {
-        operands: []const isa.Operand,
-
-        pub fn formatArgument(self: @This(), argument: []const u8, f: anytype) !bool {
-            return formatInstructionArgument(argument, self.operands, f);
-        }
-    };
-
-    return formatDescriptionWith(linePrefix, sanitizeBreak, description, writer, Ctx{ .operands = operands });
-}
-
-fn formatDescriptionWith(linePrefix: ?[]const u8, sanitizeBreak: ?[]const u8, formatString: []const u8, writer: anytype, ctx: anytype) !void {
-    var i: usize = 0;
-
-    if (linePrefix) |pfx| {
-        try writer.writeAll(pfx);
-    }
-
-    while (i < formatString.len) {
-        const ch = formatString[i];
-
-        i += 1;
-
-        if (ch == '{') {
-            const argStart = i;
-
-            const argEnd = while (i < formatString.len) {
-                const ch2 = formatString[i];
-                if (ch2 == '}') {
-                    break i;
-                }
-                i += 1;
-            } else {
-                if (@inComptime()) {
-                    @compileLog("UnclosedFormatArgument", formatString, argStart);
-                } else {
-                    log.err("Unclosed format argument `{s}` in `{s}`", .{ formatString[argStart..], formatString });
-                }
-                return error.UnclosedFormatArgument;
-            };
-
-            const arg: []const u8 = formatString[argStart..argEnd];
-
-            if (try ctx.formatArgument(arg, writer)) {
-                i += 1; // Move past the closing brace
-                continue;
-            } else {
-                if (@inComptime()) {
-                    @compileLog("unknown arg", arg, argStart, argEnd);
-                } else {
-                    log.err("unknown arg: `{s}`", .{arg});
-                }
-                return error.UnknownArg;
-            }
-        } else if (ch == '\n') {
-            if (sanitizeBreak) |san| {
-                try writer.writeAll(san);
-            } else {
-                try writer.writeByte('\n');
-            }
-
-            if (linePrefix) |pfx| {
-                try writer.writeAll(pfx);
-            }
-        } else if (ch == '|') {
-            try writer.writeAll("\\|");
-        } else {
-            try writer.writeByte(ch);
-        }
-    }
-}
-
-// utility text functions
-
-fn writeKebab(name: []const u8, writer: anytype) !void {
-    var i: usize = 0;
-    while (i < name.len) {
-        const ch = name[i];
-        if (ch == ' ') {
-            try writer.writeByte('-');
-        } else {
-            try writer.writeByte(std.ascii.toLower(ch));
-        }
-        i += 1;
-    }
-}
-
-fn writeLink(name: []const u8, writer: anytype) !void {
-    try writer.print("[{s}](#", .{name});
-    try writeKebab(name, writer);
-    try writer.writeByte(')');
-}
-
-fn paste(generatorName: []const u8, header: []const u8, commentPre: []const u8, commentPost: []const u8, comptime path: []const u8, writer: anytype) !void {
-    var genBase = std.io.fixedBufferStream(@embedFile(path));
-
-    const reader = genBase.reader();
-
-    try writer.print(
-        \\{s} This file is generated by `bin/tools/codegen.zig`, do not edit {s}
-        \\{s} See `{s}` for the template; `codegen.zig/#{s}` for the generator {s}
-        \\
-        \\{s}
-    ,
-        .{
-            commentPre,
-            commentPost,
-            commentPre,
-            path,
-            generatorName,
-            commentPost,
-            header,
-        },
-    );
-
-    // the templates have a small disclaimer comment at the top, skip it.
-    for (0..3) |_| try reader.skipUntilDelimiterOrEof('\n');
-
-    try pl.stream(reader, writer);
-
-    try writer.writeAll("\n");
 }

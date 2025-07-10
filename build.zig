@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) !void {
     const utils_mod = platform_dep.module("utils");
     const Id_mod = platform_dep.module("Id");
     const Interner_mod = platform_dep.module("Interner");
+    const AllocWriter_mod = platform_dep.module("AllocWriter");
     const VirtualWriter_mod = platform_dep.module("VirtualWriter");
     const Buffer_mod = platform_dep.module("Buffer");
     const Stack_mod = platform_dep.module("Stack");
@@ -145,6 +146,11 @@ pub fn build(b: *std.Build) !void {
         .use_lld = false,
     });
 
+    const gen_step = b.step("gen", "CLI access for the isa code generator");
+    const gen_app = b.addRunArtifact(gen_tool);
+    if (b.args) |args| gen_app.addArgs(args);
+    gen_step.dependOn(&gen_app.step);
+
     const gen_isa = b.addRunArtifact(gen_tool);
 
     gen_isa.addArg("markdown");
@@ -202,7 +208,7 @@ pub fn build(b: *std.Build) !void {
     bytecode_mod.addImport("Instruction", Instruction_mod);
     bytecode_mod.addImport("Id", Id_mod);
     bytecode_mod.addImport("Interner", Interner_mod);
-    bytecode_mod.addImport("VirtualWriter", VirtualWriter_mod);
+    bytecode_mod.addImport("AllocWriter", AllocWriter_mod);
     bytecode_mod.addImport("Buffer", Buffer_mod);
 
     core_mod.addImport("platform", platform_mod);

@@ -969,12 +969,12 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
         },
         .store16c => { // Stores a 16-bit value (Ix) to memory at the address in R offset by Iy
             const registerId = current.instruction.data.store16c.R;
+            const bits = current.instruction.data.store16c.Ix;
 
             const immBits: u64 = current.callFrame.ip[0];
             current.callFrame.ip += 1;
 
-            const bits: u16 = @truncate(immBits);
-            const offset: i32 = @bitCast(@as(u32, @truncate(immBits >> 16)));
+            const offset: i32 = @bitCast(@as(u32, @truncate(immBits)));
 
             const destBase: [*]u16 = @ptrFromInt(current.callFrame.vregs[registerId.getIndex()]);
             const dest = pl.offsetPointer(destBase, offset);
@@ -985,12 +985,12 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
         },
         .store32c => { // Stores a 32-bit value (Ix) to memory at the address in R offset by Iy
             const registerId = current.instruction.data.store32c.R;
+            const bits = current.instruction.data.store32c.Ix;
 
             const immBits: u64 = current.callFrame.ip[0];
             current.callFrame.ip += 1;
 
-            const bits: u32 = @truncate(immBits);
-            const offset: i32 = @bitCast(@as(u32, @truncate(immBits >> 32)));
+            const offset: i32 = @bitCast(@as(u32, @truncate(immBits)));
 
             const destBase: [*]u32 = @ptrFromInt(current.callFrame.vregs[registerId.getIndex()]);
             const dest = pl.offsetPointer(destBase, offset);

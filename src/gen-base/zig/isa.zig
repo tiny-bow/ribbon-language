@@ -149,6 +149,21 @@ pub const Instruction = struct {
     fn jitVariable(name: InstructionName, description: []const u8, operands: []const Operand) Instruction {
         return Instruction{ .name = name, .description = description, .operands = operands, .jit_only = true, .variable_length = true };
     }
+
+    /// Determine if this instruction is wider than a single word.
+    pub fn isWide(self: *const Instruction) bool {
+        var wordOffset: usize = 2;
+
+        for (self.operands) |operand| {
+            if (wordBoundaryHeuristic(operand, wordOffset)) {
+                return true;
+            }
+
+            wordOffset += operand.sizeOf();
+        }
+
+        return false;
+    }
 };
 
 /// Describes the type of an operand encoded in an `Instruction`.
@@ -332,30 +347,14 @@ fn endsWithDigits(str: []const u8) bool {
     return str.len != 0 and str[str.len - 1] >= '0' and str[str.len - 1] <= '9';
 }
 
-pub fn wordBoundaryHeuristic(operand: Operand, remSize: anytype, wordOffset: anytype) bool {
+pub fn wordBoundaryHeuristic(operand: Operand, wordOffset: anytype) bool {
     const wordRem = 8 - wordOffset;
     const operandSize = operand.sizeOf();
 
-    // we of course break at actual word boundaries
     if (wordOffset >= 8) return true;
-
-    // or if the operand cant fit in this word
     if (operandSize > wordRem) return true;
 
-    // if we reached here, we *could* fit it //
-
-    // only consider ending early if we definitely need another word
-    if (operandSize + remSize <= wordRem) return false;
-
-    // personal preference here, but only packing the immediates into the next word seems nicer
-    if (!operand.isImmediate()) return false;
-
-    // but if we do need another word, and we'd be left with a single fully-packed word of immediates,
-    // we should break now because it will make the decode operation cleaner
-    if (operandSize + remSize == 8) return true;
-
-    // otherwise let's only break now when doing so doesnt cause us to require an extra word
-    return (operandSize + remSize < 8);
+    return false;
 }
 
 pub fn formatInstructionName(mnemonic: []const u8, instr: InstructionName, writer: anytype) !void {
@@ -612,8 +611,8 @@ pub const CATEGORIES: []const Category = &.{
                     .basic(.suffix("32"), "Stores a 32-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("64"), "Stores a 64-bit value from {1} to memory at the address in {0} offset by {2}", &.{ .register, .register, .int }),
                     .basic(.suffix("8c"), "Stores an 8-bit value to memory at the address in {0} offset by {2}", &.{ .register, .byte, .int }),
-                    .basic(.suffix("16c"), "Stores a 16-bit value to memory at the address in {0} offset by {2}", &.{ .register, .short, .int }),
-                    .basic(.suffix("32c"), "Stores a 32-bit value to memory at the address in {0} offset by {2}", &.{ .register, .int, .int }),
+                    .basic(.suffix("16c"), "Stores a 16-bit value ({1}) to memory at the address in {0} offset by {2}", &.{ .register, .short, .int }),
+                    .basic(.suffix("32c"), "Stores a 32-bit value ({1}) to memory at the address in {0} offset by {2}", &.{ .register, .int, .int }),
                     .basic(.suffix("64c"), "Stores a 64-bit value (encoded as {2}) to memory at the address in {0} offset by {1}", &.{ .register, .int, .word }),
                 },
             ),
