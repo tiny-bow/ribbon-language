@@ -53,9 +53,10 @@ pub const Bytecode = packed struct(u64) {
     header: *const Header,
 
     /// De-initialize the bytecode unit, freeing the memory that it owns.
-    pub fn deinit(self: Bytecode) void {
-        const buffer = @as([*]const u8, @ptrCast(self.header))[0 .. self.header.size + @sizeOf(Header)];
-        std.posix.munmap(@alignCast(buffer));
+    pub fn deinit(self: Bytecode, allocator: std.mem.Allocator) void {
+        const base: [*]const u8 = @ptrCast(self.header);
+        const buf: []align(pl.PAGE_SIZE) const u8 = @alignCast(base[0 .. @sizeOf(Header) + self.header.size]);
+        allocator.free(buf);
     }
 };
 
@@ -130,6 +131,19 @@ pub fn symbolKindFromId(comptime T: type) SymbolKind {
         EffectId => .effect,
         HandlerSetId => .handler_set,
         else => @compileError("symbolKindFromId: unsupported type `" ++ @typeName(T) ++ "`"),
+    };
+}
+
+pub fn IdFromSymbolKind(comptime kind: SymbolKind) type {
+    return switch (kind) {
+        .constant => ConstantId,
+        .global => GlobalId,
+        .function => FunctionId,
+        .builtin => BuiltinAddressId,
+        .foreign_address => ForeignAddressId,
+        .effect => EffectId,
+        .handler_set => HandlerSetId,
+        else => @compileError("IdFromSymbolKind: unsupported kind `" ++ @tagName(kind) ++ "`"),
     };
 }
 
@@ -359,11 +373,11 @@ pub const Extents = packed struct(u128) {
 /// ownership varies.
 pub const AddressTable = extern struct {
     /// The actual addresses of the symbols in this table.
-    addresses: [*]const *const anyopaque,
+    addresses: [*]const *const anyopaque = undefined,
     /// The kind of symbol stored in the adjacent address buffer slot.
-    kinds: [*]const SymbolKind,
+    kinds: [*]const SymbolKind = undefined,
     /// The number of symbol/address pairs in this table.
-    len: u32,
+    len: u32 = 0,
 
     /// Get a slice of all symbol kinds in this address table.
     pub fn kindSlice(self: *const AddressTable) []const SymbolKind {
@@ -495,14 +509,14 @@ pub const AddressTable = extern struct {
 ///
 /// `*` Within Ribbon's compiler, not Zig's
 pub const SymbolTable = extern struct {
-    /// This symbol table's keys.
-    keys: Buffer.of(SymbolTable.Key, .constant) = .empty,
-    /// This symbol table's values.
-    values: Buffer.of(StaticId, .constant) = .empty,
+    /// The actual symbolic string values in this table.
+    keys: [*]const Key = undefined,
+    /// The symbolic id of the adjacent key buffer slot.
+    values: [*]const StaticId = undefined,
+    /// The number of key/value pairs in this table.
+    len: u32 = 0,
 
     /// One half of a key/value pair used for address resolution in a `SymbolTable`.
-    ///
-    /// See `Value`.
     pub const Key = packed struct {
         /// The symbol text's hash value.
         hash: u64,
@@ -510,11 +524,21 @@ pub const SymbolTable = extern struct {
         name: Buffer.short(u8, .constant),
     };
 
+    /// Get a slice of all the keys in this symbol table.
+    pub fn keySlice(self: *const SymbolTable) []const Key {
+        return self.keys[0..self.len];
+    }
+
+    /// Get a slice of all the values in this symbol table.
+    pub fn valueSlice(self: *const SymbolTable) []const StaticId {
+        return self.values[0..self.len];
+    }
+
     /// Get the id of a symbol by name.
     pub fn lookupId(self: SymbolTable, name: []const u8) ?StaticId {
         const hash = pl.hash64(name);
 
-        for (self.keys.asSlice(), 0..) |key, i| {
+        for (self.keySlice(), 0..) |key, i| {
             if (key.hash != hash) {
                 @branchHint(.likely);
                 continue;
@@ -522,7 +546,7 @@ pub const SymbolTable = extern struct {
 
             if (std.mem.eql(u8, key.name.asSlice(), name)) {
                 @branchHint(.likely);
-                return self.values.asSlice()[i];
+                return self.valueSlice()[i];
             }
         }
 
@@ -535,7 +559,7 @@ pub const Header = extern struct {
     /// The total size of the program.
     size: u64 = @sizeOf(Header),
     /// Address table used by instructions this header owns.
-    address_table: AddressTable = undefined,
+    address_table: AddressTable = .{},
     /// Symbol bindings for the address table; what this program calls different addresses.
     ///
     /// Not necessarily a complete listing for all bindings;
