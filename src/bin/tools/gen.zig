@@ -103,8 +103,8 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
     var is_branch = [1]bool{false} ** 1024;
     var is_basic = [1]bool{false} ** 1024;
     var is_term = [1]bool{false} ** 1024;
-    var wide_operand_names = [1][]const u8{""} ** 1024;
-    var wide_operand_types = [1]isa.Operand{.word} ** 1024;
+    var wide_operand_names = [1]?[]const u8{null} ** 1024;
+    var wide_operand_types = [1]?isa.Operand{null} ** 1024;
 
     opcode = 0;
     for (categories) |*category| {
@@ -184,10 +184,32 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
         \\    };
         \\}
         \\
+        \\/// Convert an instruction to its encoded bits.
+        \\pub fn toBits(self: Instruction) core.InstructionBits {
+        \\    const code_bits = self.code.toBits();
+        \\    const data_bits = self.data.toBits(self.code);
         \\
-    );
-
-    try writer.writeAll(
+        \\    return code_bits | (data_bits << @bitSizeOf(Instruction.OpCode));
+        \\}
+        \\
+        \\/// Given an instruction, determine how many call-argument register operands it expects to be passed.
+        \\/// * Returns null if the instruction is not a call instruction
+        \\pub fn getExpectedCallArgumentCount(instr: Instruction) ?u8 {
+        \\    if (!instr.code.isCall()) return null;
+        \\
+        \\    return switch (@as(Instruction.CallOpCode, @enumFromInt(@intFromEnum(instr.code)))) {
+        \\        .call => instr.data.call.I,
+        \\        .call_c => instr.data.call_c.I,
+        \\        .f_call => instr.data.f_call.I,
+        \\        .f_call_c => instr.data.f_call_c.I,
+        \\        .prompt => instr.data.prompt.I,
+        \\    };
+        \\}
+        \\
+        \\/// Designates the size of a wide operand.
+        \\pub const WideOperandType = enum { byte, short, int, word };
+        \\
+        \\/// Determine the type of the wide operand for a given opcode.
         \\pub fn WideOperand(comptime code: OpCode) type {
         \\    return switch(code) {
         \\
@@ -201,7 +223,7 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
                     try writer.writeAll("        .@\"");
                     try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
                     try writer.writeAll("\" => ");
-                    try writer.writeAll(switch (wide_operand_types[opcode]) {
+                    try writer.writeAll(switch (wide_operand_types[opcode].?) {
                         .register => "core.Register",
                         .upvalue => "core.UpvalueId",
                         .global => "core.GlobalId",
@@ -378,33 +400,43 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
     try writer.print(
         \\/// Enumeration identifying each instruction.
         \\pub const OpCode = enum(u16) {{
+        \\    /// `@enumFromInt` for instruction words
+        \\    pub fn fromBits(code: core.InstructionBits) OpCode {{
+        \\        return @enumFromInt(code);
+        \\    }}
+        \\
+        \\    /// `@intFromEnum` for instruction words
+        \\    pub fn toBits(code: OpCode) core.InstructionBits {{
+        \\        return @intFromEnum(code);
+        \\    }}
+        \\  
         \\    /// Determine if this OpCode's associated instruction is wider than a single word.
         \\    pub fn isWide(code: OpCode) bool {{
-        \\        const is_wide = [_]bool{any};
+        \\        const is_wide = comptime [_]bool{any};
         \\        return is_wide[@intFromEnum(code)];
         \\    }}
         \\    
         \\    /// Determine if this OpCode's associated instruction is a call.
         \\    pub fn isCall(code: OpCode) bool {{
-        \\        const is_call = [_]bool{any};
+        \\        const is_call = comptime [_]bool{any};
         \\        return is_call[@intFromEnum(code)];
         \\    }}
         \\    
         \\    /// Determine if this OpCode's associated instruction is a branch.
         \\    pub fn isBranch(code: OpCode) bool {{
-        \\        const is_branch = [_]bool{any};
+        \\        const is_branch = comptime [_]bool{any};
         \\        return is_branch[@intFromEnum(code)];
         \\    }}
         \\    
         \\    /// Determine if this OpCode's associated instruction is can occur inside a basic block (not a terminator).
         \\    pub fn isBasic(code: OpCode) bool {{
-        \\        const is_basic = [_]bool{any};
+        \\        const is_basic = comptime [_]bool{any};
         \\        return is_basic[@intFromEnum(code)];
         \\    }}
         \\    
         \\    /// Determine if this OpCode's associated instruction is a terminator.
         \\    pub fn isTerm(code: OpCode) bool {{
-        \\        const is_term = [_]bool{any};
+        \\        const is_term = comptime [_]bool{any};
         \\        return is_term[@intFromEnum(code)];
         \\    }}
         \\
@@ -417,6 +449,55 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
             is_basic[0..opcode],
             is_term[0..opcode],
         },
+    );
+
+    try writer.writeAll(
+        \\    /// Get the name of the wide operand for this opcode if it has one.
+        \\    pub fn wideOperandName(code: OpCode) ?[]const u8 {
+        \\        const names = comptime [_]?[]const u8{
+    ++ " ");
+
+    for (wide_operand_names) |maybe_name| {
+        if (maybe_name) |name| {
+            try writer.print("\"{s}\", ", .{name});
+        } else {
+            try writer.writeAll(" null, ");
+        }
+    }
+
+    try writer.writeAll(
+        \\};
+        \\
+        \\        return names[@intFromEnum(code)];
+        \\    }
+        \\
+        \\
+    );
+
+    try writer.writeAll(
+        \\    /// Get the immediate type of the wide operand for this opcode if it has one.
+        \\    pub fn wideOperandType(code: OpCode) ?WideOperandType {
+        \\        const types = comptime [_]?WideOperandType{
+    ++ " ");
+
+    for (wide_operand_types) |maybe_operand| {
+        if (maybe_operand) |operand| {
+            switch (operand) {
+                .byte, .short, .int, .word => try writer.print(".{s}, ", .{@tagName(operand)}),
+                else => std.debug.panic("Unexpected operand type {s} in wideOperandType", .{@tagName(operand)}),
+            }
+        } else {
+            try writer.writeAll(" null, ");
+        }
+    }
+
+    try writer.writeAll(
+        \\};
+        \\
+        \\        return types[@intFromEnum(code)];
+        \\    }
+        \\
+        \\
     );
 
     opcode = 0;
@@ -444,7 +525,7 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
         \\    /// Extract the operand set for a given opcode.
         \\    pub fn extractSet(self: OpData, comptime code: OpCode) SetType(code) {
         \\        inline for (comptime std.meta.fieldNames(OpCode)) |fieldName| {
-        \\            if (code == comptime @field(OpCode, fieldName).upcast()) {
+        \\            if (code == comptime @field(OpCode, fieldName)) {
         \\                return @field(self, fieldName);
         \\            }
         \\        }
@@ -457,13 +538,8 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
         \\        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(OpData)), @as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(set))), @bitCast(set))));
         \\    }
         \\
-        \\    /// Create a 48-bit integer from an `OpData` value.
-        \\    /// * **NOTE**: Previously, this was done with a bitcast.
-        \\    /// However, that can sometimes lead to undefined bytes in encoded bytecode streams;
-        \\    /// So now, this uses compile-time reflection to extract the fields of the union,
-        \\    /// and copies them into a 48-bit integer.
-        \\    /// This new process requires an `OpCode` to discriminate the union.
-        \\    pub fn toBits(self: OpData, code: OpCode) u48 {
+        \\    /// Create an integer from an `OpData` value.
+        \\    pub fn toBits(self: OpData, code: OpCode) core.InstructionBits {
         \\        var i: usize = 0;
         \\        var out: u48 = 0;
         \\        const bytes = std.mem.asBytes(&out);

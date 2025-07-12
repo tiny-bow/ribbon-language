@@ -483,8 +483,8 @@ pub const CATEGORIES: []const Category = &.{
                 "br",
                 "Instruction pointer manipulation",
                 &.{
-                    .terminator(.mnemonic, "Applies a signed integer offset {0} to the instruction pointer", &.{.int}),
-                    .terminator(.suffix("if"), "Applies a signed integer offset {1} to the instruction pointer, if the value stored in {0} is non-zero", &.{ .register, .int }),
+                    .terminator(.mnemonic, "Applies a signed integer offset {0} to the instruction pointer", &.{.short}),
+                    .terminator(.suffix("if"), "Applies a signed integer offset {1} to the instruction pointer, if the value stored in {0} is non-zero; otherwise, applies the signed integer offset in {2}", &.{ .register, .short, .short }),
                 },
             ),
             .mnemonic(

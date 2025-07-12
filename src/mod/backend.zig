@@ -599,7 +599,7 @@ pub const BytecodeTarget = struct {
     /// Free compiled bytecode artifacts.
     pub fn freeArtifact(self: *BytecodeTarget, id: ArtifactId) void {
         if (self.artifacts.fetchRemove(id)) |kv| {
-            kv.value.deinit();
+            kv.value.deinit(self.compiler.allocator);
         }
     }
 };

@@ -428,7 +428,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
         },
 
         .br => { // Applies a signed integer offset I to the instruction pointer
-            const offset: core.InstructionOffset = @bitCast(current.instruction.data.br.I);
+            const offset: core.InstructionOffset = @as(i16, @bitCast(current.instruction.data.br.I));
             std.debug.assert(offset != 0);
 
             // The IP was advanced by decode(). Go back one instruction and add the WORD offset.
@@ -442,20 +442,29 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             continue :dispatch try state.step(self);
         },
         .br_if => { // Applies a signed integer offset I to the instruction pointer, if the value stored in R is non-zero
-            const offset: core.InstructionOffset = @bitCast(current.instruction.data.br_if.I);
-            std.debug.assert(offset != 0);
+            const then_offset: core.InstructionOffset = @as(i16, @bitCast(current.instruction.data.br_if.Ix));
+            std.debug.assert(then_offset != 0);
+
+            const else_offset: core.InstructionOffset = @as(i16, @bitCast(current.instruction.data.br_if.Iy));
+            std.debug.assert(else_offset != 0);
 
             const registerId = current.instruction.data.br_if.R;
 
             // The IP was advanced by decode(). Go back one instruction and add the WORD offset.
-            const newIp: core.InstructionAddr = pl.offsetPointerElement(current.callFrame.ip - 1, offset);
+            const then_newIp: core.InstructionAddr = pl.offsetPointerElement(current.callFrame.ip - 1, then_offset);
+            const else_newIp: core.InstructionAddr = pl.offsetPointerElement(current.callFrame.ip - 1, else_offset);
 
-            std.debug.assert(pl.alignDelta(newIp, @alignOf(core.InstructionBits)) == 0);
-            std.debug.assert(current.function.extents.boundsCheck(newIp));
+            std.debug.assert(pl.alignDelta(then_newIp, @alignOf(core.InstructionBits)) == 0);
+            std.debug.assert(pl.alignDelta(else_newIp, @alignOf(core.InstructionBits)) == 0);
+            std.debug.assert(current.function.extents.boundsCheck(then_newIp));
+            std.debug.assert(current.function.extents.boundsCheck(else_newIp));
 
             const register = current.callFrame.vregs[registerId.getIndex()];
 
-            if (register != 0) current.callFrame.ip = newIp;
+            switch (register) {
+                0 => current.callFrame.ip = then_newIp,
+                else => current.callFrame.ip = else_newIp,
+            }
 
             continue :dispatch try state.step(self);
         },
@@ -813,7 +822,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const global: *const core.Global = current.function.header.get(globalId);
 
-            current.callFrame.vregs[registerId.getIndex()] = global.ptr;
+            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(global.asPtr());
 
             continue :dispatch try state.step(self);
         },
@@ -853,7 +862,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const constant: *const core.Constant = current.function.header.get(constantId);
 
-            current.callFrame.vregs[registerId.getIndex()] = constant.ptr;
+            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(constant.asPtr());
 
             continue :dispatch try state.step(self);
         },

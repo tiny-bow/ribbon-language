@@ -143,17 +143,58 @@ pub fn IdFromSymbolKind(comptime kind: SymbolKind) type {
         .foreign_address => ForeignAddressId,
         .effect => EffectId,
         .handler_set => HandlerSetId,
-        else => @compileError("IdFromSymbolKind: unsupported kind `" ++ @tagName(kind) ++ "`"),
     };
 }
 
 pub const UpvalueId = Id.of(Upvalue, pl.LOCAL_ID_BITS);
 
+/// Simple value layout for Ribbon's constant and global values.
+pub const Layout = packed struct {
+    size: u64,
+    alignment: pl.Alignment,
+};
+
 /// A Ribbon constant value definition.
-pub const Constant = Buffer.Bytes;
+/// * This is essentially a marker type; the actual bytes of the value are expected to be encoded just past the address
+pub const Constant = packed struct {
+    layout: Layout,
+
+    pub fn fromLayout(layout: Layout) Constant {
+        return .{ .layout = layout };
+    }
+
+    pub fn asPtr(self: *const Constant) [*]const u8 {
+        const base = @as([*]const u8, @ptrCast(self)) + @sizeOf(Constant);
+        const padding = pl.alignDelta(base, self.layout.alignment);
+
+        return base + padding;
+    }
+
+    pub fn asSlice(self: *const Constant) []const u8 {
+        return self.asPtr()[0..self.layout.size];
+    }
+};
 
 /// A Ribbon global variable definition.
-pub const Global = Buffer.MutBytes;
+/// * This is essentially a marker type; the actual bytes of the value are expected to be encoded just past the address
+pub const Global = packed struct {
+    layout: Layout,
+
+    pub fn fromLayout(layout: Layout) Global {
+        return .{ .layout = layout };
+    }
+
+    pub fn asPtr(self: *const Global) [*]u8 {
+        const base = @as([*]u8, @constCast(@ptrCast(self))) + @sizeOf(Global);
+        const padding = pl.alignDelta(base, self.layout.alignment);
+
+        return base + padding;
+    }
+
+    pub fn asSlice(self: *const Global) []u8 {
+        return self.asPtr()[0..self.layout.size];
+    }
+};
 
 /// Designates a specific Ribbon effect, runtime-wide.
 /// EffectId is used to bind to one of these within individual bytecode units.
@@ -438,7 +479,7 @@ pub const AddressTable = extern struct {
         const T = @TypeOf(id);
 
         if (comptime T == StaticId) {
-            return id.toInt() < self.addresses.len;
+            return id.toInt() < self.len;
         } else {
             const id_kind = comptime symbolKindFromId(T);
 
@@ -482,7 +523,7 @@ pub const AddressTable = extern struct {
 
     /// Get the address of a typed static by its id, if it is bound.
     pub fn tryGet(self: *const AddressTable, id: anytype) ?*const StaticTypeFromId(@TypeOf(id)) {
-        if (self.tryGetAddress(id)) |address| {
+        if (self.tryGetAddress(id.cast(anyopaque))) |address| {
             @branchHint(.likely);
 
             const kind = self.getKind(id.cast(anyopaque));
@@ -588,7 +629,7 @@ pub const Header = extern struct {
 
         const erased = self.lookupAddress(name) orelse return null;
 
-        return if (erased.kind == K) @ptrCast(@alignCast(erased.ptr)) else {
+        return if (erased[0] == K) @ptrCast(@alignCast(erased[1])) else {
             @branchHint(.unlikely);
             return error.TypeError;
         };
@@ -947,7 +988,8 @@ pub const Fiber = extern struct {
 
     /// De-initializes the fiber, freeing its memory.
     pub fn deinit(self: Fiber, allocator: std.mem.Allocator) void {
-        allocator.destroy(@as(*mem.FiberBuffer, @ptrCast(self.header)));
+        const buf: []align(mem.ALIGNMENT) u8 = @alignCast(@as([*]u8, @ptrCast(self.header))[0..mem.SIZE]);
+        allocator.free(buf);
     }
 
     /// Get a pointer to one of the stacks' memory block.
