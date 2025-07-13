@@ -1,4 +1,3 @@
-
 //! # Abi
 //! This module is a namespace defining the register conventions used by Ribbon on X64 platforms;
 //! values will be different depending if `pl.ABI` is set to `.sys_v` or `.win`.
@@ -27,7 +26,7 @@ const Abi = @This();
 const std = @import("std");
 const log = std.log.scoped(.X64Abi);
 
-const pl = @import("platform");
+const core = @import("core");
 const assembler = @import("assembler");
 
 test {
@@ -85,7 +84,10 @@ pub const IP = assembler.Register.r15;
 /// * primarily used for passing arguments to foreign calls
 /// * may be used for other purposes, so long as it is not relied upon across calls
 /// * In C ABI, this is the first argument to a function call
-pub const AUX1 = switch (pl.ABI) { .sys_v => assembler.Register.rdi, .win => assembler.Register.rcx };
+pub const AUX1 = switch (core.ABI) {
+    .sys_v => assembler.Register.rdi,
+    .win => assembler.Register.rcx,
+};
 
 /// A hardware register; SYS-V: `rsi`, WIN: `rdx`
 ///
@@ -96,7 +98,10 @@ pub const AUX1 = switch (pl.ABI) { .sys_v => assembler.Register.rdi, .win => ass
 /// * primarily used for passing arguments to foreign calls
 /// * may be used for other purposes, so long as it is not relied upon across calls
 /// * in C ABI, this is the second argument to a function call
-pub const AUX2 = switch (pl.ABI) { .sys_v => assembler.Register.rsi, .win => assembler.Register.rdx };
+pub const AUX2 = switch (core.ABI) {
+    .sys_v => assembler.Register.rsi,
+    .win => assembler.Register.rdx,
+};
 
 /// A hardware register; `rdx`
 ///
@@ -107,7 +112,10 @@ pub const AUX2 = switch (pl.ABI) { .sys_v => assembler.Register.rsi, .win => ass
 /// * primarily used for passing arguments to foreign calls
 /// * may be used for other purposes, so long as it is not relied upon across calls
 /// * in C ABI, this is the third argument to a function call
-pub const AUX3 = switch (pl.ABI) { .sys_v => assembler.Register.rdx, .win => assembler.Register.r8 };
+pub const AUX3 = switch (core.ABI) {
+    .sys_v => assembler.Register.rdx,
+    .win => assembler.Register.r8,
+};
 
 /// A hardware register; `rcx`
 ///
@@ -118,7 +126,10 @@ pub const AUX3 = switch (pl.ABI) { .sys_v => assembler.Register.rdx, .win => ass
 /// * primarily used for passing arguments to foreign calls.
 /// * may be used for other purposes, so long as it is not relied upon across calls
 /// * in C ABI, this is used for the fourth argument to a function call
-pub const AUX4 = switch (pl.ABI) { .sys_v => assembler.Register.rcx, .win => assembler.Register.r9 };
+pub const AUX4 = switch (core.ABI) {
+    .sys_v => assembler.Register.rcx,
+    .win => assembler.Register.r9,
+};
 
 /// A hardware register; `r8`
 ///
@@ -129,7 +140,10 @@ pub const AUX4 = switch (pl.ABI) { .sys_v => assembler.Register.rcx, .win => ass
 /// * primarily used for passing arguments to foreign calls
 /// * may be used for other purposes, so long as it is not relied upon across calls
 /// * in SYS-V ABI, this is used for the fifth argument to a function call
-pub const AUX5 = switch (pl.ABI) { .sys_v => assembler.Register.r8, .win => assembler.Register.rdi };
+pub const AUX5 = switch (core.ABI) {
+    .sys_v => assembler.Register.r8,
+    .win => assembler.Register.rdi,
+};
 
 /// A hardware register; `r9`
 ///
@@ -140,7 +154,10 @@ pub const AUX5 = switch (pl.ABI) { .sys_v => assembler.Register.r8, .win => asse
 /// * primarily used for passing arguments to foreign calls
 /// * may be used for other purposes, so long as it is not relied upon across calls
 /// * in SYS-V ABI, this is used for the sixth argument to a function call
-pub const AUX6 = switch (pl.ABI) { .sys_v => assembler.Register.r9, .win => assembler.Register.rsi };
+pub const AUX6 = switch (core.ABI) {
+    .sys_v => assembler.Register.r9,
+    .win => assembler.Register.rsi,
+};
 
 /// A hardware register; `r10`
 ///
@@ -161,4 +178,3 @@ pub const TER_A = assembler.Register.r10;
 /// * primarily used to store intermediate references into data structures
 /// * may be used for other purposes, so long as it is not relied upon across calls
 pub const TER_B = assembler.Register.r11;
-

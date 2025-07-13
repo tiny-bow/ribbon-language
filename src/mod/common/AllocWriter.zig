@@ -8,8 +8,8 @@
 //! Allows access to the memory while it is being used as a writer. Use with care.
 const AllocWriter = @This();
 
-const pl = @import("platform");
 const std = @import("std");
+const common = @import("../common.zig");
 
 const log = std.log.scoped(.AllocWriter);
 
@@ -20,7 +20,7 @@ test {
 /// We must retain the allocator to implement the writer interface.
 allocator: std.mem.Allocator,
 /// The currently allocated memory region.
-memory: []align(pl.PAGE_SIZE) u8 = &.{},
+memory: common.MutVirtualMemory = &.{},
 /// The current write offset.
 cursor: u64 = 0,
 
@@ -69,7 +69,7 @@ pub const RelativeAddress = enum(u64) {
     }
 
     /// Create a new relative address from a base pointer and an element pointer.
-    pub fn fromPtr(buf: []align(pl.PAGE_SIZE) u8, ptr: anytype) RelativeAddress {
+    pub fn fromPtr(buf: common.MutVirtualMemory, ptr: anytype) RelativeAddress {
         const p = @intFromPtr(ptr);
         const a = @intFromPtr(buf.ptr);
         const b = a + buf.len;
@@ -85,17 +85,17 @@ pub const RelativeAddress = enum(u64) {
     }
 
     /// Determine if a relative address is the end address (base + len) of its memory region.
-    pub fn isSentinel(self: RelativeAddress, memory: []align(pl.PAGE_SIZE) u8) bool {
+    pub fn isSentinel(self: RelativeAddress, memory: common.MutVirtualMemory) bool {
         return self.toInt() == memory.len;
     }
 
     /// Validate that a relative address is within the bounds of a memory region.
-    pub fn isValue(self: RelativeAddress, memory: []align(pl.PAGE_SIZE) u8) bool {
+    pub fn isValue(self: RelativeAddress, memory: common.MutVirtualMemory) bool {
         return self.toInt() < memory.len;
     }
 
     /// Validate that a relative address is within the bounds of a memory region, or is the sentinel address.
-    pub fn isValueOrSentinel(self: RelativeAddress, memory: []align(pl.PAGE_SIZE) u8) bool {
+    pub fn isValueOrSentinel(self: RelativeAddress, memory: common.MutVirtualMemory) bool {
         return self.toInt() <= memory.len;
     }
 
@@ -105,7 +105,7 @@ pub const RelativeAddress = enum(u64) {
     }
 
     /// Resolve a relative address to an absolute pointer given a base memory region.
-    pub fn toPtr(self: RelativeAddress, buf: []align(pl.PAGE_SIZE) u8) [*]u8 {
+    pub fn toPtr(self: RelativeAddress, buf: common.MutVirtualMemory) [*]u8 {
         // Use zig safe mode bounds check instead of offseting base.ptr
         return @ptrCast(&buf[@intFromEnum(self)]);
     }
@@ -113,19 +113,19 @@ pub const RelativeAddress = enum(u64) {
     /// Resolve a relative address to an absolute pointer given a base memory region.
     /// * This cannot perform type checking, it is a low-level operation.
     /// * Runtime align check is performed in safe modes.
-    pub fn toTypedPtr(self: RelativeAddress, comptime T: type, buf: []align(pl.PAGE_SIZE) u8) T {
+    pub fn toTypedPtr(self: RelativeAddress, comptime T: type, buf: common.MutVirtualMemory) T {
         // Use zig safe mode bounds check instead of offseting base.ptr
         return @alignCast(@ptrCast(&buf[@intFromEnum(self)]));
     }
 
     /// Resolve a relative address to an absolute pointer given a base memory region.
     /// * Unlike `toPtr`, this allows sentinel pointer resolution.
-    pub fn toPtrOrSentinel(self: RelativeAddress, buf: []align(pl.PAGE_SIZE) u8) [*]u8 {
+    pub fn toPtrOrSentinel(self: RelativeAddress, buf: common.MutVirtualMemory) [*]u8 {
         return buf.ptr + self.toInt();
     }
 
     /// Try to resolve a relative address to an absolute pointer given a base memory region.
-    pub fn tryToPtr(self: RelativeAddress, buf: []align(pl.PAGE_SIZE) u8) ?[*]u8 {
+    pub fn tryToPtr(self: RelativeAddress, buf: common.MutVirtualMemory) ?[*]u8 {
         if (self.isValue(buf)) {
             return self.toPtr(buf);
         } else {
@@ -135,7 +135,7 @@ pub const RelativeAddress = enum(u64) {
 
     /// Try to resolve a relative address to an absolute pointer given a base memory region.
     /// * Unlike `tryToPtr`, this allows sentinel pointer resolution.
-    pub fn tryToPtrOrSentinel(self: RelativeAddress, buf: []align(pl.PAGE_SIZE) u8) ?[*]u8 {
+    pub fn tryToPtrOrSentinel(self: RelativeAddress, buf: common.MutVirtualMemory) ?[*]u8 {
         if (self.isValueOrSentinel(buf)) {
             return self.toPtrOrSentinel(buf);
         } else {
@@ -155,7 +155,7 @@ pub fn init(allocator: std.mem.Allocator) AllocWriter {
 pub fn initCapacity(allocator: std.mem.Allocator) error{OutOfMemory}!AllocWriter {
     return AllocWriter{
         .allocator = allocator,
-        .memory = try allocator.alignedAlloc(u8, pl.PAGE_SIZE, pl.PAGE_SIZE),
+        .memory = try allocator.alignedAlloc(u8, common.PAGE_SIZE, common.PAGE_SIZE),
     };
 }
 
@@ -184,7 +184,7 @@ pub fn getAvailableCapacity(self: *const AllocWriter) u64 {
 }
 
 /// Get the current written region of the writer.
-pub fn getWrittenRegion(self: *const AllocWriter) []align(pl.PAGE_SIZE) u8 {
+pub fn getWrittenRegion(self: *const AllocWriter) common.MutVirtualMemory {
     return self.memory[0..self.cursor];
 }
 
@@ -235,7 +235,7 @@ pub fn relativeToPointer(self: *const AllocWriter, comptime T: type, relative: R
 /// After calling this function, the writer will be in its default-initialized state.
 /// In other words, it is safe but not necessary to call `deinit` on it.
 /// It does not need to be re-initializd before reuse, as the allocator is retained.
-pub fn finalize(self: *AllocWriter) error{ BadEncoding, OutOfMemory }![]align(pl.PAGE_SIZE) u8 {
+pub fn finalize(self: *AllocWriter) error{ BadEncoding, OutOfMemory }!common.MutVirtualMemory {
     var out = self.memory[0..self.cursor];
 
     if (out.len == 0) {
@@ -250,7 +250,7 @@ pub fn finalize(self: *AllocWriter) error{ BadEncoding, OutOfMemory }![]align(pl
         } else |err| {
             log.debug("AllocWriter: Allocator refused to reallocate ({}), trying alloc + memcpy", .{err});
 
-            const new_memory = try self.allocator.alignedAlloc(u8, pl.PAGE_SIZE, self.cursor);
+            const new_memory = try self.allocator.alignedAlloc(u8, common.PAGE_SIZE, self.cursor);
 
             @memcpy(new_memory[0..self.cursor], self.memory[0..self.cursor]);
 
@@ -268,12 +268,12 @@ pub fn finalize(self: *AllocWriter) error{ BadEncoding, OutOfMemory }![]align(pl
 
 /// Reallocate the writer's memory as necessary to support the given capacity.
 pub fn ensureCapacity(self: *AllocWriter, cap: u64) Error!void {
-    var new_cap = if (self.memory.len != 0) self.memory.len else pl.PAGE_SIZE;
+    var new_cap = if (self.memory.len != 0) self.memory.len else common.PAGE_SIZE;
 
     while (new_cap < cap) new_cap *= 2;
 
     if (new_cap != self.memory.len) {
-        const new_memory = try self.allocator.alignedAlloc(u8, pl.PAGE_SIZE, new_cap);
+        const new_memory = try self.allocator.alignedAlloc(u8, common.PAGE_SIZE, new_cap);
 
         @memcpy(new_memory[0..self.memory.len], self.memory);
 
@@ -293,8 +293,8 @@ pub fn ensureAdditionalCapacity(self: *AllocWriter, additional: u64) Error!void 
 }
 
 /// Allocates an aligned byte buffer from the address space of the writer.
-pub fn alignedAlloc(self: *AllocWriter, alignment: pl.Alignment, len: usize) Error![]u8 {
-    const padding = pl.alignDelta(self.getCurrentAddress(), alignment);
+pub fn alignedAlloc(self: *AllocWriter, alignment: u64, len: usize) Error![]u8 {
+    const padding = common.alignDelta(self.getCurrentAddress(), alignment);
     const total_size = len + padding;
 
     try self.ensureAdditionalCapacity(total_size);
@@ -399,6 +399,6 @@ pub fn writeInt(
     comptime _: enum { little }, // allows backward compat with writer api; but only in provably compatible use-cases
 ) Error!void {
     // We do not encode abi padding bytes here; only get the bytes that are actually used.
-    const bytes = std.mem.asBytes(&value)[0..pl.bytesFromBits(@bitSizeOf(T))];
+    const bytes = std.mem.asBytes(&value)[0..common.bytesFromBits(@bitSizeOf(T))];
     try self.writeAll(bytes);
 }

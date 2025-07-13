@@ -42,12 +42,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const platform_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/platform.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     const abi_mod = b.createModule(.{
         .root_source_file = b.path("src/mod/x64/abi.zig"),
         .target = target,
@@ -205,30 +199,27 @@ pub fn build(b: *std.Build) !void {
     const main_test = b.addTest(.{ .root_module = main_mod });
     const meta_language_test = b.addTest(.{ .root_module = meta_language_mod });
     const source_test = b.addTest(.{ .root_module = source_mod });
+    const common_test = b.addTest(.{ .root_module = common_mod });
     const ribbon_test = b.addTest(.{ .root_module = ribbon_mod });
     const bc_interp_test = b.addTest(.{ .root_module = bc_interp_mod });
 
     // add imports //
 
     abi_mod.addImport("assembler", assembler_mod);
-    abi_mod.addImport("platform", platform_mod);
+    abi_mod.addImport("core", core_mod);
 
-    common_mod.addImport("platform", platform_mod);
-    platform_mod.addOptions("build_info", build_info_opts);
-
-    binary_mod.addImport("platform", platform_mod);
+    binary_mod.addImport("core", core_mod);
     binary_mod.addImport("common", common_mod);
 
-    bytecode_mod.addImport("platform", platform_mod);
     bytecode_mod.addImport("common", common_mod);
     bytecode_mod.addImport("core", core_mod);
     bytecode_mod.addImport("Instruction", Instruction_mod);
     bytecode_mod.addImport("binary", binary_mod);
 
-    core_mod.addImport("platform", platform_mod);
     core_mod.addImport("common", common_mod);
+    core_mod.addOptions("build_info", build_info_opts);
 
-    gen_mod.addImport("platform", platform_mod);
+    gen_mod.addImport("common", common_mod);
     gen_mod.addImport("isa", isa_mod);
     gen_mod.addImport("core", core_mod);
     gen_mod.addImport("assembler", assembler_mod);
@@ -237,46 +228,36 @@ pub fn build(b: *std.Build) !void {
     gen_mod.addAnonymousImport("Isa_intro.md", .{ .root_source_file = b.path("src/gen-base/markdown/Isa_intro.md") });
     gen_mod.addAnonymousImport("Instruction_intro.zig", .{ .root_source_file = b.path("src/gen-base/zig/Instruction_intro.zig") });
 
-    Instruction_mod.addImport("platform", platform_mod);
     Instruction_mod.addImport("common", common_mod);
     Instruction_mod.addImport("core", core_mod);
 
-    interpreter_mod.addImport("platform", platform_mod);
     interpreter_mod.addImport("core", core_mod);
     interpreter_mod.addImport("Instruction", Instruction_mod);
     interpreter_mod.addImport("bytecode", bytecode_mod);
     interpreter_mod.addImport("common", common_mod);
     // interpreter_mod.addObjectFile(assembly_obj);
 
-    ir_mod.addImport("platform", platform_mod);
+    ir_mod.addImport("core", core_mod);
     ir_mod.addImport("common", common_mod);
     ir_mod.addImport("bytecode", bytecode_mod);
     ir_mod.addImport("source", source_mod);
 
-    backend_mod.addImport("platform", platform_mod);
     backend_mod.addImport("common", common_mod);
     backend_mod.addImport("core", core_mod);
     backend_mod.addImport("bytecode", bytecode_mod);
     backend_mod.addImport("ir", ir_mod);
 
-    isa_mod.addImport("platform", platform_mod);
-
-    machine_mod.addImport("platform", platform_mod);
     machine_mod.addImport("core", core_mod);
     machine_mod.addImport("abi", abi_mod);
     machine_mod.addImport("assembler", assembler_mod);
     machine_mod.addImport("common", common_mod);
 
     main_mod.addImport("ribbon_language", ribbon_mod);
-    main_mod.addImport("platform", platform_mod);
-    main_mod.addImport("common", common_mod);
     main_mod.addImport("repl", repl_mod);
 
-    source_mod.addImport("platform", platform_mod);
     source_mod.addImport("common", common_mod);
     source_mod.addImport("rg", rg_mod);
 
-    meta_language_mod.addImport("platform", platform_mod);
     meta_language_mod.addImport("rg", rg_mod);
     meta_language_mod.addImport("common", common_mod);
     meta_language_mod.addImport("source", source_mod);
@@ -289,13 +270,14 @@ pub fn build(b: *std.Build) !void {
     ribbon_mod.addImport("bytecode", bytecode_mod);
     ribbon_mod.addImport("interpreter", interpreter_mod);
     ribbon_mod.addImport("ir", ir_mod);
+    ribbon_mod.addImport("binary", binary_mod);
     ribbon_mod.addImport("backend", backend_mod);
     ribbon_mod.addImport("machine", machine_mod);
     ribbon_mod.addImport("meta_language", meta_language_mod);
     ribbon_mod.addImport("source", source_mod);
+    ribbon_mod.addImport("common", common_mod);
 
     bc_interp_mod.addImport("ribbon_language", ribbon_mod);
-    bc_interp_mod.addImport("platform", platform_mod);
     bc_interp_mod.addImport("common", common_mod);
     bc_interp_mod.addImport("repl", repl_mod);
 
@@ -346,6 +328,7 @@ pub fn build(b: *std.Build) !void {
     check_step.dependOn(&source_test.step);
     check_step.dependOn(&ribbon_test.step);
     check_step.dependOn(&bc_interp_test.step);
+    check_step.dependOn(&common_test.step);
 
     const test_step = b.step("unit-test", "Run all unit tests");
     test_step.dependOn(&b.addRunArtifact(abi_test).step);
@@ -364,6 +347,7 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&b.addRunArtifact(source_test).step);
     test_step.dependOn(&b.addRunArtifact(ribbon_test).step);
     test_step.dependOn(&b.addRunArtifact(bc_interp_test).step);
+    test_step.dependOn(&b.addRunArtifact(common_test).step);
 
     const docs_step = b.step("docs", "Generate documentation");
 

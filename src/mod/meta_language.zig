@@ -9,7 +9,6 @@ const std = @import("std");
 const log = std.log.scoped(.rml);
 
 const rg = @import("rg");
-const pl = @import("platform");
 const common = @import("common");
 const source = @import("source");
 const core = @import("core");
@@ -25,7 +24,7 @@ pub const CompilerId = backend.ArtifactId;
 
 pub const Context = struct {
     compiler: *backend.Compiler,
-    compilations: pl.UniqueReprArrayMap(CompilerId, *Compilation) = .empty,
+    compilations: common.UniqueReprArrayMap(CompilerId, *Compilation) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) !Context {
         return Context{
@@ -171,7 +170,7 @@ pub const Compilation = struct {
     context: *Context,
     job: *backend.Job,
     arena: std.heap.ArenaAllocator,
-    builtin: pl.StringMap(ir.Ref) = .{},
+    builtin: common.StringMap(ir.Ref) = .{},
 
     pub fn getBuiltin(self: *Compilation, builtin: Builtin) !ir.Ref {
         const gop = try self.builtin.getOrPut(self.arena.allocator(), @tagName(builtin));
@@ -212,7 +211,7 @@ pub const Compilation = struct {
             else if (x < std.math.maxInt(u48) and x >= 0)
                 Value.fromU48(@intCast(x))
             else
-                pl.todo(noreturn, "big int"),
+                common.todo(noreturn, "big int"),
             .char => |x| Value.fromChar(x),
             .string => |x| {
                 // TODO: Value ADT.
@@ -228,7 +227,7 @@ pub const Compilation = struct {
                 });
             },
             .identifier => |x| return self.getLocal(x), // TODO: handle nil, true, false etc
-            .symbol => pl.todo(noreturn, "symbol expr"),
+            .symbol => common.todo(noreturn, "symbol expr"),
             .seq => {
                 // const block = try graph.addLocalStructure(.block, .{
                 //     .parent = self.parentRef(),
@@ -243,17 +242,17 @@ pub const Compilation = struct {
                 // manage local state while building up the sequence.
                 // Most obvious solution is a block-level abstraction here.
 
-                pl.todo(noreturn, "seq expr");
+                common.todo(noreturn, "seq expr");
             },
-            .list => pl.todo(noreturn, "list expr"),
-            .tuple => pl.todo(noreturn, "tuple expr"),
-            .array => pl.todo(noreturn, "array expr"),
-            .compound => pl.todo(noreturn, "compound expr"),
-            .apply => pl.todo(noreturn, "apply expr"),
-            .operator => pl.todo(noreturn, "operator expr"),
-            .decl => pl.todo(noreturn, "decl expr"),
-            .set => pl.todo(noreturn, "set expr"),
-            .lambda => pl.todo(noreturn, "lambda expr"),
+            .list => common.todo(noreturn, "list expr"),
+            .tuple => common.todo(noreturn, "tuple expr"),
+            .array => common.todo(noreturn, "array expr"),
+            .compound => common.todo(noreturn, "compound expr"),
+            .apply => common.todo(noreturn, "apply expr"),
+            .operator => common.todo(noreturn, "operator expr"),
+            .decl => common.todo(noreturn, "decl expr"),
+            .set => common.todo(noreturn, "set expr"),
+            .lambda => common.todo(noreturn, "lambda expr"),
         };
 
         return graph.internStructure(.constant, .{
@@ -263,7 +262,7 @@ pub const Compilation = struct {
     }
 
     pub fn getLocal(self: *Compilation, name: []const u8) !ir.Ref {
-        pl.todo(noreturn, .{ "getLocal", self, name });
+        common.todo(noreturn, .{ "getLocal", self, name });
     }
 };
 
@@ -504,7 +503,7 @@ pub const Value = packed struct(u64) {
     }
 
     /// Construct a value from a character payload.
-    pub fn fromChar(x: pl.Char) Value {
+    pub fn fromChar(x: common.Char) Value {
         return Value{
             .nan_bits = NAN_FILL,
             .tag_bits = .char,
@@ -523,7 +522,7 @@ pub const Value = packed struct(u64) {
 
     /// Construct a value from a string payload.
     pub fn fromSymbol(symbol: [*:0]const u8) Value {
-        std.debug.assert(pl.alignDelta(symbol, 8) == 0);
+        std.debug.assert(common.alignDelta(symbol, 8) == 0);
 
         return Value{
             .nan_bits = NAN_FILL,
@@ -789,7 +788,7 @@ pub const Value = packed struct(u64) {
     }
 
     /// Extract the character payload of a value. See also `forceChar`.
-    pub fn asChar(self: Value) ?pl.Char {
+    pub fn asChar(self: Value) ?common.Char {
         if (!self.isChar()) return null;
 
         return @truncate(self.val_bits.asBits());
@@ -891,7 +890,7 @@ pub const Value = packed struct(u64) {
 
     /// Extract the character payload of a value. See also `asChar`.
     /// * only checked in safe modes
-    pub fn forceChar(self: Value) pl.Char {
+    pub fn forceChar(self: Value) common.Char {
         std.debug.assert(self.isChar());
 
         return @truncate(self.val_bits.asBits());
@@ -987,7 +986,7 @@ pub const Expr = struct {
     source: source.Source,
     /// The attributes of the expression.
     /// These are used to store metadata about the expression.
-    attributes: pl.StringMap(Expr) = .empty,
+    attributes: common.StringMap(Expr) = .empty,
     /// The data of the expression.
     data: Expr.Data,
 
@@ -998,7 +997,7 @@ pub const Expr = struct {
         /// 64-bit signed integer literal.
         int: i64,
         /// Character literal.
-        char: pl.Char,
+        char: common.Char,
         /// String literal.
         string: []const u8,
         /// Variable reference.
@@ -2196,7 +2195,7 @@ pub fn nuds() [10]source.Nud {
                 ) source.SyntaxError!?source.SyntaxTree {
                     log.debug("string: parsing token {}", .{token});
                     try parser.lexer.advance(); // discard beginning quote
-                    var buff: pl.ArrayList(source.SyntaxTree) = .empty;
+                    var buff: common.ArrayList(source.SyntaxTree) = .empty;
                     defer buff.deinit(parser.allocator);
                     while (try parser.lexer.next()) |next_token| {
                         if (next_token.tag == .special and !next_token.data.special.escaped and next_token.data.special.punctuation == token.data.special.punctuation) {
@@ -3118,7 +3117,7 @@ pub fn leds() [17]source.Led {
 }
 
 test "expr_parse" {
-    try pl.snapshotTest(.use_log("expr"), struct {
+    try common.snapshotTest(.use_log("expr"), struct {
         pub fn testExpr(input: []const u8, expect: []const u8) !void {
             _ = .{ input, expect };
             var syn = try getCst(std.testing.allocator, .{}, "test", input) orelse {
@@ -3155,7 +3154,7 @@ test "expr_parse" {
 }
 
 test "cst_parse" {
-    try pl.snapshotTest(.use_log("cst"), struct {
+    try common.snapshotTest(.use_log("cst"), struct {
         pub fn testCst(input: []const u8, expect: []const u8) !void {
             _ = .{ input, expect };
             var syn = try getCst(std.testing.allocator, .{}, "test", input) orelse {

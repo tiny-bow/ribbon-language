@@ -1,33 +1,143 @@
-//! # Core
+//! # core
 //! The core module is a namespace containing the runtime bytecode representation,
 //! as well as the Ribbon virtual machine's `Fiber` implementation,
 //! and their supporting data structures.
-const Core = @This();
+const core = @This();
 
 const std = @import("std");
-const log = std.log.scoped(.Core);
+const log = std.log.scoped(.core);
 
-const pl = @import("platform");
 const common = @import("common");
 const Id = common.Id;
 const Buffer = common.Buffer;
 const Stack = common.Stack;
 
+const build_info = @import("build_info");
+
 test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-/// Set of `platform.MAX_REGISTERS` virtual registers for a function call.
-pub const RegisterArray: type = [pl.MAX_REGISTERS]RegisterBits;
+/// The exact semantic version of the Ribbon language this module was built for.
+pub const VERSION = build_info.version;
+
+/// The size of a virtual opcode, in bytes.
+pub const OPCODE_SIZE = 2;
+
+/// The size of a virtual opcode, in bits.
+pub const OPCODE_SIZE_BITS = common.bitsFromBytes(OPCODE_SIZE);
+
+/// The alignment of bytecode instructions.
+pub const BYTECODE_ALIGNMENT = 8;
+
+/// The size of the data stack in words.
+pub const DATA_STACK_SIZE = common.bytesFromMegabytes(1) / 8;
+/// The size of the call stack in frames.
+pub const CALL_STACK_SIZE = 1024;
+/// The size of the set stack in frames.
+pub const SET_STACK_SIZE = 4096;
+
+/// The size of a register in bits.
+pub const REGISTER_SIZE_BITS = 64;
+/// The size of a register in bytes.
+pub const REGISTER_SIZE_BYTES = 8;
+/// The maximum number of registers.
+pub const MAX_REGISTERS = 255;
+/// The maximum number of unique effect types within a ribbon runtime instance.
+pub const MAX_EFFECT_TYPES = std.math.maxInt(u16);
+
+// The number of bits used for symbolic identity of module level values.
+pub const STATIC_ID_BITS = common.bitsFromBytes(STATIC_ID_BYTES);
+/// The number of bytes used for symbolic identity of module level values.
+pub const STATIC_ID_BYTES = 4;
+/// The number of bits used for symbolic identity of local values.
+pub const LOCAL_ID_BITS = common.bitsFromBytes(LOCAL_ID_BYTES);
+/// The number of bytes used for symbolic identity of local values.
+pub const LOCAL_ID_BYTES = 2;
+
+/// The maximum alignment value.
+pub const MAX_ALIGNMENT = 4096;
+
+/// The maximum size of a bytecode section.
+pub const MAX_VIRTUAL_CODE_SIZE = common.bytesFromMegabytes(64);
+
+/// The maximum size of a jit-compiled machine code section.
+pub const MAX_MACHINE_CODE_SIZE = common.bytesFromMegabytes(64);
+
+/// The C ABI we're using.
+pub const ABI: Abi = if (@import("builtin").os.tag == .windows) .win else .sys_v;
+
+/// Description of the C ABI used by the current hardware.
+pub const Abi = enum {
+    sys_v,
+    win,
+
+    /// The number of registers used for passing arguments under this Abi.
+    pub fn argumentRegisterCount(self: Abi) usize {
+        return switch (self) {
+            .sys_v => 6,
+            .win => 4,
+        };
+    }
+};
+
+/// The maximum number of arguments we allow to be passed in `callForeign`.
+pub const MAX_FOREIGN_ARGUMENTS = 16;
+
+/// Call a foreign function with a dynamic number of arguments.
+/// * It is (safety-checked) undefined behavior to call this function with slices of a length more than `MAX_FOREIGN_ARGUMENTS`.
+pub fn callForeign(fnPtr: *const anyopaque, args: []const usize) usize {
+    return switch (args.len) {
+        0 => @as(*const fn () usize, @alignCast(@ptrCast(fnPtr)))(),
+        1 => @as(*const fn (usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0]),
+        2 => @as(*const fn (usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1]),
+        3 => @as(*const fn (usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2]),
+        4 => @as(*const fn (usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3]),
+        5 => @as(*const fn (usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4]),
+        6 => @as(*const fn (usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5]),
+        7 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6]),
+        8 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]),
+        9 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]),
+        10 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]),
+        11 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]),
+        12 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]),
+        13 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]),
+        14 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]),
+        15 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]),
+        16 => @as(*const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]),
+        else => unreachable,
+    };
+}
+
+/// Whether runtime safety checks are enabled.
+pub const RUNTIME_SAFETY: bool = switch (@import("builtin").mode) {
+    .Debug, .ReleaseSafe => true,
+    .ReleaseFast, .ReleaseSmall => false,
+};
+
+/// The size of a page.
+pub const PAGE_SIZE = common.PAGE_SIZE;
+
+comptime {
+    if (PAGE_SIZE < MAX_ALIGNMENT) {
+        @compileError("Unsupported target; the page size must be comptime known, and at least as large as MAX_ALIGNMENT");
+    }
+}
+
+/// Represents the bit size of an integer type; we allow arbitrary bit-width integers, from 0 up to the max `Alignment`.
+pub const IntegerBitSize: type = std.math.IntFittingRange(0, MAX_ALIGNMENT);
+
+/// Set of `core.MAX_REGISTERS` virtual registers for a function call.
+pub const RegisterArray: type = [core.MAX_REGISTERS]RegisterBits;
 
 /// A stack allocator for virtual register arrays.
-pub const RegisterStack: type = Stack.new(RegisterArray, pl.CALL_STACK_SIZE);
+pub const RegisterStack: type = Stack.new(RegisterArray, CALL_STACK_SIZE);
 /// A stack allocator, allocated in 64-bit word increments; for arbitrary data within a fiber.
-pub const DataStack: type = Stack.new(RegisterBits, pl.DATA_STACK_SIZE);
+pub const DataStack: type = Stack.new(RegisterBits, DATA_STACK_SIZE);
 /// A stack allocator; for Rvm's function call frames within a fiber.
-pub const CallStack: type = Stack.new(CallFrame, pl.CALL_STACK_SIZE);
+pub const CallStack: type = Stack.new(CallFrame, CALL_STACK_SIZE);
 /// A stack allocator; for Rvm's effect handler set frames within a fiber.
-pub const SetStack: type = Stack.new(SetFrame, pl.SET_STACK_SIZE);
+pub const SetStack: type = Stack.new(SetFrame, SET_STACK_SIZE);
 
 /// The type of a relative jump offset within a Ribbon bytecode program.
 pub const InstructionOffset = i32;
@@ -40,9 +150,9 @@ pub const InstructionAddr: type = [*]const InstructionBits;
 pub const MutInstructionAddr: type = [*]InstructionBits;
 
 /// The bits of an encoded instruction, represented by an unsigned integer of the same size.
-pub const InstructionBits: type = std.meta.Int(.unsigned, pl.bitsFromBytes(pl.BYTECODE_ALIGNMENT));
+pub const InstructionBits: type = std.meta.Int(.unsigned, common.bitsFromBytes(BYTECODE_ALIGNMENT));
 /// The bits of a register, represented by a 64-bit unsigned integer.
-pub const RegisterBits: type = std.meta.Int(.unsigned, pl.REGISTER_SIZE_BITS);
+pub const RegisterBits: type = std.meta.Int(.unsigned, REGISTER_SIZE_BITS);
 
 /// A bytecode binary unit. Not necessarily self contained; may reference other units.
 /// Light wrapper for `core.Header`.
@@ -55,20 +165,23 @@ pub const Bytecode = packed struct(u64) {
     /// De-initialize the bytecode unit, freeing the memory that it owns.
     pub fn deinit(self: Bytecode, allocator: std.mem.Allocator) void {
         const base: [*]const u8 = @ptrCast(self.header);
-        const buf: []align(pl.PAGE_SIZE) const u8 = @alignCast(base[0 .. @sizeOf(Header) + self.header.size]);
+        const buf: []align(PAGE_SIZE) const u8 = @alignCast(base[0 .. @sizeOf(Header) + self.header.size]);
         allocator.free(buf);
     }
 };
 
-pub const StaticId = Id.of(anyopaque, pl.STATIC_ID_BITS);
-pub const ConstantId = Id.of(Constant, pl.STATIC_ID_BITS);
-pub const GlobalId = Id.of(Global, pl.STATIC_ID_BITS);
-pub const FunctionId = Id.of(Function, pl.STATIC_ID_BITS);
-pub const BuiltinAddressId = Id.of(BuiltinAddress, pl.STATIC_ID_BITS);
-pub const ForeignAddressId = Id.of(ForeignAddress, pl.STATIC_ID_BITS);
-pub const HandlerId = Id.of(Handler, pl.STATIC_ID_BITS);
-pub const EffectId = Id.of(Effect, pl.STATIC_ID_BITS);
-pub const HandlerSetId = Id.of(HandlerSet, pl.STATIC_ID_BITS);
+pub const Mutability = common.Mutability;
+pub const Signedness = common.Signedness;
+
+pub const StaticId = Id.of(anyopaque, STATIC_ID_BITS);
+pub const ConstantId = Id.of(Constant, STATIC_ID_BITS);
+pub const GlobalId = Id.of(Global, STATIC_ID_BITS);
+pub const FunctionId = Id.of(Function, STATIC_ID_BITS);
+pub const BuiltinAddressId = Id.of(BuiltinAddress, STATIC_ID_BITS);
+pub const ForeignAddressId = Id.of(ForeignAddress, STATIC_ID_BITS);
+pub const HandlerId = Id.of(Handler, STATIC_ID_BITS);
+pub const EffectId = Id.of(Effect, STATIC_ID_BITS);
+pub const HandlerSetId = Id.of(HandlerSet, STATIC_ID_BITS);
 
 pub fn isTypedStaticId(comptime T: type) bool {
     comptime return switch (T) {
@@ -107,7 +220,7 @@ pub fn bitSizeOfStaticFromKind(kind: SymbolKind) usize {
     } else unreachable;
 }
 
-pub fn alignOfStaticFromKind(kind: SymbolKind) pl.Alignment {
+pub fn alignOfStaticFromKind(kind: SymbolKind) Alignment {
     inline for (comptime std.meta.fieldNames(SymbolKind)) |name| {
         const sym = comptime @field(SymbolKind, name);
         const T = SymbolKind.toType(sym);
@@ -146,12 +259,24 @@ pub fn IdFromSymbolKind(comptime kind: SymbolKind) type {
     };
 }
 
-pub const UpvalueId = Id.of(Upvalue, pl.LOCAL_ID_BITS);
+pub const UpvalueId = Id.of(Upvalue, LOCAL_ID_BITS);
+
+/// Represents the alignment of a value type; the max alignment is the minimum page size supported.
+///
+/// `0` is not an applicable *machine* alignment, but may appear in some cases, such as on zero-sized types.
+/// It generally indicates a lack of a need for an address,
+/// while an alignment of `1` indicates an address is required, but it may be totally arbitrary.
+/// Successive integers (generally powers of two) indicate that proper use of a data structure
+/// relies on being placed at an address that is a multiple of that value.
+pub const Alignment: type = std.math.IntFittingRange(0, MAX_ALIGNMENT);
+
+/// Represents the size of a value type; the max size is determined by the maximum alignment's bit representation.
+pub const Size: type = std.meta.Int(.unsigned, 64 - @bitSizeOf(Alignment));
 
 /// Simple value layout for Ribbon's constant and global values.
 pub const Layout = packed struct {
-    size: pl.Size,
-    alignment: pl.Alignment,
+    size: Size,
+    alignment: Alignment,
 
     /// The default `Layout`, no size, align 1.
     pub const none: Layout = .{ .size = 0, .alignment = 1 };
@@ -187,7 +312,7 @@ pub const Layout = packed struct {
         }
 
         // Find max alignment and populate indices
-        var max_alignment: pl.Alignment = 1;
+        var max_alignment: Alignment = 1;
         for (data, 0..) |lyt, i| {
             indices[i] = i; // Populate with original indices 0, 1, 2...
             if (lyt.alignment > max_alignment) {
@@ -210,10 +335,10 @@ pub const Layout = packed struct {
         // Calculate layout offsets
         // We iterate using the sorted `indices` to determine the layout order,
         // but we write the results to the `offsets` slice at the correct original index.
-        var current_size: pl.Size = 0;
+        var current_size: Size = 0;
         for (indices) |original_index| {
             const lyt = data[original_index];
-            const aligned_offset = pl.alignTo(current_size, lyt.alignment);
+            const aligned_offset = common.alignTo(current_size, lyt.alignment);
 
             offsets[original_index] = aligned_offset;
 
@@ -221,7 +346,7 @@ pub const Layout = packed struct {
         }
 
         // Finalization
-        const final_size = pl.alignTo(current_size, max_alignment);
+        const final_size = common.alignTo(current_size, max_alignment);
 
         return Layout{
             .size = final_size,
@@ -241,7 +366,7 @@ pub const Constant = packed struct {
 
     pub fn asPtr(self: *const Constant) [*]const u8 {
         const base = @as([*]const u8, @ptrCast(self)) + @sizeOf(Constant);
-        const padding = pl.alignDelta(base, self.layout.alignment);
+        const padding = common.alignDelta(base, self.layout.alignment);
 
         return base + padding;
     }
@@ -262,7 +387,7 @@ pub const Global = packed struct {
 
     pub fn asPtr(self: *const Global) [*]u8 {
         const base = @as([*]u8, @constCast(@ptrCast(self))) + @sizeOf(Global);
-        const padding = pl.alignDelta(base, self.layout.alignment);
+        const padding = common.alignDelta(base, self.layout.alignment);
 
         return base + padding;
     }
@@ -274,7 +399,7 @@ pub const Global = packed struct {
 
 /// Designates a specific Ribbon effect, runtime-wide.
 /// EffectId is used to bind to one of these within individual bytecode units.
-pub const Effect = enum(std.math.IntFittingRange(0, pl.MAX_EFFECT_TYPES)) {
+pub const Effect = enum(std.math.IntFittingRange(0, MAX_EFFECT_TYPES)) {
     _,
 
     pub fn toIndex(self: Effect) std.meta.Tag(Effect) {
@@ -653,7 +778,7 @@ pub const SymbolTable = extern struct {
 
     /// Get the id of a symbol by name.
     pub fn lookupId(self: SymbolTable, name: []const u8) ?StaticId {
-        const hash = pl.hash64(name);
+        const hash = common.hash64(name);
 
         for (self.keySlice(), 0..) |key, i| {
             if (key.hash != hash) {
@@ -713,7 +838,7 @@ pub const Header = extern struct {
 };
 
 /// A reference to a virtual register.
-pub const Register = enum(std.math.IntFittingRange(0, pl.MAX_REGISTERS)) {
+pub const Register = enum(std.math.IntFittingRange(0, MAX_REGISTERS)) {
     // zig fmt: off
     r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, r16, r17, r18, r19, r20,
     r21, r22, r23, r24, r25, r26, r27, r28, r29, r30, r31, r32, r33, r34, r35, r36, r37, r38, r39,
@@ -751,7 +876,7 @@ pub const Register = enum(std.math.IntFittingRange(0, pl.MAX_REGISTERS)) {
     }
 
     pub fn getOffset(self: Register) BackingInteger {
-        return @intFromEnum(self) * pl.REGISTER_SIZE_BYTES;
+        return @intFromEnum(self) * REGISTER_SIZE_BYTES;
     }
 
     pub fn format(self: Register, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -845,7 +970,7 @@ pub const BuiltinFunction = fn (*mem.FiberHeader) callconv(.c) BuiltinSignal;
 /// as the jit is expected to disown the memory upon finalization.
 pub const AllocatedBuiltinFunction = extern struct {
     /// The function's bytes.
-    ptr: [*]align(pl.PAGE_SIZE) const u8,
+    ptr: [*]align(PAGE_SIZE) const u8,
     /// The function's length in bytes.
     ///
     /// Note that this is not necessarily the length of the mapped memory, as it is page aligned.
@@ -853,11 +978,11 @@ pub const AllocatedBuiltinFunction = extern struct {
 
     /// `munmap` all pages of a native function, freeing the memory.
     pub fn deinit(self: AllocatedBuiltinFunction) void {
-        std.posix.munmap(@alignCast(self.ptr[0..pl.alignTo(self.len, pl.PAGE_SIZE)]));
+        std.posix.munmap(@alignCast(self.ptr[0..common.alignTo(self.len, PAGE_SIZE)]));
     }
 
     /// Get the function's machine code as a slice.
-    pub fn toSlice(self: AllocatedBuiltinFunction) []align(pl.PAGE_SIZE) const u8 {
+    pub fn toSlice(self: AllocatedBuiltinFunction) []align(PAGE_SIZE) const u8 {
         return self.ptr[0..self.len];
     }
 };
@@ -892,7 +1017,7 @@ pub const mem = comptime_memorySize: {
         /// The effect handler set stack - manages lexically scoped effect handler sets.
         sets: SetStack,
         /// The evidence buffer - stores bindings to currently accessible effect handlers by effect id + linked lists via Evidence
-        evidence: [pl.MAX_EFFECT_TYPES]?*Evidence,
+        evidence: [MAX_EFFECT_TYPES]?*Evidence,
         /// The cause of a trap, if any was known. Pointee-type depends on the trap.
         /// * TODO: error handling function that covers this variance
         trap: ?*const anyopaque,
@@ -913,7 +1038,7 @@ pub const mem = comptime_memorySize: {
     for (FIELDS) |fieldName| {
         const S = @FieldType(FIBER_HEADER, fieldName);
 
-        const alignment, const size = if (pl.canHaveDecls(S)) .{ S.mem.ALIGNMENT, S.mem.SIZE } else continue;
+        const alignment, const size = if (common.canHaveDecls(S)) .{ S.mem.ALIGNMENT, S.mem.SIZE } else continue;
 
         if (alignment != REQUIRED_ALIGNMENT) {
             @compileError(std.fmt.comptimePrint(
@@ -936,7 +1061,7 @@ pub const mem = comptime_memorySize: {
         total += size;
     }
 
-    std.debug.assert(pl.alignDelta(total, REQUIRED_ALIGNMENT) == 0);
+    std.debug.assert(common.alignDelta(total, REQUIRED_ALIGNMENT) == 0);
 
     const finalOffsets = final_offsets: {
         var out: [k]comptime_int = undefined;
@@ -1009,7 +1134,7 @@ pub const mem = comptime_memorySize: {
 };
 
 comptime {
-    const mb = pl.megabytesFromBytes(mem.SIZE);
+    const mb = common.megabytesFromBytes(mem.SIZE);
 
     if (mb > 5.0) {
         @compileError(std.fmt.comptimePrint("Fiber total size is {d:.2}mb", .{mb}));

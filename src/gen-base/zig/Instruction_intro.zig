@@ -12,7 +12,7 @@
 const Instruction = @This();
 const core = @import("core");
 const Id = @import("common").Id;
-const pl = @import("platform");
+const common = @import("common");
 const std = @import("std");
 
 const log = std.log.scoped(.Instruction);

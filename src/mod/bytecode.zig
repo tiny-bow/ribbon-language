@@ -10,7 +10,6 @@ const bytecode = @This();
 const std = @import("std");
 const log = std.log.scoped(.bytecode);
 
-const pl = @import("platform");
 const common = @import("common");
 const core = @import("core");
 const Id = common.Id;
@@ -93,7 +92,7 @@ pub const TableBuilder = struct {
     statics: StaticMap = .empty,
 
     /// A map of static values that are referenced by the header in a `TableBuilder`.
-    pub const StaticMap = pl.UniqueReprMap(core.StaticId, Entry);
+    pub const StaticMap = common.UniqueReprMap(core.StaticId, Entry);
 
     /// An entry in the `TableBuilder.statics` map, which can either be a `DataBuilder` or a `FunctionBuilder`.
     pub const Entry = struct {
@@ -159,7 +158,7 @@ pub const TableBuilder = struct {
     pub fn createHeaderEntry(self: *TableBuilder, comptime kind: core.SymbolKind, name: ?[]const u8) error{ BadEncoding, OutOfMemory }!core.IdFromSymbolKind(kind) {
         // get the next static id
         const static_id = self.header.getNextId();
-        const typed_id = static_id.bitcast(kind.toType(), pl.STATIC_ID_BITS);
+        const typed_id = static_id.bitcast(kind.toType(), core.STATIC_ID_BITS);
 
         // create a location for the static value
         const func_loc = self.locations.localLocationId(static_id);
@@ -435,7 +434,7 @@ pub const HeaderBuilder = struct {
 /// * This is a lower-level utility api used by the `HeaderBuilder`.
 pub const SymbolTableBuilder = struct {
     /// Binds fully-qualified names to AddressTable ids
-    map: pl.StringArrayMap(core.StaticId) = .empty,
+    map: common.StringArrayMap(core.StaticId) = .empty,
 
     /// Deinitializes the symbol table, freeing all memory.
     pub fn deinit(self: *SymbolTableBuilder, allocator: std.mem.Allocator) void {
@@ -520,7 +519,7 @@ pub const SymbolTableBuilder = struct {
             const new_name = try encoder.dupe(u8, entry.key_ptr.*);
 
             new_keys[i] = .{
-                .hash = pl.hash64(new_name),
+                .hash = common.hash64(new_name),
                 .name = .fromSlice(new_name),
             };
 
@@ -545,7 +544,7 @@ pub const SymbolTableBuilder = struct {
 /// Like the rest of the `bytecode` module infrastructure, this supports fixups, which are used to resolve addresses that are not known at the time of encoding.
 /// * This is a lower-level utility api used by the `HeaderBuilder`.
 pub const AddressTableBuilder = struct {
-    data: pl.MultiArrayList(struct {
+    data: common.MultiArrayList(struct {
         kind: core.SymbolKind,
         address: Entry,
     }) = .empty,
@@ -556,7 +555,7 @@ pub const AddressTableBuilder = struct {
         absolute: *const anyopaque,
         inlined: struct {
             bytes: []const u8,
-            alignment: pl.Alignment,
+            alignment: core.Alignment,
         },
     };
 
@@ -760,21 +759,21 @@ pub const DataBuilder = struct {
     /// * This must either be a `core.ConstantId` or a `core.GlobalId`.
     id: core.StaticId = .fromInt(0),
     /// The alignment to give the final data buffer. A value <=1 indicates no preference.
-    alignment: pl.Alignment = 0,
+    alignment: core.Alignment = 0,
     /// A map of data locations to their references.
     /// * This is used to track locations in the data builder's memory that are yet to be determined.
     /// * The map is keyed by `DataLocation`, which is a symbolic type for locations in the data builder's memory.
     /// * The values are `DataRef`, which can either be a reference to the data builder's own memory or a standard `FixupRef`.
-    locations: pl.UniqueReprMap(DataLocation, ?DataRef) = .empty,
+    locations: common.UniqueReprMap(DataLocation, ?DataRef) = .empty,
     /// A list of data fixups that need to be resolved when the data is encoded.
     /// * This is used to track fixups that reference data within the data builder's own memory.
-    fixups: pl.ArrayList(DataFixup) = .empty,
+    fixups: common.ArrayList(DataFixup) = .empty,
 
     /// Purely symbolic type for id creation (`DataBuilder.DataLocation`).
     pub const DLoc = struct {};
 
     /// Represents a location in the data builder's memory that is yet to be determined when the location is initially referenced.
-    pub const DataLocation = Id.of(DLoc, pl.STATIC_ID_BITS);
+    pub const DataLocation = Id.of(DLoc, core.STATIC_ID_BITS);
 
     /// Data fixups are distinct from standard fixups in that:
     /// * `from` is always an offset into their own temporary memory, rather than an Encoder's working buffer
@@ -979,7 +978,7 @@ pub const DataBuilder = struct {
     }
 
     /// Get the current written region of the data builder.
-    pub fn getWrittenRegion(self: *const DataBuilder) []align(pl.PAGE_SIZE) u8 {
+    pub fn getWrittenRegion(self: *const DataBuilder) []align(core.PAGE_SIZE) u8 {
         return self.writer.getWrittenRegion();
     }
 
@@ -1026,7 +1025,7 @@ pub const DataBuilder = struct {
     }
 
     /// Allocates an aligned byte buffer from the address space of the data builder.
-    pub fn alignedAlloc(self: *DataBuilder, alignment: pl.Alignment, len: usize) AllocWriter.Error![]u8 {
+    pub fn alignedAlloc(self: *DataBuilder, alignment: core.Alignment, len: usize) AllocWriter.Error![]u8 {
         return self.writer.alignedAlloc(alignment, len);
     }
 
@@ -1126,30 +1125,30 @@ pub const DataBuilder = struct {
     }
 
     /// Pushes zero bytes (if necessary) to align the current offset of the builder to the provided alignment value.
-    pub fn alignTo(self: *DataBuilder, alignment: pl.Alignment) AllocWriter.Error!void {
-        const delta = pl.alignDelta(self.writer.cursor, alignment);
+    pub fn alignTo(self: *DataBuilder, alignment: core.Alignment) AllocWriter.Error!void {
+        const delta = common.alignDelta(self.writer.cursor, alignment);
         try self.writer.writeByteNTimes(0, delta);
     }
 
     /// Asserts that the current offset of the builder is aligned to the given value.
-    pub fn ensureAligned(self: *DataBuilder, alignment: pl.Alignment) DataBuilder.Error!void {
-        if (pl.alignDelta(self.writer.cursor, alignment) != 0) {
+    pub fn ensureAligned(self: *DataBuilder, alignment: core.Alignment) DataBuilder.Error!void {
+        if (common.alignDelta(self.writer.cursor, alignment) != 0) {
             return error.UnalignedWrite;
         }
     }
 };
 
 /// A unique identifier for a local variable within a function.
-pub const LocalId = Id.of(core.Layout, pl.LOCAL_ID_BITS);
+pub const LocalId = Id.of(core.Layout, core.LOCAL_ID_BITS);
 
 /// A map from LocalId to core.Layout, representing the local variables of a function.
-pub const LocalMap = pl.UniqueReprArrayMap(LocalId, core.Layout);
+pub const LocalMap = common.UniqueReprArrayMap(LocalId, core.Layout);
 
 /// A map from LocalId to a stack operand offset. Used by address-of instructions to resolve local variable addresses.
-pub const LocalFixupMap = pl.UniqueReprArrayMap(LocalId, u64);
+pub const LocalFixupMap = common.UniqueReprArrayMap(LocalId, u64);
 
 /// A map from BlockId to BlockBuilder pointers, representing the basic blocks of a function.
-pub const BlockMap = pl.UniqueReprMap(BlockId, *BlockBuilder);
+pub const BlockMap = common.UniqueReprMap(BlockId, *BlockBuilder);
 
 /// A simple builder API for bytecode functions.
 pub const FunctionBuilder = struct {
@@ -1294,7 +1293,7 @@ pub const FunctionBuilder = struct {
         // write the function body
 
         // ensure the function's instructions are aligned
-        try encoder.alignTo(@alignOf(core.InstructionBits));
+        try encoder.alignTo(core.BYTECODE_ALIGNMENT);
 
         const base_rel = encoder.getRelativeAddress();
 
@@ -1349,7 +1348,7 @@ pub const SequenceBuilder = struct {
     /// The general allocator used by this sequence builder for collections.
     gpa: std.mem.Allocator,
     /// The collection of instructions in this sequence, in un-encoded form.
-    body: pl.ArrayList(ProtoInstr) = .empty,
+    body: common.ArrayList(ProtoInstr) = .empty,
 
     /// Initialize a new sequence builder with the given allocator.
     pub fn init(gpa: std.mem.Allocator) SequenceBuilder {
@@ -1436,7 +1435,7 @@ pub const SequenceBuilder = struct {
     }
 
     /// Append a call instruction to the sequence.
-    pub fn instrCall(self: *SequenceBuilder, comptime code: Instruction.CallOpCode, data: Instruction.SetType(code.upcast()), args: Buffer.fixed(core.Register, pl.MAX_REGISTERS)) Error!void {
+    pub fn instrCall(self: *SequenceBuilder, comptime code: Instruction.CallOpCode, data: Instruction.SetType(code.upcast()), args: Buffer.fixed(core.Register, core.MAX_REGISTERS)) Error!void {
         try self.proto(.{
             .instruction = .{
                 .code = code.upcast(),
@@ -1459,10 +1458,10 @@ pub const SequenceBuilder = struct {
 pub const BlockId = Id.of(BlockBuilder, 16);
 
 /// A visitor for bytecode blocks, used to track which blocks have been visited during encoding.
-pub const BlockVisitor = pl.Visitor(BlockId);
+pub const BlockVisitor = common.Visitor(BlockId);
 
 /// A queue of bytecode blocks to visit, used by the Block encoder to queue references to jump targets.
-pub const BlockVisitorQueue = pl.VisitorQueue(BlockId);
+pub const BlockVisitorQueue = common.VisitorQueue(BlockId);
 
 /// A bytecode basic block in unencoded form.
 ///
@@ -1528,7 +1527,7 @@ pub const BlockBuilder = struct {
     }
 
     /// Append a call instruction to the block body.
-    pub fn instrCall(self: *BlockBuilder, comptime code: Instruction.CallOpCode, data: Instruction.SetType(code.upcast()), args: Buffer.fixed(core.Register, pl.MAX_REGISTERS)) Encoder.Error!void {
+    pub fn instrCall(self: *BlockBuilder, comptime code: Instruction.CallOpCode, data: Instruction.SetType(code.upcast()), args: Buffer.fixed(core.Register, core.MAX_REGISTERS)) Encoder.Error!void {
         try self.ensureUnterminated();
         try self.body.instrCall(code, data, args);
     }
@@ -1608,7 +1607,7 @@ pub const BlockBuilder = struct {
             @compileError("BlockBuilder: out of sync with ISA, unhandled branch opcodes");
         }
 
-        if (pl.indexOfBuf(u8, br_instr_names, "br") == null or pl.indexOfBuf(u8, br_instr_names, "br_if") == null) {
+        if (common.indexOfBuf(u8, br_instr_names, "br") == null or common.indexOfBuf(u8, br_instr_names, "br_if") == null) {
             @compileError("BlockBuilder: out of sync with ISA, branch opcode names changed");
         }
     }
@@ -1630,7 +1629,7 @@ pub const ProtoInstr = struct {
         /// The immediate value half of a 2-word instruction.
         wide_imm: u64,
         /// The arguments of variable-width call instructions.
-        call_args: Buffer.fixed(core.Register, pl.MAX_REGISTERS),
+        call_args: Buffer.fixed(core.Register, core.MAX_REGISTERS),
         /// The destination(s) of branch instructions.
         branch_target: struct { BlockId, ?BlockId },
     };
@@ -1642,7 +1641,7 @@ pub const ProtoInstr = struct {
     /// * Also available are convenience methods in `Encoder` for appending instructions directly.
     /// * The `queue` is used to track branch targets and ensure they are visited in the correct order.
     pub fn encode(self: *const ProtoInstr, queue: *BlockVisitorQueue, local_fixups: *const LocalFixupMap, encoder: *Encoder) Encoder.Error!void {
-        try encoder.ensureAligned(pl.BYTECODE_ALIGNMENT);
+        try encoder.ensureAligned(core.BYTECODE_ALIGNMENT);
 
         var instr = self.instruction;
 
@@ -1668,7 +1667,7 @@ pub const ProtoInstr = struct {
                     //    - For each handler set, for each handler, visit the handler function.
                     //    - Call its encode method with the current function's local fixup map.
                     // 4. This function can then take ?upvalue_fixups and local_fixups.
-                    pl.todo(noreturn, "NYI");
+                    common.todo(noreturn, "NYI");
                 },
 
                 .addr_g,
@@ -1745,7 +1744,7 @@ pub const ProtoInstr = struct {
             },
         }
 
-        try encoder.alignTo(pl.BYTECODE_ALIGNMENT);
+        try encoder.alignTo(core.BYTECODE_ALIGNMENT);
     }
 };
 

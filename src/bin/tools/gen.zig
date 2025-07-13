@@ -6,7 +6,7 @@ const abi = @import("abi");
 const assembler = @import("assembler");
 const core = @import("core");
 const isa = @import("isa");
-const pl = @import("platform");
+const common = @import("common");
 
 const log = std.log.scoped(.gen);
 
@@ -117,22 +117,22 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
 
                 if (std.mem.eql(u8, mnemonic.name, "call")) {
                     is_call[opcode] = true;
-                    std.debug.print("call: {}\n", .{instruction.*});
+                    log.debug("call: {}\n", .{instruction.*});
                 } else if (std.mem.eql(u8, mnemonic.name, "br")) {
                     is_branch[opcode] = true;
-                    std.debug.print("branch: {}\n", .{instruction.*});
+                    log.debug("branch: {}\n", .{instruction.*});
                 } else if (std.mem.eql(u8, mnemonic.name, "addr")) {
                     is_addr[opcode] = true;
-                    std.debug.print("address: {}\n", .{instruction.*});
+                    log.debug("address: {}\n", .{instruction.*});
                 } else if (instruction.terminal) {
                     is_term[opcode] = true;
-                    std.debug.print("terminator: {}\n", .{instruction.*});
+                    log.debug("terminator: {}\n", .{instruction.*});
                 } else operands: for (instruction.operands, 0..) |operand, i| {
                     const operandSize = operand.sizeOf();
 
                     if (isa.wordBoundaryHeuristic(operand, wordOffset)) {
                         is_wide[opcode] = true;
-                        std.debug.print("wide: {}\n", .{instruction.*});
+                        log.debug("wide: {}\n", .{instruction.*});
                         var operand_name = std.ArrayList(u8).init(std.heap.page_allocator);
                         _ = try isa.formatOperand(i, instruction.operands, operand_name.writer());
 
@@ -144,7 +144,7 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
                     wordOffset += operandSize;
                 } else {
                     is_basic[opcode] = true;
-                    std.debug.print("basic: {}\n", .{instruction.*});
+                    log.debug("basic: {}\n", .{instruction.*});
                 }
 
                 opcode += 1;
@@ -905,7 +905,7 @@ fn paste(generatorName: []const u8, header: []const u8, commentPre: []const u8, 
     // the templates have a small disclaimer comment at the top, skip it.
     for (0..3) |_| try reader.skipUntilDelimiterOrEof('\n');
 
-    try pl.stream(reader, writer);
+    try common.stream(reader, writer);
 
     try writer.writeAll("\n");
 }
@@ -1292,7 +1292,7 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.C
 }
 
 fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
-    try writer.print("%define OP_SIZE 0x{x}\n\n", .{pl.OPCODE_SIZE});
+    try writer.print("%define OP_SIZE 0x{x}\n\n", .{core.OPCODE_SIZE});
 
     inline for (comptime std.meta.fieldNames(core.mem.FiberHeader)) |fieldName| {
         const baseOffset = @offsetOf(core.mem.FiberHeader, fieldName);
@@ -1303,7 +1303,7 @@ fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
 
         const T: type = @FieldType(core.mem.FiberHeader, fieldName);
 
-        if (comptime pl.hasDecl(T, .IS_RIBBON_STACK)) {
+        if (comptime common.hasDecl(T, .IS_RIBBON_STACK)) {
             try writer.print("%define Fiber.{s}.base 0x{x}\n", .{ fieldName, baseOffset + @offsetOf(T, "base") });
             try writer.print("%define Fiber.{s}.limit 0x{x}\n", .{ fieldName, baseOffset + @offsetOf(T, "limit") });
         }
@@ -1510,7 +1510,7 @@ fn generateMainAssembly(categories: []const isa.Category, allocator: std.mem.All
         }
     }
 
-    try pl.stream(reader, writer);
+    try common.stream(reader, writer);
 
     const impls = try parseInstructionsFile(allocator, categories, @embedFile("instructions.asm"));
 

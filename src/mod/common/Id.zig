@@ -2,8 +2,7 @@
 const Id = @This();
 
 const std = @import("std");
-
-const pl = @import("platform");
+const common = @import("../common.zig");
 
 test {
     std.testing.refAllDeclsRecursive(@This());
@@ -82,7 +81,7 @@ pub fn Table(comptime T: type, comptime id_size: comptime_int) type {
         const Self = @This();
         pub const Id = of(T, id_size);
 
-        data: pl.MultiArrayList(T) = .empty,
+        data: common.MultiArrayList(T) = .empty,
 
         pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Self {
             var self = Self.empty;
@@ -98,7 +97,7 @@ pub fn Table(comptime T: type, comptime id_size: comptime_int) type {
         }
 
         pub fn deinitData(self: *Self, allocator: std.mem.Allocator) void {
-            if (comptime pl.hasDecl(T, .deinit)) {
+            if (comptime common.hasDecl(T, .deinit)) {
                 for (0..self.data.len) |i| {
                     var a = self.data.get(i);
                     a.deinit(allocator);
@@ -151,18 +150,18 @@ pub fn Table(comptime T: type, comptime id_size: comptime_int) type {
 ///
 /// Default initialization of this struct is deprecated; use `.empty` instead.
 ///
-/// See `platform.HashMap` and `IdHashCtx` for detailed docs.
+/// See `common.HashMap` and `IdHashCtx` for detailed docs.
 pub fn Map(comptime K: type, comptime V: type, comptime LOAD_PERCENTAGE: u64) type {
-    return pl.HashMap(K, V, HashCtx(K), LOAD_PERCENTAGE);
+    return common.HashMap(K, V, HashCtx(K), LOAD_PERCENTAGE);
 }
 
 /// `HashSet` specialized to types compatible with `IdHashCtx`.
 ///
 /// Default initialization of this struct is deprecated; use `.empty` instead.
 ///
-/// See `platform.HashSet` and `IdHashCtx` for detailed docs.
+/// See `common.HashSet` and `IdHashCtx` for detailed docs.
 pub fn Set(comptime T: type, comptime LOAD_PERCENTAGE: u64) type {
-    return pl.HashSet(T, HashCtx(T), LOAD_PERCENTAGE);
+    return common.HashSet(T, HashCtx(T), LOAD_PERCENTAGE);
 }
 
 /// Creates a context for hashing and comparing values based on their ids.
@@ -173,7 +172,7 @@ pub fn Set(comptime T: type, comptime LOAD_PERCENTAGE: u64) type {
 /// See `std.meta.hasUniqueRepresentation`.
 pub fn HashCtx(comptime T: type) type {
     comptime {
-        if (!pl.hasDerefField(T, .id)) {
+        if (!common.hasDerefField(T, .id)) {
             @compileError("IdHashCtx: type " ++ @typeName(T) ++ " requires a field named 'id'");
         }
 
@@ -187,7 +186,7 @@ pub fn HashCtx(comptime T: type) type {
             }
 
             pub fn hash(_: @This(), x: T) u64 {
-                return pl.hash64(std.mem.asBytes(&x.id));
+                return common.hash64(std.mem.asBytes(&x.id));
             }
         };
     }

@@ -20,7 +20,7 @@ const binary = @This();
 const std = @import("std");
 const log = std.log.scoped(.binary);
 
-const pl = @import("platform");
+const core = @import("core");
 const common = @import("common");
 const Id = common.Id;
 const AllocWriter = common.AllocWriter;
@@ -37,10 +37,10 @@ pub const Error = std.mem.Allocator.Error || error{
 };
 
 /// Regions are used to scope fixup locations, allowing for multiple functions or blocks to be encoded in the same encoder.
-pub const RegionId = Id.of(Location.RegionMark, pl.STATIC_ID_BITS);
+pub const RegionId = Id.of(Location.RegionMark, core.STATIC_ID_BITS);
 
 /// An identifier that is used to identify a location within a region in the encoded memory.
-pub const OffsetId = Id.of(Location.OffsetMark, pl.STATIC_ID_BITS);
+pub const OffsetId = Id.of(Location.OffsetMark, core.STATIC_ID_BITS);
 
 /// Represents a location in the encoded memory that is referenced by a fixup, but who's relative offset is not known at the time of encoding that fixup.
 pub const Location = packed struct(u64) {
@@ -57,21 +57,21 @@ pub const Location = packed struct(u64) {
 
     /// Create a new `Location` from a region id and an offset id.
     /// * `region` and `id` should be of a type constructed by `common.Id`
-    /// * Identity types larger than `pl.STATIC_ID_BITS` bits may cause integer overflow
+    /// * Identity types larger than `core.STATIC_ID_BITS` bits may cause integer overflow
     pub fn from(region: anytype, id: anytype) Location {
         return Location{
-            .region = region.bitcast(RegionMark, pl.STATIC_ID_BITS),
-            .offset = id.bitcast(OffsetMark, pl.STATIC_ID_BITS),
+            .region = region.bitcast(RegionMark, core.STATIC_ID_BITS),
+            .offset = id.bitcast(OffsetMark, core.STATIC_ID_BITS),
         };
     }
 
     /// Create a new `Location` from a region id and an offset id.
     /// * `id` should be of a type constructed by `common.Id`
-    /// * Identity types larger than `pl.STATIC_ID_BITS` bits may cause integer overflow
+    /// * Identity types larger than `core.STATIC_ID_BITS` bits may cause integer overflow
     pub fn fromId(region: RegionId, id: anytype) Location {
         return Location{
             .region = region,
-            .offset = id.bitcast(OffsetMark, pl.STATIC_ID_BITS),
+            .offset = id.bitcast(OffsetMark, core.STATIC_ID_BITS),
         };
     }
 };
@@ -157,7 +157,7 @@ pub const LinkerLocation = struct {
     fixups: FixupSet = .empty,
 
     /// The type of the set used by a `LinkerLocation` insinde a `LinkerMap.FixupMap`.
-    pub const FixupSet = pl.HashSet(LinkerFixup, LinkerHashContext);
+    pub const FixupSet = common.HashSet(LinkerFixup, LinkerHashContext);
 
     /// 64-bit hash context for `LinkerFixup`.
     pub const LinkerHashContext = struct {
@@ -191,7 +191,7 @@ pub const LinkerMap = struct {
     unbound: FixupMap = .empty,
 
     /// A map of unbound locations and their fixups within a `LinkerMap`.
-    pub const FixupMap = pl.UniqueReprArrayMap(Location, LinkerLocation);
+    pub const FixupMap = common.UniqueReprArrayMap(Location, LinkerLocation);
 
     /// Create a new linker map with the provided general purpose allocator.
     pub fn init(gpa: std.mem.Allocator) LinkerMap {
@@ -245,9 +245,9 @@ pub const LocationMap = struct {
     /// General purpose allocator used for location map collections.
     gpa: std.mem.Allocator,
     /// The map of addresses that are referenced by id in some fixups.
-    addresses: pl.UniqueReprMap(Location, ?RelativeAddress) = .empty,
+    addresses: common.UniqueReprMap(Location, ?RelativeAddress) = .empty,
     /// The map of addresses that need to be fixed up after encoding.
-    fixups: pl.ArrayList(Fixup) = .empty,
+    fixups: common.ArrayList(Fixup) = .empty,
     /// State variable indicating the region the location map currently operates in.
     region: RegionId = .fromInt(0),
 
@@ -327,7 +327,7 @@ pub const LocationMap = struct {
     /// * `region` must be a <= `pl.STATIC_ID_BITS`-bit `common.Id` type.
     pub fn enterRegion(self: *LocationMap, region: anytype) RegionId {
         const old_region = self.region;
-        self.region = region.bitcast(Location.RegionMark, pl.STATIC_ID_BITS);
+        self.region = region.bitcast(Location.RegionMark, core.STATIC_ID_BITS);
         return old_region;
     }
 
@@ -344,7 +344,7 @@ pub const LocationMap = struct {
     /// Use the fixup tables in the location map to finalize the encoded buffer.
     /// * Adds any unresolved location fixups to the provided `LinkerMap`
     /// * `buf` should be encoded with an `Encoder` attached to this location map
-    pub fn finalizeBuffer(self: *LocationMap, linker_map: *LinkerMap, buf: []align(pl.PAGE_SIZE) u8) error{ OutOfMemory, BadEncoding }!void {
+    pub fn finalizeBuffer(self: *LocationMap, linker_map: *LinkerMap, buf: []align(core.PAGE_SIZE) u8) error{ OutOfMemory, BadEncoding }!void {
         // Resolving things like branch jumps, where a relative offset is encoded into a bit-level offset of an instruction word,
         // and things like constant values that use pointer tagging, requires a fairly robust algorithm.
         // The top level is simply iterating our accumulated the fixups, though.
@@ -461,7 +461,7 @@ pub const LocationMap = struct {
 
     /// Get an unaligned word address within a buffer, by resolving a `FixupRef` referencing it.
     /// * Returns null if the location is not found.
-    pub fn resolveFixupRef(self: *LocationMap, ref: FixupRef, base: []align(pl.PAGE_SIZE) u8) error{ BadEncoding, OutOfMemory }!?*align(1) u64 {
+    pub fn resolveFixupRef(self: *LocationMap, ref: FixupRef, base: []align(core.PAGE_SIZE) u8) error{ BadEncoding, OutOfMemory }!?*align(1) u64 {
         const rel_addr: RelativeAddress = switch (ref) {
             .relative => |known| known,
             .location => |id| (self.addresses.get(id) orelse return null) orelse return null,
@@ -535,7 +535,7 @@ pub const Encoder = struct {
     /// After calling this function, the encoder will be in its default-initialized state.
     /// In other words, it is safe but not necessary to call `deinit` on it.
     /// It does not need to be re-initializd before reuse, as the allocator is retained.
-    pub fn finalize(self: *Encoder) Encoder.Error![]align(pl.PAGE_SIZE) u8 {
+    pub fn finalize(self: *Encoder) Encoder.Error![]align(core.PAGE_SIZE) u8 {
         const buf = try self.writer.finalize();
 
         self.clear();
@@ -623,7 +623,7 @@ pub const Encoder = struct {
     }
 
     /// Allocates an aligned byte buffer from the address space of the encoder.
-    pub fn alignedAlloc(self: *Encoder, alignment: pl.Alignment, len: usize) AllocWriter.Error![]u8 {
+    pub fn alignedAlloc(self: *Encoder, alignment: core.Alignment, len: usize) AllocWriter.Error![]u8 {
         return self.writer.alignedAlloc(alignment, len);
     }
 
@@ -723,14 +723,14 @@ pub const Encoder = struct {
     }
 
     /// Pushes zero bytes (if necessary) to align the current offset of the encoder to the provided alignment value.
-    pub fn alignTo(self: *Encoder, alignment: pl.Alignment) AllocWriter.Error!void {
-        const delta = pl.alignDelta(self.writer.cursor, alignment);
+    pub fn alignTo(self: *Encoder, alignment: core.Alignment) AllocWriter.Error!void {
+        const delta = common.alignDelta(self.writer.cursor, alignment);
         try self.writer.writeByteNTimes(0, delta);
     }
 
     /// Asserts that the current offset of the encoder is aligned to the given value.
-    pub fn ensureAligned(self: *Encoder, alignment: pl.Alignment) Encoder.Error!void {
-        if (pl.alignDelta(self.writer.cursor, alignment) != 0) {
+    pub fn ensureAligned(self: *Encoder, alignment: core.Alignment) Encoder.Error!void {
+        if (common.alignDelta(self.writer.cursor, alignment) != 0) {
             return error.UnalignedWrite;
         }
     }
@@ -793,11 +793,11 @@ test "location map regions and locations" {
     const region_id1 = Id.of(u8, 8).fromInt(1);
     const parent_region = map.enterRegion(region_id1);
     try testing.expectEqual(RegionId.fromInt(0), parent_region);
-    try testing.expectEqual(region_id1.bitcast(Location.RegionMark, pl.STATIC_ID_BITS), map.currentRegion());
+    try testing.expectEqual(region_id1.bitcast(Location.RegionMark, core.STATIC_ID_BITS), map.currentRegion());
 
     const offset_id1 = Id.of(u16, 16).fromInt(10);
     const loc1 = map.localLocationId(offset_id1);
-    try testing.expectEqual(region_id1.bitcast(Location.RegionMark, pl.STATIC_ID_BITS), loc1.region);
+    try testing.expectEqual(region_id1.bitcast(Location.RegionMark, core.STATIC_ID_BITS), loc1.region);
 
     try map.registerLocation(loc1, null);
     try testing.expect(map.addresses.get(loc1).? == null);

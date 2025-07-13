@@ -1,6 +1,7 @@
 //! Basically, its a slice, but with a known (packed) layout.
-const pl = @import("platform");
 const std = @import("std");
+
+const common = @import("../common.zig");
 
 /// Immutable buffer of bytes.
 pub const Bytes = of(u8, .constant);
@@ -15,7 +16,7 @@ pub const ShortBytes = of(u8, .constant);
 pub const MutShortBytes = of(u8, .mutable);
 
 /// Creates a new `Buffer` type with the given element type and mutability.
-pub fn of(comptime T: type, comptime MUT: pl.Mutability) type {
+pub fn of(comptime T: type, comptime MUT: common.Mutability) type {
     return packed struct(u128) {
         const Self = @This();
 
@@ -69,7 +70,7 @@ pub fn of(comptime T: type, comptime MUT: pl.Mutability) type {
 /// * Pointer values on our supported architectures only use 48-bits of their word,
 /// leaving us a super convenient space to store arbitrary data
 /// (assuming we decompose before using it as a pointer, see methods).
-pub fn short(comptime T: type, comptime MUT: pl.Mutability) type {
+pub fn short(comptime T: type, comptime MUT: common.Mutability) type {
     return packed struct {
         const Self = @This();
 

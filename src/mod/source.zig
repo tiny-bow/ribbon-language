@@ -3,7 +3,6 @@ const source = @This();
 const std = @import("std");
 const log = std.log.scoped(.source_analysis);
 
-const pl = @import("platform");
 const common = @import("common");
 const rg = @import("rg");
 const Id = common.Id;
@@ -49,20 +48,20 @@ pub const Source = struct {
     }
 };
 
-pub inline fn SourceBiMap(comptime T: type, comptime Ctx: type, comptime style: pl.MapStyle) type {
-    comptime return pl.BiMap(Source, T, if (style == .array) SourceContext32 else SourceContext64, Ctx, style);
+pub inline fn SourceBiMap(comptime T: type, comptime Ctx: type, comptime style: common.MapStyle) type {
+    comptime return common.BiMap(Source, T, if (style == .array) SourceContext32 else SourceContext64, Ctx, style);
 }
 
-pub inline fn UniqueReprSourceBiMap(comptime T: type, comptime style: pl.MapStyle) type {
-    comptime return SourceBiMap(T, if (style == .array) pl.UniqueReprHashContext32(T) else pl.UniqueReprHashContext64(T), style);
+pub inline fn UniqueReprSourceBiMap(comptime T: type, comptime style: common.MapStyle) type {
+    comptime return SourceBiMap(T, if (style == .array) common.UniqueReprHashContext32(T) else common.UniqueReprHashContext64(T), style);
 }
 
 pub inline fn SourceMap(comptime T: type) type {
-    comptime return std.HashMapUnmanaged(Source, T, SourceContext64, 80);
+    comptime return common.HashMap(Source, T, SourceContext64);
 }
 
 pub inline fn SourceArrayMap(comptime T: type) type {
-    return std.ArrayHashMapUnmanaged(Source, T, SourceContext64, true);
+    comptime return common.ArrayMap(Source, T, SourceContext64);
 }
 
 pub const SourceContext32 = struct {
@@ -217,7 +216,7 @@ pub const IndentationDelta = enum(i8) {
     }
 
     /// Get a codepoint representing the indentation delta.
-    pub fn toChar(self: IndentationDelta) pl.Char {
+    pub fn toChar(self: IndentationDelta) common.Char {
         return switch (self) {
             .indent => '⌊',
             .unindent => '⌋',
@@ -255,7 +254,7 @@ pub const Special = packed struct {
 /// ```
 /// " ' ` . , ; {} () [] \\ #
 /// ```
-pub const Punctuation = enum(pl.Char) {
+pub const Punctuation = enum(common.Char) {
     /// `(`
     paren_l = '(',
     /// `)`
@@ -299,18 +298,18 @@ pub const Punctuation = enum(pl.Char) {
     }
 
     /// Given a punctuation type, returns the corresponding character.
-    pub fn toChar(self: Punctuation) pl.Char {
+    pub fn toChar(self: Punctuation) common.Char {
         return @intFromEnum(self);
     }
 
     /// Given a character, returns the corresponding punctuation type.
     /// * This is only error checked in safe mode. See also `castChar`.
-    pub fn fromChar(ch: pl.Char) Punctuation {
+    pub fn fromChar(ch: common.Char) Punctuation {
         return @enumFromInt(ch);
     }
 
     /// Given a character, returns whether it has a punctuation type.
-    pub fn includesChar(ch: pl.Char) bool {
+    pub fn includesChar(ch: common.Char) bool {
         inline for (comptime std.meta.fieldNames(Punctuation)) |p| {
             if (ch == comptime @intFromEnum(@field(Punctuation, p))) return true;
         }
@@ -320,7 +319,7 @@ pub const Punctuation = enum(pl.Char) {
 
     /// Given a character, returns the corresponding punctuation type.
     /// * This returns null if the character is not punctuation. See also `fromChar`.
-    pub fn castChar(ch: pl.Char) ?Punctuation {
+    pub fn castChar(ch: common.Char) ?Punctuation {
         if (!includesChar(ch)) return null;
 
         return @enumFromInt(ch);
@@ -370,7 +369,7 @@ pub const Lexer0 = struct {
     /// Utf8 source code being lexically analyzed.
     source: []const u8,
     /// Iterator over `source`.
-    iterator: common.PeekableIterator(CodepointIterator, pl.Char, .use_try(EncodingError)),
+    iterator: common.PeekableIterator(CodepointIterator, common.Char, .use_try(EncodingError)),
     /// The indentation levels at this point in the source code.
     indentation: [MAX_LEVELS]Level,
     /// The number of indentation levels currently in use.
@@ -416,14 +415,14 @@ pub const Lexer0 = struct {
 
     /// Get the next character in the source code without consuming it.
     /// * Returns null if the end of the source code is reached.
-    pub fn peekChar(self: *Lexer0) Error!?pl.Char {
+    pub fn peekChar(self: *Lexer0) Error!?common.Char {
         return self.iterator.peek();
     }
 
     /// Get the current character in the source code and consume it.
     /// * Updates lexer source location
     /// * Returns null if the end of the source code is reached.
-    pub fn nextChar(self: *Lexer0) Error!?pl.Char {
+    pub fn nextChar(self: *Lexer0) Error!?common.Char {
         const ch = try self.iterator.next() orelse return null;
 
         if (ch == '\n') {
@@ -742,7 +741,7 @@ pub fn PatternModifier(comptime P: type) type {
         any_of: []const P,
         all_of: []const P,
 
-        const Q = if (pl.hasDecl(P, .QueryType)) P.QueryType else P;
+        const Q = if (common.hasDecl(P, .QueryType)) P.QueryType else P;
 
         pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
             switch (self.*) {
@@ -918,7 +917,7 @@ pub fn PatternSet(comptime T: type) type {
         };
 
         entries: std.MultiArrayList(Pattern(T)) = .empty,
-        query_cache: pl.ArrayList(QueryResult) = .empty,
+        query_cache: common.ArrayList(QueryResult) = .empty,
 
         pub const empty = Self{ .entries = .empty };
 

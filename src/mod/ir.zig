@@ -13,7 +13,7 @@ const ir = @This();
 const std = @import("std");
 const log = std.log.scoped(.Rir);
 
-const pl = @import("platform");
+const core = @import("core");
 const common = @import("common");
 const source = @import("source");
 const Source = source.Source;
@@ -28,11 +28,11 @@ pub const UserData = struct {
     /// The context this user data is bound to.
     context: *Context,
     /// Type constructors are expected to bind this.
-    computeLayout: ?*const fn (constructor: Ref, input_types: []const Ref) anyerror!struct { u64, pl.Alignment } = null,
+    computeLayout: ?*const fn (constructor: Ref, input_types: []const Ref) anyerror!struct { u64, core.Alignment } = null,
     /// Any ref can bind this to provide a custom display function for the node.
     display: ?*const fn (value: *const Data, writer: std.io.AnyWriter) anyerror!void = null,
     /// Any opaque data can be stored here, bound with comptime-known names.
-    bindings: pl.StringArrayMap(pl.Any) = .empty,
+    bindings: common.StringArrayMap(common.Any) = .empty,
 
     /// Deinitialize the user data, freeing all memory it owns.
     fn deinit(self: *UserData) void {
@@ -42,20 +42,20 @@ pub const UserData = struct {
 
     /// Store an arbitrary address in the user data map, bound to a comptime-known key.
     /// * Cannnot take ownership of the value, as it is type erased. It must be valid for the lifetime of the userdata.
-    pub fn addData(self: *UserData, comptime key: pl.EnumLiteral, value: anytype) !void {
-        try self.bindings.put(self.context.gpa, comptime @tagName(key), pl.Any.from(value));
+    pub fn addData(self: *UserData, comptime key: common.EnumLiteral, value: anytype) !void {
+        try self.bindings.put(self.context.gpa, comptime @tagName(key), common.Any.from(value));
     }
 
     /// Get an arbitrary address from the user data map, bound to a comptime-known key.
     /// * This does not perform any checking on the type stored in the map.
-    pub fn getData(self: *UserData, comptime T: type, comptime key: pl.EnumLiteral) ?*T {
+    pub fn getData(self: *UserData, comptime T: type, comptime key: common.EnumLiteral) ?*T {
         return (self.bindings.get(comptime @tagName(key)) orelse return null).to(T);
     }
 
     /// Delete an arbitrary address from the user data map, given the comptime-known key it is bound to.
     /// * If the key does not exist, this is a no-op.
     /// * This cannot deinitialize the value, as it is type-erased.
-    pub fn delData(self: *UserData, comptime key: pl.EnumLiteral) void {
+    pub fn delData(self: *UserData, comptime key: common.EnumLiteral) void {
         _ = self.bindings.swapRemove(comptime @tagName(key));
     }
 };
@@ -216,7 +216,7 @@ pub const Root = struct {
     /// Used to generate unique ids for child contexts.
     fresh_ctx: ContextId = .fromInt(1),
     /// All child contexts owned by this root context.
-    children: pl.UniqueReprMap(ContextId, *Context) = .empty,
+    children: common.UniqueReprMap(ContextId, *Context) = .empty,
     /// Synchronization primitive for child contexts to use when accessing the root context.
     /// * All Root methods assume that the root mutex is already locked by the caller.
     mutex: std.Thread.Mutex = .{},
@@ -306,7 +306,7 @@ pub const Root = struct {
 
         const was_interned = child_ctx.isLocalInternedNode(child_ref);
         const was_immutable = child_ctx.isLocalImmutableNode(child_ref);
-        const old_mutability: pl.Mutability = if (was_immutable) .constant else .mutable;
+        const old_mutability: core.Mutability = if (was_immutable) .constant else .mutable;
 
         // Potentially cyclic nodes (which can contain refs to other nodes) must be
         // handled with the "Create, Cache, Populate" strategy. This applies only
@@ -421,7 +421,7 @@ pub const Root = struct {
             // Merge bindings map (element-level overwrite)
             var binding_it = child_ud_ptr.bindings.iterator();
             while (binding_it.next()) |entry| {
-                // The pl.Any value is a simple pointer, so we just copy it.
+                // The common.Any value is a simple pointer, so we just copy it.
                 try root_ud.bindings.put(root_ctx.gpa, entry.key_ptr.*, entry.value_ptr.*);
             }
         }
@@ -466,15 +466,15 @@ pub const Context = struct {
     /// arena allocator for the context, used for data nodes.
     arena: std.heap.ArenaAllocator,
     /// contains all graph nodes in this context.
-    nodes: pl.UniqueReprMap(Ref, Node) = .empty,
+    nodes: common.UniqueReprMap(Ref, Node) = .empty,
     /// The def->use edges of nodes.
-    users: pl.UniqueReprMap(Ref, pl.UniqueReprSet(Use)) = .empty,
+    users: common.UniqueReprMap(Ref, common.UniqueReprSet(Use)) = .empty,
     /// Maps specific refs to user defined data, used for miscellaneous operations like layout computation, display, etc.
-    userdata: pl.UniqueReprMap(Ref, *UserData) = .empty,
+    userdata: common.UniqueReprMap(Ref, *UserData) = .empty,
     /// Maps builtin structures to their definition references.
-    builtin: pl.UniqueReprMap(Builtin, Ref) = .empty,
+    builtin: common.UniqueReprMap(Builtin, Ref) = .empty,
     /// Maps constant value nodes to references.
-    interner: pl.HashMap(Node, Ref, NodeHasher) = .empty,
+    interner: common.HashMap(Node, Ref, NodeHasher) = .empty,
     /// Flags whether a node is interned or not.
     interned_refs: RefSet = .empty,
     /// Flags whether a node is immutable or not.
@@ -708,7 +708,7 @@ pub const Context = struct {
     }
 
     /// Get a field of a structure data node bound by this reference.
-    pub fn getField(self: *Context, ref: Ref, comptime field: pl.EnumLiteral) !?Ref {
+    pub fn getField(self: *Context, ref: Ref, comptime field: common.EnumLiteral) !?Ref {
         if (ref.node_kind.getTag() != .structure) {
             return error.InvalidNodeKind;
         }
@@ -782,7 +782,7 @@ pub const Context = struct {
     /// Set a field of a structure data node bound by this reference.
     /// * Runtime type checking is not performed.
     /// * If the field does not exist, this is an error.
-    pub fn setField(self: *Context, ref: Ref, comptime field: pl.EnumLiteral, value: Ref) !void {
+    pub fn setField(self: *Context, ref: Ref, comptime field: common.EnumLiteral, value: Ref) !void {
         if (ref.node_kind.getTag() != .structure) {
             return error.InvalidNodeKind;
         }
@@ -905,7 +905,7 @@ pub const Context = struct {
     }
 
     /// Compute the layout of a type node by reference.
-    pub fn computeLayout(self: *Context, ref: Ref) !struct { u64, pl.Alignment } {
+    pub fn computeLayout(self: *Context, ref: Ref) !struct { u64, core.Alignment } {
         if (ref.node_kind.getTag() != .structure or ref.node_kind.getDiscriminator() != .type) {
             return error.InvalidNodeKind;
         }
@@ -930,7 +930,7 @@ pub const Context = struct {
         return self._internNodeUnchecked(node);
     }
 
-    fn _addNode(self: *Context, mutability: pl.Mutability, node: Node) !Ref {
+    fn _addNode(self: *Context, mutability: core.Mutability, node: Node) !Ref {
         if (mutability == .constant) try self._ensureConstantRefs(node);
 
         return self._addNodeUnchecked(mutability, node);
@@ -963,7 +963,7 @@ pub const Context = struct {
         return gop.value_ptr.*;
     }
 
-    fn _addNodeUnchecked(self: *Context, mutability: pl.Mutability, node: Node) !Ref {
+    fn _addNodeUnchecked(self: *Context, mutability: core.Mutability, node: Node) !Ref {
         const tag = node.kind.getTag();
 
         const ref = Ref{
@@ -1085,7 +1085,7 @@ pub const Context = struct {
     }
 
     /// Get a list of all the users of a node, given its reference.
-    pub fn getLocalNodeUsers(self: *Context, ref: Ref) !*const pl.UniqueReprSet(Use) {
+    pub fn getLocalNodeUsers(self: *Context, ref: Ref) !*const common.UniqueReprSet(Use) {
         std.debug.assert(ref.id.context == self.id);
 
         const gop = try self.users.getOrPut(self.gpa, ref);
@@ -1096,7 +1096,7 @@ pub const Context = struct {
     }
 
     /// Get a list of all the users of a node, given its reference.
-    pub fn getNodeUsers(self: *Context, ref: Ref) !*const pl.UniqueReprSet(Use) {
+    pub fn getNodeUsers(self: *Context, ref: Ref) !*const common.UniqueReprSet(Use) {
         if (ref.id.context == self.id) {
             return self.getLocalNodeUsers(ref);
         } else {
@@ -1113,7 +1113,7 @@ pub const Context = struct {
         }
     }
 
-    fn _getLocalNodeUsersMut(self: *Context, ref: Ref) !*pl.UniqueReprSet(Use) {
+    fn _getLocalNodeUsersMut(self: *Context, ref: Ref) !*common.UniqueReprSet(Use) {
         std.debug.assert(ref.id.context == self.id);
 
         const gop = try self.users.getOrPut(self.gpa, ref);
@@ -1123,7 +1123,7 @@ pub const Context = struct {
         return gop.value_ptr;
     }
 
-    fn _getNodeUsersMut(self: *Context, ref: Ref) !*pl.UniqueReprSet(Use) {
+    fn _getNodeUsersMut(self: *Context, ref: Ref) !*common.UniqueReprSet(Use) {
         if (ref.id.context == self.id) {
             return self._getLocalNodeUsersMut(ref);
         } else {
@@ -1160,7 +1160,7 @@ pub const Context = struct {
 
     /// Create a new primitive node in the context, given a primitive kind and value.
     /// * The value must be a primitive type, such as an integer, index, or opcode. See `ir.primitives`.
-    pub fn addPrimitive(self: *Context, mutability: pl.Mutability, value: anytype) !Ref {
+    pub fn addPrimitive(self: *Context, mutability: core.Mutability, value: anytype) !Ref {
         const node = try Node.primitive(value);
 
         return self._addNode(mutability, node);
@@ -1168,7 +1168,7 @@ pub const Context = struct {
 
     /// Create a new structure node in the context, given a structure kind and an initializer.
     /// * The initializer must be a struct with the same fields as the structure kind. See `ir.structure`.
-    pub fn addStructure(self: *Context, mutability: pl.Mutability, comptime kind: StructureKind, value: anytype) !Ref {
+    pub fn addStructure(self: *Context, mutability: core.Mutability, comptime kind: StructureKind, value: anytype) !Ref {
         var node = try Node.structure(self.gpa, kind, value);
         errdefer node.deinit(self.gpa);
 
@@ -1176,7 +1176,7 @@ pub const Context = struct {
     }
 
     /// Add a data buffer to the context.
-    pub fn addBuffer(self: *Context, mutability: pl.Mutability, value: []const u8) !Ref {
+    pub fn addBuffer(self: *Context, mutability: core.Mutability, value: []const u8) !Ref {
         var node = try Node.buffer(self.gpa, value);
         errdefer node.deinit(self.gpa);
 
@@ -1184,7 +1184,7 @@ pub const Context = struct {
     }
 
     /// Add a ref list to the context.
-    pub fn addList(self: *Context, mutability: pl.Mutability, element_kind: Discriminator, value: []const Ref) !Ref {
+    pub fn addList(self: *Context, mutability: core.Mutability, element_kind: Discriminator, value: []const Ref) !Ref {
         var node = try Node.list(self.gpa, element_kind, value);
         errdefer node.deinit(self.gpa);
 
@@ -1261,7 +1261,7 @@ pub const Context = struct {
         const gop = try self.interner.getOrPutAdapted(self.gpa, value, BufferHasher);
 
         if (!gop.found_existing) {
-            var arr = try pl.ArrayList(u8).initCapacity(self.gpa, value.len);
+            var arr = try common.ArrayList(u8).initCapacity(self.gpa, value.len);
             errdefer arr.deinit(self.gpa);
 
             arr.appendSliceAssumeCapacity(value);
@@ -1285,7 +1285,7 @@ pub const Context = struct {
         const gop = try self.interner.getOrPutAdapted(self.gpa, value, ListHasher(element_kind));
 
         if (!gop.found_existing) {
-            var arr = try pl.ArrayList(Ref).initCapacity(self.gpa, value.len);
+            var arr = try common.ArrayList(Ref).initCapacity(self.gpa, value.len);
             errdefer arr.deinit(self.gpa);
 
             arr.appendSliceAssumeCapacity(value);
@@ -1318,10 +1318,10 @@ pub const Ref = packed struct(u64) {
 };
 
 /// `platform.UniqueReprMap` for `Ref` to `Ref`.
-pub const RefMap = pl.UniqueReprMap(Ref, Ref);
+pub const RefMap = common.UniqueReprMap(Ref, Ref);
 
 /// `platform.UniqueReprSet` for `Ref`.
-pub const RefSet = pl.UniqueReprSet(Ref);
+pub const RefSet = common.UniqueReprSet(Ref);
 
 /// Uniquely identifies a child context in an ir.
 pub const ContextId = common.Id.of(Context, 16);
@@ -1500,7 +1500,7 @@ pub const discriminants = struct {
             @compileError("ir.discriminants.cast: Cannot cast " ++ @typeName(U) ++ " to " ++ @typeName(T));
         }
 
-        if (pl.isEnumVariant(T, u)) {
+        if (common.isEnumVariant(T, u)) {
             return @enumFromInt(u);
         } else {
             return null;
@@ -1528,7 +1528,7 @@ pub const discriminants = struct {
             @compileError("ir.discriminants.fromInt: Cannot cast to " ++ @typeName(T));
         }
 
-        if (pl.isEnumVariant(T, value)) {
+        if (common.isEnumVariant(T, value)) {
             return @enumFromInt(value);
         } else {
             return null;
@@ -1699,7 +1699,7 @@ pub const Node = struct {
         const structure_decls = comptime std.meta.fields(T);
         const structure_value = @field(structures, struct_name);
 
-        var ref_list = pl.ArrayList(Ref).empty;
+        var ref_list = common.ArrayList(Ref).empty;
         try ref_list.ensureTotalCapacity(allocator, structure_decls.len);
         errdefer ref_list.deinit(allocator);
 
@@ -1763,7 +1763,7 @@ pub const Node = struct {
     /// Create a data buffer node outside of a context, given a buffer of bytes.
     /// * Allocator should be that of the context that will own the node.
     pub fn buffer(allocator: std.mem.Allocator, init: []const u8) !Node {
-        var arr = try pl.ArrayList(u8).initCapacity(allocator, init.len);
+        var arr = try common.ArrayList(u8).initCapacity(allocator, init.len);
         errdefer arr.deinit(allocator);
 
         arr.appendSliceAssumeCapacity(init);
@@ -1777,7 +1777,7 @@ pub const Node = struct {
     /// Create a ref list node outside of a context, given a list of references.
     /// * Allocator should be that of the context that will own the node.
     pub fn list(allocator: std.mem.Allocator, element_kind: Discriminator, init: []const Ref) !Node {
-        var arr = try pl.ArrayList(Ref).initCapacity(allocator, init.len);
+        var arr = try common.ArrayList(Ref).initCapacity(allocator, init.len);
         errdefer arr.deinit(allocator);
 
         arr.appendSliceAssumeCapacity(init);
@@ -1796,12 +1796,12 @@ pub const Data = union {
     /// A source location.
     source: Source,
     /// Arbitrary data, such as a string body.
-    buffer: pl.ArrayList(u8),
+    buffer: common.ArrayList(u8),
 
     /// An arbitrary integer value, such as an index into an array.
     primitive: u64,
     /// Arbitrary list of graph refs, such as a list of types.
-    ref_list: pl.ArrayList(Ref),
+    ref_list: common.ArrayList(Ref),
 };
 
 /// The tag of a node, which indicates the overall node shape, be it data, structure, or collection.
@@ -2248,7 +2248,7 @@ pub const Builder = struct {
         });
     }
 
-    pub fn integer_type(self: *Builder, signedness: pl.Signedness, bit_size: pl.Alignment) !Ref {
+    pub fn integer_type(self: *Builder, signedness: core.Signedness, bit_size: core.Alignment) !Ref {
         const ctx = self.getContext();
 
         return ctx.internStructure(.type, .{

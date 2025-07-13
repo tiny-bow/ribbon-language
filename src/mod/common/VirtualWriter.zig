@@ -9,10 +9,10 @@
 //! Allows access to the memory while it is being used as a writer. Use with care.
 const VirtualWriter = @This();
 
+const common = @import("../common.zig");
+
 const std = @import("std");
 const log = std.log.scoped(.@"paged-writer");
-
-const pl = @import("platform");
 
 test {
     std.testing.refAllDeclsRecursive(@This());
@@ -42,13 +42,13 @@ pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
         const Self = @This();
 
         /// The memory buffer used by the encoder.
-        memory: pl.MutVirtualMemory,
+        memory: common.MutVirtualMemory,
         /// The current cursor position in the memory buffer.
         cursor: usize = 0,
         /// The top of the allocated memory region.
         top: usize = 0,
 
-        const MAX_BLOB_SIZE = pl.alignTo(pl.PAGE_SIZE, USABLE_ADDRESS_SPACE);
+        const MAX_BLOB_SIZE = common.alignTo(common.PAGE_SIZE, USABLE_ADDRESS_SPACE);
 
         /// Represents an error that can occur during a write to an `VirtualWriter`.
         ///
@@ -109,7 +109,7 @@ pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
         /// ### Panics
         /// + If the OS does not allow `mprotect` with `access`.
         ///   Under normal circumstances, this should be known to be safe in advance.
-        pub fn finalize(self: *Self, access: Access) error{BadEncoding}![]align(pl.PAGE_SIZE) const u8 {
+        pub fn finalize(self: *Self, access: Access) error{BadEncoding}![]align(common.PAGE_SIZE) const u8 {
             const out = self.memory[0..self.cursor];
 
             if (out.len == 0) {
@@ -117,7 +117,7 @@ pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
                 return error.BadEncoding;
             }
 
-            self.cursor += pl.alignDelta(self.cursor, pl.PAGE_SIZE);
+            self.cursor += common.alignDelta(self.cursor, common.PAGE_SIZE);
 
             std.posix.munmap(@alignCast((self.memory.ptr + self.cursor)[0 .. self.memory.len - self.cursor]));
 
@@ -142,14 +142,14 @@ pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
             return self.memory[self.cursor..self.top];
         }
 
-        fn nextPage(self: *Self) error{OutOfMemory}![]align(pl.PAGE_SIZE) u8 {
+        fn nextPage(self: *Self) error{OutOfMemory}![]align(common.PAGE_SIZE) u8 {
             std.debug.assert(self.cursor == self.top);
 
             const committable = self.uncommittedRegion();
 
             if (committable == 0) return error.OutOfMemory;
 
-            const toCommit = @min(committable, pl.PAGE_SIZE);
+            const toCommit = @min(committable, common.PAGE_SIZE);
 
             std.posix.mprotect(@alignCast((self.memory.ptr + self.top)[0..toCommit]), READ_WRITE) catch {
                 return error.OutOfMemory;
@@ -168,7 +168,7 @@ pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
         /// Same as `std.mem.Allocator.alloc`, but allocates from the virtual address space of the writer.
         pub fn alloc(self: *Self, comptime T: type, len: usize) Error![]T {
             const byte_len = len * @sizeOf(T);
-            const padding = pl.alignDelta(self.getCurrentAddress(), @alignOf(T));
+            const padding = common.alignDelta(self.getCurrentAddress(), @alignOf(T));
             const total_size = byte_len + padding;
 
             var avail = self.availableCapacity();
@@ -236,7 +236,7 @@ pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
             comptime _: enum { little }, // allows backward compat with writer code in r64; but only in provably compatible use-cases
         ) Error!void {
             // We do not encode abi padding bytes here; only get the bytes that are actually used.
-            const bytes = std.mem.asBytes(&value)[0..pl.bytesFromBits(@bitSizeOf(T))];
+            const bytes = std.mem.asBytes(&value)[0..common.bytesFromBits(@bitSizeOf(T))];
             try self.writeAll(bytes);
         }
     };

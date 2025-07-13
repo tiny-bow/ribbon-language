@@ -12,8 +12,6 @@ const Isa = @This();
 const std = @import("std");
 const log = std.log.scoped(.Isa);
 
-const pl = @import("platform");
-
 test {
     std.testing.refAllDeclsRecursive(@This());
 }
@@ -423,7 +421,13 @@ pub fn formatOperand(index: usize, operands: []const Operand, writer: anytype) !
 }
 
 /// The exact semantic version of this specification.
-pub const VERSION = pl.VERSION; // TODO: make isa version independent when it has stabilized
+pub const VERSION: std.SemanticVersion = .{
+    .major = 0,
+    .minor = 1,
+    .patch = 0,
+    .build = null,
+    .pre = "draft",
+};
 
 /// Compile-time accessible data describing all of Ribbon's bytecode instructions.
 pub const CATEGORIES: []const Category = &.{

@@ -3,7 +3,6 @@ const driver = @This();
 const std = @import("std");
 
 const ribbon = @import("ribbon_language");
-const pl = @import("platform");
 
 const log = std.log.scoped(.main);
 

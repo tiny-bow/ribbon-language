@@ -6,7 +6,6 @@ const log = std.log.scoped(.interpreter);
 
 const core = @import("core");
 const Instruction = @import("Instruction");
-const pl = @import("platform");
 const common = @import("common");
 
 test {
@@ -131,7 +130,7 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
     const alignment = fun.layout.alignment;
     const size = fun.layout.size;
 
-    const aligned_data_ptr_u8: [*]u8 = pl.alignTo(@as([*]u8, @ptrCast(original_data_top_ptr)), alignment);
+    const aligned_data_ptr_u8: [*]u8 = common.alignTo(@as([*]u8, @ptrCast(original_data_top_ptr)), alignment);
     const padding_bytes = @intFromPtr(aligned_data_ptr_u8) - @intFromPtr(original_data_top_ptr);
     const total_bytes_to_alloc = padding_bytes + size;
     const total_u64s_to_alloc = (total_bytes_to_alloc + @sizeOf(u64) - 1) / @sizeOf(u64);
@@ -264,7 +263,7 @@ fn SignalSubset(comptime isLoop: bool) type {
 fn invokeForeign(self: *core.mem.FiberHeader, current: anytype, registerId: core.Register, functionOpaquePtr: *const anyopaque, argumentRegisterIds: []const core.Register) !void {
     _ = self;
 
-    if (argumentRegisterIds.len > pl.MAX_FOREIGN_ARGUMENTS) {
+    if (argumentRegisterIds.len > core.MAX_FOREIGN_ARGUMENTS) {
         @branchHint(.cold);
         return error.Overflow;
     }
@@ -274,7 +273,7 @@ fn invokeForeign(self: *core.mem.FiberHeader, current: anytype, registerId: core
         arguments[i] = current.callFrame.vregs[reg.getIndex()];
     }
 
-    const retVal = pl.callForeign(functionOpaquePtr, arguments);
+    const retVal = core.callForeign(functionOpaquePtr, arguments);
 
     current.callFrame.vregs[registerId.getIndex()] = retVal;
 }
@@ -310,7 +309,7 @@ fn invokeInternal(self: *core.mem.FiberHeader, current: anytype, registerId: cor
                             const effectIndex = current.function.header.get(effectId).toIndex();
                             const evidencePointerSlot = &self.evidence[effectIndex];
 
-                            self.data.top_ptr = pl.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
+                            self.data.top_ptr = common.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
 
                             evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
                         }
@@ -336,7 +335,7 @@ fn pushBytecodeCall(
     const size = function.layout.size;
 
     const current_data_ptr: [*]u8 = @ptrCast(self.data.top_ptr);
-    const aligned_data_ptr: [*]u8 = pl.alignTo(current_data_ptr, alignment);
+    const aligned_data_ptr: [*]u8 = common.alignTo(current_data_ptr, alignment);
     const padding_bytes = @intFromPtr(aligned_data_ptr) - @intFromPtr(current_data_ptr);
     const total_bytes_to_alloc = padding_bytes + size;
 
@@ -474,9 +473,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             std.debug.assert(offset != 0);
 
             // The IP was advanced by decode(). Go back one instruction and add the WORD offset.
-            const newIp: core.InstructionAddr = pl.offsetPointerElement(current.callFrame.ip - 1, offset);
+            const newIp: core.InstructionAddr = common.offsetPointerElement(current.callFrame.ip - 1, offset);
 
-            std.debug.assert(pl.alignDelta(newIp, @alignOf(core.InstructionBits)) == 0);
+            std.debug.assert(common.alignDelta(newIp, @alignOf(core.InstructionBits)) == 0);
             std.debug.assert(current.function.extents.boundsCheck(newIp));
 
             current.callFrame.ip = newIp;
@@ -493,11 +492,11 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const registerId = current.instruction.data.br_if.R;
 
             // The IP was advanced by decode(). Go back one instruction and add the WORD offset.
-            const then_newIp: core.InstructionAddr = pl.offsetPointerElement(current.callFrame.ip - 1, then_offset);
-            const else_newIp: core.InstructionAddr = pl.offsetPointerElement(current.callFrame.ip - 1, else_offset);
+            const then_newIp: core.InstructionAddr = common.offsetPointerElement(current.callFrame.ip - 1, then_offset);
+            const else_newIp: core.InstructionAddr = common.offsetPointerElement(current.callFrame.ip - 1, else_offset);
 
-            std.debug.assert(pl.alignDelta(then_newIp, @alignOf(core.InstructionBits)) == 0);
-            std.debug.assert(pl.alignDelta(else_newIp, @alignOf(core.InstructionBits)) == 0);
+            std.debug.assert(common.alignDelta(then_newIp, @alignOf(core.InstructionBits)) == 0);
+            std.debug.assert(common.alignDelta(else_newIp, @alignOf(core.InstructionBits)) == 0);
             std.debug.assert(current.function.extents.boundsCheck(then_newIp));
             std.debug.assert(current.function.extents.boundsCheck(else_newIp));
 
@@ -648,7 +647,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
                                     const effectIndex = current.function.header.get(effectId).toIndex();
                                     const evidencePointerSlot = &self.evidence[effectIndex];
 
-                                    self.data.top_ptr = pl.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
+                                    self.data.top_ptr = common.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
 
                                     evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
                                 }
@@ -801,7 +800,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const src: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
             const size: u64 = current.callFrame.vregs[registerIdZ.getIndex()];
 
-            pl.swap(dest, src, size);
+            common.swap(dest, src, size);
 
             continue :dispatch try state.step(self);
         },
@@ -813,7 +812,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const dest: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdX.getIndex()]);
             const src: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            pl.swap(dest, src, size);
+            common.swap(dest, src, size);
 
             continue :dispatch try state.step(self);
         },
@@ -825,7 +824,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const frame_base: [*]const u8 = @ptrCast(current.stackFrame.ptr);
 
-            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(pl.offsetPointer(frame_base, offset));
+            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(common.offsetPointer(frame_base, offset));
 
             continue :dispatch try state.step(self);
         },
@@ -833,7 +832,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const upvalueId = current.instruction.data.addr_u.U;
             const registerId = current.instruction.data.addr_u.R;
 
-            pl.todo(noreturn, .{ "upvalue binding", upvalueId, registerId });
+            common.todo(noreturn, .{ "upvalue binding", upvalueId, registerId });
         },
         .addr_g => { // Get the address of G, placing it in R
             const globalId = current.instruction.data.addr_g.G;
@@ -892,7 +891,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: i32 = @bitCast(current.instruction.data.load8.I);
 
             const srcBase: [*]const u8 = @ptrFromInt(current.callFrame.vregs[Ry.getIndex()]);
-            const src = pl.offsetPointer(srcBase, offset);
+            const src = common.offsetPointer(srcBase, offset);
 
             current.callFrame.vregs[Rx.getIndex()] = src[0];
 
@@ -904,7 +903,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: i32 = @bitCast(current.instruction.data.load16.I);
 
             const srcBase: [*]const u16 = @ptrFromInt(current.callFrame.vregs[Ry.getIndex()]);
-            const src = pl.offsetPointer(srcBase, offset);
+            const src = common.offsetPointer(srcBase, offset);
 
             current.callFrame.vregs[Rx.getIndex()] = src[0];
 
@@ -916,7 +915,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: i32 = @bitCast(current.instruction.data.load32.I);
 
             const srcBase: [*]const u32 = @ptrFromInt(current.callFrame.vregs[Ry.getIndex()]);
-            const src = pl.offsetPointer(srcBase, offset);
+            const src = common.offsetPointer(srcBase, offset);
 
             current.callFrame.vregs[Rx.getIndex()] = src[0];
 
@@ -928,7 +927,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: i32 = @bitCast(current.instruction.data.load64.I);
 
             const srcBase: [*]const u64 = @ptrFromInt(current.callFrame.vregs[Ry.getIndex()]);
-            const src = pl.offsetPointer(srcBase, offset);
+            const src = common.offsetPointer(srcBase, offset);
 
             current.callFrame.vregs[Rx.getIndex()] = src[0];
 
@@ -941,7 +940,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: i32 = @bitCast(current.instruction.data.store8.I);
 
             const destBase: [*]u8 = @ptrFromInt(current.callFrame.vregs[Rx.getIndex()]);
-            const dest = pl.offsetPointer(destBase, offset);
+            const dest = common.offsetPointer(destBase, offset);
 
             dest[0] = @truncate(current.callFrame.vregs[Ry.getIndex()]);
 
@@ -953,7 +952,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: i32 = @bitCast(current.instruction.data.store16.I);
 
             const destBase: [*]u16 = @ptrFromInt(current.callFrame.vregs[Rx.getIndex()]);
-            const dest = pl.offsetPointer(destBase, offset);
+            const dest = common.offsetPointer(destBase, offset);
 
             dest[0] = @truncate(current.callFrame.vregs[Ry.getIndex()]);
 
@@ -965,7 +964,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: i32 = @bitCast(current.instruction.data.store32.I);
 
             const destBase: [*]u32 = @ptrFromInt(current.callFrame.vregs[Rx.getIndex()]);
-            const dest = pl.offsetPointer(destBase, offset);
+            const dest = common.offsetPointer(destBase, offset);
 
             dest[0] = @truncate(current.callFrame.vregs[Ry.getIndex()]);
 
@@ -977,7 +976,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: i32 = @bitCast(current.instruction.data.store64.I);
 
             const destBase: [*]u64 = @ptrFromInt(current.callFrame.vregs[Rx.getIndex()]);
-            const dest = pl.offsetPointer(destBase, offset);
+            const dest = common.offsetPointer(destBase, offset);
 
             dest[0] = @truncate(current.callFrame.vregs[Ry.getIndex()]);
 
@@ -989,7 +988,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: i32 = @bitCast(current.instruction.data.store8c.Iy);
 
             const destBase: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerId.getIndex()]);
-            const dest = pl.offsetPointer(destBase, offset);
+            const dest = common.offsetPointer(destBase, offset);
 
             dest[0] = constant;
 
@@ -1005,7 +1004,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: i32 = @bitCast(@as(u32, @truncate(immBits)));
 
             const destBase: [*]u16 = @ptrFromInt(current.callFrame.vregs[registerId.getIndex()]);
-            const dest = pl.offsetPointer(destBase, offset);
+            const dest = common.offsetPointer(destBase, offset);
 
             dest[0] = bits;
 
@@ -1021,7 +1020,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const offset: i32 = @bitCast(@as(u32, @truncate(immBits)));
 
             const destBase: [*]u32 = @ptrFromInt(current.callFrame.vregs[registerId.getIndex()]);
-            const dest = pl.offsetPointer(destBase, offset);
+            const dest = common.offsetPointer(destBase, offset);
 
             dest[0] = bits;
 
@@ -1035,7 +1034,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             current.callFrame.ip += 1;
 
             const destBase: [*]u64 = @ptrFromInt(current.callFrame.vregs[registerId.getIndex()]);
-            const dest = pl.offsetPointer(destBase, offset);
+            const dest = common.offsetPointer(destBase, offset);
 
             dest[0] = bits;
 
@@ -4918,7 +4917,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const num: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(pl.whole(num)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(common.whole(num)));
 
             continue :dispatch try state.step(self);
         },
@@ -4928,7 +4927,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const num: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(pl.whole(num)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(common.whole(num)));
 
             continue :dispatch try state.step(self);
         },
@@ -4939,7 +4938,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const num: f32 = @bitCast(@as(u32, @truncate(current.callFrame.vregs[registerIdY.getIndex()])));
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(pl.frac(num)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u32, @bitCast(common.frac(num)));
 
             continue :dispatch try state.step(self);
         },
@@ -4949,7 +4948,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const num: f64 = @bitCast(current.callFrame.vregs[registerIdY.getIndex()]);
 
-            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(pl.frac(num)));
+            current.callFrame.vregs[registerIdX.getIndex()] = @as(u64, @bitCast(common.frac(num)));
 
             continue :dispatch try state.step(self);
         },

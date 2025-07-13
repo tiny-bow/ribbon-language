@@ -18,7 +18,7 @@ const machine = @This();
 const std = @import("std");
 const log = std.log.scoped(.X64Builder);
 
-const pl = @import("platform");
+const common = @import("common");
 const core = @import("core");
 const assembler = @import("assembler");
 const VirtualWriter = @import("common").VirtualWriter;
@@ -30,7 +30,7 @@ test {
 const abi = @import("abi");
 
 /// Disassemble an allocated machine function, printing to the provided writer.
-pub fn disas(mem: pl.VirtualMemory, options: assembler.DisassemblerOptions, writer: anytype) !void {
+pub fn disas(mem: common.VirtualMemory, options: assembler.DisassemblerOptions, writer: anytype) !void {
     return assembler.disas(mem, options, writer);
 }
 
@@ -174,16 +174,16 @@ pub const Operand = union(enum) {
         const T = @TypeOf(value);
         return .{
             .immediate = switch (@typeInfo(T)) {
-                .comptime_int => if (comptime pl.math.sign(value) == -1) pl.bitCast(u64, @as(i64, value)) else value,
-                .comptime_float => @compileError("choose a specific float type"),
-                else => pl.bitCast(pl.UInt(@bitSizeOf(T)), value),
+                .comptime_int => if (comptime std.math.sign(value) == -1) @as(u64, @bitCast(@as(i64, value))) else value,
+                .comptime_float => @as(u64, @bitCast(@as(f64, value))),
+                else => @as(std.meta.Int(.unsigned, @bitSizeOf(T)), @bitCast(value)),
             },
         };
     }
 };
 
 /// A `VirtualWriter` with a `platform.MAX_MACHINE_CODE_SIZE` memory limit.
-pub const Writer: type = VirtualWriter.new(pl.MAX_MACHINE_CODE_SIZE);
+pub const Writer: type = VirtualWriter.new(core.MAX_MACHINE_CODE_SIZE);
 
 /// Wrapper over `VirtualWriter` that provides a machine instruction specific API.
 pub const Encoder = struct {

@@ -3,11 +3,11 @@
 const backend = @This();
 
 const std = @import("std");
-const pl = @import("platform");
 const ir = @import("ir");
 const core = @import("core");
 const bytecode = @import("bytecode");
-const Id = @import("common").Id;
+const common = @import("common");
+const Id = common.Id;
 
 test {
     std.testing.refAllDeclsRecursive(@This());
@@ -60,13 +60,13 @@ pub const Target = packed struct {
     /// Cast the target to a specific type.
     /// * Does not check the type outside of safe modes
     pub fn forceType(self: Target, comptime T: type) *T {
-        std.debug.assert(self.vtable.type_id == pl.TypeId.of(T));
+        std.debug.assert(self.vtable.type_id == common.TypeId.of(T));
         return @ptrCast(self.data);
     }
 
     /// Cast the target to a specific type, checking the type at runtime.
     pub fn castType(self: Target, comptime T: type) ?*T {
-        if (self.vtable.type_id == pl.TypeId.of(T)) {
+        if (self.vtable.type_id == common.TypeId.of(T)) {
             return @ptrCast(self.data);
         } else {
             return null;
@@ -74,7 +74,7 @@ pub const Target = packed struct {
     }
 
     pub const VTable = struct {
-        type_id: pl.TypeId,
+        type_id: common.TypeId,
         runJob: *const fn (self: *anyopaque, job: *Job) Target.Error!Artifact,
         addArtifact: *const fn (self: *anyopaque, artifact: *const anyopaque) Target.Error!ArtifactId,
         getArtifact: *const fn (self: *anyopaque, id: ArtifactId) ?Artifact,
@@ -84,7 +84,7 @@ pub const Target = packed struct {
         /// Create a vtable for a specific target type.
         pub fn of(comptime T: type) VTable {
             comptime return .{
-                .type_id = pl.TypeId.of(T),
+                .type_id = common.TypeId.of(T),
                 .runJob = @ptrCast(&T.runJob),
                 .addArtifact = @ptrCast(&T.addArtifact),
                 .getArtifact = @ptrCast(&T.getArtifact),
@@ -141,7 +141,7 @@ pub const PatternNode = struct {
     arity: MatchCommutativity = .fixed,
 };
 
-const CaptureMap = pl.UniqueReprMap(CaptureId, ir.Ref);
+const CaptureMap = common.UniqueReprMap(CaptureId, ir.Ref);
 
 /// Holds the results of a successful pattern match, mapping `CaptureId`s
 /// to the `ir.Ref`s they captured from the live IR graph.
@@ -159,7 +159,7 @@ pub const MatchResult = struct {
     }
 };
 
-const UseDefMap = pl.UniqueReprMap(ir.Ref, pl.ArrayList(ir.Ref));
+const UseDefMap = common.UniqueReprMap(ir.Ref, common.ArrayList(ir.Ref));
 
 /// A safe, high-level API for a transformer function to modify the IR graph.
 /// It provides methods to create new nodes and replace the matched subgraph atomically.
@@ -180,7 +180,7 @@ pub const PatternBuilder = struct {
 
             // This is the tricky part: we need to find `old_ref` in `user_node.bytes.ref_list`
             // and replace it with `new_ref`.
-            pl.todo(noreturn, .{ user_node, new_ref });
+            common.todo(noreturn, .{ user_node, new_ref });
         }
     }
 
@@ -192,6 +192,7 @@ pub const PatternBuilder = struct {
 
         // TODO: Add the old root_ref and its (now-unused) children to a "to be deleted" list.
         // The PeepholePass would then run a DeadCodeElimination pass after its main loop.
+        common.todo(noreturn, .{ self, new_ref });
     }
 
     // Convenience functions to create new IR nodes
@@ -201,7 +202,7 @@ pub const PatternBuilder = struct {
 
     pub fn createInstruction(self: *PatternBuilder, op: ir.Operation, type_ref: ir.Ref, operands: []const ir.Ref) !ir.Ref {
         // TODO: implementation using ir.Context.
-        pl.todo(noreturn, .{ self, op, type_ref, operands });
+        common.todo(noreturn, .{ self, op, type_ref, operands });
     }
 };
 
@@ -485,13 +486,13 @@ pub const Compiler = struct {
     /// Get the target for this compiler, cast to a specific type.
     /// * Does not check the type outside of safe modes.
     pub fn getTarget(self: *Compiler, comptime T: type) *T {
-        std.debug.assert(self.target.vtable.type_id == pl.TypeId.of(T));
+        std.debug.assert(self.target.vtable.type_id == common.TypeId.of(T));
         return @ptrCast(self.target.data);
     }
 
     /// Get the target for this compiler, cast to a specific type, checking the type at runtime.
     pub fn castTarget(self: *Compiler, comptime T: type) ?*T {
-        if (self.target.vtable.type_id == pl.TypeId.of(T)) {
+        if (self.target.vtable.type_id == common.TypeId.of(T)) {
             return @ptrCast(self.target.data);
         } else {
             return null;
@@ -538,7 +539,7 @@ pub const Job = struct {
 /// The default target for compiling Ribbon IR into bytecode.
 pub const BytecodeTarget = struct {
     compiler: *Compiler,
-    artifacts: pl.UniqueReprMap(ArtifactId, core.Bytecode) = .{},
+    artifacts: common.UniqueReprMap(ArtifactId, core.Bytecode) = .{},
 
     /// Get a `backend.Target` object from this bytecode target.
     pub fn target(self: *BytecodeTarget) Target {
@@ -566,7 +567,7 @@ pub const BytecodeTarget = struct {
     /// Given a compilation job, compile the IR in its context into a bytecode artifact.
     pub fn runJob(self: *BytecodeTarget, job: *Job) Target.Error!Artifact {
         // TODO: Compile the IR context into bytecode.
-        const compiled = pl.todo(core.Bytecode, .{job});
+        const compiled = common.todo(core.Bytecode, .{job});
 
         try self.artifacts.put(self.compiler.allocator, job.id, compiled);
 
