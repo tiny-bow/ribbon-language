@@ -101,6 +101,7 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
     var is_wide = [1]bool{false} ** 1024;
     var is_call = [1]bool{false} ** 1024;
     var is_branch = [1]bool{false} ** 1024;
+    var is_addr = [1]bool{false} ** 1024;
     var is_basic = [1]bool{false} ** 1024;
     var is_term = [1]bool{false} ** 1024;
     var wide_operand_names = [1]?[]const u8{null} ** 1024;
@@ -118,6 +119,9 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
                 } else if (std.mem.eql(u8, mnemonic.name, "br")) {
                     is_branch[opcode] = true;
                     std.debug.print("branch: {}\n", .{instruction.*});
+                } else if (std.mem.eql(u8, mnemonic.name, "addr")) {
+                    is_addr[opcode] = true;
+                    std.debug.print("address: {}\n", .{instruction.*});
                 } else if (instruction.terminal) {
                     is_term[opcode] = true;
                     std.debug.print("terminator: {}\n", .{instruction.*});
@@ -283,6 +287,35 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
     try writer.writeAll("};\n\n");
 
     try writer.writeAll(
+        \\/// Enumeration identifying all instructions that provide an address-of operation.
+        \\pub const AddrOpCode = enum(u16) {
+        \\    /// convert addr opcode -> full opcode
+        \\    pub fn upcast(self: AddrOpCode) OpCode { return @enumFromInt(@intFromEnum(self)); }
+        \\
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                if (is_addr[opcode]) {
+                    try formatInstructionZigDoc(opcode, instruction, writer);
+                    try writer.writeAll("    @\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\" = 0x");
+                    try formatOpcodeLiteral(opcode, writer);
+                    try writer.writeAll(",\n");
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
         \\/// Enumeration identifying each instruction that can terminate a basic block, and that is not a branch.
         \\pub const TermOpCode = enum(u16) {
         \\    /// convert term opcode -> full opcode
@@ -428,6 +461,12 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
         \\        return is_branch[@intFromEnum(code)];
         \\    }}
         \\    
+        \\    /// Determine if this OpCode's associated instruction is an address-of operation.
+        \\    pub fn isAddr(code: OpCode) bool {{
+        \\        const is_addr = comptime [_]bool{any};
+        \\        return is_addr[@intFromEnum(code)];
+        \\    }}
+        \\    
         \\    /// Determine if this OpCode's associated instruction is can occur inside a basic block (not a terminator).
         \\    pub fn isBasic(code: OpCode) bool {{
         \\        const is_basic = comptime [_]bool{any};
@@ -446,6 +485,7 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
             is_wide[0..opcode],
             is_call[0..opcode],
             is_branch[0..opcode],
+            is_addr[0..opcode],
             is_basic[0..opcode],
             is_term[0..opcode],
         },

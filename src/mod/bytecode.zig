@@ -885,7 +885,7 @@ pub const DataBuilder = struct {
             // we can use a `core.Constant` layout for the header entry,
             // since globals and constants share the same layout and simply provide different access semantics
             core.Constant.fromLayout(.{
-                .size = data_buf.len,
+                .size = @intCast(data_buf.len),
                 .alignment = @max(self.alignment, 1),
             }),
         );
@@ -1139,6 +1139,18 @@ pub const DataBuilder = struct {
     }
 };
 
+/// A unique identifier for a local variable within a function.
+pub const LocalId = Id.of(core.Layout, pl.LOCAL_ID_BITS);
+
+/// A map from LocalId to core.Layout, representing the local variables of a function.
+pub const LocalMap = pl.UniqueReprArrayMap(LocalId, core.Layout, false);
+
+/// A map from LocalId to a stack operand offset. Used by address-of instructions to resolve local variable addresses.
+pub const LocalFixupMap = pl.UniqueReprArrayMap(LocalId, u64, false);
+
+/// A map from BlockId to BlockBuilder pointers, representing the basic blocks of a function.
+pub const BlockMap = pl.UniqueReprMap(BlockId, *BlockBuilder, 80);
+
 /// A simple builder API for bytecode functions.
 pub const FunctionBuilder = struct {
     /// The general allocator used by this function for collections.
@@ -1152,7 +1164,9 @@ pub const FunctionBuilder = struct {
     /// The function's stack window alignment.
     stack_align: usize = 8,
     /// The function's basic blocks, unordered.
-    blocks: pl.UniqueReprMap(BlockId, *BlockBuilder, 80) = .empty,
+    blocks: BlockMap = .empty,
+    /// The function's local variables, unordered.
+    locals: LocalMap = .empty,
 
     /// Initialize a new builder for a bytecode function.
     pub fn init(gpa: std.mem.Allocator, arena: std.mem.Allocator) FunctionBuilder {
@@ -1168,6 +1182,8 @@ pub const FunctionBuilder = struct {
         while (block_it.next()) |ptr2ptr| ptr2ptr.*.deinit();
         self.blocks.clearRetainingCapacity();
 
+        self.locals.clearRetainingCapacity();
+
         self.id = .fromInt(0);
         self.stack_size = 0;
         self.stack_align = 8;
@@ -1179,8 +1195,34 @@ pub const FunctionBuilder = struct {
         while (block_it.next()) |ptr2ptr| ptr2ptr.*.deinit();
 
         self.blocks.deinit(self.gpa);
+        self.locals.deinit(self.gpa);
 
         self.* = undefined;
+    }
+
+    /// Create a new local variable within this function, returning an id for it.
+    pub fn createLocal(self: *FunctionBuilder, layout: core.Layout) error{OutOfMemory}!LocalId {
+        const index = self.locals.count();
+
+        if (index > LocalId.MAX_INT) {
+            log.debug("FunctionBuilder.createLocal: Cannot create more than {d} locals", .{LocalId.MAX_INT});
+            return error.OutOfMemory;
+        }
+
+        const local_id = LocalId.fromInt(index);
+        const gop = try self.locals.getOrPut(self.gpa, local_id);
+
+        // sanity check: local_id should be fresh if the map has been mutated in append-only fashion
+        std.debug.assert(!gop.found_existing);
+
+        gop.value_ptr.* = layout;
+
+        return local_id;
+    }
+
+    /// Get the layout of a local variable by its id.
+    pub fn getLocal(self: *const FunctionBuilder, id: LocalId) ?core.Layout {
+        return self.locals.get(id);
     }
 
     /// Create a new basic block within this function, returning a pointer to it.
@@ -1225,6 +1267,20 @@ pub const FunctionBuilder = struct {
         var queue: BlockVisitorQueue = .init(encoder.temp_allocator);
         defer queue.deinit();
 
+        // compute stack layout and set up the local fixup map for the function
+        const layouts = self.locals.values();
+
+        const indices = try encoder.temp_allocator.alloc(u64, layouts.len);
+        defer encoder.temp_allocator.free(indices);
+
+        const offsets = try encoder.temp_allocator.alloc(u64, layouts.len);
+        defer encoder.temp_allocator.free(offsets);
+
+        const stack_layout = core.Layout.computeOptimalCommonLayout(layouts, indices, offsets);
+
+        var local_fixups = try LocalFixupMap.init(encoder.temp_allocator, self.locals.keys(), offsets);
+        defer local_fixups.deinit(encoder.temp_allocator);
+
         // create our header entry
         const entry_addr_rel = try encoder.createRel(core.Function);
 
@@ -1249,16 +1305,16 @@ pub const FunctionBuilder = struct {
 
             const block = self.blocks.get(block_id).?;
 
-            try block.encode(&queue, encoder);
+            try block.encode(&queue, &local_fixups, encoder);
         }
 
         const upper_rel = encoder.getRelativeAddress();
 
         // write the function header
-        const header = encoder.relativeToPointer(*core.Function, entry_addr_rel);
+        const func = encoder.relativeToPointer(*core.Function, entry_addr_rel);
 
-        header.kind = .bytecode;
-        header.stack_size = @intCast(pl.alignTo(self.stack_size, self.stack_align));
+        func.kind = .bytecode;
+        func.layout = stack_layout;
 
         // Add a fixup for the function's header reference
         try encoder.bindFixup(
@@ -1351,6 +1407,34 @@ pub const SequenceBuilder = struct {
         });
     }
 
+    /// Append an address-of instruction to the sequence.
+    pub fn instrAddrOf(self: *SequenceBuilder, comptime code: Instruction.AddrOpCode, register: core.Register, id: anytype) Encoder.Error!void {
+        const Set = comptime Instruction.SetType(code.upcast());
+        const fields = comptime std.meta.fieldNames(Set);
+        const id_field = comptime fields[1];
+        const set_is_enum = comptime @typeInfo(@FieldType(Set, id_field)) == .@"enum";
+        const id_is_enum = comptime @typeInfo(@TypeOf(id)) == .@"enum";
+
+        comptime {
+            if (std.mem.eql(u8, id_field, "R") or fields.len != 2) {
+                @compileError("SequenceBuilder.instrAddrOf: out of sync with ISA; expected 'R' field to be first of two fields.");
+            }
+        }
+
+        var set: Set = undefined;
+
+        set.R = register;
+        @field(set, id_field) = if (comptime !set_is_enum and id_is_enum) @intFromEnum(id) else if (comptime set_is_enum and !id_is_enum) @enumFromInt(id) else id;
+
+        try self.proto(.{
+            .instruction = .{
+                .code = code.upcast(),
+                .data = @unionInit(Instruction.OpData, @tagName(code), set),
+            },
+            .additional = .none,
+        });
+    }
+
     /// Append a call instruction to the sequence.
     pub fn instrCall(self: *SequenceBuilder, comptime code: Instruction.CallOpCode, data: Instruction.SetType(code.upcast()), args: Buffer.fixed(core.Register, pl.MAX_REGISTERS)) Error!void {
         try self.proto(.{
@@ -1364,9 +1448,9 @@ pub const SequenceBuilder = struct {
 
     /// Encodes the instruction sequence into the provided encoder.
     /// Does not encode a terminator; execution will fall through.
-    pub fn encode(self: *const SequenceBuilder, queue: *BlockVisitorQueue, encoder: *Encoder) Encoder.Error!void {
+    pub fn encode(self: *const SequenceBuilder, queue: *BlockVisitorQueue, local_fixups: *const LocalFixupMap, encoder: *Encoder) Encoder.Error!void {
         for (self.body.items) |*pi| {
-            try pi.encode(queue, encoder);
+            try pi.encode(queue, local_fixups, encoder);
         }
     }
 };
@@ -1449,6 +1533,12 @@ pub const BlockBuilder = struct {
         try self.body.instrCall(code, data, args);
     }
 
+    /// Append an address-of instruction to the block body.
+    pub fn instrAddrOf(self: *BlockBuilder, comptime code: Instruction.AddrOpCode, register: core.Register, id: anytype) Encoder.Error!void {
+        try self.ensureUnterminated();
+        try self.body.instrAddrOf(code, register, id);
+    }
+
     /// Set the block terminator to a branch instruction.
     pub fn instrBr(self: *BlockBuilder, target: BlockId) Encoder.Error!void {
         try self.ensureUnterminated();
@@ -1488,16 +1578,16 @@ pub const BlockBuilder = struct {
     /// Encode the block into the provided encoder, including the body instructions and the terminator.
     /// * The block's entry point is encoded as a location in the bytecode header, using the current region id and the block's id as the offset
     /// * Other blocks' ids that are referenced by instructions are added to the provided queue in order of use
-    pub fn encode(self: *BlockBuilder, queue: *BlockVisitorQueue, encoder: *Encoder) Encoder.Error!void {
+    pub fn encode(self: *BlockBuilder, queue: *BlockVisitorQueue, local_fixups: *const LocalFixupMap, encoder: *Encoder) Encoder.Error!void {
         // we can encode the current location as the block entry point
         try encoder.registerLocation(encoder.localLocationId(self.id), encoder.getRelativeAddress());
 
         // first we emit all the body instructions by encoding the inner sequence
-        try self.body.encode(queue, encoder);
+        try self.body.encode(queue, local_fixups, encoder);
 
         // now the terminator instruction, if any; same as body instructions, but can queue block ids
         if (self.terminator) |*proto| {
-            try proto.encode(queue, encoder);
+            try proto.encode(queue, local_fixups, encoder);
         } else {
             // simply write the scaled opcode for `unreachable`, since it has no operands
             try encoder.writeValue(Instruction.OpCode.@"unreachable".toBits());
@@ -1546,15 +1636,52 @@ pub const ProtoInstr = struct {
     };
 
     /// Encode this instruction into the provided encoder at the current relative address.
+    /// * Uses the `Encoder.temp_allocator` to allocate local variable fixups in the provided `LocalFixupMap`.
     /// * This method is used by the `BlockBuilder` to encode instructions into the
     /// * It is not intended to be used directly; instead, use the `BlockBuilder` methods to append instructions.
     /// * Also available are convenience methods in `Encoder` for appending instructions directly.
     /// * The `queue` is used to track branch targets and ensure they are visited in the correct order.
-    pub fn encode(self: *const ProtoInstr, queue: *BlockVisitorQueue, encoder: *Encoder) Encoder.Error!void {
+    pub fn encode(self: *const ProtoInstr, queue: *BlockVisitorQueue, local_fixups: *const LocalFixupMap, encoder: *Encoder) Encoder.Error!void {
         try encoder.ensureAligned(pl.BYTECODE_ALIGNMENT);
 
+        var instr = self.instruction;
+
+        if (self.instruction.code.isAddr()) is_addr: {
+            const addr_code: Instruction.AddrOpCode = @enumFromInt(@intFromEnum(self.instruction.code));
+
+            switch (addr_code) {
+                .addr_l => {
+                    const local_id: LocalId = @enumFromInt(self.instruction.data.addr_l.I);
+                    instr.data.addr_l.I = @intCast(local_fixups.get(local_id) orelse {
+                        log.err("ProtoInstr.encode: Local variable {} not found in local fixup map", .{local_id});
+                        return error.BadEncoding;
+                    });
+                },
+
+                .addr_u => {
+                    // TODO: Additional data is required to implement this instruction
+                    //
+                    // basic plan of attack:
+                    // 1. Add a HandlerSetBuilder
+                    // 2. Make FunctionBuilder a manager for handler sets like it is for locals & blocks
+                    // 3. When encoding functions:
+                    //    - For each handler set, for each handler, visit the handler function.
+                    //    - Call its encode method with the current function's local fixup map.
+                    // 4. This function can then take ?upvalue_fixups and local_fixups.
+                    pl.todo(noreturn, "NYI");
+                },
+
+                .addr_g,
+                .addr_f,
+                .addr_b,
+                .addr_x,
+                .addr_c,
+                => break :is_addr,
+            }
+        }
+
         const rel_addr = encoder.getRelativeAddress();
-        try encoder.writeValue(self.instruction.toBits());
+        try encoder.writeValue(instr.toBits());
 
         switch (self.additional) {
             .none => {},
@@ -1564,7 +1691,7 @@ pub const ProtoInstr = struct {
                 const then_id, const maybe_else_id = ids;
                 const then_dest = encoder.localLocationId(then_id);
 
-                switch (self.instruction.code) {
+                switch (instr.code) {
                     .br => {
                         if (maybe_else_id) |_| {
                             log.err("BlockBuilder.encode: Branch instruction `br` cannot have an else target", .{});
@@ -1980,7 +2107,7 @@ test "encode static data reference" {
     var main_fn = try tb.builder.createFunctionBuilder(main_id);
     var entry_block = try main_fn.createBlock();
 
-    try entry_block.instr(.addr_c, .{ .R = .r0, .C = const_id });
+    try entry_block.instrAddrOf(.addr_c, .r0, const_id);
     try entry_block.instr(.load64, .{ .Rx = .r1, .Ry = .r0, .I = 0 });
     try entry_block.instrTerm(.@"return", .{ .R = .r1 });
 
@@ -2070,6 +2197,43 @@ test "table builder error on wrong static kind" {
 
     // Try to create a data builder with it, should fail.
     try testing.expectError(error.BadEncoding, tb.builder.createDataBuilder(func_id));
+}
+
+test "encode local variable reference" {
+    var tb = try TestBed("encode local variable reference").init();
+    defer tb.deinit();
+
+    const main_id = try tb.builder.createHeaderEntry(.function, "main");
+    var main_fn = try tb.builder.createFunctionBuilder(main_id);
+
+    const local_a = try main_fn.createLocal(.{ .size = 8, .alignment = 8 });
+    const local_b = try main_fn.createLocal(.{ .size = 8, .alignment = 8 });
+    const local_c = try main_fn.createLocal(.{ .size = 32, .alignment = 16 });
+
+    var entry_block = try main_fn.createBlock();
+
+    try entry_block.instrAddrOf(.addr_l, .r1, local_b);
+    try entry_block.instrAddrOf(.addr_l, .r1, local_a);
+    try entry_block.instrAddrOf(.addr_l, .r1, local_c);
+
+    var table = try tb.builder.encode(tb.gpa);
+    defer table.deinit();
+
+    var disas_buf = std.ArrayList(u8).init(tb.gpa);
+    defer disas_buf.deinit();
+
+    const main_func = table.bytecode.header.get(main_id);
+    const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
+    try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+
+    const expected =
+        \\    addr_l r1 I:00000028
+        \\    addr_l r1 I:00000020
+        \\    addr_l r1 I:00000000
+        \\    unreachable
+        \\
+    ;
+    try testing.expectEqualStrings(expected, disas_buf.items);
 }
 
 test "encode function with conditional branch" {

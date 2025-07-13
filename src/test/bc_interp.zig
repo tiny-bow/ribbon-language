@@ -230,3 +230,105 @@ test "interpreter subtraction" {
     const result = try interpreter.invokeBytecode(fiber, function, &.{ 50, 15 });
     try testing.expectEqual(@as(u64, 35), result);
 }
+
+test "interpreter local variable store and load" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator);
+    defer tb.deinit();
+
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    var main_fn = try tb.createFunctionBuilder(main_id);
+
+    // Create a local variable of size/alignment 8 (u64)
+    const my_local = try main_fn.createLocal(.{ .size = 8, .alignment = 8 });
+
+    var entry_block = try main_fn.createBlock();
+
+    // r0 = &my_local
+    try entry_block.instrAddrOf(.addr_l, .r0, my_local);
+    // r1 = 12345
+    try entry_block.instrWide(.bit_copy64c, .{ .R = .r1 }, 12345);
+    // *(r0) = r1
+    try entry_block.instr(.store64, .{ .Rx = .r0, .Ry = .r1, .I = 0 });
+    // r2 = *(r0)
+    try entry_block.instr(.load64, .{ .Rx = .r2, .Ry = .r0, .I = 0 });
+    // return r2
+    try entry_block.instrTerm(.@"return", .{ .R = .r2 });
+
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = try interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectEqual(@as(u64, 12345), result);
+}
+
+test "interpreter multiple local variables with varied alignment" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator);
+    defer tb.deinit();
+
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    var main_fn = try tb.createFunctionBuilder(main_id);
+
+    // Create locals with different sizes and alignments.
+    // The builder will re-order them to optimize layout based on alignment.
+    const local_b = try main_fn.createLocal(.{ .size = 1, .alignment = 1 }); // u8
+    const local_d = try main_fn.createLocal(.{ .size = 8, .alignment = 8 }); // u64
+    const local_c = try main_fn.createLocal(.{ .size = 4, .alignment = 4 }); // u32
+    const local_a = try main_fn.createLocal(.{ .size = 2, .alignment = 2 }); // u16
+
+    var entry_block = try main_fn.createBlock();
+
+    // Store values into each local variable
+    try entry_block.instrAddrOf(.addr_l, .r0, local_d);
+    try entry_block.instrWide(.bit_copy64c, .{ .R = .r1 }, 1000);
+    try entry_block.instr(.store64, .{ .Rx = .r0, .Ry = .r1, .I = 0 });
+
+    try entry_block.instrAddrOf(.addr_l, .r0, local_c);
+    try entry_block.instrWide(.bit_copy64c, .{ .R = .r1 }, 200);
+    try entry_block.instr(.store32, .{ .Rx = .r0, .Ry = .r1, .I = 0 });
+
+    try entry_block.instrAddrOf(.addr_l, .r0, local_a);
+    try entry_block.instrWide(.bit_copy64c, .{ .R = .r1 }, 30);
+    try entry_block.instr(.store16, .{ .Rx = .r0, .Ry = .r1, .I = 0 });
+
+    try entry_block.instrAddrOf(.addr_l, .r0, local_b);
+    try entry_block.instrWide(.bit_copy64c, .{ .R = .r1 }, 4);
+    try entry_block.instr(.store8, .{ .Rx = .r0, .Ry = .r1, .I = 0 });
+
+    // Load values back and sum them up into r2
+    try entry_block.instrAddrOf(.addr_l, .r0, local_d);
+    try entry_block.instr(.load64, .{ .Rx = .r2, .Ry = .r0, .I = 0 }); // r2 = 1000
+
+    try entry_block.instrAddrOf(.addr_l, .r0, local_c);
+    try entry_block.instr(.load32, .{ .Rx = .r1, .Ry = .r0, .I = 0 }); // r1 = 200
+    try entry_block.instr(.i_add64, .{ .Rx = .r2, .Ry = .r2, .Rz = .r1 }); // r2 += r1
+
+    try entry_block.instrAddrOf(.addr_l, .r0, local_a);
+    try entry_block.instr(.load16, .{ .Rx = .r1, .Ry = .r0, .I = 0 }); // r1 = 30
+    try entry_block.instr(.i_add64, .{ .Rx = .r2, .Ry = .r2, .Rz = .r1 }); // r2 += r1
+
+    try entry_block.instrAddrOf(.addr_l, .r0, local_b);
+    try entry_block.instr(.load8, .{ .Rx = .r1, .Ry = .r0, .I = 0 }); // r1 = 4
+    try entry_block.instr(.i_add64, .{ .Rx = .r2, .Ry = .r2, .Rz = .r1 }); // r2 += r1
+
+    try entry_block.instrTerm(.@"return", .{ .R = .r2 });
+
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = try interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectEqual(@as(u64, 1234), result);
+}

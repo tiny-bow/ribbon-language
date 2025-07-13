@@ -107,7 +107,7 @@ fn getOrInitWrapper() *const core.Function {
             .base = buffer,
             .upper = buffer + 1,
         },
-        .stack_size = 0,
+        .layout = .none,
     };
 
     static.init = true;
@@ -123,6 +123,24 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
 
     const newRegisters = self.header.registers.allocSlice(2);
     @memcpy(newRegisters[1][0..arguments.len], arguments);
+
+    const original_data_top_ptr = self.header.data.top_ptr;
+    defer self.header.data.top_ptr = original_data_top_ptr;
+
+    // Allocate space for the function's local variables on the data stack.
+    const alignment = fun.layout.alignment;
+    const size = fun.layout.size;
+
+    const aligned_data_ptr_u8: [*]u8 = pl.alignTo(@as([*]u8, @ptrCast(original_data_top_ptr)), alignment);
+    const padding_bytes = @intFromPtr(aligned_data_ptr_u8) - @intFromPtr(original_data_top_ptr);
+    const total_bytes_to_alloc = padding_bytes + size;
+    const total_u64s_to_alloc = (total_bytes_to_alloc + @sizeOf(u64) - 1) / @sizeOf(u64);
+
+    if (!self.header.data.hasSpace(total_u64s_to_alloc)) {
+        return error.Overflow;
+    }
+    const new_frame_data_ptr: [*]core.RegisterBits = @alignCast(@ptrCast(aligned_data_ptr_u8));
+    _ = self.header.data.allocSlice(total_u64s_to_alloc);
 
     log.debug("invoking bytecode function {x} with extents {x} to {x}", .{
         @intFromPtr(fun),
@@ -145,7 +163,7 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
     self.header.calls.push(core.CallFrame{
         .function = @ptrCast(fun),
         .evidence = null,
-        .data = self.header.data.top_ptr,
+        .data = new_frame_data_ptr,
         .set_frame = self.header.sets.top(),
         .vregs = &newRegisters[1],
         .ip = fun.extents.base,
@@ -154,8 +172,10 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
 
     try eval(self, .skip_breakpoints);
 
-    // second frame will have already been popped by the interpreter
-    self.header.calls.pop();
+    // The 'fun' frame was popped by its 'return' instruction. 'eval' returns
+    // after the 'wrapper' frame hits a 'halt'. We now pop the wrapper frame.
+    const popped_wrapper_frame = self.header.calls.popPtr();
+    std.debug.assert(popped_wrapper_frame.function == @as(*const anyopaque, wrapper));
 
     const registers = self.header.registers.popPtr();
 
@@ -263,29 +283,7 @@ fn invokeInternal(self: *core.mem.FiberHeader, current: anytype, registerId: cor
     switch (core.InternalFunctionKind.fromAddress(functionOpaquePtr)) {
         .bytecode => {
             const functionPtr: *const core.Function = @ptrCast(@alignCast(functionOpaquePtr));
-
-            if (@intFromBool(self.calls.hasSpace(1)) & @intFromBool(self.data.hasSpace(functionPtr.stack_size)) == 0) {
-                @branchHint(.cold);
-                return error.Overflow;
-            }
-
-            const data = self.data.allocSlice(functionPtr.stack_size);
-
-            const newRegisters = self.registers.allocPtr();
-
-            self.calls.push(core.CallFrame{
-                .function = functionOpaquePtr,
-                .evidence = null,
-                .set_frame = self.sets.top(),
-                .data = data.ptr,
-                .vregs = newRegisters,
-                .ip = functionPtr.extents.base,
-                .output = registerId,
-            });
-
-            for (argumentRegisterIds, 0..) |reg, i| {
-                newRegisters[i] = current.callFrame.vregs[reg.getIndex()];
-            }
+            try pushBytecodeCall(self, current.callFrame, functionPtr, null, registerId, argumentRegisterIds);
         },
         .builtin => {
             const functionPtr: *const core.BuiltinFunction = @as(*const core.BuiltinAddress, @ptrCast(@alignCast(functionOpaquePtr))).asFunction();
@@ -324,6 +322,48 @@ fn invokeInternal(self: *core.mem.FiberHeader, current: anytype, registerId: cor
     }
 }
 
+fn pushBytecodeCall(
+    self: *core.mem.FiberHeader,
+    caller_frame: *const core.CallFrame,
+    function: *const core.Function,
+    evidence: ?*core.Evidence,
+    output_register: core.Register,
+    argument_register_ids: []const core.Register,
+) (core.Error)!void {
+    if (!self.calls.hasSpace(1)) return error.Overflow;
+
+    const alignment = function.layout.alignment;
+    const size = function.layout.size;
+
+    const current_data_ptr: [*]u8 = @ptrCast(self.data.top_ptr);
+    const aligned_data_ptr: [*]u8 = pl.alignTo(current_data_ptr, alignment);
+    const padding_bytes = @intFromPtr(aligned_data_ptr) - @intFromPtr(current_data_ptr);
+    const total_bytes_to_alloc = padding_bytes + size;
+
+    const total_u64s_to_alloc = (total_bytes_to_alloc + @sizeOf(u64) - 1) / @sizeOf(u64);
+
+    if (!self.data.hasSpace(total_u64s_to_alloc)) return error.Overflow;
+
+    _ = self.data.allocSlice(total_u64s_to_alloc);
+    const new_frame_data_ptr: [*]core.RegisterBits = @alignCast(@ptrCast(aligned_data_ptr));
+
+    const new_registers = self.registers.allocPtr();
+
+    self.calls.push(core.CallFrame{
+        .function = function,
+        .evidence = evidence,
+        .data = new_frame_data_ptr,
+        .vregs = new_registers,
+        .set_frame = self.sets.top(),
+        .ip = function.extents.base,
+        .output = output_register,
+    });
+
+    for (argument_register_ids, 0..) |reg, i| {
+        new_registers[i] = caller_frame.vregs[reg.getIndex()];
+    }
+}
+
 fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || SignalSubset(isLoop))!void {
     log.debug("begin {s}", .{if (isLoop) "loop" else "step"});
 
@@ -347,7 +387,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             st.callFrame.ip += 1;
 
-            st.stackFrame = st.callFrame.data[0..st.function.stack_size];
+            const stack_size_bytes = st.function.layout.size;
+            const stack_size_u64s = (stack_size_bytes + @sizeOf(u64) - 1) / @sizeOf(u64);
+            st.stackFrame = st.callFrame.data[0..stack_size_u64s];
 
             return st.instruction.code;
         }
@@ -578,30 +620,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             switch (core.InternalFunctionKind.fromAddress(functionOpaquePtr)) {
                 .bytecode => {
-                    const functionPtr = handler.toPointer(*const core.Function);
-
-                    if (@intFromBool(self.calls.hasSpace(1)) & @intFromBool(self.data.hasSpace(functionPtr.stack_size)) == 0) {
-                        @branchHint(.cold);
-                        return error.Overflow;
-                    }
-
-                    const data = self.data.allocSlice(functionPtr.stack_size);
-
-                    const newRegisters = self.registers.allocPtr();
-
-                    self.calls.push(core.CallFrame{
-                        .function = functionPtr,
-                        .evidence = evidencePtr,
-                        .data = data.ptr,
-                        .vregs = newRegisters,
-                        .set_frame = self.sets.top(),
-                        .ip = functionPtr.extents.base,
-                        .output = registerId,
-                    });
-
-                    for (argumentRegisterIds, 0..) |reg, i| {
-                        newRegisters[i] = current.callFrame.vregs[reg.getIndex()];
-                    }
+                    const functionPtr: *const core.Function = @ptrCast(@alignCast(functionOpaquePtr));
+                    try pushBytecodeCall(self, current.callFrame, functionPtr, null, registerId, argumentRegisterIds);
                 },
                 .builtin => {
                     const functionPtr: *const core.BuiltinFunction = handler.toPointer(*const core.BuiltinAddress).asFunction();
@@ -800,13 +820,12 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
         .addr_l => { // Get the address of a signed integer frame-relative operand stack offset I, placing it in R.
             const registerId = current.instruction.data.addr_l.R;
-            const offset: i32 = @bitCast(current.instruction.data.addr_l.I);
+            const offset = current.instruction.data.addr_l.I;
+            std.debug.assert(offset < current.stackFrame.len * @sizeOf(core.RegisterBits));
 
-            const addr = pl.offsetPointer(current.stackFrame.ptr, offset);
+            const frame_base: [*]const u8 = @ptrCast(current.stackFrame.ptr);
 
-            std.debug.assert(@intFromPtr(addr) >= @intFromPtr(self.data.base) and @intFromPtr(addr) <= @intFromPtr(self.data.limit));
-
-            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(addr);
+            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(pl.offsetPointer(frame_base, offset));
 
             continue :dispatch try state.step(self);
         },

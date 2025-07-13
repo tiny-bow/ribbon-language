@@ -55,6 +55,16 @@ pub const Location = packed struct(u64) {
     pub const OffsetMark = struct {};
 
     /// Create a new `Location` from a region id and an offset id.
+    /// * `region` and `id` should be of a type constructed by `common.Id`
+    /// * Identity types larger than `pl.STATIC_ID_BITS` bits may cause integer overflow
+    pub fn from(region: anytype, id: anytype) Location {
+        return Location{
+            .region = region.bitcast(RegionMark, pl.STATIC_ID_BITS),
+            .offset = id.bitcast(OffsetMark, pl.STATIC_ID_BITS),
+        };
+    }
+
+    /// Create a new `Location` from a region id and an offset id.
     /// * `id` should be of a type constructed by `common.Id`
     /// * Identity types larger than `pl.STATIC_ID_BITS` bits may cause integer overflow
     pub fn fromId(region: RegionId, id: anytype) Location {

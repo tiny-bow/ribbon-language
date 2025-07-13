@@ -150,8 +150,84 @@ pub const UpvalueId = Id.of(Upvalue, pl.LOCAL_ID_BITS);
 
 /// Simple value layout for Ribbon's constant and global values.
 pub const Layout = packed struct {
-    size: u64,
+    size: pl.Size,
     alignment: pl.Alignment,
+
+    /// The default `Layout`, no size, align 1.
+    pub const none: Layout = .{ .size = 0, .alignment = 1 };
+
+    /// Computes an optimal layout for a set of items, sorting them by alignment.
+    ///
+    /// This is a pure computational function that requires the caller to provide all buffers.
+    ///
+    /// - `data`: Input slice of `Layout`s for each item.
+    /// - `indices`: Output slice. Will be populated with the item indices (0..n-1)
+    ///   sorted according to the final, optimal layout order.
+    /// - `offsets`: Output slice. Will be populated with the final stack offset for
+    ///   each corresponding item in the `data` slice.
+    ///
+    /// Returns the final `Layout` of the entire container.
+    ///
+    /// * Panics if the input slices are not of equal length.
+    pub fn computeOptimalCommonLayout(
+        data: []const Layout,
+        indices: []u64,
+        offsets: []u64,
+    ) Layout {
+        if (data.len != indices.len or data.len != offsets.len) {
+            std.debug.panic("core.Layout.computeOptimalCommonLayout: Input slices must be of equal length, got {d}, {d}, {d}", .{
+                data.len,
+                indices.len,
+                offsets.len,
+            });
+        }
+
+        if (data.len == 0) {
+            return Layout{ .size = 0, .alignment = 1 };
+        }
+
+        // Find max alignment and populate indices
+        var max_alignment: pl.Alignment = 1;
+        for (data, 0..) |lyt, i| {
+            indices[i] = i; // Populate with original indices 0, 1, 2...
+            if (lyt.alignment > max_alignment) {
+                max_alignment = lyt.alignment;
+            }
+        }
+
+        // Sort indices by layout
+        // The `indices` slice is sorted in-place. Its final state is the layout order.
+        std.mem.sort(u64, indices, data, struct {
+            pub fn sorter(context: []const Layout, a_idx: u64, b_idx: u64) bool {
+                const layout_a = context[a_idx];
+                const layout_b = context[b_idx];
+                if (layout_a.alignment > layout_b.alignment) return true;
+                if (layout_a.alignment < layout_b.alignment) return false;
+                return layout_a.size > layout_b.size;
+            }
+        }.sorter);
+
+        // Calculate layout offsets
+        // We iterate using the sorted `indices` to determine the layout order,
+        // but we write the results to the `offsets` slice at the correct original index.
+        var current_size: pl.Size = 0;
+        for (indices) |original_index| {
+            const lyt = data[original_index];
+            const aligned_offset = pl.alignTo(current_size, lyt.alignment);
+
+            offsets[original_index] = aligned_offset;
+
+            current_size = aligned_offset + lyt.size;
+        }
+
+        // Finalization
+        const final_size = pl.alignTo(current_size, max_alignment);
+
+        return Layout{
+            .size = final_size,
+            .alignment = max_alignment,
+        };
+    }
 };
 
 /// A Ribbon constant value definition.
@@ -234,8 +310,8 @@ pub const Function = extern struct {
     /// * `base`: the function's first instruction in the bytecode unit; the entry point
     /// * `upper`: one past the end of its instructions; for bounds checking
     extents: Extents,
-    /// The stack window size of the function.
-    stack_size: u16,
+    /// The size and alignment of the function's stack frame.
+    layout: Layout,
 };
 
 /// A Ribbon builtin value definition.
@@ -714,6 +790,7 @@ pub const CallFrame = extern struct {
     /// The virtual register frame for this call.
     vregs: *RegisterArray,
     /// A pointer to the base of the data stack at this call frame.
+    /// This pointer is guaranteed to be aligned according to the function's `layout` requirements.
     data: [*]RegisterBits,
     /// A pointer to the top-most SetFrame at this call frame.
     set_frame: *SetFrame,
