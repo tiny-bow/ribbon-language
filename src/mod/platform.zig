@@ -146,26 +146,35 @@ pub const MutVirtualMemory = []align(std.heap.page_size_min) u8;
 pub const ArrayList = std.ArrayListUnmanaged;
 pub const MultiArrayList = std.MultiArrayList;
 
-pub const ArrayMap = std.ArrayHashMapUnmanaged;
+/// A dynamic array based hash table of keys where the values are void. Each key is stored sequentially.
+///
+/// Default initialization of this struct is deprecated; use `.empty` instead.
+///
+/// See `std.ArrayHashMapUnmanaged` for detailed documentation.
+pub fn ArrayMap(comptime K: type, comptime V: type, comptime Ctx: type) type {
+    return std.ArrayHashMapUnmanaged(K, V, Ctx, true);
+}
 
 /// A dynamic array based hash table of keys where the values are void. Each key is stored sequentially.
 ///
 /// Default initialization of this struct is deprecated; use `.empty` instead.
 ///
 /// See `ArrayMap` for detailed documentation.
-pub fn ArraySet(comptime T: type, comptime Ctx: type, comptime RETAIN_HASH: bool) type {
-    return ArrayMap(T, void, Ctx, RETAIN_HASH);
+pub fn ArraySet(comptime T: type, comptime Ctx: type) type {
+    return ArrayMap(T, void, Ctx);
 }
 
-pub const HashMap = std.HashMapUnmanaged;
+pub fn HashMap(comptime K: type, comptime V: type, comptime Ctx: type) type {
+    return std.HashMapUnmanaged(K, V, Ctx, 80);
+}
 
 /// A hash table based on open addressing and linear probing. The values are void.
 ///
 /// Default initialization of this struct is deprecated; use `.empty` instead.
 ///
 /// See `HashMap` for detailed docs.
-pub fn HashSet(comptime T: type, comptime Ctx: type, comptime LOAD_PERCENTAGE: u64) type {
-    return HashMap(T, void, Ctx, LOAD_PERCENTAGE);
+pub fn HashSet(comptime T: type, comptime Ctx: type) type {
+    return HashMap(T, void, Ctx);
 }
 
 /// String map type; see `HashMap` for detailed docs.
@@ -185,7 +194,7 @@ pub const StringArrayMap = std.StringArrayHashMapUnmanaged;
 /// Default initialization of this struct is deprecated; use `.empty` instead.
 ///
 /// See `ArraySet` for detailed docs.
-pub const StringArraySet = std.StringArrayHashMapUnmanaged(void);
+pub const StringArraySet = StringArrayMap(void);
 
 /// String map type. The values are void.
 ///
@@ -194,9 +203,7 @@ pub const StringArraySet = std.StringArrayHashMapUnmanaged(void);
 /// Default initialization of this struct is deprecated; use `.empty` instead.
 ///
 /// See `HashSet` for detailed docs.
-pub fn StringSet(comptime Ctx: type, comptime LOAD_PERCENTAGE: u64) type {
-    return StringMap(void, Ctx, LOAD_PERCENTAGE);
-}
+pub const StringSet = StringMap(void);
 
 /// Indicates whether an integer type can represent negative values.
 pub const Signedness = std.builtin.Signedness;
@@ -262,20 +269,20 @@ pub fn WithoutFields(comptime T: type, comptime DROPPED: []const []const u8) typ
     }
 }
 
-pub fn UniqueReprMap(comptime K: type, comptime V: type, LOAD_PERCENTAGE: u64) type {
-    return HashMap(K, V, UniqueReprHashContext64(K), LOAD_PERCENTAGE);
+pub fn UniqueReprMap(comptime K: type, comptime V: type) type {
+    return HashMap(K, V, UniqueReprHashContext64(K));
 }
 
-pub fn UniqueReprSet(comptime T: type, LOAD_PERCENTAGE: u64) type {
-    return HashSet(T, UniqueReprHashContext64(T), LOAD_PERCENTAGE);
+pub fn UniqueReprSet(comptime T: type) type {
+    return HashSet(T, UniqueReprHashContext64(T));
 }
 
-pub fn UniqueReprArrayMap(comptime K: type, comptime V: type, comptime RETAIN_HASH: bool) type {
-    return ArrayMap(K, V, UniqueReprHashContext32(K), RETAIN_HASH);
+pub fn UniqueReprArrayMap(comptime K: type, comptime V: type) type {
+    return ArrayMap(K, V, UniqueReprHashContext32(K));
 }
 
-pub fn UniqueReprArraySet(comptime T: type, comptime RETAIN_HASH: bool) type {
-    return ArraySet(T, UniqueReprHashContext32(T), RETAIN_HASH);
+pub fn UniqueReprArraySet(comptime T: type) type {
+    return ArraySet(T, UniqueReprHashContext32(T));
 }
 
 /// Provides a 32-bit hash context for types with unique representation. See `std.meta.hasUniqueRepresentation`.
@@ -1125,7 +1132,7 @@ pub inline fn BiMap(comptime A: type, comptime B: type, comptime A_Ctx: type, co
         const Self = @This();
 
         fn Map(comptime X: type, comptime Y: type, comptime C: type) type {
-            return if (style == .array) ArrayMap(X, Y, C, false) else HashMap(X, Y, C, 80);
+            return if (style == .array) ArrayMap(X, Y, C) else HashMap(X, Y, C);
         }
 
         a_to_b: Map(A, B, A_Ctx),
@@ -1206,7 +1213,7 @@ pub fn UniqueReprBiMap(comptime A: type, comptime B: type, comptime style: MapSt
         const Self = @This();
 
         fn Map(comptime X: type, comptime Y: type) type {
-            return if (style == .array) UniqueReprArrayMap(X, Y, false) else UniqueReprMap(X, Y, 80);
+            return if (style == .array) UniqueReprArrayMap(X, Y) else UniqueReprMap(X, Y);
         }
 
         a_to_b: Map(A, B),
@@ -1222,8 +1229,8 @@ pub fn UniqueReprBiMap(comptime A: type, comptime B: type, comptime style: MapSt
             errdefer allocator.destroy(self);
 
             self.* = Self{
-                .a_to_b = Map(A, B, 80),
-                .b_to_a = Map(B, A, 80),
+                .a_to_b = Map(A, B),
+                .b_to_a = Map(B, A),
             };
             errdefer self.deinit(allocator);
 
@@ -1312,7 +1319,7 @@ pub fn Visitor(comptime T: type) type {
         const Self = @This();
 
         allocator: std.mem.Allocator,
-        visited_values: UniqueReprSet(T, 80),
+        visited_values: UniqueReprSet(T),
 
         pub fn init(allocator: std.mem.Allocator) Self {
             return Self{

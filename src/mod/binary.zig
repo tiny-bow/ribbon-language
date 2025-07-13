@@ -157,7 +157,7 @@ pub const LinkerLocation = struct {
     fixups: FixupSet = .empty,
 
     /// The type of the set used by a `LinkerLocation` insinde a `LinkerMap.FixupMap`.
-    pub const FixupSet = pl.HashSet(LinkerFixup, LinkerHashContext, 80);
+    pub const FixupSet = pl.HashSet(LinkerFixup, LinkerHashContext);
 
     /// 64-bit hash context for `LinkerFixup`.
     pub const LinkerHashContext = struct {
@@ -191,7 +191,7 @@ pub const LinkerMap = struct {
     unbound: FixupMap = .empty,
 
     /// A map of unbound locations and their fixups within a `LinkerMap`.
-    pub const FixupMap = pl.UniqueReprArrayMap(Location, LinkerLocation, false);
+    pub const FixupMap = pl.UniqueReprArrayMap(Location, LinkerLocation);
 
     /// Create a new linker map with the provided general purpose allocator.
     pub fn init(gpa: std.mem.Allocator) LinkerMap {
@@ -245,7 +245,7 @@ pub const LocationMap = struct {
     /// General purpose allocator used for location map collections.
     gpa: std.mem.Allocator,
     /// The map of addresses that are referenced by id in some fixups.
-    addresses: pl.UniqueReprMap(Location, ?RelativeAddress, 80) = .empty,
+    addresses: pl.UniqueReprMap(Location, ?RelativeAddress) = .empty,
     /// The map of addresses that need to be fixed up after encoding.
     fixups: pl.ArrayList(Fixup) = .empty,
     /// State variable indicating the region the location map currently operates in.

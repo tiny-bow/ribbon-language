@@ -25,7 +25,7 @@ pub const CompilerId = backend.ArtifactId;
 
 pub const Context = struct {
     compiler: *backend.Compiler,
-    compilations: pl.UniqueReprArrayMap(CompilerId, *Compilation, false) = .empty,
+    compilations: pl.UniqueReprArrayMap(CompilerId, *Compilation) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) !Context {
         return Context{

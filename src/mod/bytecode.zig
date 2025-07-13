@@ -93,7 +93,7 @@ pub const TableBuilder = struct {
     statics: StaticMap = .empty,
 
     /// A map of static values that are referenced by the header in a `TableBuilder`.
-    pub const StaticMap = pl.UniqueReprMap(core.StaticId, Entry, 80);
+    pub const StaticMap = pl.UniqueReprMap(core.StaticId, Entry);
 
     /// An entry in the `TableBuilder.statics` map, which can either be a `DataBuilder` or a `FunctionBuilder`.
     pub const Entry = struct {
@@ -765,7 +765,7 @@ pub const DataBuilder = struct {
     /// * This is used to track locations in the data builder's memory that are yet to be determined.
     /// * The map is keyed by `DataLocation`, which is a symbolic type for locations in the data builder's memory.
     /// * The values are `DataRef`, which can either be a reference to the data builder's own memory or a standard `FixupRef`.
-    locations: pl.UniqueReprMap(DataLocation, ?DataRef, 80) = .empty,
+    locations: pl.UniqueReprMap(DataLocation, ?DataRef) = .empty,
     /// A list of data fixups that need to be resolved when the data is encoded.
     /// * This is used to track fixups that reference data within the data builder's own memory.
     fixups: pl.ArrayList(DataFixup) = .empty,
@@ -1143,13 +1143,13 @@ pub const DataBuilder = struct {
 pub const LocalId = Id.of(core.Layout, pl.LOCAL_ID_BITS);
 
 /// A map from LocalId to core.Layout, representing the local variables of a function.
-pub const LocalMap = pl.UniqueReprArrayMap(LocalId, core.Layout, false);
+pub const LocalMap = pl.UniqueReprArrayMap(LocalId, core.Layout);
 
 /// A map from LocalId to a stack operand offset. Used by address-of instructions to resolve local variable addresses.
-pub const LocalFixupMap = pl.UniqueReprArrayMap(LocalId, u64, false);
+pub const LocalFixupMap = pl.UniqueReprArrayMap(LocalId, u64);
 
 /// A map from BlockId to BlockBuilder pointers, representing the basic blocks of a function.
-pub const BlockMap = pl.UniqueReprMap(BlockId, *BlockBuilder, 80);
+pub const BlockMap = pl.UniqueReprMap(BlockId, *BlockBuilder);
 
 /// A simple builder API for bytecode functions.
 pub const FunctionBuilder = struct {

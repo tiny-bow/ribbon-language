@@ -216,7 +216,7 @@ pub const Root = struct {
     /// Used to generate unique ids for child contexts.
     fresh_ctx: ContextId = .fromInt(1),
     /// All child contexts owned by this root context.
-    children: pl.UniqueReprMap(ContextId, *Context, 80) = .empty,
+    children: pl.UniqueReprMap(ContextId, *Context) = .empty,
     /// Synchronization primitive for child contexts to use when accessing the root context.
     /// * All Root methods assume that the root mutex is already locked by the caller.
     mutex: std.Thread.Mutex = .{},
@@ -466,15 +466,15 @@ pub const Context = struct {
     /// arena allocator for the context, used for data nodes.
     arena: std.heap.ArenaAllocator,
     /// contains all graph nodes in this context.
-    nodes: pl.UniqueReprMap(Ref, Node, 80) = .empty,
+    nodes: pl.UniqueReprMap(Ref, Node) = .empty,
     /// The def->use edges of nodes.
-    users: pl.UniqueReprMap(Ref, pl.UniqueReprSet(Use, 80), 80) = .empty,
+    users: pl.UniqueReprMap(Ref, pl.UniqueReprSet(Use)) = .empty,
     /// Maps specific refs to user defined data, used for miscellaneous operations like layout computation, display, etc.
-    userdata: pl.UniqueReprMap(Ref, *UserData, 80) = .empty,
+    userdata: pl.UniqueReprMap(Ref, *UserData) = .empty,
     /// Maps builtin structures to their definition references.
-    builtin: pl.UniqueReprMap(Builtin, Ref, 80) = .empty,
+    builtin: pl.UniqueReprMap(Builtin, Ref) = .empty,
     /// Maps constant value nodes to references.
-    interner: pl.HashMap(Node, Ref, NodeHasher, 80) = .empty,
+    interner: pl.HashMap(Node, Ref, NodeHasher) = .empty,
     /// Flags whether a node is interned or not.
     interned_refs: RefSet = .empty,
     /// Flags whether a node is immutable or not.
@@ -1085,7 +1085,7 @@ pub const Context = struct {
     }
 
     /// Get a list of all the users of a node, given its reference.
-    pub fn getLocalNodeUsers(self: *Context, ref: Ref) !*const pl.UniqueReprSet(Use, 80) {
+    pub fn getLocalNodeUsers(self: *Context, ref: Ref) !*const pl.UniqueReprSet(Use) {
         std.debug.assert(ref.id.context == self.id);
 
         const gop = try self.users.getOrPut(self.gpa, ref);
@@ -1096,7 +1096,7 @@ pub const Context = struct {
     }
 
     /// Get a list of all the users of a node, given its reference.
-    pub fn getNodeUsers(self: *Context, ref: Ref) !*const pl.UniqueReprSet(Use, 80) {
+    pub fn getNodeUsers(self: *Context, ref: Ref) !*const pl.UniqueReprSet(Use) {
         if (ref.id.context == self.id) {
             return self.getLocalNodeUsers(ref);
         } else {
@@ -1113,7 +1113,7 @@ pub const Context = struct {
         }
     }
 
-    fn _getLocalNodeUsersMut(self: *Context, ref: Ref) !*pl.UniqueReprSet(Use, 80) {
+    fn _getLocalNodeUsersMut(self: *Context, ref: Ref) !*pl.UniqueReprSet(Use) {
         std.debug.assert(ref.id.context == self.id);
 
         const gop = try self.users.getOrPut(self.gpa, ref);
@@ -1123,7 +1123,7 @@ pub const Context = struct {
         return gop.value_ptr;
     }
 
-    fn _getNodeUsersMut(self: *Context, ref: Ref) !*pl.UniqueReprSet(Use, 80) {
+    fn _getNodeUsersMut(self: *Context, ref: Ref) !*pl.UniqueReprSet(Use) {
         if (ref.id.context == self.id) {
             return self._getLocalNodeUsersMut(ref);
         } else {
@@ -1318,10 +1318,10 @@ pub const Ref = packed struct(u64) {
 };
 
 /// `platform.UniqueReprMap` for `Ref` to `Ref`.
-pub const RefMap = pl.UniqueReprMap(Ref, Ref, 80);
+pub const RefMap = pl.UniqueReprMap(Ref, Ref);
 
 /// `platform.UniqueReprSet` for `Ref`.
-pub const RefSet = pl.UniqueReprSet(Ref, 80);
+pub const RefSet = pl.UniqueReprSet(Ref);
 
 /// Uniquely identifies a child context in an ir.
 pub const ContextId = common.Id.of(Context, 16);

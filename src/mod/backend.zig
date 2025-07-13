@@ -141,7 +141,7 @@ pub const PatternNode = struct {
     arity: MatchCommutativity = .fixed,
 };
 
-const CaptureMap = pl.UniqueReprMap(CaptureId, ir.Ref, 80);
+const CaptureMap = pl.UniqueReprMap(CaptureId, ir.Ref);
 
 /// Holds the results of a successful pattern match, mapping `CaptureId`s
 /// to the `ir.Ref`s they captured from the live IR graph.
@@ -159,7 +159,7 @@ pub const MatchResult = struct {
     }
 };
 
-const UseDefMap = pl.UniqueReprMap(ir.Ref, pl.ArrayList(ir.Ref), 80);
+const UseDefMap = pl.UniqueReprMap(ir.Ref, pl.ArrayList(ir.Ref));
 
 /// A safe, high-level API for a transformer function to modify the IR graph.
 /// It provides methods to create new nodes and replace the matched subgraph atomically.
@@ -538,7 +538,7 @@ pub const Job = struct {
 /// The default target for compiling Ribbon IR into bytecode.
 pub const BytecodeTarget = struct {
     compiler: *Compiler,
-    artifacts: pl.UniqueReprMap(ArtifactId, core.Bytecode, 80) = .{},
+    artifacts: pl.UniqueReprMap(ArtifactId, core.Bytecode) = .{},
 
     /// Get a `backend.Target` object from this bytecode target.
     pub fn target(self: *BytecodeTarget) Target {
