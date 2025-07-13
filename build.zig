@@ -53,6 +53,12 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     }).module("r64");
 
+    const binary_mod = b.createModule(.{
+        .root_source_file = b.path("src/mod/binary.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const bytecode_mod = b.createModule(.{
         .root_source_file = b.path("src/mod/bytecode.zig"),
         .target = target,
@@ -203,6 +209,10 @@ pub fn build(b: *std.Build) !void {
 
     // assembler_mod is a dep
 
+    binary_mod.addImport("platform", platform_mod);
+    binary_mod.addImport("AllocWriter", AllocWriter_mod);
+    binary_mod.addImport("Id", Id_mod);
+
     bytecode_mod.addImport("platform", platform_mod);
     bytecode_mod.addImport("core", core_mod);
     bytecode_mod.addImport("Instruction", Instruction_mod);
@@ -210,6 +220,7 @@ pub fn build(b: *std.Build) !void {
     bytecode_mod.addImport("Interner", Interner_mod);
     bytecode_mod.addImport("AllocWriter", AllocWriter_mod);
     bytecode_mod.addImport("Buffer", Buffer_mod);
+    bytecode_mod.addImport("binary", binary_mod);
 
     core_mod.addImport("platform", platform_mod);
     core_mod.addImport("common", common_mod);
