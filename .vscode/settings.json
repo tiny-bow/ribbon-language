@@ -3,4 +3,5 @@
     // in single-repo workspace mode, so this is my workaround for now...
     "cSpell.enabled": false,
     "nixEnvSelector.nixFile": "${workspaceFolder}/flake.nix",
+    "reflowMarkdown.preferredLineLength": 120,
 }
