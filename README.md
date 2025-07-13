@@ -355,7 +355,8 @@ It's designed to reduce cognitive overhead by eliminating the need to switch con
 
 We have aspirations toward self-hosting Ribbon eventually, but in this early phase, our host language of choice is [Zig](https://ziglang.org).
 
-You will need to clone the [Ribbon mono-repo](https://github.com/tiny-bow/mono-repo) or otherwise acquire the dependencies listed in [`build.zig.zon`](./build.zig.zon) for now, as we are using local dependency paths for less friction during the early development phase.
+Zig handles the dependency management. Simply cloning the repository and running `zig build` will fetch the dependencies.
+> Note: the fetch is currently not handled by the nix flake, it is expecting to be run with `direnv`/`nix develop` for now, giving it http access.
 
 Running `zig build --help` will give an overview of the build api. Alternatively, [tasks.json](./.vscode/tasks.json) provides a good overview, even if you are not using VS Code.
 

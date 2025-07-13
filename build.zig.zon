@@ -5,13 +5,16 @@
     // FIXME: use lazy dependencies; drop nasm
     .dependencies = .{
         .r64 = .{
-            .path = "../r64",
+            .url = "git+https://github.com/tiny-bow/r64#ac2417abd586d5c4ffd836f6b4a3dee772d7bd48",
+            .hash = "r64-0.1.0-AAAAADbFAwDiumE2Ryle1HMxBJ57WWRM4qaSnBo2l136",
         },
         .rg = .{
-            .path = "../rg",
+            .url = "git+https://github.com/tiny-bow/rg#7d9574c4de3b1dac42c5c0e411b094732851929e",
+            .hash = "rg-0.1.0-wrB3Tdjy7ALv1mWb6bdWcC8hSLm4UNWOjR_Z8Z3fsJt0",
         },
         .repl = .{
-            .path = "../repl",
+            .url = "git+https://github.com/tiny-bow/repl#65188d49a9a1bb9f15e929e02eaf0ae954e0e141",
+            .hash = "repl-0.1.0-f-UafbjOAAAnd8-THOX5ZSRSVNysnPf3KPnycpDXTCR7",
         },
         .nasm = .{
             .url = "git+https://github.com/allyourcodebase/nasm#c153aec97cfe50a4600d9cf3d5f703d58f9ccd56",
