@@ -462,8 +462,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const register = current.callFrame.vregs[registerId.getIndex()];
 
             switch (register) {
-                0 => current.callFrame.ip = then_newIp,
-                else => current.callFrame.ip = else_newIp,
+                0 => current.callFrame.ip = else_newIp,
+                else => current.callFrame.ip = then_newIp,
             }
 
             continue :dispatch try state.step(self);
