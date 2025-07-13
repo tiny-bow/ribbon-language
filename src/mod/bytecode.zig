@@ -2520,7 +2520,7 @@ fn TestBed(comptime test_name: []const u8) type {
             var self: TestBed(test_name) = undefined;
             self.gpa = std.testing.allocator;
             self.builder = TableBuilder.init(self.gpa);
-            testing.log_level = .debug;
+            // testing.log_level = .debug;
             return self;
         }
 
@@ -2785,4 +2785,204 @@ test "encode external reference creates linker fixup" {
     try testing.expectEqual(FixupKind.absolute, fixup.kind);
     try testing.expectEqual(LinkerFixup.Basis.to, fixup.basis);
     try testing.expect(fixup.bit_offset == null);
+}
+
+test "block builder error on double-termination" {
+    var tb = try TestBed("block builder error on double-termination").init();
+    defer tb.deinit();
+
+    const main_id = try tb.builder.createHeaderEntry(.function, "main");
+    var main_fn = try tb.builder.createFunctionBuilder(main_id);
+
+    var block = try main_fn.createBlock();
+    try block.instrTerm(.halt, .{});
+    try testing.expectError(error.BadEncoding, block.instrTerm(.@"return", .{ .R = .r0 }));
+}
+
+test "table builder error on wrong static kind" {
+    var tb = try TestBed("table builder error on wrong static kind").init();
+    defer tb.deinit();
+
+    // Create a constant ID
+    const const_id: core.ConstantId = try tb.builder.createHeaderEntry(.constant, "my_const");
+
+    // Try to create a function builder with it, should fail.
+    try testing.expectError(error.BadEncoding, tb.builder.createFunctionBuilder(const_id.cast(core.Function)));
+
+    // Create a function ID
+    const func_id: core.FunctionId = try tb.builder.createHeaderEntry(.function, "my_func");
+
+    // Try to create a data builder with it, should fail.
+    try testing.expectError(error.BadEncoding, tb.builder.createDataBuilder(func_id));
+}
+
+test "encode function with conditional branch" {
+    var tb = try TestBed("encode function with conditional branch").init();
+    defer tb.deinit();
+
+    const main_id = try tb.builder.createHeaderEntry(.function, "main");
+    var main_fn = try tb.builder.createFunctionBuilder(main_id);
+
+    var entry_block = try main_fn.createBlock();
+    var then_block = try main_fn.createBlock();
+    var else_block = try main_fn.createBlock();
+    var merge_block = try main_fn.createBlock();
+
+    // entry: if (r0 != 0) goto then_block else goto else_block
+    try entry_block.instrWide(.bit_copy64c, .{ .R = .r0 }, 1); // condition will be true
+    try entry_block.instrBrIf(.r0, then_block.id, else_block.id);
+
+    // then: r1 = 1; goto merge_block
+    try then_block.instrWide(.bit_copy64c, .{ .R = .r1 }, 1);
+    try then_block.instrBr(merge_block.id);
+
+    // else: r1 = 2; goto merge_block
+    try else_block.instrWide(.bit_copy64c, .{ .R = .r1 }, 2);
+    try else_block.instrBr(merge_block.id);
+
+    // merge: return r1
+    try merge_block.instrTerm(.@"return", .{ .R = .r1 });
+
+    var table = try tb.builder.encode(tb.gpa);
+    defer table.deinit();
+
+    var disas_buf = std.ArrayList(u8).init(tb.gpa);
+    defer disas_buf.deinit();
+
+    const main_func = table.bytecode.header.get(main_id);
+    const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
+    try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+
+    // Expected offsets are calculated based on sequential layout of visited blocks: entry, then, else, merge.
+    // br_if (word 2) -> then (word 3, offset +1), else (word 6, offset +4)
+    // br in then (word 5) -> merge (word 9, offset +4)
+    // br in else (word 8) -> merge (word 9, offset +1)
+    const expected =
+        \\    bit_copy64c r0 .. I:0000000000000001
+        \\    br_if r0 Ix:0001 Iy:0004
+        \\    bit_copy64c r1 .. I:0000000000000001
+        \\    br I:0004
+        \\    bit_copy64c r1 .. I:0000000000000002
+        \\    br I:0001
+        \\    return r1
+        \\
+    ;
+    try testing.expectEqualStrings(expected, disas_buf.items);
+}
+
+test "data builder with internal pointer fixup" {
+    var tb = try TestBed("data builder with internal pointer fixup").init();
+    defer tb.deinit();
+
+    const Node = struct {
+        value: u64,
+        next: ?*const @This(),
+    };
+
+    const const_id: core.ConstantId = try tb.builder.createHeaderEntry(.constant, "linked_list");
+    const data_builder = try tb.builder.createDataBuilder(const_id);
+    data_builder.alignment = @alignOf(Node);
+
+    // Node 1
+    const node1_rel = data_builder.getRelativeAddress();
+    _ = node1_rel;
+    try data_builder.writeValue(@as(u64, 111));
+    const node1_next_rel = data_builder.getRelativeAddress();
+    try data_builder.writeValue(@as(?*const Node, null)); // placeholder for next pointer
+
+    // Node 2
+    const node2_rel = data_builder.getRelativeAddress();
+    try data_builder.writeValue(@as(u64, 222));
+    try data_builder.writeValue(@as(?*const Node, null)); // next is null for the last node
+
+    // Fixup Node 1's next pointer to point to Node 2
+    try data_builder.bindFixup(.absolute, node1_next_rel, .{ .internal = .{ .relative = node2_rel } }, null);
+
+    var table = try tb.builder.encode(tb.gpa);
+    defer table.deinit();
+
+    // Verify the structure after encoding and linking
+    const data: *const core.Constant = table.bytecode.header.get(const_id);
+    const node1_ptr: *const Node = @alignCast(@ptrCast(data.asPtr()));
+
+    try testing.expectEqual(@as(u64, 111), node1_ptr.value);
+    try testing.expect(node1_ptr.next != null);
+
+    const node2_ptr = node1_ptr.next orelse unreachable;
+    try testing.expectEqual(@as(u64, 222), node2_ptr.value);
+    try testing.expect(node2_ptr.next == null);
+
+    // Check that node2_ptr is at the correct offset from node1_ptr
+    const offset = @as(isize, @intCast(@intFromPtr(node2_ptr))) - @as(isize, @intCast(@intFromPtr(node1_ptr)));
+    try testing.expectEqual(@as(isize, @sizeOf(Node)), offset);
+}
+
+test "data builder with external function pointer fixup" {
+    var tb = try TestBed("data builder with external function pointer fixup").init();
+    defer tb.deinit();
+
+    const StructWithFnPtr = struct {
+        id: u64,
+        handler: ?*const fn () void,
+    };
+
+    const func_id = try tb.builder.createHeaderEntry(.function, "my_func");
+    var fn_builder = try tb.builder.createFunctionBuilder(func_id);
+    var entry = try fn_builder.createBlock();
+    try entry.instrTerm(.halt, .{});
+
+    const const_id: core.ConstantId = try tb.builder.createHeaderEntry(.constant, "my_struct");
+    var data_builder = try tb.builder.createDataBuilder(const_id);
+    data_builder.alignment = @alignOf(StructWithFnPtr);
+
+    const func_loc = tb.builder.getStaticLocation(func_id.cast(anyopaque)).?;
+
+    // Write placeholder struct
+    try data_builder.writeValue(@as(u64, 42)); // id
+    const handler_ptr_rel = data_builder.getRelativeAddress();
+    try data_builder.writeValue(@as(?*const fn () void, null)); // handler placeholder
+
+    // Bind a fixup to patch the handler address later
+    try data_builder.bindFixup(.absolute, handler_ptr_rel, .{ .standard = .{ .location = func_loc } }, null);
+
+    var table = try tb.builder.encode(tb.gpa);
+    defer table.deinit();
+
+    // Verify
+    const data: *const core.Constant = table.bytecode.header.get(const_id);
+    const my_struct_ptr: *const StructWithFnPtr = @alignCast(@ptrCast(data.asPtr()));
+
+    const func_ptr = table.bytecode.header.get(func_id);
+
+    try testing.expectEqual(@as(u64, 42), my_struct_ptr.id);
+    try testing.expect(my_struct_ptr.handler == @as(?*const fn () void, @ptrCast(func_ptr)));
+}
+
+test "decoder with incomplete wide instruction" {
+    const gpa = testing.allocator;
+
+    var instructions = try gpa.alloc(core.InstructionBits, 1);
+    defer gpa.free(instructions);
+
+    // bit_copy64c is a wide instruction, so it requires a second word for its immediate value.
+    const instr = Instruction{ .code = .bit_copy64c, .data = .{ .bit_copy64c = .{ .R = .r1 } } };
+    instructions[0] = instr.toBits();
+
+    var decoder = Decoder.init(instructions);
+    // The decoder should find the first word, but fail to read the second.
+    try testing.expectError(error.BadEncoding, decoder.next());
+}
+
+test "decoder with incomplete call instruction" {
+    const gpa = testing.allocator;
+    var instructions = try gpa.alloc(core.InstructionBits, 1);
+    defer gpa.free(instructions);
+
+    // call_c with I=2 expects 16 bytes (2 words) of arguments after it.
+    const instr = Instruction{ .code = .call_c, .data = .{ .call_c = .{ .R = .r0, .F = .fromInt(1), .I = 2 } } };
+    instructions[0] = instr.toBits();
+
+    var decoder = Decoder.init(instructions);
+    // The decoder should see the call, but fail to read the arguments.
+    try testing.expectError(error.BadEncoding, decoder.next());
 }
