@@ -5,7 +5,7 @@ const log = std.log.scoped(.source_analysis);
 
 const pl = @import("platform");
 const common = @import("common");
-const utils = @import("utils");
+const rg = @import("rg");
 const Id = common.Id;
 
 test {
@@ -429,7 +429,7 @@ pub const Lexer0 = struct {
         if (ch == '\n') {
             self.location.visual.line += 1;
             self.location.visual.column = 1;
-        } else if (!utils.text.isControl(ch)) {
+        } else if (!rg.isControl(ch)) {
             self.location.visual.column += 1;
         }
 
@@ -520,7 +520,7 @@ pub const Lexer0 = struct {
                 line_loop: while (try self.peekChar()) |pk| {
                     if (pk == '\n') {
                         n += 1;
-                    } else if (!utils.text.isSpace(pk)) {
+                    } else if (!rg.isSpace(pk)) {
                         break :line_loop;
                     }
 
@@ -595,7 +595,7 @@ pub const Lexer0 = struct {
                 break :char_switch TokenData{ .special = .{ .punctuation = .fromChar('\\'), .escaped = false } };
             },
             else => |x| {
-                if (utils.text.isSpace(@intCast(x))) {
+                if (rg.isSpace(@intCast(x))) {
                     log.debug("skipping whitespace {u} (0x{x:0>2})", .{ x, x });
 
                     start = self.location;
@@ -624,7 +624,7 @@ pub const Lexer0 = struct {
                     };
                 }
 
-                if (utils.text.isControl(@intCast(x))) {
+                if (rg.isControl(@intCast(x))) {
                     log.err("unexpected control character {u} (0x{x:0>2})", .{ x, x });
                     return error.UnexpectedInput;
                 }
@@ -642,7 +642,7 @@ pub const Lexer0 = struct {
                 log.debug("processing sequence", .{});
 
                 symbol_loop: while (try self.peekChar()) |pk| {
-                    if (utils.text.isSpace(@intCast(pk)) or utils.text.isControl(@intCast(pk)) or Punctuation.includesChar(@intCast(pk))) {
+                    if (rg.isSpace(@intCast(pk)) or rg.isControl(@intCast(pk)) or Punctuation.includesChar(@intCast(pk))) {
                         log.debug("ending sequence at {u} (0x{x:0>2})", .{ pk, pk });
                         break :symbol_loop;
                     }

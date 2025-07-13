@@ -1,10 +1,12 @@
+const gen = @This();
+
+const std = @import("std");
+
 const abi = @import("abi");
 const assembler = @import("assembler");
 const core = @import("core");
-const gen = @This();
 const isa = @import("isa");
 const pl = @import("platform");
-const std = @import("std");
 
 const log = std.log.scoped(.gen);
 

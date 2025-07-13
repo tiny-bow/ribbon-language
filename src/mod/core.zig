@@ -11,7 +11,7 @@ const pl = @import("platform");
 const common = @import("common");
 const Id = common.Id;
 const Buffer = common.Buffer;
-const Stack = @import("Stack");
+const Stack = common.Stack;
 
 test {
     std.testing.refAllDeclsRecursive(@This());

@@ -11,7 +11,7 @@
 //! See the `bytecode` namespace for encoding and decoding utilities.
 const Instruction = @This();
 const core = @import("core");
-const Id = @import("Id");
+const Id = @import("common").Id;
 const pl = @import("platform");
 const std = @import("std");
 

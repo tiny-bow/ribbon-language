@@ -21,8 +21,9 @@ const std = @import("std");
 const log = std.log.scoped(.binary);
 
 const pl = @import("platform");
-const Id = @import("Id");
-const AllocWriter = @import("AllocWriter");
+const common = @import("common");
+const Id = common.Id;
+const AllocWriter = common.AllocWriter;
 const RelativeAddress = AllocWriter.RelativeAddress;
 const RelativeBuffer = AllocWriter.RelativeBuffer;
 

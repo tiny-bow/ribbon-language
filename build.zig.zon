@@ -7,8 +7,8 @@
         .r64 = .{
             .path = "../r64",
         },
-        .platform = .{
-            .path = "../ribbon-platform",
+        .rg = .{
+            .path = "../rg",
         },
         .repl = .{
             .path = "../repl",

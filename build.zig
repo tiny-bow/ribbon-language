@@ -8,39 +8,45 @@ const SUPPORTED_OS = &.{ .windows, .linux };
 pub fn build(b: *std.Build) !void {
     const zon = parseZon(b, struct { version: []const u8 });
 
+    const version = std.SemanticVersion.parse(zon.version) catch {
+        std.debug.panic("Cannot parse `{s}` as a semantic version string", .{zon.version});
+    };
+
+    const build_info_opts = b.addOptions();
+    build_info_opts.addOption(std.SemanticVersion, "version", version);
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     // whitelisting doesnt really work the way we'd like here
     validateTarget(target.result);
 
-    const platform_dep = b.dependency("platform", .{
+    const rg_dep = b.dependency("rg", .{
         .target = target,
         .optimize = optimize,
-        .name = @as([]const u8, "ribbon-language"),
-        .version = zon.version,
     });
-
-    const platform_mod = platform_dep.module("platform");
-    const common_mod = platform_dep.module("common");
-    const utils_mod = platform_dep.module("utils");
-    const Id_mod = platform_dep.module("Id");
-    const Interner_mod = platform_dep.module("Interner");
-    const AllocWriter_mod = platform_dep.module("AllocWriter");
-    const VirtualWriter_mod = platform_dep.module("VirtualWriter");
-    const Buffer_mod = platform_dep.module("Buffer");
-    const Stack_mod = platform_dep.module("Stack");
 
     const repl_dep = b.dependency("repl", .{
         .target = target,
         .optimize = optimize,
-        .builtin_platform = false,
     });
 
+    const rg_mod = rg_dep.module("rg");
     const repl_mod = repl_dep.module("repl");
-    repl_mod.addImport("utils", utils_mod);
 
     // create all modules //
+
+    const common_mod = b.createModule(.{
+        .root_source_file = b.path("src/mod/common.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const platform_mod = b.createModule(.{
+        .root_source_file = b.path("src/mod/platform.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const abi_mod = b.createModule(.{
         .root_source_file = b.path("src/mod/x64/abi.zig"),
@@ -207,25 +213,20 @@ pub fn build(b: *std.Build) !void {
     abi_mod.addImport("assembler", assembler_mod);
     abi_mod.addImport("platform", platform_mod);
 
-    // assembler_mod is a dep
+    common_mod.addImport("platform", platform_mod);
+    platform_mod.addOptions("build_info", build_info_opts);
 
     binary_mod.addImport("platform", platform_mod);
-    binary_mod.addImport("AllocWriter", AllocWriter_mod);
-    binary_mod.addImport("Id", Id_mod);
+    binary_mod.addImport("common", common_mod);
 
     bytecode_mod.addImport("platform", platform_mod);
+    bytecode_mod.addImport("common", common_mod);
     bytecode_mod.addImport("core", core_mod);
     bytecode_mod.addImport("Instruction", Instruction_mod);
-    bytecode_mod.addImport("Id", Id_mod);
-    bytecode_mod.addImport("Interner", Interner_mod);
-    bytecode_mod.addImport("AllocWriter", AllocWriter_mod);
-    bytecode_mod.addImport("Buffer", Buffer_mod);
     bytecode_mod.addImport("binary", binary_mod);
 
     core_mod.addImport("platform", platform_mod);
     core_mod.addImport("common", common_mod);
-    core_mod.addImport("Buffer", Buffer_mod);
-    core_mod.addImport("Stack", Stack_mod);
 
     gen_mod.addImport("platform", platform_mod);
     gen_mod.addImport("isa", isa_mod);
@@ -237,8 +238,8 @@ pub fn build(b: *std.Build) !void {
     gen_mod.addAnonymousImport("Instruction_intro.zig", .{ .root_source_file = b.path("src/gen-base/zig/Instruction_intro.zig") });
 
     Instruction_mod.addImport("platform", platform_mod);
+    Instruction_mod.addImport("common", common_mod);
     Instruction_mod.addImport("core", core_mod);
-    Instruction_mod.addImport("Id", Id_mod);
 
     interpreter_mod.addImport("platform", platform_mod);
     interpreter_mod.addImport("core", core_mod);
@@ -249,16 +250,14 @@ pub fn build(b: *std.Build) !void {
 
     ir_mod.addImport("platform", platform_mod);
     ir_mod.addImport("common", common_mod);
-    ir_mod.addImport("utils", utils_mod);
-    ir_mod.addImport("Interner", Interner_mod);
     ir_mod.addImport("bytecode", bytecode_mod);
     ir_mod.addImport("source", source_mod);
 
     backend_mod.addImport("platform", platform_mod);
+    backend_mod.addImport("common", common_mod);
     backend_mod.addImport("core", core_mod);
     backend_mod.addImport("bytecode", bytecode_mod);
     backend_mod.addImport("ir", ir_mod);
-    backend_mod.addImport("Id", Id_mod);
 
     isa_mod.addImport("platform", platform_mod);
 
@@ -266,21 +265,20 @@ pub fn build(b: *std.Build) !void {
     machine_mod.addImport("core", core_mod);
     machine_mod.addImport("abi", abi_mod);
     machine_mod.addImport("assembler", assembler_mod);
-    machine_mod.addImport("VirtualWriter", VirtualWriter_mod);
+    machine_mod.addImport("common", common_mod);
 
     main_mod.addImport("ribbon_language", ribbon_mod);
     main_mod.addImport("platform", platform_mod);
     main_mod.addImport("common", common_mod);
-    main_mod.addImport("utils", utils_mod);
     main_mod.addImport("repl", repl_mod);
 
     source_mod.addImport("platform", platform_mod);
     source_mod.addImport("common", common_mod);
-    source_mod.addImport("utils", utils_mod);
+    source_mod.addImport("rg", rg_mod);
 
     meta_language_mod.addImport("platform", platform_mod);
+    meta_language_mod.addImport("rg", rg_mod);
     meta_language_mod.addImport("common", common_mod);
-    meta_language_mod.addImport("utils", utils_mod);
     meta_language_mod.addImport("source", source_mod);
     meta_language_mod.addImport("core", core_mod);
     meta_language_mod.addImport("ir", ir_mod);
@@ -299,7 +297,6 @@ pub fn build(b: *std.Build) !void {
     bc_interp_mod.addImport("ribbon_language", ribbon_mod);
     bc_interp_mod.addImport("platform", platform_mod);
     bc_interp_mod.addImport("common", common_mod);
-    bc_interp_mod.addImport("utils", utils_mod);
     bc_interp_mod.addImport("repl", repl_mod);
 
     // setup steps //

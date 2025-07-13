@@ -11,10 +11,11 @@ const std = @import("std");
 const log = std.log.scoped(.bytecode);
 
 const pl = @import("platform");
+const common = @import("common");
 const core = @import("core");
-const Id = @import("Id");
-const Interner = @import("Interner");
-const AllocWriter = @import("AllocWriter");
+const Id = common.Id;
+const Buffer = common.Buffer;
+const AllocWriter = common.AllocWriter;
 const RelativeAddress = AllocWriter.RelativeAddress;
 const RelativeBuffer = AllocWriter.RelativeBuffer;
 const binary = @import("binary");
@@ -28,7 +29,6 @@ const RegionId = binary.RegionId;
 const OffsetId = binary.OffsetId;
 const Fixup = binary.Fixup;
 const LinkerFixup = binary.LinkerFixup;
-const Buffer = @import("Buffer");
 
 pub const Instruction = @import("Instruction");
 

@@ -21,7 +21,7 @@ const log = std.log.scoped(.X64Builder);
 const pl = @import("platform");
 const core = @import("core");
 const assembler = @import("assembler");
-const VirtualWriter = @import("VirtualWriter");
+const VirtualWriter = @import("common").VirtualWriter;
 
 test {
     std.testing.refAllDeclsRecursive(@This());
@@ -29,13 +29,10 @@ test {
 
 const abi = @import("abi");
 
-
-
 /// Disassemble an allocated machine function, printing to the provided writer.
 pub fn disas(mem: pl.VirtualMemory, options: assembler.DisassemblerOptions, writer: anytype) !void {
     return assembler.disas(mem, options, writer);
 }
-
 
 /// Machine code function builder. `x64`
 pub const Builder = struct {
@@ -54,7 +51,7 @@ pub const Builder = struct {
     /// then calls `Builder.prelude`,
     /// and returns the jit.
     pub fn init() error{OutOfMemory}!Builder {
-        var self = Builder {
+        var self = Builder{
             .encoder = try Encoder.init(),
         };
 
@@ -78,12 +75,11 @@ pub const Builder = struct {
     pub fn finalize(self: *Builder) Error!core.AllocatedBuiltinFunction {
         const mem = try self.encoder.writer.finalize(.read_execute);
 
-        return core.AllocatedBuiltinFunction {
+        return core.AllocatedBuiltinFunction{
             .ptr = mem.ptr,
             .len = mem.len,
         };
     }
-
 
     const REGISTERS_TOP_PTR_OFFSET = @offsetOf(core.mem.FiberHeader, "registers") + @offsetOf(core.RegisterStack, "top_ptr");
 
@@ -92,7 +88,6 @@ pub const Builder = struct {
     // comptime {
     //     @compileError(std.fmt.comptimePrint("{x} {x}", .{ REGISTERS_TOP_PTR_OFFSET, FRAMES_TOP_PTR_OFFSET }));
     // }
-
 
     /// Inject the abi prelude code into the function being constructed.
     pub fn prelude(self: *Builder) error{OutOfMemory}!void { // FIXME: prelude here is not in sync with that of the interpreter asm
@@ -190,13 +185,12 @@ pub const Operand = union(enum) {
 /// A `VirtualWriter` with a `platform.MAX_MACHINE_CODE_SIZE` memory limit.
 pub const Writer: type = VirtualWriter.new(pl.MAX_MACHINE_CODE_SIZE);
 
-
 /// Wrapper over `VirtualWriter` that provides a machine instruction specific API.
 pub const Encoder = struct {
     /// The `VirtualWriter` used by the encoder to write machine code.
     writer: Writer,
 
-    pub const Error = Writer.Error || error { BadEncoding };
+    pub const Error = Writer.Error || error{BadEncoding};
 
     /// Creates a new `Encoder` and a `Writer`.
     pub fn init() error{OutOfMemory}!Encoder {
@@ -234,8 +228,9 @@ pub const Encoder = struct {
     /// Writes an integer to the encoder.
     pub fn writeInt(
         self: *Encoder,
-        comptime T: type, value: T,
-        comptime _: enum {little}, // allows backward compat with writer code in r64; but only in provably compatible use-cases
+        comptime T: type,
+        value: T,
+        comptime _: enum { little }, // allows backward compat with writer code in r64; but only in provably compatible use-cases
     ) Encoder.Error!void {
         const bytes = std.mem.asBytes(&value);
         try self.writeAll(bytes);
@@ -556,7 +551,6 @@ pub const Encoder = struct {
         };
     }
 
-
     /// Encodes a `ret` instruction.
     pub fn ret(self: *Encoder) error{OutOfMemory}!void {
         self.instr(.ret, &.{}) catch {
@@ -598,7 +592,7 @@ test "x64_machine_basic_integration" {
         \\  │  ret
         \\  ╽
         \\
-    ;
+        ;
 
     const allocator = std.testing.allocator;
 

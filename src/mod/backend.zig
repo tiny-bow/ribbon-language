@@ -7,7 +7,7 @@ const pl = @import("platform");
 const ir = @import("ir");
 const core = @import("core");
 const bytecode = @import("bytecode");
-const Id = @import("Id");
+const Id = @import("common").Id;
 
 test {
     std.testing.refAllDeclsRecursive(@This());

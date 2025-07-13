@@ -8,9 +8,9 @@ const meta_language = @This();
 const std = @import("std");
 const log = std.log.scoped(.rml);
 
+const rg = @import("rg");
 const pl = @import("platform");
 const common = @import("common");
-const utils = @import("utils");
 const source = @import("source");
 const core = @import("core");
 const ir = @import("ir");
@@ -2247,8 +2247,8 @@ pub fn nuds() [10]source.Nud {
                     const s = token.data.sequence.asSlice();
                     log.debug("leaf: checking token {s}", .{s});
                     try parser.lexer.advance(); // discard leaf
-                    const first_char = utils.text.nthCodepoint(0, s) catch unreachable orelse unreachable;
-                    if (utils.text.isDecimal(first_char)) {
+                    const first_char = rg.nthCodepoint(0, s) catch unreachable orelse unreachable;
+                    if (rg.isDecimal(first_char)) {
                         log.debug("leaf: found int literal", .{});
                         return source.SyntaxTree{
                             .source = .{ .name = parser.settings.source_name, .location = token.location },

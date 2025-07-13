@@ -15,7 +15,6 @@ const log = std.log.scoped(.Rir);
 
 const pl = @import("platform");
 const common = @import("common");
-const utils = @import("utils");
 const source = @import("source");
 const Source = source.Source;
 const bytecode = @import("bytecode");
