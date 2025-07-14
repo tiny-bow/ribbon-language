@@ -1262,6 +1262,7 @@ pub fn Visitor(comptime T: type) type {
         allocator: std.mem.Allocator,
         visited_values: UniqueReprSet(T),
 
+        /// Create a new visitor using the provided allocator.
         pub fn init(allocator: std.mem.Allocator) Self {
             return Self{
                 .allocator = allocator,
@@ -1269,17 +1270,21 @@ pub fn Visitor(comptime T: type) type {
             };
         }
 
+        /// Deinitialize the visitor, freeing any allocated memory.
         pub fn deinit(self: *Self) void {
             self.visited_values.deinit(self.allocator);
         }
 
+        /// Clear the visitor set, retaining its capacity.
         pub fn clearVisited(self: *Self) void {
             self.visited_values.clearRetainingCapacity();
         }
 
+        /// Poll the visitor set to see if a value should be visited.
+        /// * Returns `true` if the value has not yet been visited, and puts it into the set.
         pub fn visit(self: *Self, value: T) !bool {
             const value_gop = try self.visited_values.getOrPut(self.allocator, value);
-            return value_gop.found_existing;
+            return !value_gop.found_existing;
         }
     };
 }

@@ -296,8 +296,12 @@ fn invokeInternal(self: *core.mem.FiberHeader, current: anytype, registerId: cor
             switch (result) {
                 .cancel => |cancelInfo| {
                     const cancelledSet = cancelInfo.set_frame;
+                    const address = cancelledSet.handler_set.cancellation.address;
+                    const cancelledFunctionKind = core.InternalFunctionKind.fromAddress(cancelledSet.call.function);
 
-                    cancelledSet.call.ip = cancelledSet.handler_set.cancellation.address;
+                    std.debug.assert(cancelledFunctionKind != .bytecode or @as(*const core.Function, @ptrCast(@alignCast(cancelledSet.call.function))).extents.boundsCheck(address));
+
+                    cancelledSet.call.ip = address;
                     cancelledSet.call.vregs[cancelledSet.handler_set.cancellation.register.getIndex()] = cancelInfo.value;
 
                     self.calls.top_ptr = @ptrCast(cancelledSet.call);
@@ -305,11 +309,12 @@ fn invokeInternal(self: *core.mem.FiberHeader, current: anytype, registerId: cor
 
                     while (@intFromPtr(self.sets.top()) >= @intFromPtr(cancelledSet.handler_set)) {
                         const setFrame = self.sets.popPtr();
-                        for (setFrame.handler_set.effects.asSlice()) |effectId| {
-                            const effectIndex = current.function.header.get(effectId).toIndex();
-                            const evidencePointerSlot = &self.evidence[effectIndex];
 
-                            self.data.top_ptr = common.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
+                        self.data.top_ptr = setFrame.base;
+
+                        for (setFrame.handler_set.handlers.asSlice()) |*handler| {
+                            const effectIndex = current.function.header.get(handler.effect).toIndex();
+                            const evidencePointerSlot = &self.evidence[effectIndex];
 
                             evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
                         }
@@ -422,6 +427,9 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
         .@"unreachable" => return error.Unreachable,
 
         .push_set => { // Pushes H onto the stack. The handlers in this set will be first in line for their effects' prompts until a corresponding pop operation
+            const slot_size = comptime @divExact(@sizeOf(core.Evidence), 8);
+            comptime if (@alignOf(core.Evidence) > 8) @compileError("interpreter.run: out of sync with core, expected core.Evidence to be at most 8-byte aligned");
+
             if (!self.sets.hasSpace(1)) {
                 @branchHint(.cold);
                 return error.Overflow;
@@ -431,20 +439,37 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const handlerSet: *const core.HandlerSet = current.function.header.get(handlerSetId);
 
+            if (!self.data.hasSpace(slot_size * handlerSet.handlers.len)) {
+                @branchHint(.cold);
+                return error.Overflow;
+            }
+
+            const base = self.data.top_ptr;
+
+            const evidence_storage: [*]core.Evidence = @ptrCast(self.data.allocSlice(slot_size).ptr);
+
             const setFrame = self.sets.create(core.SetFrame{
                 .call = current.callFrame,
                 .handler_set = handlerSet,
+                .base = base,
             });
 
             current.callFrame.set_frame = setFrame;
 
-            for (handlerSet.effects.asSlice()) |effectId| {
-                const effectIndex = current.function.header.get(effectId).toIndex();
+            for (handlerSet.handlers.asSlice(), 0..) |*handler, i| {
+                const effectIndex = current.function.header.get(handler.effect).toIndex();
 
                 const evidencePointerSlot = &self.evidence[effectIndex];
-
                 const oldEvidence = evidencePointerSlot.*;
-                evidencePointerSlot.* = oldEvidence.?.previous;
+                const newEvidence = &evidence_storage[i];
+
+                evidencePointerSlot.* = newEvidence;
+
+                newEvidence.* = core.Evidence{
+                    .frame = setFrame,
+                    .handler = handler,
+                    .previous = oldEvidence,
+                };
             }
 
             continue :dispatch try state.step(self);
@@ -458,8 +483,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const setFrame = self.sets.popPtr();
             current.callFrame.set_frame = self.sets.top();
 
-            for (setFrame.handler_set.effects.asSlice()) |effectId| {
-                const effectIndex = current.function.header.get(effectId).toIndex();
+            for (setFrame.handler_set.handlers.asSlice()) |*handler| {
+                const effectIndex = current.function.header.get(handler.effect).toIndex();
                 const evidencePointerSlot = &self.evidence[effectIndex];
 
                 evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
@@ -623,7 +648,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
                     try pushBytecodeCall(self, current.callFrame, functionPtr, null, registerId, argumentRegisterIds);
                 },
                 .builtin => {
-                    const functionPtr: *const core.BuiltinFunction = handler.toPointer(*const core.BuiltinAddress).asFunction();
+                    const builtin: *const core.BuiltinAddress = @ptrCast(@alignCast(handler.function));
+                    const functionPtr = builtin.asFunction();
 
                     const arguments = current.tempRegisters[0..argumentRegisterIds.len];
                     for (argumentRegisterIds, 0..) |reg, i| {
@@ -643,11 +669,12 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
                             while (@intFromPtr(self.sets.top()) >= @intFromPtr(cancelledSet.handler_set)) {
                                 const setFrame = self.sets.popPtr();
-                                for (setFrame.handler_set.effects.asSlice()) |effectId| {
-                                    const effectIndex = current.function.header.get(effectId).toIndex();
-                                    const evidencePointerSlot = &self.evidence[effectIndex];
 
-                                    self.data.top_ptr = common.offsetPointer(setFrame.call.data, setFrame.handler_set.evidence);
+                                self.data.top_ptr = setFrame.base;
+
+                                for (setFrame.handler_set.handlers.asSlice()) |*h| {
+                                    const effectIndex = current.function.header.get(h.effect).toIndex();
+                                    const evidencePointerSlot = &self.evidence[effectIndex];
 
                                     evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
                                 }
@@ -692,15 +719,21 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             self.registers.top_ptr = @ptrCast(self.calls.top().vregs);
 
             const newIp: core.InstructionAddr = cancellation.address;
-            std.debug.assert(current.function.extents.boundsCheck(newIp));
+            const canceledFunctionKind = core.InternalFunctionKind.fromAddress(canceledCallFrame.function);
+            const address = cancelledSetFrame.handler_set.cancellation.address;
+
+            std.debug.assert(canceledFunctionKind != .bytecode or @as(*const core.Function, @ptrCast(@alignCast(canceledCallFrame.function))).extents.boundsCheck(address));
 
             canceledCallFrame.ip = newIp;
             canceledCallFrame.vregs[cancellation.register.getIndex()] = cancelVal;
 
             while (@intFromPtr(self.sets.top()) >= @intFromPtr(canceledCallFrame.set_frame)) {
                 const setFrame = self.sets.popPtr();
-                for (setFrame.handler_set.effects.asSlice()) |effectId| {
-                    const effectIndex = current.function.header.get(effectId).toIndex();
+
+                self.data.top_ptr = setFrame.base;
+
+                for (setFrame.handler_set.handlers.asSlice()) |*handler| {
+                    const effectIndex = current.function.header.get(handler.effect).toIndex();
                     const evidencePointerSlot = &self.evidence[effectIndex];
 
                     evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
@@ -820,6 +853,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
         .addr_l => { // Get the address of a signed integer frame-relative operand stack offset I, placing it in R.
             const registerId = current.instruction.data.addr_l.R;
             const offset = current.instruction.data.addr_l.I;
+
             std.debug.assert(offset < current.stackFrame.len * @sizeOf(core.RegisterBits));
 
             const frame_base: [*]const u8 = @ptrCast(current.stackFrame.ptr);
@@ -829,10 +863,27 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             continue :dispatch try state.step(self);
         },
         .addr_u => { // Get the address of U, placing it in R
-            const upvalueId = current.instruction.data.addr_u.U;
             const registerId = current.instruction.data.addr_u.R;
+            const offset = current.instruction.data.addr_u.I;
 
-            common.todo(noreturn, .{ "upvalue binding", upvalueId, registerId });
+            const functionOpaquePtr = current.callFrame.set_frame.call.function;
+
+            // cant get upvalues from builtins
+            std.debug.assert(core.InternalFunctionKind.fromAddress(functionOpaquePtr) == .bytecode);
+
+            const parent_function = @as(*const core.Function, @ptrCast(@alignCast(functionOpaquePtr)));
+
+            const stack_size_bytes = parent_function.layout.size;
+            const stack_size_u64s = (stack_size_bytes + @sizeOf(u64) - 1) / @sizeOf(u64);
+            const stackFrame = current.callFrame.set_frame.call.data[0..stack_size_u64s];
+
+            std.debug.assert(offset < stackFrame.len * @sizeOf(core.RegisterBits));
+
+            const frame_base: [*]const u8 = @ptrCast(stackFrame.ptr);
+
+            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(common.offsetPointer(frame_base, offset));
+
+            continue :dispatch try state.step(self);
         },
         .addr_g => { // Get the address of G, placing it in R
             const globalId = current.instruction.data.addr_g.G;

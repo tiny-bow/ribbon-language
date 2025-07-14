@@ -109,6 +109,8 @@ pub const TableBuilder = struct {
             function: *FunctionBuilder,
             /// A builder for a constant or global data value.
             data: *DataBuilder,
+            /// A builder for an effect handler set.
+            handler_set: *HandlerSetBuilder,
 
             fn deinit(self: *@This()) void {
                 switch (self.*) {
@@ -202,13 +204,13 @@ pub const TableBuilder = struct {
     ) error{ BadEncoding, OutOfMemory }!*FunctionBuilder {
         // if we're not tracking this id we can't create a builder for it
         const entry = self.statics.getPtr(id.cast(anyopaque)) orelse {
-            log.debug("TableBuilder.createFunctionBuilder: static:{x} does not exist", .{id});
+            log.debug("TableBuilder.createFunctionBuilder: {} does not exist", .{id});
             return error.BadEncoding;
         };
 
         // type check: the entry must be a function
         if (entry.kind != .function) {
-            log.debug("TableBuilder.createFunctionBuilder: expected function id, got {s}:{x}", .{ @tagName(entry.kind), id });
+            log.debug("TableBuilder.createFunctionBuilder: expected function, got {s}", .{@tagName(entry.kind)});
             return error.BadEncoding;
         }
 
@@ -243,13 +245,13 @@ pub const TableBuilder = struct {
 
         // if we're not tracking this id we can't create a builder for it
         const entry = self.statics.getPtr(static_id) orelse {
-            log.debug("TableBuilder.createFunctionBuilder: static:{x} does not exist", .{id});
+            log.debug("TableBuilder.createFunctionBuilder: {} does not exist", .{id});
             return error.BadEncoding;
         };
 
         // type check: the entry must be a data value
         if (entry.kind != .constant and entry.kind != .global) {
-            log.debug("TableBuilder.createFunctionBuilder: expected constant or global id, got {s}:{x}", .{ @tagName(entry.kind), id });
+            log.debug("TableBuilder.createFunctionBuilder: expected constant or global, got {s}", .{@tagName(entry.kind)});
             return error.BadEncoding;
         }
 
@@ -271,6 +273,41 @@ pub const TableBuilder = struct {
         return addr;
     }
 
+    /// Bind a new `HandlerSetBuilder` to an id.
+    /// * A fresh `id` can be created with `createHeaderEntry`.
+    /// * Note that the returned pointer is owned by the `TableBuilder` and should not be deinitialized manually.
+    /// * Use `getHandlerSetBuilder` to retrieve the pointer to the function builder by its id (available as a field of the builder).
+    pub fn createHandlerSet(self: *TableBuilder, id: core.HandlerSetId) error{OutOfMemory}!*HandlerSetBuilder {
+        // if we're not tracking this id we can't create a builder for it
+        const entry = self.statics.getPtr(id.cast(anyopaque)) orelse {
+            log.debug("TableBuilder.createHandlerSetBuilder: {} does not exist", .{id});
+            return error.BadEncoding;
+        };
+
+        // type check: the entry must be a handler set
+        if (entry.kind != .handler_set) {
+            log.debug("TableBuilder.createHandlerSetBuilder: expected handler_set, got {}", .{@tagName(entry.kind)});
+            return error.BadEncoding;
+        }
+
+        // we support local mutations up to and including full replacement of the builder,
+        // so if there was an existing builder its not an error, just deinit, and reuse the address.
+        const addr = if (entry.builder) |*old_builder| existing: {
+            old_builder.deinit();
+
+            break :existing old_builder.handler_set;
+        } else try self.arena.allocator().create(HandlerSetBuilder);
+
+        addr.* = HandlerSetBuilder.init(self.gpa, self.arena.allocator());
+
+        addr.id = id;
+
+        // setup and return the new builder
+        entry.builder = .{ .handler_set = addr };
+
+        return addr;
+    }
+
     /// Get a function builder by its id.
     pub fn getFunctionBuilder(self: *const TableBuilder, id: core.FunctionId) ?*FunctionBuilder {
         const entry = self.statics.getPtr(id) orelse return null;
@@ -284,6 +321,13 @@ pub const TableBuilder = struct {
         const entry = self.statics.getPtr(id) orelse return null;
         if (entry.kind != .constant and entry.kind != .global) return null;
         return if (entry.builder) |*builder| &builder.data else null;
+    }
+
+    /// Get a handler set builder by its id.
+    pub fn getHandlerSetBuilder(self: *const TableBuilder, id: core.HandlerSetId) ?*HandlerSetBuilder {
+        const entry = self.statics.getPtr(id) orelse return null;
+        if (entry.kind != .handler_set) return null;
+        return if (entry.builder) |*builder| &builder.handler_set else null;
     }
 
     /// Get the location of a static by its id.
@@ -311,8 +355,9 @@ pub const TableBuilder = struct {
             if (entry.builder) |builder| {
                 switch (builder) {
                     .external => {},
-                    .function => |function_builder| try function_builder.encode(&encoder),
+                    .function => |function_builder| try function_builder.encode(null, &encoder),
                     .data => |data_builder| try data_builder.encode(&encoder),
+                    .handler_set => |handler_set_builder| try handler_set_builder.encode(null, &encoder),
                 }
             }
         }
@@ -876,6 +921,13 @@ pub const DataBuilder = struct {
 
     /// Encode the data and fixups into the provided encoder.
     pub fn encode(self: *const DataBuilder, encoder: *Encoder) Encoder.Error!void {
+        const location = encoder.localLocationId(self.id);
+
+        if (!try encoder.visitLocation(location)) {
+            log.debug("DataBuilder.encode: {} has already been encoded, skipping", .{self.id});
+            return;
+        }
+
         // get the final data buffer
         const data_buf = self.writer.getWrittenRegion();
 
@@ -891,7 +943,6 @@ pub const DataBuilder = struct {
 
         // bind the location for our ID
         const entry_rel_addr = encoder.addressToRelative(entry_addr);
-        const location = encoder.localLocationId(self.id);
         try encoder.bindLocation(location, entry_rel_addr);
 
         // ensure our data is aligned to its specified alignment
@@ -1138,17 +1189,222 @@ pub const DataBuilder = struct {
     }
 };
 
-/// A unique identifier for a local variable within a function.
-pub const LocalId = Id.of(core.Layout, core.LOCAL_ID_BITS);
+/// A builder for effect handler collections.
+pub const HandlerSetBuilder = struct {
+    /// The general allocator used by this handler set for collections.
+    gpa: std.mem.Allocator,
+    /// The arena allocator used by this handler set for non-volatile data.
+    arena: std.mem.Allocator,
+    /// The function that utilizes this handler set.
+    function: ?core.FunctionId = null,
+    /// The unique identifier of the handler set.
+    id: core.HandlerSetId = .fromInt(0),
+    /// The handlers in this set, keyed by their unique identifiers.
+    handlers: HandlerMap = .empty,
+    /// The register to place the cancellation operand in if this handler set is cancelled at runtime.
+    register: core.Register = .r(0),
+    /// A map from the upvalue ids of this handler to the local variable ids they reference in its parent function.
+    upvalues: UpvalueMap = .empty,
 
-/// A map from LocalId to core.Layout, representing the local variables of a function.
-pub const LocalMap = common.UniqueReprArrayMap(LocalId, core.Layout);
+    /// A map from upvalue ids to local variable ids, representing the immediate lexical closure of an effect within a handler set builder entry.
+    pub const UpvalueMap = common.UniqueReprMap(core.UpvalueId, core.LocalId);
 
-/// A map from LocalId to a stack operand offset. Used by address-of instructions to resolve local variable addresses.
-pub const LocalFixupMap = common.UniqueReprArrayMap(LocalId, u64);
+    /// A map from handler ids to their entries in a handler set builder.
+    pub const HandlerMap = common.UniqueReprMap(core.HandlerId, Entry);
 
-/// A map from BlockId to BlockBuilder pointers, representing the basic blocks of a function.
-pub const BlockMap = common.UniqueReprMap(BlockId, *BlockBuilder);
+    /// Binding for an effect handler within a handler set builder.
+    /// * The HandlerSetBuilder does not own the function builder
+    pub const Entry = struct {
+        /// The id of the effect that this handler can process.
+        effect: core.EffectId = .fromInt(0),
+        /// The function that implements the handler.
+        function: *FunctionBuilder,
+    };
+
+    /// Initialize a new handler set builder.
+    pub fn init(gpa: std.mem.Allocator, arena: std.mem.Allocator) HandlerSetBuilder {
+        return HandlerSetBuilder{
+            .gpa = gpa,
+            .arena = arena,
+        };
+    }
+
+    /// Clear the handler set builder, retaining the current memory capacity.
+    pub fn clear(self: *HandlerSetBuilder) void {
+        var it = self.handlers.valueIterator();
+        while (it.next()) |entry| entry.deinit(self.gpa);
+        self.handlers.clearRetainingCapacity();
+
+        self.function = null;
+        self.id = .fromInt(0);
+        self.parent_location = .{};
+        self.upvalues.clearRetainingCapacity();
+        self.register = .r(0);
+    }
+
+    /// Deinitialize the handler set builder, freeing all memory associated with it.
+    pub fn deinit(self: *HandlerSetBuilder) void {
+        self.handlers.deinit(self.gpa);
+        self.upvalues.deinit(self.gpa);
+        self.* = undefined;
+    }
+
+    /// Bind a function builder to a handler set entry for a given effect identity, returning its HandlerId.
+    /// * The handler id can be used with `getHandlerFunction` to retrieve the bound function builder address later.
+    /// * The handler set builder does not own the function builder, so it must be deinitialized separately.
+    ///   Recommended usage pattern is to use `TableBuilder` to manage statics.
+    pub fn bindHandler(self: *HandlerSetBuilder, effect: core.EffectId, function: *FunctionBuilder) error{ BadEncoding, OutOfMemory }!core.HandlerId {
+        if (function.parent) |parent| {
+            log.debug("HandlerSetBuilder.bindHandlerFunction: function already bound to {}", .{parent});
+            return error.BadEncoding;
+        }
+
+        const index = self.handlers.count();
+
+        if (index > core.HandlerId.MAX_INT) {
+            log.debug("HandlerSetBuilder.createHandler: cannot create more than {d} handlers", .{core.HandlerId.MAX_INT});
+            return error.OutOfMemory;
+        }
+
+        const handler_id = core.HandlerId.fromInt(index);
+        const addr = try self.arena.create(Entry);
+
+        addr.* = Entry{
+            .effect = effect,
+            .function = function,
+        };
+
+        const gop = try self.handlers.getOrPut(self.gpa, handler_id);
+
+        // sanity check: handler_id should be fresh if the map has been mutated in append-only fashion
+        std.debug.assert(!gop.found_existing);
+
+        gop.value_ptr.* = addr;
+
+        return handler_id;
+    }
+
+    /// Get a handler function builder by its local handler id.
+    pub fn getHandler(self: *const HandlerSetBuilder, id: core.HandlerId) ?*FunctionBuilder {
+        const entry = self.handlers.getPtr(id) orelse return null;
+        return entry.function;
+    }
+
+    /// Create a new upvalue within this handler, returning an id for it.
+    pub fn createUpvalue(self: *HandlerSetBuilder, local_id: core.LocalId) error{OutOfMemory}!core.UpvalueId {
+        const index = self.upvalues.count();
+
+        if (index > core.UpvalueId.MAX_INT) {
+            log.debug("HandlerSetBuilder.createUpvalue: Cannot create more than {d} upvalues", .{core.UpvalueId.MAX_INT});
+            return error.OutOfMemory;
+        }
+
+        const upvalue_id = core.UpvalueId.fromInt(index);
+
+        const gop = try self.upvalues.getOrPut(self.gpa, upvalue_id);
+
+        // sanity check: upvalue_id should be fresh if the map has been mutated in append-only fashion
+        std.debug.assert(!gop.found_existing);
+
+        gop.value_ptr.* = local_id;
+
+        return upvalue_id;
+    }
+
+    /// Get the local variable id of an upvalue by its id.
+    /// * Returns the core.LocalId of the upvalue, inside the parent function; or null if the upvalue does not exist.
+    pub fn getUpvalue(self: *const HandlerSetBuilder, id: core.UpvalueId) ?core.LocalId {
+        return self.upvalues.get(id);
+    }
+
+    /// Get the location to bind for this handler set's cancellation address.
+    pub fn cancellationLocation(self: *const HandlerSetBuilder) error{BadEncoding}!Location {
+        return .fromId(FunctionBuilder.functionBlockRegion(self.function orelse {
+            log.debug("HandlerSetBuilder.cancellationLocation: parent function not set", .{});
+            return error.BadEncoding;
+        }), self.id);
+    }
+
+    /// Encode the handler set into the provided encoder.
+    pub fn encode(self: *const HandlerSetBuilder, maybe_upvalue_fixups: ?*const UpvalueFixupMap, encoder: *Encoder) Encoder.Error!void {
+        const upvalue_fixups = if (maybe_upvalue_fixups) |x| x else {
+            // TODO: provide a "skipped" map in the encoder, that would allow us to write a flag here that would be checked at encode.finalize to ensure the flag was cleared at some point.
+            log.debug("HandlerSetBuilder.encode: No upvalue fixups provided, skipping upvalue encoding", .{});
+            return;
+        };
+
+        const location = encoder.localLocationId(self.id);
+
+        if (!try encoder.visitLocation(location)) {
+            log.debug("HandlerSetBuilder.encode: {} has already been encoded, skipping", .{self.id});
+            return;
+        }
+
+        // create the core.HandlerSet and bind it to the header table
+        const handler_set_rel = try encoder.createRel(core.HandlerSet);
+        try encoder.bindLocation(location, handler_set_rel);
+
+        // create the buffer memory for the handlers
+        const handlers_buf_rel = try encoder.allocRel(core.Handler, self.handlers.count());
+
+        // write the handler set header
+        const handler_set = encoder.relativeToPointer(*core.HandlerSet, handler_set_rel);
+        handler_set.handlers.len = @intCast(self.handlers.count());
+        handler_set.cancellation.register = self.register;
+
+        // bind the cancellation address
+        try encoder.bindFixup(
+            .absolute,
+            .{ .relative = handler_set_rel.applyOffset(@intCast(@offsetOf(core.HandlerSet, "cancellation"))).applyOffset(@intCast(@offsetOf(core.Cancellation, "address"))) },
+            .{ .location = try self.cancellationLocation() },
+            null,
+        );
+
+        // bind the buffer to the handler set
+        try encoder.bindFixup(
+            .absolute,
+            .{ .relative = handler_set_rel.applyOffset(@intCast(@offsetOf(core.HandlerSet, "handlers"))) },
+            .{ .relative = handlers_buf_rel },
+            @bitOffsetOf(core.HandlerBuffer, "ptr"),
+        );
+
+        // encode each handler in the set and create a fixup for it
+        var handler_it = self.handlers.valueIterator();
+        var i: usize = 0;
+        while (handler_it.next()) |entry| {
+            const handler_rel = handlers_buf_rel.applyOffset(@intCast(i * @sizeOf(core.Handler)));
+            const handler = encoder.relativeToPointer(*core.Handler, handler_rel);
+
+            handler.effect = entry.effect;
+
+            try encoder.bindFixup(
+                .absolute,
+                .{ .relative = handler_rel.applyOffset(@intCast(@offsetOf(core.Handler, "function"))) },
+                .{ .location = encoder.localLocationId(entry.function.id) },
+                null,
+            );
+
+            try entry.function.encode(upvalue_fixups, encoder);
+
+            i += 1;
+        }
+    }
+};
+
+/// A map from core.LocalId to core.Layout, representing the local variables of a function.
+pub const LocalMap = common.UniqueReprArrayMap(core.LocalId, core.Layout);
+
+/// A map from core.LocalId to a stack operand offset. Used by address-of instructions to resolve local variable addresses.
+pub const LocalFixupMap = common.UniqueReprArrayMap(core.LocalId, u64);
+
+/// A map from UpvalueId to a stack operand offset. Used by address-of instructions to resolve local variable addresses.
+pub const UpvalueFixupMap = common.UniqueReprArrayMap(core.UpvalueId, u64);
+
+/// A map from core.BlockId to BlockBuilder pointers, representing the basic blocks of a function.
+pub const BlockMap = common.UniqueReprMap(core.BlockId, *BlockBuilder);
+
+/// A map from HandlerSetId to HandlerSetBuilder pointers, representing the basic blocks of a function.
+pub const HandlerSetMap = common.UniqueReprMap(core.HandlerSetId, *HandlerSetBuilder);
 
 /// A simple builder API for bytecode functions.
 pub const FunctionBuilder = struct {
@@ -1158,14 +1414,14 @@ pub const FunctionBuilder = struct {
     arena: std.mem.Allocator,
     /// The function's unique identifier.
     id: core.FunctionId = .fromInt(0),
-    /// The function's stack window size.
-    stack_size: usize = 0,
-    /// The function's stack window alignment.
-    stack_align: usize = 8,
+    /// The function's parent, if it is an effect handler.
+    parent: ?core.FunctionId = null,
     /// The function's basic blocks, unordered.
     blocks: BlockMap = .empty,
     /// The function's local variables, unordered.
     locals: LocalMap = .empty,
+    /// The function's local handler set definitions.
+    handler_sets: HandlerSetMap = .empty,
 
     /// Initialize a new builder for a bytecode function.
     pub fn init(gpa: std.mem.Allocator, arena: std.mem.Allocator) FunctionBuilder {
@@ -1183,9 +1439,10 @@ pub const FunctionBuilder = struct {
 
         self.locals.clearRetainingCapacity();
 
+        self.handler_sets.clearRetainingCapacity();
+
         self.id = .fromInt(0);
-        self.stack_size = 0;
-        self.stack_align = 8;
+        self.parent = null;
     }
 
     /// Deinitialize the builder, freeing all memory associated with it.
@@ -1195,20 +1452,21 @@ pub const FunctionBuilder = struct {
 
         self.blocks.deinit(self.gpa);
         self.locals.deinit(self.gpa);
+        self.handler_sets.deinit(self.gpa);
 
         self.* = undefined;
     }
 
     /// Create a new local variable within this function, returning an id for it.
-    pub fn createLocal(self: *FunctionBuilder, layout: core.Layout) error{OutOfMemory}!LocalId {
+    pub fn createLocal(self: *FunctionBuilder, layout: core.Layout) error{OutOfMemory}!core.LocalId {
         const index = self.locals.count();
 
-        if (index > LocalId.MAX_INT) {
-            log.debug("FunctionBuilder.createLocal: Cannot create more than {d} locals", .{LocalId.MAX_INT});
+        if (index > core.LocalId.MAX_INT) {
+            log.debug("FunctionBuilder.createLocal: Cannot create more than {d} locals", .{core.LocalId.MAX_INT});
             return error.OutOfMemory;
         }
 
-        const local_id = LocalId.fromInt(index);
+        const local_id = core.LocalId.fromInt(index);
         const gop = try self.locals.getOrPut(self.gpa, local_id);
 
         // sanity check: local_id should be fresh if the map has been mutated in append-only fashion
@@ -1220,8 +1478,30 @@ pub const FunctionBuilder = struct {
     }
 
     /// Get the layout of a local variable by its id.
-    pub fn getLocal(self: *const FunctionBuilder, id: LocalId) ?core.Layout {
+    pub fn getLocal(self: *const FunctionBuilder, id: core.LocalId) ?core.Layout {
         return self.locals.get(id);
+    }
+
+    /// Bind a handler set builder to this function builder.
+    /// * The handler set builder address may be retrieved later with `getHandlerSet` and the id of the handler set,
+    ///   which is accessible as a field of the builder.
+    /// * The function builder does not own the handler set builder, so it must be deinitialized separately.
+    ///   Recommended usage pattern is to use `TableBuilder` to manage statics.
+    pub fn bindHandlerSet(self: *FunctionBuilder, builder: *HandlerSetBuilder) error{OutOfMemory}!void {
+        if (builder.function) |old_function| {
+            log.debug("FunctionBuilder.bindHandlerSet: Handler set builder already bound to function {}", .{old_function});
+            return error.OutOfMemory;
+        }
+
+        builder.function = self.id;
+        builder.parent_location = Location.fromId(functionBlockRegion(self.id), builder.id);
+
+        try self.handler_sets.put(self.gpa, builder.id, builder);
+    }
+
+    /// Get a pointer to a handler set builder by its handler set id.
+    pub fn getHandlerSet(self: *const FunctionBuilder, id: core.HandlerSetId) ?*HandlerSetBuilder {
+        return self.handler_sets.get(id);
     }
 
     /// Create a new basic block within this function, returning a pointer to it.
@@ -1235,7 +1515,7 @@ pub const FunctionBuilder = struct {
             return error.OutOfMemory;
         }
 
-        const block_id = BlockId.fromInt(index);
+        const block_id = core.BlockId.fromInt(index);
         const addr = try self.arena.create(BlockBuilder);
 
         const gop = try self.blocks.getOrPut(self.gpa, block_id);
@@ -1245,7 +1525,7 @@ pub const FunctionBuilder = struct {
 
         addr.* = BlockBuilder.init(self.gpa, self.arena);
         addr.id = block_id;
-        addr.function = self.id;
+        addr.body.function = self.id;
 
         gop.value_ptr.* = addr;
 
@@ -1253,15 +1533,29 @@ pub const FunctionBuilder = struct {
     }
 
     /// Get a pointer to a block builder by its block id.
-    pub fn getBlock(self: *const FunctionBuilder, id: BlockId) ?*BlockBuilder {
+    pub fn getBlock(self: *const FunctionBuilder, id: core.BlockId) ?*BlockBuilder {
         return self.blocks.get(id);
     }
 
+    /// Helper function to get a block location from a function id and block id.
+    pub fn functionBlockRegion(function_id: core.FunctionId) RegionId {
+        return .fromInt(function_id.toInt() + 1);
+    }
+
     /// Encode the function and all blocks into the provided encoder, inserting a fixup location for the function itself into the current region.
-    pub fn encode(self: *FunctionBuilder, encoder: *Encoder) Encoder.Error!void {
-        // set up the visitor and queue for block encoding
-        var visitor: BlockVisitor = .init(encoder.temp_allocator);
-        defer visitor.deinit();
+    pub fn encode(self: *const FunctionBuilder, maybe_upvalue_fixups: ?*const UpvalueFixupMap, encoder: *Encoder) Encoder.Error!void {
+        if (maybe_upvalue_fixups == null and self.parent != null) {
+            // TODO: provide a "skipped" map in the encoder, that would allow us to write a flag here that would be checked at encode.finalize to ensure the flag was cleared at some point.
+            log.debug("FunctionBuilder.encode: {} has a parent but no parent locals map was provided; assuming this is the top-level TableBuilder hitting a pre-declared handler function, skipping", .{self.id});
+            return;
+        }
+
+        const location = encoder.localLocationId(self.id);
+
+        if (!try encoder.visitLocation(location)) {
+            log.debug("FunctionBuilder.encode: {} has already been encoded, skipping", .{self.id});
+            return;
+        }
 
         var queue: BlockVisitorQueue = .init(encoder.temp_allocator);
         defer queue.deinit();
@@ -1284,59 +1578,87 @@ pub const FunctionBuilder = struct {
         const entry_addr_rel = try encoder.createRel(core.Function);
 
         // bind its location to the function id
-        const location = encoder.localLocationId(self.id);
         try encoder.bindLocation(location, entry_addr_rel);
 
-        const region_token = encoder.enterRegion(RegionId.fromInt(self.id.toInt() + 1));
-        defer encoder.leaveRegion(region_token);
+        { // function block region
+            const region_token = encoder.enterRegion(functionBlockRegion(self.id));
+            defer encoder.leaveRegion(region_token);
 
-        // write the function body
+            // write the function body
 
-        // ensure the function's instructions are aligned
-        try encoder.alignTo(core.BYTECODE_ALIGNMENT);
+            // ensure the function's instructions are aligned
+            try encoder.alignTo(core.BYTECODE_ALIGNMENT);
 
-        const base_rel = encoder.getRelativeAddress();
+            const base_rel = encoder.getRelativeAddress();
 
-        try queue.add(BlockBuilder.entry_point_id);
+            try queue.add(BlockBuilder.entry_point_id);
 
-        while (queue.visit()) |block_id| {
-            if (try visitor.visit(block_id)) continue;
+            while (queue.visit()) |block_id| {
+                const block = self.blocks.get(block_id).?;
 
-            const block = self.blocks.get(block_id).?;
+                try block.encode(&queue, maybe_upvalue_fixups, &local_fixups, encoder);
+            }
 
-            try block.encode(&queue, &local_fixups, encoder);
+            const upper_rel = encoder.getRelativeAddress();
+
+            // write the function header
+            const func = encoder.relativeToPointer(*core.Function, entry_addr_rel);
+
+            func.kind = .bytecode;
+            func.layout = stack_layout;
+
+            // Add a fixup for the function's header reference
+            try encoder.bindFixup(
+                .absolute,
+                .{ .relative = entry_addr_rel.applyOffset(@intCast(@offsetOf(core.Function, "header"))) },
+                .{ .relative = .base },
+                null,
+            );
+
+            // Add fixups for the function's extents references
+            const extents_rel = entry_addr_rel.applyOffset(@intCast(@offsetOf(core.Function, "extents")));
+            try encoder.bindFixup(
+                .absolute,
+                .{ .relative = extents_rel.applyOffset(@intCast(@offsetOf(core.Extents, "base"))) },
+                .{ .relative = base_rel },
+                null,
+            );
+
+            try encoder.bindFixup(
+                .absolute,
+                .{ .relative = extents_rel.applyOffset(@intCast(@offsetOf(core.Extents, "upper"))) },
+                .{ .relative = upper_rel },
+                null,
+            );
         }
 
-        const upper_rel = encoder.getRelativeAddress();
+        // encode descendents
+        var set_it = self.handler_sets.valueIterator();
+        while (set_it.next()) |ptr2ptr| {
+            const handler_set = ptr2ptr.*;
 
-        // write the function header
-        const func = encoder.relativeToPointer(*core.Function, entry_addr_rel);
+            // we need to create a map from UpvalueId to our local fixups;
+            // we can do this by using the handler set builder's upvalues map to create a buffer of UpvalueIds matched with our existing local fixups.
+            var new_upvalue_fixups: UpvalueFixupMap = .{};
+            defer new_upvalue_fixups.deinit(encoder.temp_allocator);
 
-        func.kind = .bytecode;
-        func.layout = stack_layout;
+            var handler_it = handler_set.upvalues.iterator();
+            while (handler_it.next()) |pair| {
+                const upvalue_id = pair.key_ptr.*;
+                const local_id = pair.value_ptr.*;
 
-        // Add a fixup for the function's header reference
-        try encoder.bindFixup(
-            .absolute,
-            .{ .relative = entry_addr_rel.applyOffset(@intCast(@offsetOf(core.Function, "header"))) },
-            .{ .relative = .base },
-            null,
-        );
+                try new_upvalue_fixups.put(
+                    encoder.temp_allocator,
+                    upvalue_id,
+                    local_fixups.get(local_id) orelse {
+                        log.err("FunctionBuilder.encode: Local variable {} referenced by upvalue {} in handler set {} does not exist", .{ local_id, upvalue_id, handler_set.id });
+                        return error.BadEncoding;
+                    },
+                );
+            }
 
-        // Add fixups for the function's extents references
-        const extents_rel = entry_addr_rel.applyOffset(@intCast(@offsetOf(core.Function, "extents")));
-        try encoder.bindFixup(
-            .absolute,
-            .{ .relative = extents_rel.applyOffset(@intCast(@offsetOf(core.Extents, "base"))) },
-            .{ .relative = base_rel },
-            null,
-        );
-        try encoder.bindFixup(
-            .absolute,
-            .{ .relative = extents_rel.applyOffset(@intCast(@offsetOf(core.Extents, "upper"))) },
-            .{ .relative = upper_rel },
-            null,
-        );
+            try handler_set.encode(&new_upvalue_fixups, encoder);
+        }
     }
 };
 
@@ -1349,6 +1671,8 @@ pub const SequenceBuilder = struct {
     gpa: std.mem.Allocator,
     /// The collection of instructions in this sequence, in un-encoded form.
     body: common.ArrayList(ProtoInstr) = .empty,
+    /// The function that this sequence belongs to.
+    function: core.FunctionId = .fromInt(0),
 
     /// Initialize a new sequence builder with the given allocator.
     pub fn init(gpa: std.mem.Allocator) SequenceBuilder {
@@ -1367,7 +1691,8 @@ pub const SequenceBuilder = struct {
     }
 
     /// Append a pre-composed `ProtoInstr` to the sequence.
-    /// * Violating sequence invariants will result in a `BadEncoding` error.
+    /// * Violating some sequence invariants will result in a `BadEncoding` error, but this method is generally unsafe,
+    ///   and should be considered an escape hatch where comptime bounds on the other instruction methods are too restrictive.
     pub fn proto(self: *SequenceBuilder, pi: ProtoInstr) Error!void {
         if (pi.instruction.code.isTerm() or pi.instruction.code.isBranch()) {
             log.err("SequenceBuilder cannot contain terminator or branch instructions", .{});
@@ -1385,7 +1710,7 @@ pub const SequenceBuilder = struct {
     }
 
     /// Append a non-terminating one-word instruction to the sequence.
-    pub fn instr(self: *SequenceBuilder, comptime code: Instruction.BasicOpCode, data: Instruction.SetType(code.upcast())) Error!void {
+    pub fn instr(self: *SequenceBuilder, comptime code: Instruction.BasicOpCode, data: Instruction.OperandSet(code.upcast())) Error!void {
         try self.proto(.{
             .instruction = .{
                 .code = code.upcast(),
@@ -1396,7 +1721,7 @@ pub const SequenceBuilder = struct {
     }
 
     /// Append a two-word instruction to the sequence.
-    pub fn instrWide(self: *SequenceBuilder, comptime code: Instruction.WideOpCode, data: Instruction.SetType(code.upcast()), wide_operand: Instruction.WideOperand(code.upcast())) Error!void {
+    pub fn instrWide(self: *SequenceBuilder, comptime code: Instruction.WideOpCode, data: Instruction.OperandSet(code.upcast()), wide_operand: Instruction.WideOperand(code.upcast())) Error!void {
         try self.proto(.{
             .instruction = .{
                 .code = code.upcast(),
@@ -1406,13 +1731,25 @@ pub const SequenceBuilder = struct {
         });
     }
 
+    /// Helper to get the identity type of an AddrOf proto instruction.
+    pub fn AddrId(comptime code: Instruction.AddrOpCode) type {
+        comptime return switch (code) {
+            .addr_l => core.LocalId,
+            .addr_u => core.UpvalueId,
+            .addr_g => core.GlobalId,
+            .addr_f => core.FunctionId,
+            .addr_b => core.BuiltinAddressId,
+            .addr_x => core.ForeignAddressId,
+            .addr_c => core.ConstantId,
+        };
+    }
+
     /// Append an address-of instruction to the sequence.
-    pub fn instrAddrOf(self: *SequenceBuilder, comptime code: Instruction.AddrOpCode, register: core.Register, id: anytype) Encoder.Error!void {
-        const Set = comptime Instruction.SetType(code.upcast());
+    pub fn instrAddrOf(self: *SequenceBuilder, comptime code: Instruction.AddrOpCode, register: core.Register, id: AddrId(code)) Encoder.Error!void {
+        const Set = comptime Instruction.OperandSet(code.upcast());
         const fields = comptime std.meta.fieldNames(Set);
         const id_field = comptime fields[1];
         const set_is_enum = comptime @typeInfo(@FieldType(Set, id_field)) == .@"enum";
-        const id_is_enum = comptime @typeInfo(@TypeOf(id)) == .@"enum";
 
         comptime {
             if (std.mem.eql(u8, id_field, "R") or fields.len != 2) {
@@ -1423,7 +1760,7 @@ pub const SequenceBuilder = struct {
         var set: Set = undefined;
 
         set.R = register;
-        @field(set, id_field) = if (comptime !set_is_enum and id_is_enum) @intFromEnum(id) else if (comptime set_is_enum and !id_is_enum) @enumFromInt(id) else id;
+        @field(set, id_field) = if (comptime !set_is_enum) @intFromEnum(id) else id;
 
         try self.proto(.{
             .instruction = .{
@@ -1435,7 +1772,7 @@ pub const SequenceBuilder = struct {
     }
 
     /// Append a call instruction to the sequence.
-    pub fn instrCall(self: *SequenceBuilder, comptime code: Instruction.CallOpCode, data: Instruction.SetType(code.upcast()), args: Buffer.fixed(core.Register, core.MAX_REGISTERS)) Error!void {
+    pub fn instrCall(self: *SequenceBuilder, comptime code: Instruction.CallOpCode, data: Instruction.OperandSet(code.upcast()), args: Buffer.fixed(core.Register, core.MAX_REGISTERS)) Error!void {
         try self.proto(.{
             .instruction = .{
                 .code = code.upcast(),
@@ -1445,23 +1782,67 @@ pub const SequenceBuilder = struct {
         });
     }
 
+    /// Push an effect handler set onto the stack at the current sequence position.
+    pub fn pushHandlerSet(self: *SequenceBuilder, handler_set: *HandlerSetBuilder) Encoder.Error!void {
+        if (handler_set.function != self.function) {
+            log.err("BlockBuilder.pushHandlerSet: {} does not belong to the block's parent {}", .{ handler_set.id, self.function });
+            return error.BadEncoding;
+        }
+
+        try self.proto(.{
+            .instruction = .{
+                .code = .push_set,
+                .data = .{ .push_set = .{ .H = handler_set.id } },
+            },
+            .additional = .none,
+        });
+    }
+
+    /// Pop an effect handler set from the stack at the current sequence position.
+    pub fn popHandlerSet(self: *SequenceBuilder, handler_set: *HandlerSetBuilder) Encoder.Error!void {
+        if (handler_set.function != self.function) {
+            log.err("BlockBuilder.popHandlerSet: {} does not belong to the block's parent {}", .{ handler_set.id, self.function });
+            return error.BadEncoding;
+        }
+
+        try self.proto(.{
+            .instruction = .{
+                .code = .pop_set,
+                .data = .{ .pop_set = .{ .H = handler_set.id } },
+            },
+            .additional = .none,
+        });
+    }
+
+    /// Bind a handler set's cancellation location to the current offset in the sequence.
+    /// * The instruction that is encoded next *after this call*, will be executed first after the handler set is cancelled
+    /// * This allows cancellation to terminate a block and still use its terminator
+    pub fn bindHandlerSetCancellationLocation(self: *SequenceBuilder, handler_set: *HandlerSetBuilder) Encoder.Error!void {
+        if (handler_set.function != self.function) {
+            log.err("BlockBuilder.bindHandlerSetCancellationLocation: {} does not belong to the block's parent {}", .{ handler_set.id, self.function });
+            return error.BadEncoding;
+        }
+
+        try self.proto(.{
+            .instruction = .{ .code = .breakpoint, .data = .breakpoint }, // placeholder
+            .additional = .{ .cancellation_location = try handler_set.cancellationLocation() },
+        });
+    }
+
     /// Encodes the instruction sequence into the provided encoder.
     /// Does not encode a terminator; execution will fall through.
-    pub fn encode(self: *const SequenceBuilder, queue: *BlockVisitorQueue, local_fixups: *const LocalFixupMap, encoder: *Encoder) Encoder.Error!void {
+    pub fn encode(self: *const SequenceBuilder, upvalue_fixups: ?*const UpvalueFixupMap, local_fixups: *const LocalFixupMap, encoder: *Encoder) Encoder.Error!void {
         for (self.body.items) |*pi| {
-            try pi.encode(queue, local_fixups, encoder);
+            try pi.encode(null, upvalue_fixups, local_fixups, encoder);
         }
     }
 };
 
-/// A unique identifier for a bytecode block, used to reference blocks in a function builder.
-pub const BlockId = Id.of(BlockBuilder, 16);
-
 /// A visitor for bytecode blocks, used to track which blocks have been visited during encoding.
-pub const BlockVisitor = common.Visitor(BlockId);
+pub const BlockVisitor = common.Visitor(core.BlockId);
 
 /// A queue of bytecode blocks to visit, used by the Block encoder to queue references to jump targets.
-pub const BlockVisitorQueue = common.VisitorQueue(BlockId);
+pub const BlockVisitorQueue = common.VisitorQueue(core.BlockId);
 
 /// A bytecode basic block in unencoded form.
 ///
@@ -1474,16 +1855,14 @@ pub const BlockBuilder = struct {
     /// The instructions making up the body of this block, in un-encoded form.
     body: SequenceBuilder,
     /// The unique(-within-`function`) identifier for this block.
-    id: BlockId = .fromInt(0),
-    /// The function this block belongs to.
-    function: core.FunctionId = .fromInt(0),
+    id: core.BlockId = .fromInt(0),
     /// The instruction that terminates this block.
     /// * Adding any instruction when this is non-`null` is a `BadEncoding` error
     /// * For all other purposes, `null` is semantically equivalent to `unreachable`
     terminator: ?ProtoInstr = null,
 
     /// ID of all functions' entry point block.
-    pub const entry_point_id = BlockId.fromInt(0);
+    pub const entry_point_id = core.BlockId.fromInt(0);
 
     /// Initialize a new block builder for the given function and block ids.
     pub fn init(gpa: std.mem.Allocator, arena: std.mem.Allocator) BlockBuilder {
@@ -1513,33 +1892,46 @@ pub const BlockBuilder = struct {
         return self.body.body.items.len + 1;
     }
 
+    /// Append a pre-composed instruction to the block.
+    /// * Violating some invariants will result in a `BadEncoding` error, but this method is generally unsafe,
+    ///   and should be considered an escape hatch where comptime bounds on the other instruction methods are too restrictive.
+    pub fn proto(self: *BlockBuilder, pi: ProtoInstr) Encoder.Error!void {
+        try self.ensureUnterminated();
+
+        if (pi.instruction.code.isTerm() or pi.instruction.code.isBranch()) {
+            self.terminator = pi;
+        } else {
+            try self.body.proto(pi);
+        }
+    }
+
     /// Append a pre-composed
     /// Append a non-terminating one-word instruction to the block body.
-    pub fn instr(self: *BlockBuilder, comptime code: Instruction.BasicOpCode, data: Instruction.SetType(code.upcast())) Encoder.Error!void {
+    pub fn instr(self: *BlockBuilder, comptime code: Instruction.BasicOpCode, data: Instruction.OperandSet(code.upcast())) Encoder.Error!void {
         try self.ensureUnterminated();
         try self.body.instr(code, data);
     }
 
     /// Append a two-word instruction to the block body.
-    pub fn instrWide(self: *BlockBuilder, comptime code: Instruction.WideOpCode, data: Instruction.SetType(code.upcast()), wide_operand: Instruction.WideOperand(code.upcast())) Encoder.Error!void {
+    pub fn instrWide(self: *BlockBuilder, comptime code: Instruction.WideOpCode, data: Instruction.OperandSet(code.upcast()), wide_operand: Instruction.WideOperand(code.upcast())) Encoder.Error!void {
         try self.ensureUnterminated();
         try self.body.instrWide(code, data, wide_operand);
     }
 
     /// Append a call instruction to the block body.
-    pub fn instrCall(self: *BlockBuilder, comptime code: Instruction.CallOpCode, data: Instruction.SetType(code.upcast()), args: Buffer.fixed(core.Register, core.MAX_REGISTERS)) Encoder.Error!void {
+    pub fn instrCall(self: *BlockBuilder, comptime code: Instruction.CallOpCode, data: Instruction.OperandSet(code.upcast()), args: Buffer.fixed(core.Register, core.MAX_REGISTERS)) Encoder.Error!void {
         try self.ensureUnterminated();
         try self.body.instrCall(code, data, args);
     }
 
     /// Append an address-of instruction to the block body.
-    pub fn instrAddrOf(self: *BlockBuilder, comptime code: Instruction.AddrOpCode, register: core.Register, id: anytype) Encoder.Error!void {
+    pub fn instrAddrOf(self: *BlockBuilder, comptime code: Instruction.AddrOpCode, register: core.Register, id: SequenceBuilder.AddrId(code)) Encoder.Error!void {
         try self.ensureUnterminated();
         try self.body.instrAddrOf(code, register, id);
     }
 
     /// Set the block terminator to a branch instruction.
-    pub fn instrBr(self: *BlockBuilder, target: BlockId) Encoder.Error!void {
+    pub fn instrBr(self: *BlockBuilder, target: core.BlockId) Encoder.Error!void {
         try self.ensureUnterminated();
         self.terminator = .{
             .instruction = .{
@@ -1551,7 +1943,7 @@ pub const BlockBuilder = struct {
     }
 
     /// Set the block terminator to a conditional branch instruction.
-    pub fn instrBrIf(self: *BlockBuilder, condition: core.Register, then_id: BlockId, else_id: BlockId) Encoder.Error!void {
+    pub fn instrBrIf(self: *BlockBuilder, condition: core.Register, then_id: core.BlockId, else_id: core.BlockId) Encoder.Error!void {
         try self.ensureUnterminated();
         self.terminator = .{
             .instruction = .{
@@ -1562,8 +1954,8 @@ pub const BlockBuilder = struct {
         };
     }
 
-    /// Set the block terminator.
-    pub fn instrTerm(self: *BlockBuilder, comptime code: Instruction.TermOpCode, data: Instruction.SetType(code.upcast())) Encoder.Error!void {
+    /// Set the block terminator to a non-branching instruction.
+    pub fn instrTerm(self: *BlockBuilder, comptime code: Instruction.TermOpCode, data: Instruction.OperandSet(code.upcast())) Encoder.Error!void {
         try self.ensureUnterminated();
         self.terminator = .{
             .instruction = .{
@@ -1574,26 +1966,55 @@ pub const BlockBuilder = struct {
         };
     }
 
+    /// Push an effect handler set onto the stack at the current sequence position.
+    pub fn pushHandlerSet(self: *BlockBuilder, handler_set: *HandlerSetBuilder) Encoder.Error!void {
+        try self.ensureUnterminated();
+        try self.body.pushHandlerSet(handler_set);
+    }
+
+    /// Pop an effect handler set from the stack at the current sequence position.
+    pub fn popHandlerSet(self: *BlockBuilder, handler_set: *HandlerSetBuilder) Encoder.Error!void {
+        try self.ensureUnterminated();
+        try self.body.popHandlerSet(handler_set);
+    }
+
+    /// Bind a handler set's cancellation location to the current offset in the sequence.
+    /// * The instruction that is encoded next *after this call*, will be executed first after the handler set is cancelled
+    /// * This allows cancellation to terminate a block and still use its terminator
+    pub fn bindHandlerSetCancellationLocation(self: *BlockBuilder, handler_set: *HandlerSetBuilder) Encoder.Error!void {
+        try self.body.bindHandlerSetCancellationLocation(handler_set);
+    }
+
     /// Encode the block into the provided encoder, including the body instructions and the terminator.
     /// * The block's entry point is encoded as a location in the bytecode header, using the current region id and the block's id as the offset
     /// * Other blocks' ids that are referenced by instructions are added to the provided queue in order of use
-    pub fn encode(self: *BlockBuilder, queue: *BlockVisitorQueue, local_fixups: *const LocalFixupMap, encoder: *Encoder) Encoder.Error!void {
+    pub fn encode(self: *BlockBuilder, queue: *BlockVisitorQueue, upvalue_fixups: ?*const UpvalueFixupMap, local_fixups: *const LocalFixupMap, encoder: *Encoder) Encoder.Error!void {
+        const location = encoder.localLocationId(self.id);
+
+        if (!try encoder.visitLocation(location)) {
+            log.debug("BlockBuilder.encode: Block {x} has already been encoded, skipping", .{self.id.toInt()});
+            return;
+        }
+
+        try encoder.ensureAligned(core.BYTECODE_ALIGNMENT);
+
         // we can encode the current location as the block entry point
-        try encoder.registerLocation(encoder.localLocationId(self.id), encoder.getRelativeAddress());
+        try encoder.registerLocation(location, encoder.getRelativeAddress());
 
         // first we emit all the body instructions by encoding the inner sequence
-        try self.body.encode(queue, local_fixups, encoder);
+        try self.body.encode(upvalue_fixups, local_fixups, encoder);
 
         // now the terminator instruction, if any; same as body instructions, but can queue block ids
-        if (self.terminator) |*proto| {
-            try proto.encode(queue, local_fixups, encoder);
+        if (self.terminator) |*pi| {
+            try pi.encode(queue, upvalue_fixups, local_fixups, encoder);
         } else {
             // simply write the scaled opcode for `unreachable`, since it has no operands
             try encoder.writeValue(Instruction.OpCode.@"unreachable".toBits());
         }
     }
 
-    fn ensureUnterminated(self: *BlockBuilder) Encoder.Error!void {
+    /// Helper method that returns a `BadEncoding` error if the block is already terminated.
+    pub fn ensureUnterminated(self: *BlockBuilder) Encoder.Error!void {
         if (self.terminator) |_| {
             log.debug("BlockBuilder.ensureUnterminated: Block {x} is already terminated; cannot append additional instructions", .{self.id.toInt()});
             return error.BadEncoding;
@@ -1631,7 +2052,9 @@ pub const ProtoInstr = struct {
         /// The arguments of variable-width call instructions.
         call_args: Buffer.fixed(core.Register, core.MAX_REGISTERS),
         /// The destination(s) of branch instructions.
-        branch_target: struct { BlockId, ?BlockId },
+        branch_target: struct { core.BlockId, ?core.BlockId },
+        /// The address of a handler set cancellation location.
+        cancellation_location: Location,
     };
 
     /// Encode this instruction into the provided encoder at the current relative address.
@@ -1639,18 +2062,27 @@ pub const ProtoInstr = struct {
     /// * This method is used by the `BlockBuilder` to encode instructions into the
     /// * It is not intended to be used directly; instead, use the `BlockBuilder` methods to append instructions.
     /// * Also available are convenience methods in `Encoder` for appending instructions directly.
-    /// * The `queue` is used to track branch targets and ensure they are visited in the correct order.
-    pub fn encode(self: *const ProtoInstr, queue: *BlockVisitorQueue, local_fixups: *const LocalFixupMap, encoder: *Encoder) Encoder.Error!void {
+    /// * The queue is used to track branch targets and ensure they are visited in the correct order. Pass `null` for body sequences to ensure no branches are allowed inside.
+    pub fn encode(self: *const ProtoInstr, maybe_queue: ?*BlockVisitorQueue, upvalue_fixups: ?*const UpvalueFixupMap, local_fixups: *const LocalFixupMap, encoder: *Encoder) Encoder.Error!void {
         try encoder.ensureAligned(core.BYTECODE_ALIGNMENT);
 
         var instr = self.instruction;
 
+        // Cancellation locations do not encode any bytes to the stream, they simply bind a fixup location
+        if (self.additional == .cancellation_location) {
+            const loc = self.additional.cancellation_location;
+
+            try encoder.bindLocation(loc, encoder.getRelativeAddress());
+            return;
+        }
+
+        // We fix up the local and upvalue stack-relative addresses here, before encoding bytes to the stream
         if (self.instruction.code.isAddr()) is_addr: {
             const addr_code: Instruction.AddrOpCode = @enumFromInt(@intFromEnum(self.instruction.code));
 
             switch (addr_code) {
                 .addr_l => {
-                    const local_id: LocalId = @enumFromInt(self.instruction.data.addr_l.I);
+                    const local_id: core.LocalId = @enumFromInt(self.instruction.data.addr_l.I);
                     instr.data.addr_l.I = @intCast(local_fixups.get(local_id) orelse {
                         log.err("ProtoInstr.encode: Local variable {} not found in local fixup map", .{local_id});
                         return error.BadEncoding;
@@ -1658,16 +2090,16 @@ pub const ProtoInstr = struct {
                 },
 
                 .addr_u => {
-                    // TODO: Additional data is required to implement this instruction
-                    //
-                    // basic plan of attack:
-                    // 1. Add a HandlerSetBuilder
-                    // 2. Make FunctionBuilder a manager for handler sets like it is for locals & blocks
-                    // 3. When encoding functions:
-                    //    - For each handler set, for each handler, visit the handler function.
-                    //    - Call its encode method with the current function's local fixup map.
-                    // 4. This function can then take ?upvalue_fixups and local_fixups.
-                    common.todo(noreturn, "NYI");
+                    const map = upvalue_fixups orelse {
+                        log.debug("ProtoInstr.encode: Upvalue address instruction without upvalue fixup map; this is not allowed", .{});
+                        return error.BadEncoding;
+                    };
+
+                    const upvalue_id: core.UpvalueId = @enumFromInt(self.instruction.data.addr_u.I);
+                    instr.data.addr_u.I = @intCast(map.get(upvalue_id) orelse {
+                        log.err("ProtoInstr.encode: Upvalue {} not found in upvalue fixup map", .{upvalue_id});
+                        return error.BadEncoding;
+                    });
                 },
 
                 .addr_g,
@@ -1684,11 +2116,17 @@ pub const ProtoInstr = struct {
 
         switch (self.additional) {
             .none => {},
+            .cancellation_location => unreachable,
             .wide_imm => |bits| try encoder.writeValue(bits),
             .call_args => |args| try encoder.writeAll(std.mem.sliceAsBytes(args.asSlice())),
             .branch_target => |ids| {
                 const then_id, const maybe_else_id = ids;
                 const then_dest = encoder.localLocationId(then_id);
+
+                const queue = maybe_queue orelse {
+                    log.debug("ProtoInstr.encode: Branch instruction without a queue; this is not allowed", .{});
+                    return error.BadEncoding;
+                };
 
                 switch (instr.code) {
                     .br => {
@@ -1700,7 +2138,7 @@ pub const ProtoInstr = struct {
                         const then_bit_offset = @bitOffsetOf(Instruction.operand_sets.br, "I") + @bitSizeOf(Instruction.OpCode);
 
                         try encoder.bindFixup(
-                            .relative,
+                            .relative_words,
                             .{ .relative = rel_addr },
                             .{ .location = then_dest },
                             then_bit_offset,
@@ -1716,14 +2154,14 @@ pub const ProtoInstr = struct {
                             const else_bit_offset = @bitOffsetOf(Instruction.operand_sets.br_if, "Iy") + @bitSizeOf(Instruction.OpCode);
 
                             try encoder.bindFixup(
-                                .relative,
+                                .relative_words,
                                 .{ .relative = rel_addr },
                                 .{ .location = then_dest },
                                 then_bit_offset,
                             );
 
                             try encoder.bindFixup(
-                                .relative,
+                                .relative_words,
                                 .{ .relative = rel_addr },
                                 .{ .location = else_dest },
                                 else_bit_offset,
@@ -1771,7 +2209,7 @@ pub const Decoder = struct {
                 const code = comptime @field(Instruction.OpCode, opcode_name);
 
                 if (code == self.instruction.code) {
-                    const Set = comptime Instruction.SetType(code);
+                    const Set = comptime Instruction.OperandSet(code);
                     const operands = &@field(self.instruction.data, opcode_name);
 
                     inline for (comptime std.meta.fieldNames(Set)) |operand_name| {
@@ -1900,7 +2338,7 @@ pub const Decoder = struct {
             if (item.instruction.code.isWide()) {
                 if (self.ip < self.instructions.len) {
                     // simple case, just copy it over and increment ip
-                    item.trailing = .{ .wide_imm = switch (item.instruction.code.wideOperandType().?) {
+                    item.trailing = .{ .wide_imm = switch (item.instruction.code.wideOperandKind().?) {
                         .byte => .{ .byte = @truncate(self.instructions[self.ip]) },
                         .short => .{ .short = @truncate(self.instructions[self.ip]) },
                         .int => .{ .int = @truncate(self.instructions[self.ip]) },
@@ -2226,9 +2664,9 @@ test "encode local variable reference" {
     try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
 
     const expected =
-        \\    addr_l r1 I:00000028
-        \\    addr_l r1 I:00000020
-        \\    addr_l r1 I:00000000
+        \\    addr_l r1 I:0028
+        \\    addr_l r1 I:0020
+        \\    addr_l r1 I:0000
         \\    unreachable
         \\
     ;

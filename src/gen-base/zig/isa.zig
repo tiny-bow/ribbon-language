@@ -587,17 +587,22 @@ pub const CATEGORIES: []const Category = &.{
                 "addr",
                 "Get addresses from special values.",
                 &.{
-                    .basic(
-                        .suffix("l"),
-                        \\Get the address of a signed integer frame-relative operand stack offset {1}, placing it in {0}.
+                    .basic(.suffix("l"),
+                        \\Get the address of an unsigned integer current-frame-relative operand stack offset {1}, placing it in {0}.
                         \\
                         \\An operand stack offset of 1 is equivalent to 8 bytes down from the base of the stack frame.
                         \\
-                        \\{0} = stack_base + {1}
-                    ,
-                        &.{ .register, .int },
-                    ),
-                    .basic(.suffix("u"), "Get the address of {1}, placing it in {0}; {0} = &{1}", &.{ .register, .upvalue }),
+                        \\{0} = stack_base(current_function) + {1}
+                    , &.{ .register, .short }),
+                    .basic(.suffix("u"),
+                        \\Get the address of an unsigned integer parent-frame-relative operand stack offset {1}, placing it in {0}.
+                        \\
+                        \\An operand stack offset of 1 is equivalent to 8 bytes down from the base of the parent frame.
+                        \\
+                        \\"Parent" frame here refers to the frame of the function that bound the current function as an effect handler.
+                        \\
+                        \\{0} = stack_base(current_function.parent) + {1}
+                    , &.{ .register, .short }),
                     .basic(.suffix("g"), "Get the address of {1}, placing it in {0}; {0} = &{1}", &.{ .register, .global }),
                     .basic(.suffix("f"), "Get the address of {1}, placing it in {0}; {0} = &{1}", &.{ .register, .function }),
                     .basic(.suffix("b"), "Get the address of {1}, placing it in {0}; {0} = &{1}", &.{ .register, .builtin }),

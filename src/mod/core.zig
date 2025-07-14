@@ -183,6 +183,10 @@ pub const HandlerId = Id.of(Handler, STATIC_ID_BITS);
 pub const EffectId = Id.of(Effect, STATIC_ID_BITS);
 pub const HandlerSetId = Id.of(HandlerSet, STATIC_ID_BITS);
 
+pub const UpvalueId = Id.of(Upvalue, LOCAL_ID_BITS);
+pub const BlockId = Id.of(Block, core.LOCAL_ID_BITS);
+pub const LocalId = Id.of(Local, core.LOCAL_ID_BITS);
+
 pub fn isTypedStaticId(comptime T: type) bool {
     comptime return switch (T) {
         ConstantId,
@@ -258,8 +262,6 @@ pub fn IdFromSymbolKind(comptime kind: SymbolKind) type {
         .handler_set => HandlerSetId,
     };
 }
-
-pub const UpvalueId = Id.of(Upvalue, LOCAL_ID_BITS);
 
 /// Represents the alignment of a value type; the max alignment is the minimum page size supported.
 ///
@@ -492,12 +494,18 @@ pub const BuiltinAddress = packed struct {
 /// Intent-communication alias for `*anyopaque`.
 pub const ForeignAddress = *anyopaque;
 
-/// A frame-local stack value offset into the frame of the parent function of a handler set.
-pub const Upvalue = enum(StackOffset) { _ };
+/// Marker type for UpvalueId.
+pub const Upvalue = struct {};
+
+/// Marker type for BlockId.
+pub const Block = struct {};
+
+/// Marker type for LocalId.
+pub const Local = struct {};
 
 /// `cancel` configuration for a `HandlerSet`.
 pub const Cancellation = extern struct {
-    /// The address to set the call frame's instruction pointer to if a handler in this set cancels.
+    /// The address to jump to if a handler in this set cancels.
     /// This should be the address *just past* the `pop_set` instruction that corresponds to the
     /// `push_set` that adds the handler set being canceled.
     address: InstructionAddr,
@@ -505,16 +513,13 @@ pub const Cancellation = extern struct {
     register: Register,
 };
 
+/// A `Buffer` of effect Handlers for a `HandlerSet`.
+pub const HandlerBuffer = Buffer.short(Handler, .constant);
+
 /// A Ribbon effect handler set definition. Data is relative to the function.
 pub const HandlerSet = extern struct {
-    /// The effect type's each handler is for.
-    effects: Buffer.short(EffectId, .constant),
-    /// The handler set's effects.
-    handlers: Buffer.short(Handler, .constant),
-    /// The handler set's upvalue offsets.
-    upvalues: Buffer.short(Upvalue, .constant),
-    /// Frame-relative stack offset for the evidence this handler set carries.
-    evidence: StackOffset,
+    /// The actual effect handlers used by this set.
+    handlers: HandlerBuffer,
     /// Cancellation configuration for this handler set.
     cancellation: Cancellation,
 
@@ -523,32 +528,18 @@ pub const HandlerSet = extern struct {
         return &self.handlers.asSlice()[id.toInt()];
     }
 
-    /// Get an `Upvalue` offset from its `id`.
-    pub fn getUpvalue(self: *const HandlerSet, id: UpvalueId) Upvalue {
-        return self.upvalues.asSlice()[id.toInt()];
-    }
-
     /// Validate a `Handler` id.
     pub fn validateHandler(self: *const HandlerSet, id: HandlerId) bool {
         return self.handlers.asSlice().len > id.toInt();
     }
-
-    /// Validate an `Upvalue` id.
-    pub fn validateUpvalue(self: *const HandlerSet, id: UpvalueId) bool {
-        return self.upvalues.asSlice().len > id.toInt();
-    }
 };
 
 /// An effect handler definition.
-pub const Handler = packed struct(u64) {
+pub const Handler = extern struct {
+    /// The id of the effect this handler is for.
+    effect: EffectId,
     /// The handler's address
     function: *const anyopaque,
-
-    /// Unpack the function pointer embedded in this handler.
-    /// * Cannot perform type checking
-    pub fn toPointer(self: Handler, comptime T: type) T {
-        return @ptrCast(@alignCast(@constCast(self.function)));
-    }
 };
 
 /// Indicates the kind of value bound to a symbol in a `SymbolTable`.
@@ -888,8 +879,8 @@ pub const Register = enum(std.math.IntFittingRange(0, MAX_REGISTERS)) {
 pub const Evidence = extern struct {
     /// A pointer to the set frame this evidence belongs to.
     frame: *SetFrame,
-    /// A copy of the effect handler this evidence carries.
-    handler: Handler,
+    /// A pointer to the effect handler this evidence carries.
+    handler: *const Handler,
     /// A pointer to the previous evidence, if there was already a set frame when this one was created.
     previous: ?*Evidence,
 };
@@ -900,6 +891,8 @@ pub const SetFrame = extern struct {
     call: *CallFrame,
     /// The effect handler set that defines this frame.
     handler_set: *const HandlerSet,
+    /// The top_ptr of the data stack before this set frame was created.
+    base: [*]RegisterBits,
 };
 
 /// Represents a call frame.

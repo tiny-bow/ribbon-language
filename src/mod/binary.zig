@@ -45,9 +45,9 @@ pub const OffsetId = Id.of(Location.OffsetMark, core.STATIC_ID_BITS);
 /// Represents a location in the encoded memory that is referenced by a fixup, but who's relative offset is not known at the time of encoding that fixup.
 pub const Location = packed struct(u64) {
     /// The region id that this location belongs to.
-    region: RegionId,
+    region: RegionId = .fromInt(0),
     /// The  offset id within the region that this location is at.
-    offset: OffsetId,
+    offset: OffsetId = .fromInt(0),
 
     /// Purely symbolic type for id creation (`RegionId`).
     pub const RegionMark = struct {};
@@ -82,7 +82,7 @@ pub const FixupKind = enum {
     absolute,
     /// Resolve the address of `.to`, and `.from`, then calculate the relative offset between them,
     /// overwriting the bits at `.bit_offset` in the instruction at `.from`.
-    relative,
+    relative_words,
 };
 
 /// A reference to an encoded memory location that needs to be fixed up.
@@ -414,7 +414,7 @@ pub const LocationMap = struct {
                     };
                 },
                 // relative offsets are more complex, but here we just need to calculate the offset between the two pointers
-                .relative => jump: {
+                .relative_words => jump: {
                     const relative_offset_bytes = @as(isize, @bitCast(@intFromPtr(to))) - @as(isize, @bitCast(@intFromPtr(from)));
                     const relative_offset_words: i16 = @intCast(@divExact(relative_offset_bytes, @sizeOf(*u64)));
 
@@ -484,6 +484,8 @@ pub const Encoder = struct {
     writer: AllocWriter,
     /// Location map providing relative address identification, fixup storage, and other state for fixups.
     locations: *LocationMap,
+    /// Generic location visitor state for resolving out-of-order encodes.
+    visited_locations: common.UniqueReprSet(Location) = .empty,
 
     pub const Error = binary.Error;
 
@@ -497,15 +499,17 @@ pub const Encoder = struct {
         };
     }
 
-    /// Clear the Encoder, retaining the allocator and writer, along with the writer buffer memory.
+    /// Clear the Encoder, retaining the allocator and writer, along with the writer buffer memory and visitor set storage.
     /// * Note this does not clear the `locations` map as the encoder does not own it
     pub fn clear(self: *Encoder) void {
         self.writer.clear();
+        self.visited_locations.clearRetainingCapacity();
     }
 
     /// Deinitialize the Encoder, freeing any memory it owns.
     pub fn deinit(self: *Encoder) void {
         self.writer.deinit();
+        self.visited_locations.deinit(self.temp_allocator);
         self.* = undefined;
     }
 
@@ -528,6 +532,19 @@ pub const Encoder = struct {
     /// Get the current location region id.
     pub fn currentRegion(self: *Encoder) RegionId {
         return self.locations.currentRegion();
+    }
+
+    /// Poll the visitor set to see if a value should be visited.
+    /// * Returns `true` if the value has not yet been visited, and puts it into the set.
+    pub fn visitLocation(self: *Encoder, location: Location) !bool {
+        const gop = try self.visited_locations.getOrPut(self.temp_allocator, location);
+        return !gop.found_existing;
+    }
+
+    /// Poll the visitor set to see if a value has been visited.
+    /// * Returns `true` if the value has been visited, and does not put it into the set.
+    pub fn hasVisitedLocation(self: *Encoder, location: Location) bool {
+        return self.visited_locations.contains(location);
     }
 
     /// Finalize the Encoder's writer, returning the memory.

@@ -106,6 +106,7 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
     var is_addr = [1]bool{false} ** 1024;
     var is_basic = [1]bool{false} ** 1024;
     var is_term = [1]bool{false} ** 1024;
+    var is_set = [1]bool{false} ** 1024;
     var wide_operand_names = [1]?[]const u8{null} ** 1024;
     var wide_operand_types = [1]?isa.Operand{null} ** 1024;
 
@@ -124,6 +125,9 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
                 } else if (std.mem.eql(u8, mnemonic.name, "addr")) {
                     is_addr[opcode] = true;
                     log.debug("address: {}\n", .{instruction.*});
+                } else if (std.mem.eql(u8, mnemonic.name, "set")) {
+                    is_set[opcode] = true;
+                    log.debug("set: {}\n", .{instruction.*});
                 } else if (instruction.terminal) {
                     is_term[opcode] = true;
                     log.debug("terminator: {}\n", .{instruction.*});
@@ -161,12 +165,12 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
         \\data: OpData,
         \\
         \\/// Derive a type from `operand_sets` using the provided opcode.
-        \\pub fn SetType(comptime code: OpCode) type {
+        \\pub fn OperandSet(comptime code: OpCode) type {
         \\    return @FieldType(OpData, @tagName(code));
         \\}
         \\
         \\/// Determine if a type is from `operand_sets`.
-        \\pub fn isSetType(comptime T: type) bool {
+        \\pub fn isOperandSet(comptime T: type) bool {
         \\    comptime {
         \\        for (std.meta.declarations(operand_sets)) |typeDecl| {
         \\            const F = @field(operand_sets, typeDecl.name);
@@ -213,7 +217,7 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
         \\}
         \\
         \\/// Designates the size of a wide operand.
-        \\pub const WideOperandType = enum { byte, short, int, word };
+        \\pub const WideOperandKind = enum { byte, short, int, word };
         \\
         \\/// Determine the type of the wide operand for a given opcode.
         \\pub fn WideOperand(comptime code: OpCode) type {
@@ -331,6 +335,35 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
         for (category.mnemonics) |*mnemonic| {
             for (mnemonic.instructions) |*instruction| {
                 if (is_term[opcode]) {
+                    try formatInstructionZigDoc(opcode, instruction, writer);
+                    try writer.writeAll("    @\"");
+                    try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
+                    try writer.writeAll("\" = 0x");
+                    try formatOpcodeLiteral(opcode, writer);
+                    try writer.writeAll(",\n");
+                }
+
+                opcode += 1;
+            }
+        }
+    }
+
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll(
+        \\/// Enumeration identifying each instruction that manipulates the effect handler set stack.
+        \\pub const SetOpCode = enum(u16) {
+        \\    /// convert set opcode -> full opcode
+        \\    pub fn upcast(self: SetOpCode) OpCode { return @enumFromInt(@intFromEnum(self)); }
+        \\
+        \\
+    );
+
+    opcode = 0;
+    for (categories) |*category| {
+        for (category.mnemonics) |*mnemonic| {
+            for (mnemonic.instructions) |*instruction| {
+                if (is_set[opcode]) {
                     try formatInstructionZigDoc(opcode, instruction, writer);
                     try writer.writeAll("    @\"");
                     try isa.formatInstructionName(mnemonic.name, instruction.name, writer);
@@ -481,6 +514,13 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
         \\        return is_term[@intFromEnum(code)];
         \\    }}
         \\
+        \\    
+        \\    /// Determine if this OpCode's associated instruction is a handler set manipulator.
+        \\    pub fn isSet(code: OpCode) bool {{
+        \\        const is_set = comptime [_]bool{any};
+        \\        return is_set[@intFromEnum(code)];
+        \\    }}
+        \\
         \\
     ,
         .{
@@ -490,6 +530,7 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
             is_addr[0..opcode],
             is_basic[0..opcode],
             is_term[0..opcode],
+            is_set[0..opcode],
         },
     );
 
@@ -518,15 +559,15 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
 
     try writer.writeAll(
         \\    /// Get the immediate type of the wide operand for this opcode if it has one.
-        \\    pub fn wideOperandType(code: OpCode) ?WideOperandType {
-        \\        const types = comptime [_]?WideOperandType{
+        \\    pub fn wideOperandKind(code: OpCode) ?WideOperandKind {
+        \\        const types = comptime [_]?WideOperandKind{
     ++ " ");
 
     for (wide_operand_types) |maybe_operand| {
         if (maybe_operand) |operand| {
             switch (operand) {
                 .byte, .short, .int, .word => try writer.print(".{s}, ", .{@tagName(operand)}),
-                else => std.debug.panic("Unexpected operand type {s} in wideOperandType", .{@tagName(operand)}),
+                else => std.debug.panic("Unexpected operand type {s} in wideOperandKind", .{@tagName(operand)}),
             }
         } else {
             try writer.writeAll(" null, ");
@@ -565,7 +606,7 @@ fn generateTypes(categories: []const isa.Category, writer: anytype) !void {
         \\/// Untagged union of all `operand_sets` types.
         \\pub const OpData = packed union {
         \\    /// Extract the operand set for a given opcode.
-        \\    pub fn extractSet(self: OpData, comptime code: OpCode) SetType(code) {
+        \\    pub fn extractSet(self: OpData, comptime code: OpCode) OperandSet(code) {
         \\        inline for (comptime std.meta.fieldNames(OpCode)) |fieldName| {
         \\            if (code == comptime @field(OpCode, fieldName)) {
         \\                return @field(self, fieldName);
