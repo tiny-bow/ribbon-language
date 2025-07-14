@@ -574,6 +574,11 @@ pub const Encoder = struct {
         return self.visited_locations.contains(location);
     }
 
+    /// Poll the visitor set to see if a value has been skipped.
+    pub fn hasSkippedLocation(self: *Encoder, location: Location) bool {
+        return self.skipped_locations.contains(location);
+    }
+
     /// Finalize the Encoder's writer, returning the memory.
     ///
     /// After calling this function, the encoder will be in its default-initialized state.
