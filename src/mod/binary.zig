@@ -486,6 +486,9 @@ pub const Encoder = struct {
     locations: *LocationMap,
     /// Generic location visitor state for resolving out-of-order encodes.
     visited_locations: common.UniqueReprSet(Location) = .empty,
+    /// Generic locations visitor state for marking skipped locations.
+    /// * This is to validate that locations that have to be skipped are visited later.
+    skipped_locations: common.UniqueReprSet(Location) = .empty,
 
     pub const Error = binary.Error;
 
@@ -504,12 +507,14 @@ pub const Encoder = struct {
     pub fn clear(self: *Encoder) void {
         self.writer.clear();
         self.visited_locations.clearRetainingCapacity();
+        self.skipped_locations.clearRetainingCapacity();
     }
 
     /// Deinitialize the Encoder, freeing any memory it owns.
     pub fn deinit(self: *Encoder) void {
         self.writer.deinit();
         self.visited_locations.deinit(self.temp_allocator);
+        self.skipped_locations.deinit(self.temp_allocator);
         self.* = undefined;
     }
 
@@ -541,6 +546,28 @@ pub const Encoder = struct {
         return !gop.found_existing;
     }
 
+    /// Append a marker in the visitor set to indicate a location has been skipped and should be validated later.
+    /// * Causes a `BadEncoding` error if the location has already been visited or skipped.
+    pub fn skipLocation(self: *Encoder, location: Location) !void {
+        if (self.visited_locations.get(location) != null or self.skipped_locations.get(location) != null) {
+            log.debug("Encoder.skipLocation: {} has already been visited or skipped", .{location});
+            return error.BadEncoding;
+        }
+
+        try self.skipped_locations.put(self.temp_allocator, location, {});
+    }
+
+    /// Validate that all skipped locations have been visited.
+    pub fn validateSkippedLocations(self: *Encoder) error{BadEncoding}!void {
+        var it = self.skipped_locations.keyIterator();
+        while (it.next()) |location| {
+            if (self.visited_locations.get(location.*) == null) {
+                log.debug("Encoder.validateSkippedLocations: {} was skipped but not re-visited later", .{location.*});
+                return error.BadEncoding;
+            }
+        }
+    }
+
     /// Poll the visitor set to see if a value has been visited.
     /// * Returns `true` if the value has been visited, and does not put it into the set.
     pub fn hasVisitedLocation(self: *Encoder, location: Location) bool {
@@ -553,6 +580,8 @@ pub const Encoder = struct {
     /// In other words, it is safe but not necessary to call `deinit` on it.
     /// It does not need to be re-initializd before reuse, as the allocator is retained.
     pub fn finalize(self: *Encoder) Encoder.Error![]align(core.PAGE_SIZE) u8 {
+        try self.validateSkippedLocations();
+
         const buf = try self.writer.finalize();
 
         self.clear();

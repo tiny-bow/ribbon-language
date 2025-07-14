@@ -1327,13 +1327,12 @@ pub const HandlerSetBuilder = struct {
 
     /// Encode the handler set into the provided encoder.
     pub fn encode(self: *const HandlerSetBuilder, maybe_upvalue_fixups: ?*const UpvalueFixupMap, encoder: *Encoder) Encoder.Error!void {
-        const upvalue_fixups = if (maybe_upvalue_fixups) |x| x else {
-            // TODO: provide a "skipped" map in the encoder, that would allow us to write a flag here that would be checked at encode.finalize to ensure the flag was cleared at some point.
-            log.debug("HandlerSetBuilder.encode: No upvalue fixups provided, skipping upvalue encoding", .{});
-            return;
-        };
-
         const location = encoder.localLocationId(self.id);
+
+        const upvalue_fixups = if (maybe_upvalue_fixups) |x| x else {
+            log.debug("HandlerSetBuilder.encode: No upvalue fixups provided, skipping upvalue encoding", .{});
+            return encoder.skipLocation(location);
+        };
 
         if (!try encoder.visitLocation(location)) {
             log.debug("HandlerSetBuilder.encode: {} has already been encoded, skipping", .{self.id});
@@ -1544,13 +1543,12 @@ pub const FunctionBuilder = struct {
 
     /// Encode the function and all blocks into the provided encoder, inserting a fixup location for the function itself into the current region.
     pub fn encode(self: *const FunctionBuilder, maybe_upvalue_fixups: ?*const UpvalueFixupMap, encoder: *Encoder) Encoder.Error!void {
-        if (maybe_upvalue_fixups == null and self.parent != null) {
-            // TODO: provide a "skipped" map in the encoder, that would allow us to write a flag here that would be checked at encode.finalize to ensure the flag was cleared at some point.
-            log.debug("FunctionBuilder.encode: {} has a parent but no parent locals map was provided; assuming this is the top-level TableBuilder hitting a pre-declared handler function, skipping", .{self.id});
-            return;
-        }
-
         const location = encoder.localLocationId(self.id);
+
+        if (maybe_upvalue_fixups == null and self.parent != null) {
+            log.debug("FunctionBuilder.encode: {} has a parent but no parent locals map was provided; assuming this is the top-level TableBuilder hitting a pre-declared handler function, skipping", .{self.id});
+            return encoder.skipLocation(location);
+        }
 
         if (!try encoder.visitLocation(location)) {
             log.debug("FunctionBuilder.encode: {} has already been encoded, skipping", .{self.id});
