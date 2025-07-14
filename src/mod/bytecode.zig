@@ -24,8 +24,8 @@ const LinkerMap = binary.LinkerMap;
 const LocationMap = binary.LocationMap;
 const FixupRef = binary.FixupRef;
 const FixupKind = binary.FixupKind;
-const RegionId = binary.RegionId;
-const OffsetId = binary.OffsetId;
+const Region = binary.Region;
+const Offset = binary.Offset;
 const Fixup = binary.Fixup;
 const LinkerFixup = binary.LinkerFixup;
 
@@ -127,8 +127,11 @@ pub const TableBuilder = struct {
     };
 
     /// Initialize a new table builder.
-    pub fn init(allocator: std.mem.Allocator) TableBuilder {
-        return TableBuilder{ .gpa = allocator, .arena = .init(allocator), .locations = .init(allocator) };
+    /// * `identifier` should be any integer that is not also provided to another table builder in the same compilation environment;
+    ///   `null` may be passed if there will only be one table builder in the current compilation environment
+    pub fn init(allocator: std.mem.Allocator, identifier: ?u32) TableBuilder {
+        const id: Id.of(TableBuilder, 32) = if (identifier) |i| .fromInt(i) else @enumFromInt(0xAAAA_AAAA);
+        return TableBuilder{ .gpa = allocator, .arena = .init(allocator), .locations = .init(allocator, id) };
     }
 
     /// Clear the table, retaining allocated storage where possible.
@@ -163,13 +166,13 @@ pub const TableBuilder = struct {
         const typed_id = static_id.bitcast(kind.toType(), core.STATIC_ID_BITS);
 
         // create a location for the static value
-        const func_loc = self.locations.localLocationId(static_id);
-        const func_ref = FixupRef{ .location = func_loc };
+        const static_loc = self.locations.localLocationId(static_id.cast(kind.toType()));
+        const static_ref = FixupRef{ .location = static_loc };
 
-        try self.locations.registerLocation(func_loc, null);
+        try self.locations.registerLocation(static_loc);
 
         // bind the location to the address table
-        const bind_result = try self.header.bindAddress(self.gpa, kind, .{ .relative = func_ref });
+        const bind_result = try self.header.bindAddress(self.gpa, kind, .{ .relative = static_ref });
 
         // sanity check: static_id should be the same as bind_result if getNextId is sound
         std.debug.assert(static_id == bind_result);
@@ -186,7 +189,7 @@ pub const TableBuilder = struct {
         std.debug.assert(!gop.found_existing);
 
         gop.value_ptr.* = .{
-            .location = func_loc,
+            .location = static_loc,
             .kind = kind,
             .builder = null,
         };
@@ -266,6 +269,7 @@ pub const TableBuilder = struct {
         addr.* = DataBuilder.init(self.gpa, self.arena.allocator());
 
         addr.id = static_id;
+        addr.symbol_kind = entry.kind;
 
         // setup and return the new builder
         entry.builder = .{ .data = addr };
@@ -277,7 +281,7 @@ pub const TableBuilder = struct {
     /// * A fresh `id` can be created with `createHeaderEntry`.
     /// * Note that the returned pointer is owned by the `TableBuilder` and should not be deinitialized manually.
     /// * Use `getHandlerSetBuilder` to retrieve the pointer to the function builder by its id (available as a field of the builder).
-    pub fn createHandlerSet(self: *TableBuilder, id: core.HandlerSetId) error{OutOfMemory}!*HandlerSetBuilder {
+    pub fn createHandlerSet(self: *TableBuilder, id: core.HandlerSetId) error{ BadEncoding, OutOfMemory }!*HandlerSetBuilder {
         // if we're not tracking this id we can't create a builder for it
         const entry = self.statics.getPtr(id.cast(anyopaque)) orelse {
             log.debug("TableBuilder.createHandlerSetBuilder: {} does not exist", .{id});
@@ -286,7 +290,7 @@ pub const TableBuilder = struct {
 
         // type check: the entry must be a handler set
         if (entry.kind != .handler_set) {
-            log.debug("TableBuilder.createHandlerSetBuilder: expected handler_set, got {}", .{@tagName(entry.kind)});
+            log.debug("TableBuilder.createHandlerSetBuilder: expected handler_set, got {s}", .{@tagName(entry.kind)});
             return error.BadEncoding;
         }
 
@@ -813,6 +817,10 @@ pub const DataBuilder = struct {
     /// A list of data fixups that need to be resolved when the data is encoded.
     /// * This is used to track fixups that reference data within the data builder's own memory.
     fixups: common.ArrayList(DataFixup) = .empty,
+    /// The symbol kind of the data builder.
+    /// * This is used to determine how the data builder's id should be interpreted.
+    /// * It should be either `core.SymbolKind.constant` or `core.SymbolKind.global`.
+    symbol_kind: core.SymbolKind = .constant,
 
     /// Purely symbolic type for id creation (`DataBuilder.DataLocation`).
     pub const DLoc = struct {};
@@ -864,6 +872,8 @@ pub const DataBuilder = struct {
         self.locations.clearRetainingCapacity();
         self.fixups.clearRetainingCapacity();
         self.id = .fromInt(0);
+        self.alignment = 0;
+        self.symbol_kind = .constant;
     }
 
     /// Deinitialize the data builder, freeing all memory it owns.
@@ -921,7 +931,14 @@ pub const DataBuilder = struct {
 
     /// Encode the data and fixups into the provided encoder.
     pub fn encode(self: *const DataBuilder, encoder: *Encoder) Encoder.Error!void {
-        const location = encoder.localLocationId(self.id);
+        const location = switch (self.symbol_kind) {
+            .constant => encoder.localLocationId(self.id.cast(core.Constant)),
+            .global => encoder.localLocationId(self.id.cast(core.Global)),
+            else => {
+                log.debug("DataBuilder.encode: Invalid symbol kind {s} for data builder", .{@tagName(self.symbol_kind)});
+                return error.BadEncoding;
+            },
+        };
 
         if (!try encoder.visitLocation(location)) {
             log.debug("DataBuilder.encode: {} has already been encoded, skipping", .{self.id});
@@ -1267,19 +1284,16 @@ pub const HandlerSetBuilder = struct {
         }
 
         const handler_id = core.HandlerId.fromInt(index);
-        const addr = try self.arena.create(Entry);
-
-        addr.* = Entry{
-            .effect = effect,
-            .function = function,
-        };
 
         const gop = try self.handlers.getOrPut(self.gpa, handler_id);
 
         // sanity check: handler_id should be fresh if the map has been mutated in append-only fashion
         std.debug.assert(!gop.found_existing);
 
-        gop.value_ptr.* = addr;
+        gop.value_ptr.* = Entry{
+            .effect = effect,
+            .function = function,
+        };
 
         return handler_id;
     }
@@ -1319,10 +1333,10 @@ pub const HandlerSetBuilder = struct {
 
     /// Get the location to bind for this handler set's cancellation address.
     pub fn cancellationLocation(self: *const HandlerSetBuilder) error{BadEncoding}!Location {
-        return .fromId(FunctionBuilder.functionBlockRegion(self.function orelse {
+        return .from(self.function orelse {
             log.debug("HandlerSetBuilder.cancellationLocation: parent function not set", .{});
             return error.BadEncoding;
-        }), self.id);
+        }, self.id);
     }
 
     /// Encode the handler set into the provided encoder.
@@ -1341,6 +1355,8 @@ pub const HandlerSetBuilder = struct {
 
         // create the core.HandlerSet and bind it to the header table
         const handler_set_rel = try encoder.createRel(core.HandlerSet);
+
+        // bind the table entry
         try encoder.bindLocation(location, handler_set_rel);
 
         // create the buffer memory for the handlers
@@ -1351,11 +1367,12 @@ pub const HandlerSetBuilder = struct {
         handler_set.handlers.len = @intCast(self.handlers.count());
         handler_set.cancellation.register = self.register;
 
-        // bind the cancellation address
+        const cancel_loc = try self.cancellationLocation();
+
         try encoder.bindFixup(
             .absolute,
             .{ .relative = handler_set_rel.applyOffset(@intCast(@offsetOf(core.HandlerSet, "cancellation"))).applyOffset(@intCast(@offsetOf(core.Cancellation, "address"))) },
-            .{ .location = try self.cancellationLocation() },
+            .{ .location = cancel_loc },
             null,
         );
 
@@ -1493,7 +1510,6 @@ pub const FunctionBuilder = struct {
         }
 
         builder.function = self.id;
-        builder.parent_location = Location.fromId(functionBlockRegion(self.id), builder.id);
 
         try self.handler_sets.put(self.gpa, builder.id, builder);
     }
@@ -1536,11 +1552,6 @@ pub const FunctionBuilder = struct {
         return self.blocks.get(id);
     }
 
-    /// Helper function to get a block location from a function id and block id.
-    pub fn functionBlockRegion(function_id: core.FunctionId) RegionId {
-        return .fromInt(function_id.toInt() + 1);
-    }
-
     /// Encode the function and all blocks into the provided encoder, inserting a fixup location for the function itself into the current region.
     pub fn encode(self: *const FunctionBuilder, maybe_upvalue_fixups: ?*const UpvalueFixupMap, encoder: *Encoder) Encoder.Error!void {
         const location = encoder.localLocationId(self.id);
@@ -1579,7 +1590,7 @@ pub const FunctionBuilder = struct {
         try encoder.bindLocation(location, entry_addr_rel);
 
         { // function block region
-            const region_token = encoder.enterRegion(functionBlockRegion(self.id));
+            const region_token = encoder.enterRegion(self.id);
             defer encoder.leaveRegion(region_token);
 
             // write the function body
@@ -1806,7 +1817,7 @@ pub const SequenceBuilder = struct {
         try self.proto(.{
             .instruction = .{
                 .code = .pop_set,
-                .data = .{ .pop_set = .{ .H = handler_set.id } },
+                .data = .{ .pop_set = .{} },
             },
             .additional = .none,
         });
@@ -1822,7 +1833,7 @@ pub const SequenceBuilder = struct {
         }
 
         try self.proto(.{
-            .instruction = .{ .code = .breakpoint, .data = .breakpoint }, // placeholder
+            .instruction = undefined,
             .additional = .{ .cancellation_location = try handler_set.cancellationLocation() },
         });
     }
@@ -1990,14 +2001,15 @@ pub const BlockBuilder = struct {
         const location = encoder.localLocationId(self.id);
 
         if (!try encoder.visitLocation(location)) {
-            log.debug("BlockBuilder.encode: Block {x} has already been encoded, skipping", .{self.id.toInt()});
+            log.debug("BlockBuilder.encode: {} has already been encoded, skipping", .{self.id});
             return;
         }
 
         try encoder.ensureAligned(core.BYTECODE_ALIGNMENT);
 
         // we can encode the current location as the block entry point
-        try encoder.registerLocation(location, encoder.getRelativeAddress());
+        try encoder.registerLocation(location);
+        try encoder.bindLocation(location, encoder.getRelativeAddress());
 
         // first we emit all the body instructions by encoding the inner sequence
         try self.body.encode(upvalue_fixups, local_fixups, encoder);
@@ -2014,7 +2026,7 @@ pub const BlockBuilder = struct {
     /// Helper method that returns a `BadEncoding` error if the block is already terminated.
     pub fn ensureUnterminated(self: *BlockBuilder) Encoder.Error!void {
         if (self.terminator) |_| {
-            log.debug("BlockBuilder.ensureUnterminated: Block {x} is already terminated; cannot append additional instructions", .{self.id.toInt()});
+            log.debug("BlockBuilder.ensureUnterminated: {} is already terminated; cannot append additional instructions", .{self.id});
             return error.BadEncoding;
         }
     }
@@ -2064,15 +2076,17 @@ pub const ProtoInstr = struct {
     pub fn encode(self: *const ProtoInstr, maybe_queue: ?*BlockVisitorQueue, upvalue_fixups: ?*const UpvalueFixupMap, local_fixups: *const LocalFixupMap, encoder: *Encoder) Encoder.Error!void {
         try encoder.ensureAligned(core.BYTECODE_ALIGNMENT);
 
-        var instr = self.instruction;
-
         // Cancellation locations do not encode any bytes to the stream, they simply bind a fixup location
         if (self.additional == .cancellation_location) {
             const loc = self.additional.cancellation_location;
 
+            try encoder.registerLocation(loc);
             try encoder.bindLocation(loc, encoder.getRelativeAddress());
+
             return;
         }
+
+        var instr = self.instruction;
 
         // We fix up the local and upvalue stack-relative addresses here, before encoding bytes to the stream
         if (self.instruction.code.isAddr()) is_addr: {
@@ -2383,15 +2397,17 @@ fn TestBed(comptime test_name: []const u8) type {
         builder: TableBuilder,
 
         fn init() !TestBed(test_name) {
+            log.debug("Begin test \"{s}\"", .{test_name});
             var self: TestBed(test_name) = undefined;
             self.gpa = std.testing.allocator;
-            self.builder = TableBuilder.init(self.gpa);
-            // testing.log_level = .debug;
+            self.builder = TableBuilder.init(self.gpa, null);
+            testing.log_level = .debug;
             return self;
         }
 
         fn deinit(self: *TestBed(test_name)) void {
             self.builder.deinit();
+            log.debug("End test \"{s}\"", .{test_name});
         }
     };
 }
@@ -2840,4 +2856,187 @@ test "decoder with incomplete call instruction" {
     var decoder = Decoder.init(instructions);
     // The decoder should see the call, but fail to read the arguments.
     try testing.expectError(error.BadEncoding, decoder.next());
+}
+
+test "encode handler set" {
+    var tb = try TestBed("encode handler set").init();
+    defer tb.deinit();
+
+    // IDs for our functions and effects
+    const main_id = try tb.builder.createHeaderEntry(.function, "main");
+    const handler_fn_id = try tb.builder.createHeaderEntry(.function, "my_handler");
+    const handler_set_id = try tb.builder.createHeaderEntry(.handler_set, null);
+    const effect_id = try tb.builder.createHeaderEntry(.effect, "my_effect");
+
+    // Main function builder
+    var main_fn = try tb.builder.createFunctionBuilder(main_id);
+
+    // Handler function builder
+    var handler_fn = try tb.builder.createFunctionBuilder(handler_fn_id);
+    var handler_entry = try handler_fn.createBlock();
+    try handler_entry.instrWide(.bit_copy64c, .{ .R = .r0 }, 42); // return 42
+    try handler_entry.instrTerm(.@"return", .{ .R = .r0 });
+
+    // Handler set builder
+    var handler_set = try tb.builder.createHandlerSet(handler_set_id);
+    _ = try handler_set.bindHandler(effect_id, handler_fn);
+    try main_fn.bindHandlerSet(handler_set);
+
+    // Main function body
+    var main_entry = try main_fn.createBlock();
+    try main_entry.pushHandlerSet(handler_set);
+    try main_entry.instrCall(.prompt, .{ .R = .r0, .E = effect_id, .I = 0 }, .{});
+    try main_entry.popHandlerSet(handler_set);
+    try main_entry.instrTerm(.@"return", .{ .R = .r0 });
+
+    // Encode
+    var table = try tb.builder.encode(tb.gpa);
+    defer table.deinit();
+
+    // Verify main function disassembly
+    {
+        var disas_buf = std.ArrayList(u8).init(tb.gpa);
+        defer disas_buf.deinit();
+        const main_func = table.bytecode.header.get(main_id);
+        const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
+        try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+
+        const expected_main =
+            \\    push_set H:00000002
+            \\    prompt r0 E:00000003 I:00 .. ()
+            \\    pop_set
+            \\    return r0
+            \\
+        ;
+        try testing.expectEqualStrings(expected_main, disas_buf.items);
+    }
+
+    // Verify handler function disassembly
+    {
+        var disas_buf = std.ArrayList(u8).init(tb.gpa);
+        defer disas_buf.deinit();
+        const handler_func: *const core.Function = table.bytecode.header.get(handler_fn_id);
+        const code_slice = handler_func.extents.base[0..@divExact(@intFromPtr(handler_func.extents.upper) - @intFromPtr(handler_func.extents.base), @sizeOf(core.InstructionBits))];
+        try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+
+        const expected_handler =
+            \\    bit_copy64c r0 .. I:000000000000002a
+            \\    return r0
+            \\
+        ;
+        try testing.expectEqualStrings(expected_handler, disas_buf.items);
+    }
+}
+
+test "encode handler set with cancellation" {
+    testing.log_level = .debug;
+    var tb = try TestBed("encode handler set with cancellation").init();
+    defer tb.deinit();
+
+    const main_id = try tb.builder.createHeaderEntry(.function, "main");
+    const handler_fn_id = try tb.builder.createHeaderEntry(.function, "cancelling_handler");
+    const handler_set_id = try tb.builder.createHeaderEntry(.handler_set, null);
+    const effect_id = try tb.builder.createHeaderEntry(.effect, "my_effect");
+
+    var handler_fn = try tb.builder.createFunctionBuilder(handler_fn_id);
+    var handler_entry = try handler_fn.createBlock();
+    try handler_entry.instrWide(.bit_copy64c, .{ .R = .r0 }, 99);
+    try handler_entry.instrTerm(.cancel, .{ .R = .r0 });
+
+    var main_fn = try tb.builder.createFunctionBuilder(main_id);
+    var entry_block = try main_fn.createBlock();
+    var cancel_block = try main_fn.createBlock();
+
+    var handler_set = try tb.builder.createHandlerSet(handler_set_id);
+    try main_fn.bindHandlerSet(handler_set);
+    handler_set.register = .r1;
+
+    _ = try handler_set.bindHandler(effect_id, handler_fn);
+
+    // Entry block: push, prompt, then branch to the cancellation block to ensure it's assembled
+    try entry_block.pushHandlerSet(handler_set);
+    try entry_block.instrCall(.prompt, .{ .R = .r0, .E = effect_id, .I = 0 }, .{});
+    try entry_block.instrBr(cancel_block.id);
+
+    // Cancellation block: pop and return value
+    try cancel_block.bindHandlerSetCancellationLocation(handler_set);
+    try cancel_block.popHandlerSet(handler_set);
+    try cancel_block.instrTerm(.@"return", .{ .R = .r1 });
+
+    var table = try tb.builder.encode(tb.gpa);
+    defer table.deinit();
+
+    const main_func = table.bytecode.header.get(main_id);
+    const set: *const core.HandlerSet = table.bytecode.header.get(handler_set_id);
+    const cancel_addr = set.cancellation.address;
+
+    // The entry block has 3 instructions (push, prompt, br), taking 3 words.
+    // The cancellation block should therefore start at an offset of 3 words from the function base.
+    const cancel_block_start_addr = @intFromPtr(main_func.extents.base) + 3 * @sizeOf(core.InstructionBits);
+    try testing.expectEqual(cancel_block_start_addr, @intFromPtr(cancel_addr));
+    try testing.expectEqual(core.Register.r1, set.cancellation.register);
+}
+
+test "encode handler set with upvalues" {
+    var tb = try TestBed("encode handler set with upvalues").init();
+    defer tb.deinit();
+
+    // IDs
+    const main_id = try tb.builder.createHeaderEntry(.function, "main");
+    const handler_fn_id = try tb.builder.createHeaderEntry(.function, "upvalue_handler");
+    const handler_set_id = try tb.builder.createHeaderEntry(.handler_set, null);
+    const effect_id = try tb.builder.createHeaderEntry(.effect, "my_effect");
+
+    // Main function with locals
+    var main_fn = try tb.builder.createFunctionBuilder(main_id);
+    const local_x = try main_fn.createLocal(.{ .size = 8, .alignment = 8 });
+    const local_y = try main_fn.createLocal(.{ .size = 8, .alignment = 8 });
+
+    // Handler function that uses upvalues
+    var handler_fn = try tb.builder.createFunctionBuilder(handler_fn_id);
+    var handler_entry = try handler_fn.createBlock();
+
+    // Handler set that captures locals as upvalues
+    var handler_set = try tb.builder.createHandlerSet(handler_set_id);
+    const upvalue_y = try handler_set.createUpvalue(local_y);
+    _ = try handler_set.bindHandler(effect_id, handler_fn);
+    try main_fn.bindHandlerSet(handler_set);
+
+    // Now define the handler body using the upvalue id
+    try handler_entry.instrAddrOf(.addr_u, .r0, upvalue_y);
+    try handler_entry.instr(.load64, .{ .Rx = .r1, .Ry = .r0, .I = 0 });
+    try handler_entry.instrTerm(.@"return", .{ .R = .r1 });
+
+    // Main function body
+    var main_entry = try main_fn.createBlock();
+    // Initialize local y to 123
+    try main_entry.instrAddrOf(.addr_l, .r0, local_y);
+    try main_entry.instrWide(.bit_copy64c, .{ .R = .r1 }, 123);
+    try main_entry.instr(.store64, .{ .Rx = .r0, .Ry = .r1, .I = 0 });
+    _ = local_x; // to ensure it gets a stack slot and affects layout
+
+    // Prompt the effect
+    try main_entry.pushHandlerSet(handler_set);
+    try main_entry.instrCall(.prompt, .{ .R = .r0, .E = effect_id, .I = 0 }, .{});
+    try main_entry.popHandlerSet(handler_set);
+    try main_entry.instrTerm(.halt, .{});
+
+    // Encode
+    var table = try tb.builder.encode(tb.gpa);
+    defer table.deinit();
+
+    // Verify handler function disassembly
+    var disas_buf = std.ArrayList(u8).init(tb.gpa);
+    defer disas_buf.deinit();
+    const h_func: *const core.Function = table.bytecode.header.get(handler_fn_id);
+    const code_slice = h_func.extents.base[0..@divExact(@intFromPtr(h_func.extents.upper) - @intFromPtr(h_func.extents.base), @sizeOf(core.InstructionBits))];
+    try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+
+    const expected_handler =
+        \\    addr_u r0 I:0008
+        \\    load64 r1 r0 I:00000000
+        \\    return r1
+        \\
+    ;
+    try testing.expectEqualStrings(expected_handler, disas_buf.items);
 }

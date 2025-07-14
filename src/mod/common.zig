@@ -887,26 +887,11 @@ pub fn expectsPointerAtArgumentN(comptime F: type, comptime index: usize, compti
     }
 }
 
-/// A type id, which is a unique identifier for a *Zig* type.
-pub const TypeId = packed struct {
-    ptr: [*:0]const u8,
-
-    /// Create a type id from a comptime-known Zig type.
-    pub fn of(comptime T: type) TypeId {
-        return .{ .ptr = @typeName(T) };
-    }
-
-    /// Determine if a type id is the id of a specific type.
-    pub fn is(self: TypeId, comptime T: type) bool {
-        return self.ptr == @typeName(T);
-    }
-};
-
 /// A type-erased pointer to any type, used for binding arbitrary data in user-defined nodes.
 /// * Does not imply ownership of the type-erased value.
-pub const Any = packed struct {
+pub const Any = struct {
     /// The type id of the value stored in this `Any`.
-    type_id: TypeId,
+    type_name: []const u8,
     /// The pointer to the value stored in this `Any`.
     ptr: *anyopaque,
 
@@ -920,7 +905,7 @@ pub const Any = packed struct {
         }
 
         return .{
-            .type_id = TypeId.of(T),
+            .type_name = @typeName(T),
             .ptr = @ptrCast(value),
         };
     }
@@ -928,7 +913,7 @@ pub const Any = packed struct {
     /// Convert this `Any` to a pointer of type `T`, if the type matches.
     /// * The type must be a pointer type, otherwise this will fail at compile time.
     pub fn to(self: Any, comptime T: type) ?*T {
-        if (TypeId.of(T).ptr != self.type_id.ptr) return null;
+        if (std.mem.eql(u8, @typeName(T), self.type_name)) return null;
 
         return @alignCast(@ptrCast(self.ptr));
     }
@@ -942,7 +927,7 @@ pub const Any = packed struct {
         };
 
         if (comptime RUNTIME_SAFETY) {
-            if (TypeId.of(T).ptr != self.type_id.ptr) {
+            if (std.mem.eql(u8, @typeName(T), self.type_name.ptr)) {
                 @compileError("Cannot convert Any to " ++ @typeName(T) ++ ", type mismatch");
             }
         }

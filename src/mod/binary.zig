@@ -36,42 +36,117 @@ pub const Error = std.mem.Allocator.Error || error{
     UnalignedWrite,
 };
 
-/// Regions are used to scope fixup locations, allowing for multiple functions or blocks to be encoded in the same encoder.
-pub const RegionId = Id.of(Location.RegionMark, core.STATIC_ID_BITS);
+/// An identifier that is used to identify a region in the encoded memory.
+pub const RegionId = Id.of(Region, core.STATIC_ID_BITS);
 
-/// An identifier that is used to identify a location within a region in the encoded memory.
-pub const OffsetId = Id.of(Location.OffsetMark, core.STATIC_ID_BITS);
+/// Regions are used to scope fixup locations, allowing for multiple functions or blocks to be encoded in the same encoder.
+pub const Region = struct {
+    type_name: []const u8,
+    id: RegionId,
+
+    /// * `id` should be of a type constructed by `common.Id`
+    /// * id types larger than `core.STATIC_ID_BITS` bits may cause (safe mode checked) integer overflow
+    pub fn from(id: anytype) Region {
+        const T = @TypeOf(id);
+        if (T == Region) return id;
+
+        return Region{
+            .type_name = @typeName(T.Value),
+            .id = id.bitcast(Region, core.STATIC_ID_BITS),
+        };
+    }
+};
+
+/// An identifier that is used to identify an offset within a region in the encoded memory.
+pub const OffsetId = Id.of(Offset, core.STATIC_ID_BITS);
+
+/// Offsets are like a sub-region, attached to a location along with a region to give more specific identification.
+pub const Offset = struct {
+    type_name: []const u8,
+    id: OffsetId,
+
+    /// * `id` should be of a type constructed by `common.Id`
+    /// * id types larger than `core.STATIC_ID_BITS` bits may cause (safe mode checked) integer overflow
+    pub fn from(id: anytype) Offset {
+        const T = @TypeOf(id);
+        if (T == Offset) return id;
+
+        return Offset{
+            .type_name = @typeName(T.Value),
+            .id = id.bitcast(Offset, core.STATIC_ID_BITS),
+        };
+    }
+};
 
 /// Represents a location in the encoded memory that is referenced by a fixup, but who's relative offset is not known at the time of encoding that fixup.
-pub const Location = packed struct(u64) {
+pub const Location = struct {
     /// The region id that this location belongs to.
-    region: RegionId = .fromInt(0),
+    region: Region,
     /// The  offset id within the region that this location is at.
-    offset: OffsetId = .fromInt(0),
-
-    /// Purely symbolic type for id creation (`RegionId`).
-    pub const RegionMark = struct {};
-
-    /// Purely symbolic type for id creation (`OffsetId`).
-    pub const OffsetMark = struct {};
+    offset: Offset,
 
     /// Create a new `Location` from a region id and an offset id.
     /// * `region` and `id` should be of a type constructed by `common.Id`
-    /// * Identity types larger than `core.STATIC_ID_BITS` bits may cause integer overflow
+    /// * Identity types larger than `core.STATIC_ID_BITS` (safe mode checked) bits may cause integer overflow
     pub fn from(region: anytype, id: anytype) Location {
         return Location{
-            .region = region.bitcast(RegionMark, core.STATIC_ID_BITS),
-            .offset = id.bitcast(OffsetMark, core.STATIC_ID_BITS),
+            .region = .from(region),
+            .offset = .from(id),
         };
     }
 
-    /// Create a new `Location` from a region id and an offset id.
-    /// * `id` should be of a type constructed by `common.Id`
-    /// * Identity types larger than `core.STATIC_ID_BITS` bits may cause integer overflow
-    pub fn fromId(region: RegionId, id: anytype) Location {
-        return Location{
-            .region = region,
-            .offset = id.bitcast(OffsetMark, core.STATIC_ID_BITS),
+    pub fn eql(a: Location, b: Location) bool {
+        return a.region.id == b.region.id and a.offset.id == b.offset.id and std.mem.eql(u8, a.region.type_name, b.region.type_name) and std.mem.eql(u8, a.offset.type_name, b.offset.type_name);
+    }
+
+    pub fn hash(self: Location, h: anytype) void {
+        h.update(std.mem.asBytes(&self.region.id));
+        h.update(std.mem.asBytes(&self.offset.id));
+        h.update(std.mem.asBytes(&self.region.type_name));
+        h.update(std.mem.asBytes(&self.offset.type_name));
+    }
+
+    pub fn format(self: Location, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{s}:{x}/{s}:{x}", .{
+            self.region.type_name,
+            self.region.id.toInt(),
+            self.offset.type_name,
+            self.offset.id.toInt(),
+        });
+    }
+
+    pub fn HashContext(comptime T: type) type {
+        return struct {
+            const Ctx = @This();
+
+            pub const eql = switch (T) {
+                u32 => struct {
+                    pub fn eql(_: Ctx, a: Location, b: Location, _: usize) bool {
+                        return a.eql(b);
+                    }
+                }.eql,
+                u64, u128 => struct {
+                    pub fn eql(_: Ctx, a: Location, b: Location) bool {
+                        return a.eql(b);
+                    }
+                }.eql,
+                else => @compileError("Unsupported hash type " ++ @typeName(T) ++ " expected u32, u64 or u128"),
+            };
+
+            pub fn hash(_: Ctx, loc: Location) T {
+                var hasher = switch (T) {
+                    u32 => std.hash.Fnv1a_32.init(),
+                    u64 => std.hash.Fnv1a_64.init(),
+                    u128 => std.hash.Fnv1a_128.init(),
+                    else => @compileError("Unsupported hash type " ++ @typeName(T) ++ " expected u32, u64, or u128"),
+                };
+
+                hasher.update(std.mem.asBytes(&loc.region.type_name));
+                hasher.update(std.mem.asBytes(&loc.region.id));
+                hasher.update(std.mem.asBytes(&loc.offset.type_name));
+                hasher.update(std.mem.asBytes(&loc.offset.id));
+                return hasher.final();
+            }
         };
     }
 };
@@ -191,7 +266,7 @@ pub const LinkerMap = struct {
     unbound: FixupMap = .empty,
 
     /// A map of unbound locations and their fixups within a `LinkerMap`.
-    pub const FixupMap = common.UniqueReprArrayMap(Location, LinkerLocation);
+    pub const FixupMap = common.ArrayMap(Location, LinkerLocation, Location.HashContext(u32));
 
     /// Create a new linker map with the provided general purpose allocator.
     pub fn init(gpa: std.mem.Allocator) LinkerMap {
@@ -245,16 +320,19 @@ pub const LocationMap = struct {
     /// General purpose allocator used for location map collections.
     gpa: std.mem.Allocator,
     /// The map of addresses that are referenced by id in some fixups.
-    addresses: common.UniqueReprMap(Location, ?RelativeAddress) = .empty,
+    addresses: common.HashMap(Location, ?RelativeAddress, Location.HashContext(u64)) = .empty,
     /// The map of addresses that need to be fixed up after encoding.
     fixups: common.ArrayList(Fixup) = .empty,
     /// State variable indicating the region the location map currently operates in.
-    region: RegionId = .fromInt(0),
+    region: Region,
 
     /// Initialize a new location map with the provided general purpose allocator.
-    pub fn init(gpa: std.mem.Allocator) LocationMap {
+    /// * `id` should be of a type constructed by `common.Id`
+    /// * Identity types larger than `core.STATIC_ID_BITS` bits may cause integer overflow
+    pub fn init(gpa: std.mem.Allocator, id: anytype) LocationMap {
         return LocationMap{
             .gpa = gpa,
+            .region = .from(id),
         };
     }
 
@@ -276,20 +354,21 @@ pub const LocationMap = struct {
     /// * `id` should be of a type constructed by `common.Id`.
     /// * Identity types larger than pl.STATIC_ID_BITS bits may cause integer overflow.
     pub fn localLocationId(self: *LocationMap, id: anytype) Location {
-        return Location.fromId(self.region, id);
+        return Location.from(self.region, id);
     }
 
     /// Register a location for a data reference.
     /// * Ref may be null if the location is not yet known.
     /// * Ref may be bound later with `bindLocation`.
-    pub fn registerLocation(self: *LocationMap, location: Location, rel: ?RelativeAddress) error{ BadEncoding, OutOfMemory }!void {
+    pub fn registerLocation(self: *LocationMap, location: Location) error{ BadEncoding, OutOfMemory }!void {
         const gop = try self.addresses.getOrPut(self.gpa, location);
         if (gop.found_existing) {
             log.debug("LocationMap.registerLocation: {} already exists in map", .{location});
             return error.BadEncoding;
+        } else {
+            gop.value_ptr.* = null;
+            log.debug("LocationMap.registerLocation: {} registered in map", .{location});
         }
-
-        gop.value_ptr.* = rel;
     }
 
     /// Bind the location of a data reference to a specific address.
@@ -306,6 +385,8 @@ pub const LocationMap = struct {
         }
 
         entry.* = rel;
+
+        log.debug("LocationMap.bindLocation: {} bound to @{x} in map", .{ location, rel.toInt() });
     }
 
     /// Create a new fixup.
@@ -325,19 +406,19 @@ pub const LocationMap = struct {
     /// defer x.leaveRegion(parent_region);
     /// ```
     /// * `region` must be a <= `pl.STATIC_ID_BITS`-bit `common.Id` type.
-    pub fn enterRegion(self: *LocationMap, region: anytype) RegionId {
+    pub fn enterRegion(self: *LocationMap, id: anytype) Region {
         const old_region = self.region;
-        self.region = region.bitcast(Location.RegionMark, core.STATIC_ID_BITS);
+        self.region = .from(id);
         return old_region;
     }
 
     /// Leave the current location region, restoring the previous region. See `enterRegion`.
-    pub fn leaveRegion(self: *LocationMap, old_region: RegionId) void {
+    pub fn leaveRegion(self: *LocationMap, old_region: Region) void {
         self.region = old_region;
     }
 
     /// Get the current location region id.
-    pub fn currentRegion(self: *LocationMap) RegionId {
+    pub fn currentRegion(self: *LocationMap) Region {
         return self.region;
     }
 
@@ -485,10 +566,10 @@ pub const Encoder = struct {
     /// Location map providing relative address identification, fixup storage, and other state for fixups.
     locations: *LocationMap,
     /// Generic location visitor state for resolving out-of-order encodes.
-    visited_locations: common.UniqueReprSet(Location) = .empty,
+    visited_locations: common.HashSet(Location, Location.HashContext(u64)) = .empty,
     /// Generic locations visitor state for marking skipped locations.
     /// * This is to validate that locations that have to be skipped are visited later.
-    skipped_locations: common.UniqueReprSet(Location) = .empty,
+    skipped_locations: common.HashSet(Location, Location.HashContext(u64)) = .empty,
 
     pub const Error = binary.Error;
 
@@ -525,34 +606,38 @@ pub const Encoder = struct {
     /// defer x.leaveRegion(parent_region);
     /// ```
     /// * `region` must be a <= `pl.STATIC_ID_BITS`-bit `common.Id` type.
-    pub fn enterRegion(self: *Encoder, region: anytype) RegionId {
-        return self.locations.enterRegion(region);
+    pub fn enterRegion(self: *Encoder, id: anytype) Region {
+        return self.locations.enterRegion(id);
     }
 
     /// Leave the current location region, restoring the previous region. See `enterRegion`.
-    pub fn leaveRegion(self: *Encoder, old_region: RegionId) void {
+    pub fn leaveRegion(self: *Encoder, old_region: Region) void {
         return self.locations.leaveRegion(old_region);
     }
 
     /// Get the current location region id.
-    pub fn currentRegion(self: *Encoder) RegionId {
+    pub fn currentRegion(self: *Encoder) Region {
         return self.locations.currentRegion();
     }
 
     /// Poll the visitor set to see if a value should be visited.
-    /// * Returns `true` if the value has not yet been visited, and puts it into the set.
-    pub fn visitLocation(self: *Encoder, location: Location) !bool {
+    /// * Returns `true` if the value has not yet been visited, and puts it into the set
+    pub fn visitLocation(self: *Encoder, location: Location) error{OutOfMemory}!bool {
         const gop = try self.visited_locations.getOrPut(self.temp_allocator, location);
-        return !gop.found_existing;
+        const new = !gop.found_existing;
+
+        if (new) {
+            log.debug("Encoder.visitLocation: {} has not been visited, adding to visitor set", .{location});
+        } else {
+            log.debug("Encoder.visitLocation: {} has already been visited", .{location});
+        }
+
+        return new;
     }
 
     /// Append a marker in the visitor set to indicate a location has been skipped and should be validated later.
-    /// * Causes a `BadEncoding` error if the location has already been visited or skipped.
-    pub fn skipLocation(self: *Encoder, location: Location) !void {
-        if (self.visited_locations.get(location) != null or self.skipped_locations.get(location) != null) {
-            log.debug("Encoder.skipLocation: {} has already been visited or skipped", .{location});
-            return error.BadEncoding;
-        }
+    pub fn skipLocation(self: *Encoder, location: Location) error{OutOfMemory}!void {
+        log.debug("Encoder.skipLocation: marking {} as skipped", .{location});
 
         try self.skipped_locations.put(self.temp_allocator, location, {});
     }
@@ -600,10 +685,9 @@ pub const Encoder = struct {
     }
 
     /// Register a new location for fixups to reference.
-    /// * relative address may be null if the location is not yet known
     /// * relative address may be bound later with `bindLocation`
-    pub fn registerLocation(self: *Encoder, id: Location, rel_addr: ?RelativeAddress) error{ BadEncoding, OutOfMemory }!void {
-        try self.locations.registerLocation(id, rel_addr);
+    pub fn registerLocation(self: *Encoder, id: Location) error{ BadEncoding, OutOfMemory }!void {
+        try self.locations.registerLocation(id);
     }
 
     /// Store the address of a location for fixups to reference.

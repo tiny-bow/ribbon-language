@@ -330,7 +330,9 @@ pub const Layout = packed struct {
                 const layout_b = context[b_idx];
                 if (layout_a.alignment > layout_b.alignment) return true;
                 if (layout_a.alignment < layout_b.alignment) return false;
-                return layout_a.size > layout_b.size;
+                if (layout_a.size > layout_b.size) return true;
+                if (layout_a.size < layout_b.size) return false;
+                return a_idx < b_idx;
             }
         }.sorter);
 

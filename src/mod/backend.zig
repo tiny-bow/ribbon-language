@@ -60,13 +60,13 @@ pub const Target = packed struct {
     /// Cast the target to a specific type.
     /// * Does not check the type outside of safe modes
     pub fn forceType(self: Target, comptime T: type) *T {
-        std.debug.assert(self.vtable.type_id == common.TypeId.of(T));
+        std.debug.assert(self.vtable.type_name == @typeName(T));
         return @ptrCast(self.data);
     }
 
     /// Cast the target to a specific type, checking the type at runtime.
     pub fn castType(self: Target, comptime T: type) ?*T {
-        if (self.vtable.type_id == common.TypeId.of(T)) {
+        if (self.vtable.type_name == @typeName(T)) {
             return @ptrCast(self.data);
         } else {
             return null;
@@ -74,7 +74,7 @@ pub const Target = packed struct {
     }
 
     pub const VTable = struct {
-        type_id: common.TypeId,
+        type_name: []const u8,
         runJob: *const fn (self: *anyopaque, job: *Job) Target.Error!Artifact,
         addArtifact: *const fn (self: *anyopaque, artifact: *const anyopaque) Target.Error!ArtifactId,
         getArtifact: *const fn (self: *anyopaque, id: ArtifactId) ?Artifact,
@@ -84,7 +84,7 @@ pub const Target = packed struct {
         /// Create a vtable for a specific target type.
         pub fn of(comptime T: type) VTable {
             comptime return .{
-                .type_id = common.TypeId.of(T),
+                .type_name = @typeName(T),
                 .runJob = @ptrCast(&T.runJob),
                 .addArtifact = @ptrCast(&T.addArtifact),
                 .getArtifact = @ptrCast(&T.getArtifact),
@@ -486,13 +486,13 @@ pub const Compiler = struct {
     /// Get the target for this compiler, cast to a specific type.
     /// * Does not check the type outside of safe modes.
     pub fn getTarget(self: *Compiler, comptime T: type) *T {
-        std.debug.assert(self.target.vtable.type_id == common.TypeId.of(T));
+        std.debug.assert(self.target.vtable.type_name == @typeName(T));
         return @ptrCast(self.target.data);
     }
 
     /// Get the target for this compiler, cast to a specific type, checking the type at runtime.
     pub fn castTarget(self: *Compiler, comptime T: type) ?*T {
-        if (self.target.vtable.type_id == common.TypeId.of(T)) {
+        if (self.target.vtable.type_name == @typeName(T)) {
             return @ptrCast(self.target.data);
         } else {
             return null;

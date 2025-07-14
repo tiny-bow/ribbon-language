@@ -11,7 +11,7 @@ const interpreter = ribbon.interpreter;
 test "interpreter unconditional branch skips code" {
     const allocator = testing.allocator;
 
-    var tb = bytecode.TableBuilder.init(allocator);
+    var tb = bytecode.TableBuilder.init(allocator, null);
     defer tb.deinit();
 
     const main_id = try tb.createHeaderEntry(.function, "main");
@@ -48,7 +48,7 @@ test "interpreter unconditional branch skips code" {
 test "interpreter conditional branch takes then path on true" {
     const allocator = testing.allocator;
 
-    var tb = bytecode.TableBuilder.init(allocator);
+    var tb = bytecode.TableBuilder.init(allocator, null);
     defer tb.deinit();
 
     const main_id = try tb.createHeaderEntry(.function, "main");
@@ -92,7 +92,7 @@ test "interpreter conditional branch takes then path on true" {
 test "interpreter conditional branch takes else path on false" {
     const allocator = testing.allocator;
 
-    var tb = bytecode.TableBuilder.init(allocator);
+    var tb = bytecode.TableBuilder.init(allocator, null);
     defer tb.deinit();
 
     const main_id = try tb.createHeaderEntry(.function, "main");
@@ -136,7 +136,7 @@ test "interpreter conditional branch takes else path on false" {
 test "interpreter simple loop" {
     const allocator = testing.allocator;
 
-    var tb = bytecode.TableBuilder.init(allocator);
+    var tb = bytecode.TableBuilder.init(allocator, null);
     defer tb.deinit();
 
     const main_id = try tb.createHeaderEntry(.function, "main");
@@ -180,7 +180,7 @@ test "interpreter simple loop" {
 test "interpreter multiple arguments" {
     const allocator = testing.allocator;
 
-    var tb = bytecode.TableBuilder.init(allocator);
+    var tb = bytecode.TableBuilder.init(allocator, null);
     defer tb.deinit();
 
     const main_id = try tb.createHeaderEntry(.function, "main");
@@ -207,7 +207,7 @@ test "interpreter multiple arguments" {
 test "interpreter subtraction" {
     const allocator = testing.allocator;
 
-    var tb = bytecode.TableBuilder.init(allocator);
+    var tb = bytecode.TableBuilder.init(allocator, null);
     defer tb.deinit();
 
     const main_id = try tb.createHeaderEntry(.function, "main");
@@ -234,7 +234,7 @@ test "interpreter subtraction" {
 test "interpreter local variable store and load" {
     const allocator = testing.allocator;
 
-    var tb = bytecode.TableBuilder.init(allocator);
+    var tb = bytecode.TableBuilder.init(allocator, null);
     defer tb.deinit();
 
     const main_id = try tb.createHeaderEntry(.function, "main");
@@ -271,7 +271,7 @@ test "interpreter local variable store and load" {
 test "interpreter multiple local variables with varied alignment" {
     const allocator = testing.allocator;
 
-    var tb = bytecode.TableBuilder.init(allocator);
+    var tb = bytecode.TableBuilder.init(allocator, null);
     defer tb.deinit();
 
     const main_id = try tb.createHeaderEntry(.function, "main");
