@@ -102,7 +102,7 @@ pub const TableBuilder = struct {
         kind: core.SymbolKind,
         /// Not binding a builder before encoding is an error.
         /// To indicate a linked address or a custom encoding, use `external`.
-        builder: ?union(enum) {
+        content: ?union(enum) {
             /// Designates an intentional lack of an attached builder.
             external: void,
             /// A builder for a function.
@@ -111,17 +111,19 @@ pub const TableBuilder = struct {
             data: *DataBuilder,
             /// A builder for an effect handler set.
             handler_set: *HandlerSetBuilder,
+            /// An effect identity.
+            effect: core.Effect,
 
             fn deinit(self: *@This()) void {
                 switch (self.*) {
-                    .external => {},
+                    .external, .effect => {},
                     inline else => |b| b.deinit(),
                 }
             }
         },
 
         fn deinit(self: *Entry) void {
-            if (self.builder) |*b| b.deinit();
+            if (self.content) |*b| b.deinit();
             self.* = undefined;
         }
     };
@@ -191,7 +193,7 @@ pub const TableBuilder = struct {
         gop.value_ptr.* = .{
             .location = static_loc,
             .kind = kind,
-            .builder = null,
+            .content = null,
         };
 
         return typed_id;
@@ -219,7 +221,7 @@ pub const TableBuilder = struct {
 
         // we support local mutations up to and including full replacement of the builder,
         // so if there was an existing builder its not an error, just deinit, and reuse the address.
-        const addr = if (entry.builder) |*old_builder| existing: {
+        const addr = if (entry.content) |*old_builder| existing: {
             old_builder.deinit();
 
             break :existing old_builder.function;
@@ -230,7 +232,7 @@ pub const TableBuilder = struct {
         addr.id = id;
 
         // setup and return the new builder
-        entry.builder = .{ .function = addr };
+        entry.content = .{ .function = addr };
 
         return addr;
     }
@@ -260,7 +262,7 @@ pub const TableBuilder = struct {
 
         // we support local mutations up to and including full replacement of the builder,
         // so if there was an existing builder its not an error, just deinit, and reuse the address.
-        const addr = if (entry.builder) |*old_builder| existing: {
+        const addr = if (entry.content) |*old_builder| existing: {
             old_builder.deinit();
 
             break :existing old_builder.data;
@@ -272,7 +274,7 @@ pub const TableBuilder = struct {
         addr.symbol_kind = entry.kind;
 
         // setup and return the new builder
-        entry.builder = .{ .data = addr };
+        entry.content = .{ .data = addr };
 
         return addr;
     }
@@ -296,7 +298,7 @@ pub const TableBuilder = struct {
 
         // we support local mutations up to and including full replacement of the builder,
         // so if there was an existing builder its not an error, just deinit, and reuse the address.
-        const addr = if (entry.builder) |*old_builder| existing: {
+        const addr = if (entry.content) |*old_builder| existing: {
             old_builder.deinit();
 
             break :existing old_builder.handler_set;
@@ -307,16 +309,47 @@ pub const TableBuilder = struct {
         addr.id = id;
 
         // setup and return the new builder
-        entry.builder = .{ .handler_set = addr };
+        entry.content = .{ .handler_set = addr };
 
         return addr;
+    }
+
+    /// Bind a `core.Effect` to an id.
+    /// * a fresh id can be created with `createHeaderEntry`
+    /// * The `core` differentiates between these to allow different tables to find agreement on effect typing
+    ///   without having to share the same effect ids within the table.
+    /// *
+    ///   - TODO: create an effects manager that does this by name
+    ///   - use effect manager to *get an id* for the effect
+    ///   - run effect manager with the table builder linkermap after encoding, which will link the effect ids to its own table
+    pub fn bindEffect(self: *TableBuilder, id: core.EffectId, effect: core.Effect) error{ BadEncoding, OutOfMemory }!void {
+        // we must be tracking the id to manage the effect
+        const entry = self.statics.getPtr(id.cast(anyopaque)) orelse {
+            log.debug("TableBuilder.createEffect: {} does not exist", .{id});
+            return error.BadEncoding;
+        };
+
+        // type check: the entry must be an effect
+        if (entry.kind != .effect) {
+            log.debug("TableBuilder.createEffect: expected effect, got {s}", .{@tagName(entry.kind)});
+            return error.BadEncoding;
+        }
+
+        // we support local mutations up to and including full replacement of the builder,
+        // so if there was an existing builder its not an error, just deinit.
+        if (entry.content) |*old_builder| {
+            old_builder.deinit();
+        }
+
+        // setup the content
+        entry.content = .{ .effect = effect };
     }
 
     /// Get a function builder by its id.
     pub fn getFunctionBuilder(self: *const TableBuilder, id: core.FunctionId) ?*FunctionBuilder {
         const entry = self.statics.getPtr(id) orelse return null;
         if (entry.kind != .function) return null;
-        return if (entry.builder) |*builder| &builder.function else null;
+        return if (entry.content) |*builder| &builder.function else null;
     }
 
     /// Get a data builder by its id.
@@ -324,14 +357,14 @@ pub const TableBuilder = struct {
     pub fn getDataBuilder(self: *const TableBuilder, id: anytype) ?*DataBuilder {
         const entry = self.statics.getPtr(id) orelse return null;
         if (entry.kind != .constant and entry.kind != .global) return null;
-        return if (entry.builder) |*builder| &builder.data else null;
+        return if (entry.content) |*builder| &builder.data else null;
     }
 
     /// Get a handler set builder by its id.
     pub fn getHandlerSetBuilder(self: *const TableBuilder, id: core.HandlerSetId) ?*HandlerSetBuilder {
         const entry = self.statics.getPtr(id) orelse return null;
         if (entry.kind != .handler_set) return null;
-        return if (entry.builder) |*builder| &builder.handler_set else null;
+        return if (entry.content) |*builder| &builder.handler_set else null;
     }
 
     /// Get the location of a static by its id.
@@ -354,11 +387,20 @@ pub const TableBuilder = struct {
         // to the encoder, so we can finalize the header with the correct size.
         const size_start = encoder.getEncodedSize();
 
-        var static_it = self.statics.valueIterator();
-        while (static_it.next()) |entry| {
-            if (entry.builder) |builder| {
+        var static_it = self.statics.iterator();
+        while (static_it.next()) |pair| {
+            const static_id = pair.key_ptr.*;
+            const entry = pair.value_ptr.*;
+
+            if (entry.content) |builder| {
                 switch (builder) {
                     .external => {},
+                    .effect => |eff| {
+                        const loc = encoder.localLocationId(static_id.cast(core.Effect));
+                        const rel = try encoder.cloneRel(eff);
+
+                        try encoder.bindLocation(loc, rel);
+                    },
                     .function => |function_builder| try function_builder.encode(null, &encoder),
                     .data => |data_builder| try data_builder.encode(&encoder),
                     .handler_set => |handler_set_builder| try handler_set_builder.encode(null, &encoder),
@@ -2401,7 +2443,7 @@ fn TestBed(comptime test_name: []const u8) type {
             var self: TestBed(test_name) = undefined;
             self.gpa = std.testing.allocator;
             self.builder = TableBuilder.init(self.gpa, null);
-            testing.log_level = .debug;
+            // testing.log_level = .debug;
             return self;
         }
 
@@ -2867,6 +2909,7 @@ test "encode handler set" {
     const handler_fn_id = try tb.builder.createHeaderEntry(.function, "my_handler");
     const handler_set_id = try tb.builder.createHeaderEntry(.handler_set, null);
     const effect_id = try tb.builder.createHeaderEntry(.effect, "my_effect");
+    try tb.builder.bindEffect(effect_id, @enumFromInt(0));
 
     // Main function builder
     var main_fn = try tb.builder.createFunctionBuilder(main_id);
@@ -2929,7 +2972,6 @@ test "encode handler set" {
 }
 
 test "encode handler set with cancellation" {
-    testing.log_level = .debug;
     var tb = try TestBed("encode handler set with cancellation").init();
     defer tb.deinit();
 
@@ -2937,6 +2979,7 @@ test "encode handler set with cancellation" {
     const handler_fn_id = try tb.builder.createHeaderEntry(.function, "cancelling_handler");
     const handler_set_id = try tb.builder.createHeaderEntry(.handler_set, null);
     const effect_id = try tb.builder.createHeaderEntry(.effect, "my_effect");
+    try tb.builder.bindEffect(effect_id, @enumFromInt(0));
 
     var handler_fn = try tb.builder.createFunctionBuilder(handler_fn_id);
     var handler_entry = try handler_fn.createBlock();
@@ -2959,8 +3002,8 @@ test "encode handler set with cancellation" {
     try entry_block.instrBr(cancel_block.id);
 
     // Cancellation block: pop and return value
-    try cancel_block.bindHandlerSetCancellationLocation(handler_set);
     try cancel_block.popHandlerSet(handler_set);
+    try cancel_block.bindHandlerSetCancellationLocation(handler_set);
     try cancel_block.instrTerm(.@"return", .{ .R = .r1 });
 
     var table = try tb.builder.encode(tb.gpa);
@@ -2972,7 +3015,8 @@ test "encode handler set with cancellation" {
 
     // The entry block has 3 instructions (push, prompt, br), taking 3 words.
     // The cancellation block should therefore start at an offset of 3 words from the function base.
-    const cancel_block_start_addr = @intFromPtr(main_func.extents.base) + 3 * @sizeOf(core.InstructionBits);
+    // The cancellation address should be after the pop instruction, which is the first instruction in the cancel block, meaning a total of 4 word offset.
+    const cancel_block_start_addr = @intFromPtr(main_func.extents.base) + 4 * @sizeOf(core.InstructionBits);
     try testing.expectEqual(cancel_block_start_addr, @intFromPtr(cancel_addr));
     try testing.expectEqual(core.Register.r1, set.cancellation.register);
 }
@@ -2986,6 +3030,7 @@ test "encode handler set with upvalues" {
     const handler_fn_id = try tb.builder.createHeaderEntry(.function, "upvalue_handler");
     const handler_set_id = try tb.builder.createHeaderEntry(.handler_set, null);
     const effect_id = try tb.builder.createHeaderEntry(.effect, "my_effect");
+    try tb.builder.bindEffect(effect_id, @enumFromInt(0));
 
     // Main function with locals
     var main_fn = try tb.builder.createFunctionBuilder(main_id);

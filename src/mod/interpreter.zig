@@ -645,7 +645,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             switch (core.InternalFunctionKind.fromAddress(functionOpaquePtr)) {
                 .bytecode => {
                     const functionPtr: *const core.Function = @ptrCast(@alignCast(functionOpaquePtr));
-                    try pushBytecodeCall(self, current.callFrame, functionPtr, null, registerId, argumentRegisterIds);
+                    try pushBytecodeCall(self, current.callFrame, functionPtr, evidencePtr, registerId, argumentRegisterIds);
                 },
                 .builtin => {
                     const builtin: *const core.BuiltinAddress = @ptrCast(@alignCast(handler.function));
@@ -667,7 +667,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
                             self.calls.top_ptr = @ptrCast(cancelledSet.call);
                             self.registers.top_ptr = @ptrCast(cancelledSet.call.vregs);
 
-                            while (@intFromPtr(self.sets.top()) >= @intFromPtr(cancelledSet.handler_set)) {
+                            while (@intFromPtr(self.sets.top()) >= @intFromPtr(cancelledSet)) {
                                 const setFrame = self.sets.popPtr();
 
                                 self.data.top_ptr = setFrame.base;
@@ -679,6 +679,8 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
                                     evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
                                 }
                             }
+
+                            cancelledSet.call.set_frame = self.sets.top();
                         },
                         .@"return" => |retVal| current.callFrame.vregs[registerId.getIndex()] = retVal,
                     }

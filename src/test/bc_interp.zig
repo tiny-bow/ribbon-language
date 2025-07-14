@@ -332,3 +332,176 @@ test "interpreter multiple local variables with varied alignment" {
     const result = try interpreter.invokeBytecode(fiber, function, &.{});
     try testing.expectEqual(@as(u64, 1234), result);
 }
+
+test "interpreter basic effect handling" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    // --- IDs ---
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    const handler_fn_id = try tb.createHeaderEntry(.function, "handler_fn");
+    const handler_set_id = try tb.createHeaderEntry(.handler_set, null);
+    const effect_id = try tb.createHeaderEntry(.effect, "my_effect");
+    try tb.bindEffect(effect_id, @enumFromInt(0));
+
+    // --- Handler Function ---
+    // This function will be called when the effect is prompted.
+    // It simply returns the value 42.
+    var handler_fn = try tb.createFunctionBuilder(handler_fn_id);
+    var handler_entry = try handler_fn.createBlock();
+    try handler_entry.instrWide(.bit_copy64c, .{ .R = .r0 }, 42);
+    try handler_entry.instrTerm(.@"return", .{ .R = .r0 });
+
+    // --- Main Function ---
+    var main_fn = try tb.createFunctionBuilder(main_id);
+
+    // --- Handler Set ---
+    // This set binds our effect_id to our handler_fn_id.
+    var handler_set_builder = try tb.createHandlerSet(handler_set_id);
+    _ = try handler_set_builder.bindHandler(effect_id, handler_fn);
+    try main_fn.bindHandlerSet(handler_set_builder);
+
+    // --- Main Function Body ---
+    // 1. Push the handler set onto the stack, making it active.
+    // 2. Prompt the effect. This transfers control to the handler function.
+    // 3. The handler returns 42, which is placed in r0.
+    // 4. Pop the handler set.
+    // 5. Return the value in r0.
+    var main_entry = try main_fn.createBlock();
+    try main_entry.pushHandlerSet(handler_set_builder);
+    try main_entry.instrCall(.prompt, .{ .R = .r0, .E = effect_id, .I = 0 }, .{});
+    try main_entry.popHandlerSet(handler_set_builder);
+    try main_entry.instrTerm(.@"return", .{ .R = .r0 });
+
+    // --- Encode and Run ---
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = try interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectEqual(@as(u64, 42), result);
+}
+
+test "interpreter effect cancellation" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    // --- IDs ---
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    const handler_fn_id = try tb.createHeaderEntry(.function, "cancelling_handler");
+    const handler_set_id = try tb.createHeaderEntry(.handler_set, null);
+    const effect_id = try tb.createHeaderEntry(.effect, "my_effect");
+    try tb.bindEffect(effect_id, @enumFromInt(0));
+
+    // --- Handler Function ---
+    // This handler will cancel the computation, passing 99 as the cancellation value.
+    var handler_fn = try tb.createFunctionBuilder(handler_fn_id);
+    var handler_entry = try handler_fn.createBlock();
+    try handler_entry.instrWide(.bit_copy64c, .{ .R = .r0 }, 99);
+    try handler_entry.instrTerm(.cancel, .{ .R = .r0 });
+
+    // --- Main Function ---
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    var entry_block = try main_fn.createBlock();
+    var cancel_landing_pad = try main_fn.createBlock();
+
+    // --- Handler Set ---
+    var handler_set_builder = try tb.createHandlerSet(handler_set_id);
+    handler_set_builder.register = .r1; // Store cancellation value in r1
+    _ = try handler_set_builder.bindHandler(effect_id, handler_fn);
+    try main_fn.bindHandlerSet(handler_set_builder);
+
+    // --- Main Function Body ---
+    // entry_block: push set, prompt, then a branch to make the landing pad reachable.
+    try entry_block.pushHandlerSet(handler_set_builder);
+    try entry_block.instrCall(.prompt, .{ .R = .r0, .E = effect_id, .I = 0 }, .{});
+    // This branch ensures the landing pad is encoded, but won't be taken at runtime.
+    try entry_block.instrBr(cancel_landing_pad.id);
+
+    // cancel_landing_pad: This is where control resumes after cancellation.
+    // The `cancel` instruction in the handler will jump here.
+    try cancel_landing_pad.popHandlerSet(handler_set_builder);
+    try cancel_landing_pad.bindHandlerSetCancellationLocation(handler_set_builder);
+    try cancel_landing_pad.instrTerm(.@"return", .{ .R = .r1 }); // Return the cancellation value
+
+    // --- Encode and Run ---
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = try interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectEqual(@as(u64, 99), result);
+}
+
+test "interpreter upvalue access from handler" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    // --- IDs ---
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    const handler_fn_id = try tb.createHeaderEntry(.function, "upvalue_handler");
+    const handler_set_id = try tb.createHeaderEntry(.handler_set, null);
+    const effect_id = try tb.createHeaderEntry(.effect, "my_effect");
+    try tb.bindEffect(effect_id, @enumFromInt(0));
+
+    // --- Main Function with a local variable ---
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    const local_x = try main_fn.createLocal(.{ .size = 8, .alignment = 8 });
+
+    // --- Handler Function ---
+    // This function will access an upvalue from its parent (main).
+    var handler_fn = try tb.createFunctionBuilder(handler_fn_id);
+    var handler_entry = try handler_fn.createBlock();
+
+    // --- Handler Set ---
+    // Capture local_x from main as upvalue 0.
+    var handler_set_builder = try tb.createHandlerSet(handler_set_id);
+    const upvalue_x = try handler_set_builder.createUpvalue(local_x);
+    _ = try handler_set_builder.bindHandler(effect_id, handler_fn);
+    try main_fn.bindHandlerSet(handler_set_builder);
+
+    // --- Handler Body ---
+    // Access the upvalue, load its value, and return it.
+    try handler_entry.instrAddrOf(.addr_u, .r0, upvalue_x);
+    try handler_entry.instr(.load64, .{ .Rx = .r1, .Ry = .r0, .I = 0 });
+    try handler_entry.instrTerm(.@"return", .{ .R = .r1 });
+
+    // --- Main Function Body ---
+    var main_entry = try main_fn.createBlock();
+    // 1. Get address of local_x.
+    try main_entry.instrAddrOf(.addr_l, .r0, local_x);
+    // 2. Store the value 888 into it.
+    try main_entry.instrWide(.bit_copy64c, .{ .R = .r1 }, 888);
+    try main_entry.instr(.store64, .{ .Rx = .r0, .Ry = .r1, .I = 0 });
+    // 3. Push handler set.
+    try main_entry.pushHandlerSet(handler_set_builder);
+    // 4. Prompt the effect. The handler will read the value of local_x (888) and return it.
+    try main_entry.instrCall(.prompt, .{ .R = .r0, .E = effect_id, .I = 0 }, .{});
+    // 5. Pop handler set.
+    try main_entry.popHandlerSet(handler_set_builder);
+    // 6. Return the result from the handler (which is in r0).
+    try main_entry.instrTerm(.@"return", .{ .R = .r0 });
+
+    // --- Encode and Run ---
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = try interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectEqual(@as(u64, 888), result);
+}
