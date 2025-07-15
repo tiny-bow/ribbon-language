@@ -580,3 +580,224 @@ test "interpreter effect modulation via re-prompt" {
     const result = try interpreter.invokeBytecode(fiber, function, &.{});
     try testing.expectEqual(@as(u64, 101), result);
 }
+
+test "interpreter nested effect cancellation" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    // --- IDs ---
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    const h_outer_id = try tb.createHeaderEntry(.function, "handler_outer_cancel");
+    const h_inner_id = try tb.createHeaderEntry(.function, "handler_inner_reprompt");
+    const hs_outer_id = try tb.createHeaderEntry(.handler_set, "outer_set");
+    const hs_inner_id = try tb.createHeaderEntry(.handler_set, "inner_set");
+    const effect_id = try tb.createHeaderEntry(.effect, "cancellable_effect");
+    try tb.bindEffect(effect_id, @enumFromInt(0));
+
+    // --- Outer Handler (Cancels) ---
+    var h_outer_fn = try tb.createFunctionBuilder(h_outer_id);
+    var h_outer_entry = try h_outer_fn.createBlock();
+    try h_outer_entry.instrWide(.bit_copy64c, .{ .R = .r0 }, 250); // The cancellation value
+    try h_outer_entry.instrTerm(.cancel, .{ .R = .r0 });
+
+    // --- Inner Handler (Re-prompts) ---
+    var h_inner_fn = try tb.createFunctionBuilder(h_inner_id);
+    var h_inner_entry = try h_inner_fn.createBlock();
+    // This prompt will be handled by the outer handler, which will then cancel.
+    try h_inner_entry.instrCall(.prompt, .{ .R = .r0, .E = effect_id, .I = 0 }, .{});
+    // This part should never be reached.
+    try h_inner_entry.instrWide(.bit_copy64c, .{ .R = .r0 }, 999);
+    try h_inner_entry.instrTerm(.@"return", .{ .R = .r0 });
+
+    // --- Main Function ---
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    var entry_block = try main_fn.createBlock();
+    var outer_cancel_pad = try main_fn.createBlock();
+    var inner_cancel_pad = try main_fn.createBlock(); // Should not be reached.
+
+    // --- Handler Set Setup ---
+    var hs_outer_builder = try tb.createHandlerSet(hs_outer_id);
+    _ = try hs_outer_builder.bindHandler(effect_id, h_outer_fn);
+    hs_outer_builder.register = .r1; // Cancellation value for outer set goes to r1
+    try main_fn.bindHandlerSet(hs_outer_builder);
+
+    var hs_inner_builder = try tb.createHandlerSet(hs_inner_id);
+    _ = try hs_inner_builder.bindHandler(effect_id, h_inner_fn);
+    hs_inner_builder.register = .r2; // Cancellation value for inner set goes to r2
+    try main_fn.bindHandlerSet(hs_inner_builder);
+
+    // --- Main Function Body ---
+    try entry_block.pushHandlerSet(hs_outer_builder);
+    try entry_block.pushHandlerSet(hs_inner_builder);
+    // This prompt is handled by the inner handler, which re-prompts to the outer, which cancels.
+    try entry_block.instrCall(.prompt, .{ .R = .r0, .E = effect_id, .I = 0 }, .{});
+    // This code should not be reached.
+    try entry_block.popHandlerSet(hs_inner_builder);
+    try entry_block.popHandlerSet(hs_outer_builder);
+    try entry_block.instrTerm(.halt, .{});
+
+    // Landing pad for the inner set's cancellation (should be skipped).
+    try inner_cancel_pad.popHandlerSet(hs_inner_builder);
+    try inner_cancel_pad.bindHandlerSetCancellationLocation(hs_inner_builder);
+    try inner_cancel_pad.instrTerm(.@"return", .{ .R = .r2 }); // would return from r2
+
+    // Landing pad for the outer set's cancellation (should be hit).
+    try outer_cancel_pad.popHandlerSet(hs_outer_builder);
+    try outer_cancel_pad.bindHandlerSetCancellationLocation(hs_outer_builder);
+    try outer_cancel_pad.instrTerm(.@"return", .{ .R = .r1 }); // returns from r1
+
+    // --- Encode and Run ---
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = try interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectEqual(@as(u64, 250), result);
+}
+
+test "invokeBytecode call stack overflow" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    var entry = try main_fn.createBlock();
+    try entry.instrTerm(.halt, .{});
+
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+    var fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    // Manually fill the call stack to leave less than 2 free frames.
+    // invokeBytecode requires 2 frames (one for the wrapper, one for the function).
+    const frames_to_push = core.CALL_STACK_SIZE - 1;
+    for (0..frames_to_push) |_| {
+        _ = fiber.header.calls.allocPtr();
+    }
+
+    // This invocation should fail with an overflow error.
+    const result = interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectError(error.Overflow, result);
+}
+
+test "invokeBytecode data stack overflow" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    var entry = try main_fn.createBlock();
+    try entry.instrTerm(.halt, .{});
+
+    // Create a function with a layout so large it cannot possibly fit on the data stack.
+    const huge_size = (core.DATA_STACK_SIZE * @sizeOf(u64)) + 1;
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    // Manually patch the function's layout after encoding.
+    var function: *core.Function = @ptrCast(@constCast(table.bytecode.header.get(main_id)));
+    function.layout.size = huge_size;
+
+    var fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    // This invocation should now correctly fail with an overflow error.
+    const result = interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectError(error.Overflow, result);
+}
+
+test "mem_set with zero size is a no-op" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    const local = try main_fn.createLocal(.{ .size = 8, .alignment = 8 });
+    var entry = try main_fn.createBlock();
+
+    // r0 = &local
+    try entry.instrAddrOf(.addr_l, .r0, local);
+    // Store a known initial value into the local
+    try entry.instrWide(.bit_copy64c, .{ .R = .r1 }, 0x12345678_87654321);
+    try entry.instr(.store64, .{ .Rx = .r0, .Ry = .r1, .I = 0 });
+
+    // Now, attempt the mem_set with zero size
+    // r1 = byte to write (0xFF)
+    try entry.instrWide(.bit_copy64c, .{ .R = .r1 }, 0xFF);
+    // r2 = size (0)
+    try entry.instrWide(.bit_copy64c, .{ .R = .r2 }, 0);
+    // mem_set(dest=r0, byte=r1, size=r2) -> should do nothing
+    try entry.instr(.mem_set, .{ .Rx = .r0, .Ry = .r1, .Rz = .r2 });
+
+    // Load the value from the local and return it.
+    try entry.instr(.load64, .{ .Rx = .r3, .Ry = .r0, .I = 0 });
+    try entry.instrTerm(.@"return", .{ .R = .r3 });
+
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    var fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = try interpreter.invokeBytecode(fiber, table.bytecode.header.get(main_id), &.{});
+    // The result should be the original, unmodified value.
+    try testing.expectEqual(@as(u64, 0x12345678_87654321), result);
+}
+
+test "mem_copy with zero size is a no-op" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    const local_dest = try main_fn.createLocal(.{ .size = 8, .alignment = 8 });
+    const local_src = try main_fn.createLocal(.{ .size = 8, .alignment = 8 });
+    var entry = try main_fn.createBlock();
+
+    // Get addresses for dest and src
+    try entry.instrAddrOf(.addr_l, .r0, local_dest);
+    try entry.instrAddrOf(.addr_l, .r1, local_src);
+
+    // Initialize dest to a known value
+    try entry.instrWide(.bit_copy64c, .{ .R = .r3 }, 0x11111111_11111111);
+    try entry.instr(.store64, .{ .Rx = .r0, .Ry = .r3, .I = 0 });
+
+    // Initialize src to a different known value
+    try entry.instrWide(.bit_copy64c, .{ .R = .r3 }, 0x99999999_99999999);
+    try entry.instr(.store64, .{ .Rx = .r1, .Ry = .r3, .I = 0 });
+
+    // Attempt the mem_copy with zero size
+    try entry.instrWide(.bit_copy64c, .{ .R = .r2 }, 0); // Zero size
+    // mem_copy(dest=r0, src=r1, size=r2) -> should do nothing
+    try entry.instr(.mem_copy, .{ .Rx = .r0, .Ry = .r1, .Rz = .r2 });
+
+    // Load the value from dest and return it.
+    try entry.instr(.load64, .{ .Rx = .r3, .Ry = .r0, .I = 0 });
+    try entry.instrTerm(.@"return", .{ .R = .r3 });
+
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    var fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = try interpreter.invokeBytecode(fiber, table.bytecode.header.get(main_id), &.{});
+    // The result should be the original destination value, not the source value.
+    try testing.expectEqual(@as(u64, 0x11111111_11111111), result);
+}
