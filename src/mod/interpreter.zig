@@ -382,12 +382,13 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             st.callFrame = header.calls.top();
             std.debug.assert(@intFromPtr(st.callFrame) >= @intFromPtr(header.calls.base));
 
-            log.debug("active function for decode is at {x}", .{@intFromPtr(st.callFrame.function)});
             st.function = @ptrCast(@alignCast(st.callFrame.function));
 
             std.debug.assert(st.function.extents.boundsCheck(st.callFrame.ip));
 
             st.instruction = Instruction.fromBits(st.callFrame.ip[0]);
+
+            log.debug("[{x}] {s}:{x:0>6}", .{ @intFromPtr(st.callFrame.ip), @tagName(st.instruction.code), @as(u48, @truncate(st.instruction.data.toBits(st.instruction.code))) });
 
             st.callFrame.ip += 1;
 
