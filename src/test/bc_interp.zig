@@ -505,3 +505,78 @@ test "interpreter upvalue access from handler" {
     const result = try interpreter.invokeBytecode(fiber, function, &.{});
     try testing.expectEqual(@as(u64, 888), result);
 }
+
+test "interpreter effect modulation via re-prompt" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    // --- IDs ---
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    const h_outer_id = try tb.createHeaderEntry(.function, "handler_outer");
+    const h_mod_id = try tb.createHeaderEntry(.function, "handler_modulator");
+    const hs_outer_id = try tb.createHeaderEntry(.handler_set, null);
+    const hs_mod_id = try tb.createHeaderEntry(.handler_set, null);
+    const effect_id = try tb.createHeaderEntry(.effect, "my_effect");
+    try tb.bindEffect(effect_id, @enumFromInt(0));
+
+    // --- Outer Handler ---
+    // This is the "real" implementation that the modulator will call.
+    // It just returns 100.
+    var h_outer_fn = try tb.createFunctionBuilder(h_outer_id);
+    var h_outer_entry = try h_outer_fn.createBlock();
+    try h_outer_entry.instrWide(.bit_copy64c, .{ .R = .r0 }, 100);
+    try h_outer_entry.instrTerm(.@"return", .{ .R = .r0 });
+
+    // --- Modulating Handler ---
+    // This handler intercepts the effect, re-prompts it to call the next
+    // handler in the chain, modifies the result, and returns.
+    var h_mod_fn = try tb.createFunctionBuilder(h_mod_id);
+    var h_mod_entry = try h_mod_fn.createBlock();
+    // Re-prompt the same effect. This should invoke the *next* handler (h_outer).
+    try h_mod_entry.instrCall(.prompt, .{ .R = .r0, .E = effect_id, .I = 0 }, .{});
+    // The result from h_outer (100) is now in r0. Add 1 to it.
+    try h_mod_entry.instrWide(.bit_copy64c, .{ .R = .r1 }, 1);
+    try h_mod_entry.instr(.i_add64, .{ .Rx = .r0, .Ry = .r0, .Rz = .r1 });
+    // Return the modified result (101).
+    try h_mod_entry.instrTerm(.@"return", .{ .R = .r0 });
+
+    // --- Main Function ---
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    var main_entry = try main_fn.createBlock();
+
+    // --- Handler Set Setup ---
+    var hs_outer_builder = try tb.createHandlerSet(hs_outer_id);
+    _ = try hs_outer_builder.bindHandler(effect_id, h_outer_fn);
+    try main_fn.bindHandlerSet(hs_outer_builder);
+
+    var hs_mod_builder = try tb.createHandlerSet(hs_mod_id);
+    _ = try hs_mod_builder.bindHandler(effect_id, h_mod_fn);
+    try main_fn.bindHandlerSet(hs_mod_builder);
+
+    // --- Main Function Body ---
+    // 1. Push the outer handler.
+    try main_entry.pushHandlerSet(hs_outer_builder);
+    // 2. Push the modulating handler. The evidence chain is now mod -> outer.
+    try main_entry.pushHandlerSet(hs_mod_builder);
+    // 3. Prompt the effect. This will invoke the modulator.
+    try main_entry.instrCall(.prompt, .{ .R = .r0, .E = effect_id, .I = 0 }, .{});
+    // 4. Pop both handlers.
+    try main_entry.popHandlerSet(hs_mod_builder);
+    try main_entry.popHandlerSet(hs_outer_builder);
+    // 5. Return the result from the prompt, which should be 101.
+    try main_entry.instrTerm(.@"return", .{ .R = .r0 });
+
+    // --- Encode and Run ---
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    // The correct result should be 101.
+    const result = try interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectEqual(@as(u64, 101), result);
+}

@@ -633,7 +633,21 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const promptIndex = current.function.header.get(promptId).toIndex();
 
-            const evidencePtr = self.evidence[promptIndex] orelse {
+            const evidencePtr = find_evidence: {
+                if (current.callFrame.evidence) |frame_evidence| {
+                    // If the current call frame is handling an effect, and it's the *same*
+                    // effect we are now prompting, we must skip this handler and start our
+                    // search from the *next* handler in the evidence chain. This is what
+                    // enables effect modulation via re-prompting.
+                    if (frame_evidence.handler.effect == promptId) {
+                        break :find_evidence frame_evidence.previous;
+                    }
+                }
+
+                // Otherwise, this is a standard prompt. Start the search from the head
+                // of the evidence list for this effect.
+                break :find_evidence self.evidence[promptIndex];
+            } orelse {
                 @branchHint(.cold);
                 return error.MissingEvidence;
             };
