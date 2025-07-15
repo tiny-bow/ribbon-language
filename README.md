@@ -68,7 +68,28 @@ We are in a focused development phase, with a `0.1.0` release targeted for **Q4 
 
 ### What is Ribbon?
 
-A core tenet of Ribbon's design philosophy is the notion that *syntax is secondary*. For the majority of Ribbon's development thus far, we have therefore focused on semantics. However, some of the syntax of our base languages is ready to show, and we present a few simple examples here to demonstrate Ribbon's capabilities. We ask that you keep in mind details are subject to change, and focus on the design of the developer experience.
+A core tenet of Ribbon's design philosophy is the notion that syntax is secondary to semantics. To truly understand Ribbon, it's best to see how its core features work in concert; from modern typing concepts like structural polymorphism and algebraic effects to systems-level control over memory. These concepts have been carefully fused through a long pre-production period of iterative design and research to create a developer experience that is both expressive and precise. The following example illustrates this integrated design, providing a high-level picture of the language before we dive into the specific mechanics.
+
+Ribbon's design makes abstract concepts like side effects, data shape, and operational capabilities first-class citizens of its type system. This approach aims to resolve the long-standing tension between a high-level developer experience and the fine-grained control required for systems programming. It gives developers powerful tools for abstraction without sacrificing the performance, predictability, and low-level memory control essential for realtime applications like games and data analytics tools.
+
+To see how these principles combine in practice, consider a function that finds the closest object in a list to a given reference point. This single, concise definition is generic, safe, and explicit about its behavior. It can operate on a list of *any* type of object (e.g., players, enemies, particles) as long as those objects have a position. It relies on a generic `Dist` capability to calculate distance, and its signature clearly states that it might fail with an error if the list is empty, a possibility the caller must account for.
+
+```ribbon
+;; Finds the object in a list closest to a given point.
+;; This function is generic, and safe, and declares its own side effects.
+find_closest := fun(point: any P, items: List (any T)) -> T | { Error Str }
+    where T: { pos: P, .. }, Dist P.
+
+    match items.
+        []       => Error/throw "Input list was empty"
+        [h, ..t] =>
+            a := Dist/to h pos
+            ;; ...
+```
+
+This example showcases some of Ribbon's core strengths. The signature `where T: { pos: P, .. }` demonstrates **structural polymorphism**, allowing the function to work on any struct `T` that has a `pos` field of some type `P`. The constraint `where Dist P` is a **type class**, ensuring that the position's type `P` has a `distance` function available. The `| { Error String }` annotation is Ribbon's **side effect tracking** in action, making the potential for an error an explicit part of the function's contract that the type system will enforce is handled. Bringing it all together, all of the types shown here can be inferred automatically, wherever desired.
+
+The `find_closest` example offers a glimpse into how Ribbon composes its foundational features into a cohesive whole. It shows how you can write code that is simultaneously generic, type-safe, and explicit about its side effects. To fully unpack this, the following sections will explore each of these core concepts in detail. We ask that you keep in mind that while the syntax shown is a work in progress presented for illustration, the primary focus is on the design of the developer experience and the powerful semantics these systems enable.
 
 If any of the following is confusing, it may help to refer to the [Design Documentation](https://design.ribbon-lang.com), for example the [Grammar](https://design.ribbon-lang.com/Grammar) may be of particular use in mentally parsing the examples.
 
