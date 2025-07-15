@@ -1608,9 +1608,6 @@ pub const FunctionBuilder = struct {
             return;
         }
 
-        var queue: BlockVisitorQueue = .init(encoder.temp_allocator);
-        defer queue.deinit();
-
         // compute stack layout and set up the local fixup map for the function
         const layouts = self.locals.values();
 
@@ -1635,6 +1632,9 @@ pub const FunctionBuilder = struct {
             const region_token = encoder.enterRegion(self.id);
             defer encoder.leaveRegion(region_token);
 
+            var queue: BlockVisitorQueue = .init(encoder.temp_allocator);
+            defer queue.deinit();
+
             // write the function body
 
             // ensure the function's instructions are aligned
@@ -1647,6 +1647,19 @@ pub const FunctionBuilder = struct {
             while (queue.visit()) |block_id| {
                 const block = self.blocks.get(block_id).?;
 
+                try block.encode(&queue, maybe_upvalue_fixups, &local_fixups, encoder);
+            }
+
+            // certain situations, such as a block that is only reached via effect cancellation,
+            // may result in a block not being encoded at all.
+            // while one might argue for a "dead code elimination" principled motivation here,
+            // dead code removal is not an intended feature of this api; it is an expectation
+            // placed upon the caller, as with any assembler.
+
+            // thus, we simply ensure any blocks we didn't touch via traversal get encoded at the end
+            var block_it = self.blocks.valueIterator();
+            while (block_it.next()) |ptr2ptr| {
+                const block = ptr2ptr.*;
                 try block.encode(&queue, maybe_upvalue_fixups, &local_fixups, encoder);
             }
 
@@ -2520,6 +2533,8 @@ test "encode function with branch and dead code" {
         \\    br I:0001
         \\    bit_copy64c r0 .. I:0000000000000002
         \\    return r0
+        \\    bit_copy64c r0 .. I:00000000000003e7
+        \\    halt
         \\
     ;
     try testing.expectEqualStrings(expected, disas_buf.items);
@@ -2999,7 +3014,7 @@ test "encode handler set with cancellation" {
     // Entry block: push, prompt, then branch to the cancellation block to ensure it's assembled
     try entry_block.pushHandlerSet(handler_set);
     try entry_block.instrCall(.prompt, .{ .R = .r0, .E = effect_id, .I = 0 }, .{});
-    try entry_block.instrBr(cancel_block.id);
+    try entry_block.instrTerm(.halt, .{});
 
     // Cancellation block: pop and return value
     try cancel_block.popHandlerSet(handler_set);
