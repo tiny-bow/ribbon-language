@@ -79,9 +79,12 @@ pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *co
             };
         },
 
-        .panic => @panic("An unexpected error occurred in native code; exiting"),
+        .panic => @panic("An unexpected/unrecoverable error occurred within a call to a builtin function; exiting"),
+        .request_trap, .function_trapped => error.FunctionTrapped,
 
-        .request_trap => error.FunctionTrapped,
+        .@"unreachable" => error.Unreachable,
+        .bad_encoding => error.BadEncoding,
+        .missing_evidence => error.MissingEvidence,
         .overflow => error.Overflow,
         .underflow => error.Underflow,
     };

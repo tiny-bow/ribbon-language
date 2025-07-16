@@ -413,16 +413,31 @@ pub const Effect = enum(std.math.IntFittingRange(0, MAX_EFFECT_TYPES)) {
 /// A minimal valid header for core.Function
 pub const EMPTY_HEADER: *const Header = &Header{};
 
-/// Ribbon provides an abstraction for the disambiguation of bytecode and builtin functions.
+/// Abstraction for the disambiguation of bytecode and builtin functions.
 /// When you take the address of a function, the type is lost; but we can recover it by inspecting the first byte at the address for this marker type.
 pub const InternalFunctionKind = enum(u8) {
     /// A bytecode function.
-    bytecode,
+    bytecode = 0xBC,
     /// A builtin function.
-    builtin,
+    builtin = 0xBF,
 
     /// Get the internal function kind from an internal function address.
     pub fn fromAddress(addr: *const anyopaque) InternalFunctionKind {
+        return @enumFromInt(@as(*const u8, @ptrCast(addr)).*);
+    }
+};
+
+/// Describes the kind of a `BuiltinAddress`. This enumeration overlaps with `InternalFunctionKind`.
+/// It allows `data` and `function` builtins, where the `function` variant has the same bit identity as `InternalFunctionKind.builtin`,
+/// ensuring that checks using it still work as expected.
+pub const BuiltinKind = enum(u8) {
+    /// A data buffer.
+    data = 0xBD,
+    /// A function pointer.
+    function = 0xBF,
+
+    /// Get the builtin kind from a builtin address.
+    pub fn fromAddress(addr: *const anyopaque) BuiltinKind {
         return @enumFromInt(@as(*const u8, @ptrCast(addr)).*);
     }
 };
@@ -449,46 +464,54 @@ pub const Function = extern struct {
 pub const BuiltinAddress = packed struct {
     /// Static marker differentiating bytecode and builtin functions.
     /// * This must remain as the first field and must not be mutated.
-    kind: InternalFunctionKind = .builtin,
+    kind: BuiltinKind,
     /// The builtin is a data buffer.
-    data: Buffer.MutBytes,
+    data: Buf,
 
-    /// Create a `BuiltinAddress` from an opaque pointer.
+    /// The data buffer type used by builtins. Essentially an untyped byte slice with known layout.
+    pub const Buf = Buffer.of(u8, .constant);
+
+    /// Create a data `BuiltinAddress` from an opaque pointer.
     pub fn fromPointer(pointer: *const anyopaque, len: u64) BuiltinAddress {
-        return .{ .data = .{ .ptr = @intFromPtr(pointer), .len = len } };
+        return .{ .kind = .data, .data = .{ .ptr = @intFromPtr(pointer), .len = len } };
     }
 
-    /// Create a `BuiltinAddress` from a buffer.
-    pub fn fromBuffer(data: Buffer.MutBytes) BuiltinAddress {
-        return .{ .data = data };
+    /// Create a data `BuiltinAddress` from a buffer.
+    pub fn fromBuffer(data: Buf) BuiltinAddress {
+        return .{ .kind = .data, .data = data };
     }
 
-    /// Create a `BuiltinAddress` from a slice.
-    pub fn fromSlice(data: Buffer.MutBytes.SliceType) BuiltinAddress {
-        return .{ .data = .fromSlice(data) };
+    /// Create a data `BuiltinAddress` from a slice.
+    pub fn fromSlice(data: Buf.SliceType) BuiltinAddress {
+        return .{ .kind = .data, .data = .fromSlice(data) };
     }
 
-    /// Bitcast a `BuiltinAddress` to an opaque pointer.
+    /// Create a function `BuiltinAddress` from a pointer.
+    pub fn fromFunction(fnPtr: *const BuiltinFunction) BuiltinAddress {
+        return .{ .kind = .function, .data = .{ .ptr = @intFromPtr(fnPtr), .len = 0 } };
+    }
+
+    /// Convert a `BuiltinAddress` to an opaque pointer.
     /// * Cannot perform type checking
     pub fn asPointer(self: BuiltinAddress) *const anyopaque {
         return @ptrFromInt(self.data.ptr);
     }
 
-    /// Bitcast a `BuiltinAddress` to a function pointer.
+    /// Convert a `BuiltinAddress` to a function pointer.
     /// * Cannot perform type checking
     pub fn asFunction(self: BuiltinAddress) *const BuiltinFunction {
         return @ptrFromInt(self.data.ptr);
     }
 
-    /// Bitcast a `BuiltinAddress` to a function pointer.
+    /// Extract the inner `Buffer` of a BuiltinAddress, discarding its `kind`.
     /// * Cannot perform type checking
-    pub fn asBuffer(self: BuiltinAddress) Buffer.MutBytes {
+    pub fn asBuffer(self: BuiltinAddress) Buf {
         return self.data;
     }
 
-    /// Bitcast a `BuiltinAddress` to a function pointer.
+    /// Convert a `BuiltinAddress` to a function pointer.
     /// * Cannot perform type checking
-    pub fn asSlice(self: BuiltinAddress) Buffer.MutBytes.SliceType {
+    pub fn asSlice(self: BuiltinAddress) Buf.SliceType {
         return self.data.asSlice();
     }
 };
@@ -918,31 +941,51 @@ pub const CallFrame = extern struct {
     output: Register,
 };
 
+/// Zig versions of `BuiltinSignal`s that can be returned by a built-in function or assembly code.
+pub const BuiltinSignalError = error{
+    // The built-in function is cancelling a computation it was prompted by.
+    cancel,
+
+    // Misc signals
+
+    /// An unexpected error has occurred in a built-in function; runtime should panic.
+    panic,
+
+    /// Indicates that a guest function call requested the runtime to trap.
+    request_trap,
+};
+
 /// Signals that can be returned by a built-in function / assembly code.
 pub const BuiltinSignal = enum(i64) {
     // Nominal signals
 
     /// The built-in function is finished and returning a value.
     @"return" = 0,
-
     // The built-in function is cancelling a computation it was prompted by.
     cancel = 1,
 
     // Misc signals
+
+    /// Indicates that a guest function call requested the runtime to trap.
+    request_trap = std.math.minInt(i64),
 
     /// An unexpected error has occurred in a built-in function; runtime should panic.
     panic = std.math.maxInt(i64),
 
     // Standard errors
 
-    /// The built-in function has encountered an error and would like to trap the fiber at this point.
-    request_trap = -1,
-
-    /// The built-in function has encountered a stack overflow.
-    overflow = -2,
-
-    /// The built-in function has encountered a stack overflow.
-    underflow = -3,
+    /// Indicates that a guest function call reached an invalid state.
+    @"unreachable" = -1,
+    /// Indicates that a built-in function call requested the fiber to trap.
+    function_trapped = -2,
+    /// Indicates that the interpreter encountered an invalid encoding.
+    bad_encoding = -3,
+    /// Indicates an overflow of one of the stacks in a fiber.
+    overflow = -4,
+    /// Indicates an underflow of one of the stacks in a fiber.
+    underflow = -5,
+    /// Indicates that a guest function attempted to call a missing effect handler.
+    missing_evidence = -6,
 };
 
 /// The type of procedures that can operate as "built-in" functions
