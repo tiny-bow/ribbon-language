@@ -801,3 +801,189 @@ test "mem_copy with zero size is a no-op" {
     // The result should be the original destination value, not the source value.
     try testing.expectEqual(@as(u64, 0x11111111_11111111), result);
 }
+
+// --- Helpers for builtin tests ---
+
+fn simpleBuiltin(fiber: *core.mem.FiberHeader) callconv(.C) core.BuiltinSignal {
+    // Return 555 in the designated return register.
+    const regs = fiber.registers.top();
+    regs[core.Register.native_ret.getIndex()] = 555;
+    return .@"return";
+}
+
+fn trapBuiltin(fiber: *core.mem.FiberHeader) callconv(.C) core.BuiltinSignal {
+    _ = fiber;
+    return .request_trap;
+}
+
+// This function gets called by bytecode, and it in turn calls other bytecode.
+fn interlacedBuiltin(fiber_header: *core.mem.FiberHeader) callconv(.C) core.BuiltinSignal {
+    const fiber = core.Fiber{ .header = fiber_header };
+
+    // Get the arguments passed to this builtin from its registers.
+    const builtin_regs = fiber.header.registers.top();
+    const arg_for_target = builtin_regs[core.Register.r0.getIndex()];
+    const target_fn_id_int = builtin_regs[core.Register.r1.getIndex()];
+    const target_fn_id = core.FunctionId.fromInt(target_fn_id_int);
+
+    // The current function is the builtin itself. To find the bytecode world,
+    // we need to go one level down the call stack to the bytecode function that called us.
+    const caller_call_frame: *core.CallFrame = @ptrCast(fiber.header.calls.top_ptr - 1);
+    const bc_function = @as(*const core.Function, @ptrCast(@alignCast(caller_call_frame.function)));
+
+    // Look up the target function in the header of the calling bytecode function.
+    const target_function = bc_function.header.get(target_fn_id);
+
+    // Invoke the target bytecode function.
+    const result = interpreter.invokeBytecode(fiber, target_function, &.{arg_for_target}) catch {
+        // On error, return a sentinel value.
+        builtin_regs[core.Register.native_ret.getIndex()] = 0xDEADBEEF;
+        return .@"return";
+    };
+
+    // Put the result into our return register.
+    builtin_regs[core.Register.native_ret.getIndex()] = result;
+
+    return .@"return";
+}
+
+test "interpreter builtin data access" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    // 1. Create a builtin data entry
+    const builtin_data_id = try tb.createHeaderEntry(.builtin, "my_builtin_data");
+    const test_data = "hello";
+    try tb.bindBuiltinData(builtin_data_id, .fromSlice(test_data));
+
+    // 2. Create the main function that accesses it
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    var entry_block = try main_fn.createBlock();
+
+    // r0 = &my_builtin_data
+    try entry_block.instrAddrOf(.addr_b, .r0, builtin_data_id);
+    // r1 = *r0 (load first byte)
+    try entry_block.instr(.load8, .{ .Rx = .r1, .Ry = .r0, .I = 0 });
+    // return r1
+    try entry_block.instrTerm(.@"return", .{ .R = .r1 });
+
+    // 3. Encode and run
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = try interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectEqual(@as(u64, 'h'), result);
+}
+
+test "interpreter builtin function usage" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    // 1. Bind the native Zig function
+    const builtin_fn_id = try tb.createHeaderEntry(.builtin, "simpleBuiltin");
+    try tb.bindBuiltinFunction(builtin_fn_id, simpleBuiltin);
+
+    // 2. Create main function to call it
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    var entry_block = try main_fn.createBlock();
+
+    // Call the builtin, result in r0
+    try entry_block.instrCall(.call_c, .{ .R = .r0, .F = builtin_fn_id.cast(core.Function), .I = 0 }, .fromSlice(&.{}));
+    // Return r0
+    try entry_block.instrTerm(.@"return", .{ .R = .r0 });
+
+    // 3. Encode and run
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = try interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectEqual(@as(u64, 555), result);
+}
+
+test "interpreter interlaced bytecode->builtin->bytecode noneffectful" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    // The function that will be called *by* the builtin
+    const callee_id = try tb.createHeaderEntry(.function, "callee");
+    var callee_fn = try tb.createFunctionBuilder(callee_id);
+    var callee_entry = try callee_fn.createBlock();
+    // Takes one arg in r0, adds 100 to it, and returns.
+    try callee_entry.instrWide(.bit_copy64c, .{ .R = .r1 }, 100);
+    try callee_entry.instr(.i_add64, .{ .Rx = .r0, .Ry = .r0, .Rz = .r1 });
+    try callee_entry.instrTerm(.@"return", .{ .R = .r0 });
+
+    // The builtin function
+    const builtin_id = try tb.createHeaderEntry(.builtin, "interlacedBuiltin");
+    try tb.bindBuiltinFunction(builtin_id, interlacedBuiltin);
+
+    // Main function to start the chain
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    var main_entry = try main_fn.createBlock();
+    // Arg for the builtin -> callee
+    try main_entry.instrWide(.bit_copy64c, .{ .R = .r0 }, 42);
+    // ID of the callee function for the builtin
+    try main_entry.instrWide(.bit_copy64c, .{ .R = .r1 }, callee_id.toInt());
+    // Call the builtin, result in r0
+    try main_entry.instrCall(.call_c, .{ .R = .r0, .F = builtin_id.cast(core.Function), .I = 2 }, .fromSlice(&.{ .r0, .r1 }));
+    try main_entry.instrTerm(.@"return", .{ .R = .r0 });
+
+    // Encode and run
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = try interpreter.invokeBytecode(fiber, function, &.{});
+    // Expected: interlacedBuiltin(42, callee_id) -> callee(42) -> 42 + 100 -> 142
+    try testing.expectEqual(@as(u64, 142), result);
+}
+
+test "builtin function requests trap" {
+    const allocator = testing.allocator;
+
+    var tb = bytecode.TableBuilder.init(allocator, null);
+    defer tb.deinit();
+
+    // 1. Bind the trapping native Zig function
+    const builtin_fn_id = try tb.createHeaderEntry(.builtin, "trapBuiltin");
+    try tb.bindBuiltinFunction(builtin_fn_id, trapBuiltin);
+
+    // 2. Create main function to call it
+    const main_id = try tb.createHeaderEntry(.function, "main");
+    var main_fn = try tb.createFunctionBuilder(main_id);
+    var entry_block = try main_fn.createBlock();
+
+    try entry_block.instrCall(.call_c, .{ .R = .r0, .F = builtin_fn_id.cast(core.Function), .I = 0 }, .fromSlice(&.{}));
+    try entry_block.instrTerm(.halt, .{}); // Should not be reached
+
+    // 3. Encode and run
+    var table = try tb.encode(allocator);
+    defer table.deinit();
+
+    const function = table.bytecode.header.get(main_id);
+    const fiber = try core.Fiber.init(allocator);
+    defer fiber.deinit(allocator);
+
+    const result = interpreter.invokeBytecode(fiber, function, &.{});
+    try testing.expectError(error.FunctionTrapped, result);
+}
