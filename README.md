@@ -27,20 +27,7 @@
 
 This is the primary repo for the [Ribbon Programming Language](https://ribbon-lang.com/) toolchain. The repo contains the bytecode vm, intermediate representation, compiler, frontend, and other core components. This is a community-focused, [Apache 2.0 Licensed](./LICENSE) open-source project. It is under the stewardship of [Tiny Bow](https://tinybow.org), a nonprofit organization founded with the primary goal of supporting open-source, extensible software within the Ribbon ecosystem.
 
-We're building Ribbon to be a new home for:
-* Systems programmers who want modern type safety.
-* Language designers looking for a powerful meta-programming toolkit.
-* Game developers and others needing predictable, realtime performance in their modding and scripting systems.
-
-To serve these creators, Ribbon provides:
-* **Fine-grained Performance:** Zero GC, composable tracked allocation, and tracked thread affinity.
-* **Deep Extensibility:** LISP-inspired toolkit for creating domain-specific solutions.
-* **Modern Type Systems:** Strong static typing with full inference for safety and flexibility.
-
-Ribbon is an embeddable programming language, designed to resolve the long-standing tension between high-level developer experience and low-level systems access. It combines influences from the latest in academic research and industry practice to offer performance without sacrificing usability. It is designed for building and extending realtime applications like games and data analytics tools, as well as providing a language-design toolkit for DSLs and academic pursuits.
-
 We are in a focused development phase, with a `0.1.0` release targeted for **Q4 2025**. This first major release will deliver a feature-complete bytecode compiler and interpreter. This will establish the foundational baseline for building the Ribbon ecosystem. From this point forward, API stability as well as the JIT and native backends will become the primary focal points of compiler development. This will allow development of the standard library to begin in earnest and enable the community to create the first experimental applications.
-
 
 
 ### Contents
@@ -54,9 +41,7 @@ We are in a focused development phase, with a `0.1.0` release targeted for **Q4 
     * [Dynamic Meta-Language](#dynamic-meta-language)
     * [Object Notation Language](#object-notation-language)
 * [Building from Source](#building-from-source)
-    * [Notes](#notes)
 * [Source Overview](#source-overview)
-    * [Generated Files](#generated-files)
 * [Contributing](#contributing)
     * [Discussion](#discussion)
     * [Design](#design)
@@ -68,7 +53,19 @@ We are in a focused development phase, with a `0.1.0` release targeted for **Q4 
 
 ### What is Ribbon?
 
-A core tenet of Ribbon's design philosophy is the notion that syntax is secondary to semantics. To truly understand Ribbon, it's best to see how its core features work in concert; from modern typing concepts like structural polymorphism and algebraic effects to systems-level control over memory. These concepts have been carefully fused through a long pre-production period of iterative design and research to create a developer experience that is both expressive and precise. The following example illustrates this integrated design, providing a high-level picture of the language before we dive into the specific mechanics.
+Ribbon is an embeddable programming language, designed to resolve the long-standing tension between high-level developer experience and low-level systems access. It combines influences from the latest in academic research and industry practice to offer performance without sacrificing usability. It is designed for building and extending realtime applications like games and data analytics tools, as well as providing a language-design toolkit for DSLs and academic pursuits.
+
+We're building Ribbon to be a new home for:
+* Systems programmers who want modern type safety.
+* Language designers looking for a powerful meta-programming toolkit.
+* Game developers and others needing predictable, realtime performance in their modding and scripting systems.
+
+To serve these creators, Ribbon provides:
+* **Fine-grained Performance:** Zero GC, composable tracked allocation, and tracked thread affinity.
+* **Deep Extensibility:** LISP-inspired toolkit for creating domain-specific solutions.
+* **Modern Type Systems:** Strong static typing with full inference for safety and flexibility.
+
+A core tenet of Ribbon's design philosophy is the notion that syntax is secondary to semantics. To truly understand Ribbon, it's best to see how its core features work in concert; from modern typing concepts like structural polymorphism and algebraic effects to systems-level control over memory. These concepts have been carefully fused through a long pre-production period of iterative design and research to create a developer experience that is both expressive and precise.
 
 Ribbon's design makes abstract concepts like side effects, data shape, and operational capabilities first-class citizens of its type system. This approach aims to resolve the long-standing tension between a high-level developer experience and the fine-grained control required for systems programming. It gives developers powerful tools for abstraction without sacrificing the performance, predictability, and low-level memory control essential for realtime applications like games and data analytics tools.
 
@@ -87,7 +84,7 @@ find_closest := fun(point: any P, items: List (any T)) -> T | { Error Str }
             ;; ...
 ```
 
-This example showcases some of Ribbon's core strengths. The signature `where T: { pos: P, .. }` demonstrates **structural polymorphism**, allowing the function to work on any struct `T` that has a `pos` field of some type `P`. The constraint `where Dist P` is a **type class**, ensuring that the position's type `P` has a `distance` function available. The `| { Error String }` annotation is Ribbon's **side effect tracking** in action, making the potential for an error an explicit part of the function's contract that the type system will enforce is handled. Bringing it all together, all of the types shown here can be inferred automatically, wherever desired.
+This example showcases some of Ribbon's core strengths. The signature `where T: { pos: P, .. }` demonstrates [structural polymorphism](#structural-polymorphism), allowing the function to work on any struct `T` that has a `pos` field of some type `P`. The constraint `where Dist P` is a [type class](#type-classes), ensuring that the position's type `P` has a `distance` function available. The `| { Error String }` annotation is Ribbon's [side effect tracking](#side-effect-tracking) in action, making the potential for an error an explicit part of the function's contract that the type system will enforce is handled. Bringing it all together, all of the types shown here can be *fully inferred*, wherever desired.
 
 The `find_closest` example offers a glimpse into how Ribbon composes its foundational features into a cohesive whole. It shows how you can write code that is simultaneously generic, type-safe, and explicit about its side effects. To fully unpack this, the following sections will explore each of these core concepts in detail. We ask that you keep in mind that while the syntax shown is a work in progress presented for illustration, the primary focus is on the design of the developer experience and the powerful semantics these systems enable.
 
@@ -405,17 +402,19 @@ The driver (`zig build run`) as of now just parses code and prints the AST back 
 
 ### Source Overview
 
-* [Core Internals (Fiber, etc)](./src/mod/core.zig) - Defines the Ribbon runtime core; the vm execution fiber, the bytecode definition structure, etc.
-* [Bytecode Utilities](./src/mod/bytecode.zig) - Disassembler, higher level utilities for working with bytecodes.
-* [Lexical & Syntactic Utilities](./src/mod/source.zig) - Source tracking structures, abstract lexer and parser.
-* [Core X64 Target Abstractions](./src/mod/x64/) - Basic ABI abstraction and machine code assembly API.
-* [Instruction Specification Architecture](./src/gen-base/zig/isa.zig) - Specifies the bytecode instruction encoding using comptime-accessible Zig data. Source of truth for generated files.
-* [Reference Bytecode Interpreter](./src/mod/interpreter.zig) - The Zig-language implementation of the bytecode interpretation logic and minimal API.
+* [Common Utilities](./src/common.zig) - Zig utilties not specific to Ribbon.
+* [Core Internals (Fiber, etc)](./src/mod/core.zig) - Defines the Ribbon runtime core: the vm execution fiber, the bytecode definition, etc.
+* [X64 Target Abstractions](./src/mod/x64/) - Basic ABI abstraction and early implementation sketches for the machine code assembly API.
+* [Binary Utilities](./src/mod/binary.zig) - Encoder, relative address map, and other memory level utilities for assembling machine code, bytecode, and data.
+* [Bytecode Utilities](./src/mod/bytecode.zig) - Disassembler, builder, and other higher level utilities for working with bytecodes.
 * [SoN/SSA Hybrid Intermediate Representation](./src/mod/ir.zig) - Ribbon's backend IR; a graph-based representation of source code already semantically analyzed by frontends.
+* [Lexical & Syntactic Utilities](./src/mod/source.zig) - Source tracking structures, abstract lexer and parser.
+* [Reference Bytecode Interpreter](./src/mod/interpreter.zig) - The Zig-language reference implementation of the bytecode interpretation logic and minimal host interface for execution on a Fiber.
 * [Backend & Bytecode Target](./src/mod/backend.zig) - Handles the conversion from the IR to bytecode and other backend tasks.
 * [Meta-Language Frontend](./src/mod/meta_language.zig) - Meta-language specific parser, analysis, and data types.
-* [Build-time Zig, ASM & Markdown Codegen Facilities](./src/bin/tools/gen.zig) - Uses [`isa.zig`](./src/gen-base/zig/isa.zig) to generate various source files for the Ribbon toolchain & documentation.
 * [Driver Stub](./src/bin/main.zig) - Work-in-progress. A REPL interface is available (though the 'E' for 'Eval' is still on the way!).
+* [Instruction Specification Architecture](./src/gen-base/zig/isa.zig) - Specifies the bytecode instruction encoding using comptime-accessible Zig data. Source of truth for generated files.
+* [Build-time Zig, ASM & Markdown Codegen Facilities](./src/bin/tools/gen.zig) - Uses [`isa.zig`](./src/gen-base/zig/isa.zig) to generate various source files for the Ribbon toolchain & documentation.
 
 
 #### Generated Files
@@ -488,3 +487,8 @@ Small fixes and patch PRs (such as typo corrections, documentation improvements,
 #### Sponsorship
 
 If you share our vision for a new era of extensible, high-performance software, consider supporting Ribbon through [GitHub Sponsors](https://github.com/sponsors/tiny-bow). Your sponsorship directly fuels our mission to build Ribbon as an open-source language and realtime software engine; combining performance, safety, and deep extensibility for creators, game developers, and platform builders. Financial support directly contributes to the community in establishing and maintaining our non-profit foundation, providing essential community infrastructure, and dedicating focused lead-developer time, as well as in the creation of accessible learning resources.
+
+<br>
+<hr>
+<br>
+<div align="center">💝</div>
