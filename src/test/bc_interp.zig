@@ -847,41 +847,6 @@ fn interlacedBuiltin(fiber_header: *core.mem.FiberHeader) callconv(.C) core.Buil
     return .@"return";
 }
 
-test "interpreter builtin data access" {
-    const allocator = testing.allocator;
-
-    var tb = bytecode.TableBuilder.init(allocator, null);
-    defer tb.deinit();
-
-    // 1. Create a builtin data entry
-    const builtin_data_id = try tb.createHeaderEntry(.builtin, "my_builtin_data");
-    const test_data = "hello";
-    try tb.bindBuiltinDataBuffer(builtin_data_id, test_data);
-
-    // 2. Create the main function that accesses it
-    const main_id = try tb.createHeaderEntry(.function, "main");
-    var main_fn = try tb.createFunctionBuilder(main_id);
-    var entry_block = try main_fn.createBlock();
-
-    // r0 = &my_builtin_data
-    try entry_block.instrAddrOf(.addr_b, .r0, builtin_data_id);
-    // r1 = *r0 (load first byte)
-    try entry_block.instr(.load8, .{ .Rx = .r1, .Ry = .r0, .I = 0 });
-    // return r1
-    try entry_block.instrTerm(.@"return", .{ .R = .r1 });
-
-    // 3. Encode and run
-    var table = try tb.encode(allocator);
-    defer table.deinit();
-
-    const function = table.bytecode.header.get(main_id);
-    const fiber = try core.Fiber.init(allocator);
-    defer fiber.deinit(allocator);
-
-    const result = try interpreter.invokeBytecode(fiber, function, &.{});
-    try testing.expectEqual(@as(u64, 'h'), result);
-}
-
 test "interpreter builtin function usage" {
     const allocator = testing.allocator;
 

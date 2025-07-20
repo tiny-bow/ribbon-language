@@ -444,13 +444,11 @@ pub const Function = extern struct {
     layout: Layout,
 };
 
-/// A Ribbon builtin value definition; two words, bit packed.
+/// A Ribbon host-builtin function definition; two words, bit packed.
 ///
-/// The first 8 bits indicate the kind of builtin this is.
+/// The first 8 bits indicate the kind of function this is. This is always `InternalFunctionKind.builtin`; it is used by the interpreter to disambiguate internal calls.
 ///
-/// The remaining 56 bits of this first word contain the address:
-/// * A function pointer
-/// * A data pointer
+/// The remaining 56 bits of this first word contain the function address.
 ///
 /// The next word optionally contains 64 bits of additional data:
 /// * Functional builtins may attach an additional pointer, to its closure data. This is the first pointer passed to `BuiltinFunction` calls.
@@ -460,7 +458,7 @@ pub const Function = extern struct {
 /// ### ABI note
 /// We use the host platform's C ABI calling convention for builtin functions, for two purposes.
 ///
-/// Because we must specify a calling convention in order to implement the interface between the vm and the jit;
+/// First, we must specify a calling convention in order to implement the interface between the vm and the jit;
 /// Using the same one here allows us to compile to builtin functions from the jit, simplifying the implementation.
 ///
 /// Additionally, this gives access to a kind of runtime *arity polymorphism*:
@@ -483,10 +481,10 @@ pub const Function = extern struct {
 /// The callee does not have additional responsibilites under this extended signature.
 pub const Builtin = packed struct(u128) {
     /// The kind of builtin this is.
-    /// * This must come first, as we allow taking the address of static values in the VM.
+    /// * This must come first and must not be mutated, as we allow taking the address of static values in the VM.
     ///   In order to disambiguate these addresses' types later (ie, builtin vs bytecode),
     ///   we inspect the first byte of the address. See also `core.Function.kind`.
-    kind: Kind,
+    kind: InternalFunctionKind = .builtin,
     /// The actual address of the builtin function or data buffer.
     addr: u56,
     /// The builtin is a data buffer.
@@ -496,8 +494,6 @@ pub const Builtin = packed struct(u128) {
     pub const SignalError = error{
         // The built-in function is cancelling a computation it was prompted by.
         cancel,
-
-        // Misc signals
 
         /// An unexpected error has occurred in a built-in function; runtime should panic.
         panic,
@@ -555,45 +551,13 @@ pub const Builtin = packed struct(u128) {
     /// See `Builtin` for detailed documentation on builtin usage, construction, and lifecycle.
     pub const Closure = fn (fiber: *mem.FiberHeader, local_state: ?*const anyopaque) callconv(.c) Signal;
 
-    /// Describes the kind of a `Builtin`. This enumeration overlaps with `InternalFunctionKind`.
-    /// It allows `data` and `function` builtins, where the `function` variant has the same bit identity as `InternalFunctionKind.builtin`,
-    /// ensuring that checks using it still work as expected.
-    pub const Kind = enum(std.meta.Tag(InternalFunctionKind)) {
-        /// A data buffer.
-        data = 0xBD,
-        /// A function pointer.
-        function = @intFromEnum(InternalFunctionKind.builtin),
-
-        /// Get the builtin kind from a builtin address.
-        pub fn fromAddress(addr: anytype) Kind {
-            return @enumFromInt(@as(*const u8, @ptrCast(addr)).*);
-        }
-    };
-
-    /// Create a data `Builtin` from a byte pointer and a byte length.
-    pub fn fromDataComponents(ptr: [*]const u8, len: u64) Builtin {
-        return Builtin{
-            .kind = .data,
-            .addr = @intCast(@intFromPtr(ptr)),
-            .extra = len,
-        };
-    }
-
-    /// Create a `Builtin` from a value data pointer.
-    pub fn fromDataPointer(ptr: anytype) Builtin {
-        const T = @typeInfo(@TypeOf(ptr)).pointer.child;
-        return fromDataComponents(@ptrCast(ptr), @sizeOf(T));
-    }
-
-    /// Create a `Builtin` from a data buffer slice.
-    pub fn fromDataBuffer(slice: anytype) Builtin {
-        const T = @typeInfo(@TypeOf(slice)).pointer.child;
-        return fromDataComponents(slice.ptr, slice.len * @sizeOf(T));
-    }
-
     /// Create a `Builtin` from a procedure pointer.
     pub fn fromProcedure(ptr: *const Procedure) Builtin {
-        return fromClosure(@as(*const Closure, @ptrCast(ptr)), @as(?*const anyopaque, null));
+        return Builtin{
+            .kind = .builtin,
+            .addr = @intCast(@intFromPtr(ptr)),
+            .extra = 0, // No local state for procedures
+        };
     }
 
     /// Create a `Builtin` from a closure.
@@ -631,39 +595,13 @@ pub const Builtin = packed struct(u128) {
         }
 
         return Builtin{
-            .kind = .function,
             .addr = @intCast(@intFromPtr(ptr)),
             .extra = @intCast(@intFromPtr(local_state)),
         };
     }
 
-    /// Create a pointer view of this `Builtin` as single value data.
-    /// * Does not perform kind-validation outside of safe modes.
-    /// * Does not inspect length: A non-zero-length buffer is a valid input.
-    pub fn asPointer(self: *const Builtin) *const anyopaque {
-        std.debug.assert(self.kind == .data);
-
-        // The address is stored in the first 56 bits of the `addr` field.
-        return @ptrFromInt(self.addr);
-    }
-
-    /// Create a buffer view of this `Builtin` as data.
-    /// * Does not perform kind-validation outside of safe modes.
-    /// * Does not inspect length: A zero-length buffer is a valid input.
-    pub fn asBuffer(self: *const Builtin) []const u8 {
-        std.debug.assert(self.kind == .data);
-
-        const base: [*]const u8 = @ptrFromInt(self.addr);
-
-        return base[0..self.extra];
-    }
-
-    /// Invoke this `Builtin` as a closure on the provided fiber.
-    /// * Does not perform kind-validation outside of safe modes.
-    /// * See type-level documentation for information on the abi safety of this operation.
+    /// Invoke this `Builtin` on the provided fiber.
     pub fn invoke(self: *const Builtin, fiber: *mem.FiberHeader) Signal {
-        std.debug.assert(self.kind == .function);
-
         const func: *const Closure = @ptrFromInt(self.addr);
 
         return func(fiber, @ptrFromInt(self.extra));

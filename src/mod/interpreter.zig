@@ -917,7 +917,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
 
             const builtin: *const core.Builtin = current.function.header.get(builtinId);
 
-            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(builtin.asPointer());
+            current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(builtin);
 
             continue :dispatch try state.step(self);
         },
