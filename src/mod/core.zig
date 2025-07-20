@@ -581,8 +581,8 @@ pub const Builtin = packed struct(u128) {
                 @compileError("core.Builtin.fromClosure: Expected a zig function with exactly two parameters, got " ++ @typeName(F));
             }
 
-            if (params[0].type != *mem.FiberHeader and params[0].type != *core.Fiber) {
-                @compileError("core.Builtin.fromClosure: Expected a zig function with a first parameter of `*core.Fiber` or `*core.mem.FiberHeader`, got " ++ @typeName(F));
+            if (params[0].type != *core.Fiber) {
+                @compileError("core.Builtin.fromClosure: Expected a zig function with a first parameter of type `*core.Fiber`, got " ++ @typeName(F));
             }
 
             if (params[1].type != S) {
