@@ -34,6 +34,31 @@ pub fn disas(mem: common.VirtualMemory, options: assembler.DisassemblerOptions, 
     return assembler.disas(mem, options, writer);
 }
 
+/// A `BuiltinFunction`, but compiled at runtime.
+///
+/// Can be called within a `Fiber` using the `interpreter.invokeBuiltin` family of functions.
+///
+/// This is primarily a memory management structure,
+/// as the jit is expected to disown the memory upon finalization.
+pub const AllocatedBuiltinFunction = extern struct {
+    /// The function's bytes.
+    ptr: [*]align(common.PAGE_SIZE) const u8,
+    /// The function's length in bytes.
+    ///
+    /// Note that this is not necessarily the length of the mapped memory, as it is page aligned.
+    len: u64,
+
+    /// `munmap` all pages of a native function, freeing the memory.
+    pub fn deinit(self: AllocatedBuiltinFunction) void {
+        std.posix.munmap(@alignCast(self.ptr[0..common.alignTo(self.len, common.PAGE_SIZE)]));
+    }
+
+    /// Get the function's machine code as a slice.
+    pub fn toSlice(self: AllocatedBuiltinFunction) []align(common.PAGE_SIZE) const u8 {
+        return self.ptr[0..self.len];
+    }
+};
+
 /// Machine code function builder. `x64`
 pub const Builder = struct {
     /// The x64 encoder used to generate machine code.
@@ -72,10 +97,10 @@ pub const Builder = struct {
     ///
     /// ### Panics
     /// + If the OS does not allow `mprotect` with `READ | WRITE`
-    pub fn finalize(self: *Builder) Error!core.AllocatedBuiltinFunction {
+    pub fn finalize(self: *Builder) Error!AllocatedBuiltinFunction {
         const mem = try self.encoder.writer.finalize(.read_execute);
 
-        return core.AllocatedBuiltinFunction{
+        return AllocatedBuiltinFunction{
             .ptr = mem.ptr,
             .len = mem.len,
         };
@@ -121,7 +146,7 @@ pub const Builder = struct {
             try self.encoder.store(.native_ret);
         }
 
-        try self.encoder.imm(@bitCast(@intFromEnum(core.BuiltinSignal.@"return")));
+        try self.encoder.imm(@bitCast(@intFromEnum(core.Builtin.Signal.@"return")));
         try self.encoder.ret();
     }
 

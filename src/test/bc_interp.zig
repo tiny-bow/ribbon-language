@@ -804,20 +804,20 @@ test "mem_copy with zero size is a no-op" {
 
 // --- Helpers for builtin tests ---
 
-fn simpleBuiltin(fiber: *core.mem.FiberHeader) callconv(.C) core.BuiltinSignal {
+fn simpleBuiltin(fiber: *core.mem.FiberHeader) callconv(.C) core.Builtin.Signal {
     // Return 555 in the designated return register.
     const regs = fiber.registers.top();
     regs[core.Register.native_ret.getIndex()] = 555;
     return .@"return";
 }
 
-fn trapBuiltin(fiber: *core.mem.FiberHeader) callconv(.C) core.BuiltinSignal {
+fn trapBuiltin(fiber: *core.mem.FiberHeader) callconv(.C) core.Builtin.Signal {
     _ = fiber;
     return .request_trap;
 }
 
 // This function gets called by bytecode, and it in turn calls other bytecode.
-fn interlacedBuiltin(fiber_header: *core.mem.FiberHeader) callconv(.C) core.BuiltinSignal {
+fn interlacedBuiltin(fiber_header: *core.mem.FiberHeader) callconv(.C) core.Builtin.Signal {
     const fiber = core.Fiber{ .header = fiber_header };
 
     // Get the arguments passed to this builtin from its registers.
@@ -856,7 +856,7 @@ test "interpreter builtin data access" {
     // 1. Create a builtin data entry
     const builtin_data_id = try tb.createHeaderEntry(.builtin, "my_builtin_data");
     const test_data = "hello";
-    try tb.bindBuiltinData(builtin_data_id, .fromSlice(test_data));
+    try tb.bindBuiltinDataBuffer(builtin_data_id, test_data);
 
     // 2. Create the main function that accesses it
     const main_id = try tb.createHeaderEntry(.function, "main");
@@ -890,7 +890,7 @@ test "interpreter builtin function usage" {
 
     // 1. Bind the native Zig function
     const builtin_fn_id = try tb.createHeaderEntry(.builtin, "simpleBuiltin");
-    try tb.bindBuiltinFunction(builtin_fn_id, simpleBuiltin);
+    try tb.bindBuiltinProcedure(builtin_fn_id, simpleBuiltin);
 
     // 2. Create main function to call it
     const main_id = try tb.createHeaderEntry(.function, "main");
@@ -931,7 +931,7 @@ test "interpreter interlaced bytecode->builtin->bytecode noneffectful" {
 
     // The builtin function
     const builtin_id = try tb.createHeaderEntry(.builtin, "interlacedBuiltin");
-    try tb.bindBuiltinFunction(builtin_id, interlacedBuiltin);
+    try tb.bindBuiltinProcedure(builtin_id, interlacedBuiltin);
 
     // Main function to start the chain
     const main_id = try tb.createHeaderEntry(.function, "main");
@@ -966,7 +966,7 @@ test "builtin function requests trap" {
 
     // 1. Bind the trapping native Zig function
     const builtin_fn_id = try tb.createHeaderEntry(.builtin, "trapBuiltin");
-    try tb.bindBuiltinFunction(builtin_fn_id, trapBuiltin);
+    try tb.bindBuiltinProcedure(builtin_fn_id, trapBuiltin);
 
     // 2. Create main function to call it
     const main_id = try tb.createHeaderEntry(.function, "main");
@@ -986,4 +986,70 @@ test "builtin function requests trap" {
 
     const result = interpreter.invokeBytecode(fiber, function, &.{});
     try testing.expectError(error.FunctionTrapped, result);
+}
+
+test "bytecode prompts simple builtin effect handler" {
+    // TODO: Have a bytecode function prompt an effect that is handled by a core.BuiltinFunction.
+
+    // Missing Feature: The bytecode.HandlerSetBuilder.bindHandler method only accepts a *bytecode.FunctionBuilder.
+    // There is no way to bind a core.BuiltinAddressId as a handler for an effect.
+
+    // Required Change: A new method `bindBuiltinHandler(effect: core.EffectId, builtin: core.BuiltinAddressId)` is needed in HandlerSetBuilder.
+    // This would allow the builder to create a core.Handler entry that points to a builtin function, which the interpreter's prompt logic already knows how to invoke.
+}
+
+test "builtin prompts simple bytecode effect handler" {
+    // TODO: A core.BuiltinFunction needs to prompt an effect that is handled by a bytecode function.
+
+    // Missing Feature: There is no public runtime API for a builtin function to trigger a prompt.
+    // This logic is currently internal to the interpreter's main run loop and is only triggered by the prompt bytecode instruction.
+
+    // Required Change: A new function in the interpreter module `promptFromBuiltin(fiber: core.Fiber, effect_id: core.EffectId, args: []const u64) !u64` is needed.
+    // This function would encapsulate the logic of finding the appropriate handler from the fiber's evidence chain and invoking it,
+    // thereby allowing builtins to participate in the effect system as prompters.
+}
+
+test "builtin function accesses closure state" {
+    // TODO: A builtin function needs to access a constructed state closure, of native data.
+
+    // Missing Feature: This scenario is blocked by two missing features. First, there is no mechanism for a builtin function to access additional state.
+    // Second, the current table builder api has no way to encode closure data along with the function's address.
+
+    // Required Change: Add additional features wherein a builtin function pointer may locate the `core.BuiltinAddress` it was located within, allowing it to access the closure state.
+    // This would require some additional checks in the interpreter to locate the function pointer in the case of such closures, because it cannot be at the root of the builtin buffer.
+}
+
+test "builtin effect handler accesses bytecode upvalues" {
+    // TODO: A bytecode function captures a local variable as an upvalue for a handler, and that handler is a builtin function that needs to access the upvalue.
+
+    // Missing Feature: This scenario is blocked by two missing features. First, the inability to bind a builtin as a handler, as described above.
+    // Second, there is no mechanism for a native builtin function to resolve an upvalue's address.
+    // The addr_u instruction, which performs this lookup for bytecode, is not available to native code.
+    // The mapping from an upvalue ID to a stack offset in the parent frame is not stored in a way that is accessible at runtime to a native function.
+
+    // Required Change: In addition to allowing builtins as handlers, the core.HandlerSet would need to store the upvalue map.
+    // A new runtime API function `getUpvalueAddress(fiber: core.Fiber, upvalue_id: core.UpvalueId) !*anyopaque`, would be
+    // required to allow a builtin to resolve an upvalue ID to a memory address within the parent's stack frame.
+}
+
+test "bytecode effect handler accesses builtin upvalues" {
+    // TODO: A builtin function needs to provide its own "local" state (e.g., native memory from the C stack or heap) as upvalues to a bytecode handler.
+
+    // Missing Feature: A builtin has no mechanism to dynamically create a HandlerSet,
+    // define upvalues that point to arbitrary native memory, and push this set onto the fiber's handler stack for a bytecode function to use.
+    // The addr_u instruction is currently implemented with exclusive access the parent bytecode function's stack frame on the fiber, not arbitrary native memory pointers provided by a builtin.
+
+    // Required Change: The work involved here is illustrated by the necessary changes for "builtin function accesses closure state."
+    // If all we want to cover is static cases, once we have a consistent methodology for attaching contextual information to builtin functions,
+    // we could extend this to allow bytecode functions access into that state via upvalues.
+    // However, we do need to also cover the dynamic case mentioned above, so extension to the fiber/interpreter logic may be necessary as well.
+}
+
+test "interlaced bytecode->builtin->bytecode execution of effectful function" {
+    // TODO: A bytecode function calls a builtin, which in turn prompts an effect that is handled by another bytecode function.
+
+    // Missing Feature: This test is blocked by the same issue as "builtin prompts simple bytecode effect handler":
+    // there is currently no way for a builtin function to programmatically initiate a prompt.
+
+    // Required Change: The same interpreter.promptFromBuiltin function proposed earlier would be needed to enable this test case.
 }

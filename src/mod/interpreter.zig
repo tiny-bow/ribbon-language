@@ -12,19 +12,6 @@ test {
     std.testing.refAllDecls(@This());
 }
 
-/// Invokes either a `core.BuiltinFunction` or `core.BuiltinAddress` on the provided fiber, returning the result.
-pub fn invokeBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: anytype, arguments: []const core.RegisterBits) core.Error!BuiltinResult {
-    const T = @TypeOf(fun);
-    // Because the allocated builtin is a packed structure with the pointer at the start, we can just truncate it.
-    // To handle both cases, we cast to the bitsize of the input first and then truncate to the output.
-    return invokeStaticBuiltin(self, evidence, @ptrFromInt(@as(u64, @truncate(@as(std.meta.Int(.unsigned, @bitSizeOf(T)), @bitCast(fun))))), arguments);
-}
-
-/// Invokes a `core.AllocatedBuiltinFunction` on the provided fiber, returning the result.
-pub fn invokeAllocatedBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: core.AllocatedBuiltinFunction, arguments: []const core.RegisterBits) core.Error!BuiltinResult {
-    return invokeStaticBuiltin(self, evidence, @ptrCast(fun.ptr), arguments);
-}
-
 /// Result of `invokeBuiltin` depends on the kind of control flow yield being performed by a builtin function;
 /// this tagged union discriminates between the two.
 pub const BuiltinResult = union(enum) {
@@ -42,13 +29,13 @@ pub const BuiltinResult = union(enum) {
 };
 
 /// Invokes a `core.BuiltinFunction` on the provided fiber, returning the result.
-pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *const core.BuiltinFunction, arguments: []const core.RegisterBits) core.Error!BuiltinResult {
+pub fn invokeBuiltin(self: core.Fiber, evidence: ?*core.Evidence, builtin: *const core.Builtin, arguments: []const core.RegisterBits) core.Error!BuiltinResult {
     if (!self.header.calls.hasSpace(1)) {
         return error.Overflow;
     }
 
     self.header.calls.push(core.CallFrame{
-        .function = @ptrCast(fun),
+        .function = @ptrCast(builtin),
         .evidence = evidence,
         .data = self.header.data.top_ptr,
         .set_frame = self.header.sets.top(),
@@ -60,7 +47,7 @@ pub fn invokeStaticBuiltin(self: core.Fiber, evidence: ?*core.Evidence, fun: *co
     const newRegisters = self.header.registers.allocPtr();
     @memcpy(newRegisters[0..arguments.len], arguments);
 
-    return switch (fun(self.header)) {
+    return switch (builtin.invoke(self.header)) {
         .cancel => {
             self.header.calls.pop();
 
@@ -288,14 +275,14 @@ fn invokeInternal(self: *core.mem.FiberHeader, current: anytype, registerId: cor
             try pushBytecodeCall(self, current.callFrame, functionPtr, null, registerId, argumentRegisterIds);
         },
         .builtin => {
-            const functionPtr: *const core.BuiltinFunction = @as(*const core.BuiltinAddress, @ptrCast(@alignCast(functionOpaquePtr))).asFunction();
+            const functionPtr: *const core.Builtin = @ptrCast(@alignCast(functionOpaquePtr));
 
             const arguments = current.tempRegisters[0..argumentRegisterIds.len];
             for (argumentRegisterIds, 0..) |reg, i| {
                 arguments[i] = current.callFrame.vregs[reg.getIndex()];
             }
 
-            const result = try invokeStaticBuiltin(.{ .header = self }, null, functionPtr, arguments);
+            const result = try invokeBuiltin(.{ .header = self }, null, functionPtr, arguments);
             switch (result) {
                 .cancel => |cancelInfo| {
                     const cancelledSet = cancelInfo.set_frame;
@@ -666,15 +653,14 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
                     try pushBytecodeCall(self, current.callFrame, functionPtr, evidencePtr, registerId, argumentRegisterIds);
                 },
                 .builtin => {
-                    const builtin: *const core.BuiltinAddress = @ptrCast(@alignCast(handler.function));
-                    const functionPtr = builtin.asFunction();
+                    const functionPtr: *const core.Builtin = @ptrCast(@alignCast(handler.function));
 
                     const arguments = current.tempRegisters[0..argumentRegisterIds.len];
                     for (argumentRegisterIds, 0..) |reg, i| {
                         arguments[i] = current.callFrame.vregs[reg.getIndex()];
                     }
 
-                    const result = try invokeStaticBuiltin(.{ .header = self }, evidencePtr, functionPtr, arguments);
+                    const result = try invokeBuiltin(.{ .header = self }, evidencePtr, functionPtr, arguments);
                     switch (result) {
                         .cancel => |cancelVal| {
                             const cancelledSet = cancelVal.set_frame;
@@ -929,7 +915,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             const builtinId = current.instruction.data.addr_b.B;
             const registerId = current.instruction.data.addr_b.R;
 
-            const builtin: *const core.BuiltinAddress = current.function.header.get(builtinId);
+            const builtin: *const core.Builtin = current.function.header.get(builtinId);
 
             current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(builtin.asPointer());
 

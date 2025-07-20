@@ -380,7 +380,7 @@ pub const Value = packed struct(u64) {
                 void => .nil,
                 *align(8) anyopaque, *align(8) const anyopaque => .foreign,
                 *align(8) core.Bytecode, *align(8) const core.Bytecode => .bytecode,
-                *align(8) core.BuiltinAddress, *align(8) const core.BuiltinAddress => .builtin,
+                *align(8) core.Builtin, *align(8) const core.Builtin => .builtin,
                 *align(8) IString, *align(8) const IString => .string,
                 *align(8) source.SyntaxTree, *align(8) const source.SyntaxTree => .cst,
                 *align(8) Expr, *align(8) const Expr => .expr,
@@ -552,7 +552,7 @@ pub const Value = packed struct(u64) {
     }
 
     /// Construct a value from a builtin address payload.
-    pub fn fromBuiltin(ptr: *core.BuiltinAddress) Value {
+    pub fn fromBuiltin(ptr: *core.Builtin) Value {
         return Value.fromObjectPointer(.builtin, @ptrCast(ptr));
     }
 
@@ -830,7 +830,7 @@ pub const Value = packed struct(u64) {
     }
 
     /// Extract the builtin address payload of a value.
-    pub fn asBuiltin(self: Value) ?*core.BuiltinAddress {
+    pub fn asBuiltin(self: Value) ?*core.Builtin {
         if (!self.isBuiltin()) return null;
 
         return @alignCast(@ptrCast(self.val_bits.forceObject()));
@@ -937,7 +937,7 @@ pub const Value = packed struct(u64) {
 
     /// Extract the builtin address payload of a value. See also `asBuiltin`.
     /// * only checked in safe modes
-    pub fn forceBuiltin(self: Value) *core.BuiltinAddress {
+    pub fn forceBuiltin(self: Value) *core.Builtin {
         std.debug.assert(self.isBuiltin());
 
         return @alignCast(@ptrCast(self.val_bits.forceObject()));

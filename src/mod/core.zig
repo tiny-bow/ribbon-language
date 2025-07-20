@@ -177,7 +177,7 @@ pub const StaticId = Id.of(anyopaque, STATIC_ID_BITS);
 pub const ConstantId = Id.of(Constant, STATIC_ID_BITS);
 pub const GlobalId = Id.of(Global, STATIC_ID_BITS);
 pub const FunctionId = Id.of(Function, STATIC_ID_BITS);
-pub const BuiltinAddressId = Id.of(BuiltinAddress, STATIC_ID_BITS);
+pub const BuiltinId = Id.of(Builtin, STATIC_ID_BITS);
 pub const ForeignAddressId = Id.of(ForeignAddress, STATIC_ID_BITS);
 pub const HandlerId = Id.of(Handler, STATIC_ID_BITS);
 pub const EffectId = Id.of(Effect, STATIC_ID_BITS);
@@ -192,7 +192,7 @@ pub fn isTypedStaticId(comptime T: type) bool {
         ConstantId,
         GlobalId,
         FunctionId,
-        BuiltinAddressId,
+        BuiltinId,
         ForeignAddressId,
         HandlerId,
         EffectId,
@@ -242,7 +242,7 @@ pub fn symbolKindFromId(comptime T: type) SymbolKind {
         ConstantId => .constant,
         GlobalId => .global,
         FunctionId => .function,
-        BuiltinAddressId => .builtin,
+        BuiltinId => .builtin,
         ForeignAddressId => .foreign_address,
         HandlerId => .handler_set,
         EffectId => .effect,
@@ -256,7 +256,7 @@ pub fn IdFromSymbolKind(comptime kind: SymbolKind) type {
         .constant => ConstantId,
         .global => GlobalId,
         .function => FunctionId,
-        .builtin => BuiltinAddressId,
+        .builtin => BuiltinId,
         .foreign_address => ForeignAddressId,
         .effect => EffectId,
         .handler_set => HandlerSetId,
@@ -427,25 +427,11 @@ pub const InternalFunctionKind = enum(u8) {
     }
 };
 
-/// Describes the kind of a `BuiltinAddress`. This enumeration overlaps with `InternalFunctionKind`.
-/// It allows `data` and `function` builtins, where the `function` variant has the same bit identity as `InternalFunctionKind.builtin`,
-/// ensuring that checks using it still work as expected.
-pub const BuiltinKind = enum(u8) {
-    /// A data buffer.
-    data = 0xBD,
-    /// A function pointer.
-    function = 0xBF,
-
-    /// Get the builtin kind from a builtin address.
-    pub fn fromAddress(addr: *const anyopaque) BuiltinKind {
-        return @enumFromInt(@as(*const u8, @ptrCast(addr)).*);
-    }
-};
-
 /// A Ribbon function definition.
 pub const Function = extern struct {
     /// Static marker differentiating bytecode and builtin functions.
-    /// * This must remain as the first field and must not be mutated.
+    /// * This must remain as the first field and must not be mutated, because we allow taking the address of static values in the VM.
+    ///   In order to disambiguate these addresses' types later (ie, builtin vs bytecode), we inspect the first byte of the address. See also `core.Builtin.kind`.
     kind: InternalFunctionKind = .bytecode,
     /// The `Header` that owns this function,
     /// which we rely on to resolve the ids encoded in the function's instructions.
@@ -458,61 +444,229 @@ pub const Function = extern struct {
     layout: Layout,
 };
 
-/// A Ribbon builtin value definition.
+/// A Ribbon builtin value definition; two words, bit packed.
 ///
-/// BuiltinAddress can be handled as either a buffer or a pointer via simple bit truncation
-pub const BuiltinAddress = packed struct {
-    /// Static marker differentiating bytecode and builtin functions.
-    /// * This must remain as the first field and must not be mutated.
-    kind: BuiltinKind,
+/// The first 8 bits indicate the kind of builtin this is.
+///
+/// The remaining 56 bits of this first word contain the address:
+/// * A function pointer
+/// * A data pointer
+///
+/// The next word optionally contains 64 bits of additional data:
+/// * Functional builtins may attach an additional pointer, to its closure data. This is the first pointer passed to `BuiltinFunction` calls.
+/// * Data builtins may attach a length value, which is the size of the data buffer in bytes.
+/// * In either case, this may be zero, indicating no additional data is present.
+///
+/// ### ABI note
+/// We use the host platform's C ABI calling convention for builtin functions, for two purposes.
+///
+/// Because we must specify a calling convention in order to implement the interface between the vm and the jit;
+/// Using the same one here allows us to compile to builtin functions from the jit, simplifying the implementation.
+///
+/// Additionally, this gives access to a kind of runtime *arity polymorphism*:
+/// we can simply assume that all built-in functions are closures when invoking them,
+/// and pass them the `Builtin.extra` field as a second parameter, regardless of how they were created.
+///
+/// This works because:
+/// * Procedures and Closures both take a Fiber pointer, a word-sized argument, as their first argument.
+/// * The only variance Closure adds is that of an additional word-sized argument, a pointer to its local state.
+/// * The first four <= word-sized arguments passed to a C ABI function are passed in registers, in order.
+/// * We don't have to worry about aggregate splitting (Sys-V) because we do not use aggregate types in the builtin calls.
+///
+/// These points mean that we can rely on arguments being where we expect them to be in any case.
+///
+/// And finally, because:
+/// * Argument-passing registers under C ABI are caller-saved.
+///
+/// This last point is critical: even though we have clobbered an extra register to call the Procedure,
+/// the caller itself is responsible for cleaning that up after the call.
+/// The callee does not have additional responsibilites under this extended signature.
+pub const Builtin = packed struct(u128) {
+    /// The kind of builtin this is.
+    /// * This must come first, as we allow taking the address of static values in the VM.
+    ///   In order to disambiguate these addresses' types later (ie, builtin vs bytecode),
+    ///   we inspect the first byte of the address. See also `core.Function.kind`.
+    kind: Kind,
+    /// The actual address of the builtin function or data buffer.
+    addr: u56,
     /// The builtin is a data buffer.
-    data: Buf,
+    extra: u64,
 
-    /// The data buffer type used by builtins. Essentially an untyped byte slice with known layout.
-    pub const Buf = Buffer.of(u8, .constant);
+    /// Zig versions of `BuiltinSignal`s that can be returned by a built-in function or assembly code.
+    pub const SignalError = error{
+        // The built-in function is cancelling a computation it was prompted by.
+        cancel,
 
-    /// Create a data `BuiltinAddress` from an opaque pointer.
-    pub fn fromPointer(pointer: *const anyopaque, len: u64) BuiltinAddress {
-        return .{ .kind = .data, .data = .{ .ptr = @intFromPtr(pointer), .len = len } };
+        // Misc signals
+
+        /// An unexpected error has occurred in a built-in function; runtime should panic.
+        panic,
+
+        /// Indicates that a guest function call requested the runtime to trap.
+        request_trap,
+    };
+
+    /// Signals that can be returned by a built-in function / assembly code.
+    pub const Signal = enum(i64) {
+        // Nominal signals
+
+        /// The built-in function is finished and returning a value.
+        @"return" = 0,
+        // The built-in function is cancelling a computation it was prompted by.
+        cancel = 1,
+
+        // Misc signals
+
+        /// Indicates that a guest function call requested the runtime to trap.
+        request_trap = std.math.minInt(i64),
+
+        /// An unexpected error has occurred in a built-in function; runtime should panic.
+        panic = std.math.maxInt(i64),
+
+        // Standard errors
+
+        /// Indicates that a guest function call reached an invalid state.
+        @"unreachable" = -1,
+        /// Indicates that a built-in function call requested the fiber to trap.
+        function_trapped = -2,
+        /// Indicates that the interpreter encountered an invalid encoding.
+        bad_encoding = -3,
+        /// Indicates an overflow of one of the stacks in a fiber.
+        overflow = -4,
+        /// Indicates an underflow of one of the stacks in a fiber.
+        underflow = -5,
+        /// Indicates that a guest function attempted to call a missing effect handler.
+        missing_evidence = -6,
+    };
+
+    /// The type of procedures which do not have a local state and can operate as "built-in" functions
+    /// (those provided by the host environment) within Ribbon's `core.Fiber`.
+    ///
+    /// Can be called within a `Fiber` using `interpreter.invokeBuiltin`.
+    ///
+    /// See `Builtin` for detailed documentation on builtin usage, construction, and lifecycle.
+    pub const Procedure = fn (fiber: *mem.FiberHeader) callconv(.c) Signal;
+
+    /// The type of procedures which have a local state and can operate as "built-in" functions
+    /// (those provided by the host environment) within Ribbon's `core.Fiber`.
+    ///
+    /// Can be called within a `Fiber` using `interpreter.invokeBuiltin`.
+    ///
+    /// See `Builtin` for detailed documentation on builtin usage, construction, and lifecycle.
+    pub const Closure = fn (fiber: *mem.FiberHeader, local_state: ?*const anyopaque) callconv(.c) Signal;
+
+    /// Describes the kind of a `Builtin`. This enumeration overlaps with `InternalFunctionKind`.
+    /// It allows `data` and `function` builtins, where the `function` variant has the same bit identity as `InternalFunctionKind.builtin`,
+    /// ensuring that checks using it still work as expected.
+    pub const Kind = enum(std.meta.Tag(InternalFunctionKind)) {
+        /// A data buffer.
+        data = 0xBD,
+        /// A function pointer.
+        function = @intFromEnum(InternalFunctionKind.builtin),
+
+        /// Get the builtin kind from a builtin address.
+        pub fn fromAddress(addr: anytype) Kind {
+            return @enumFromInt(@as(*const u8, @ptrCast(addr)).*);
+        }
+    };
+
+    /// Create a data `Builtin` from a byte pointer and a byte length.
+    pub fn fromDataComponents(ptr: [*]const u8, len: u64) Builtin {
+        return Builtin{
+            .kind = .data,
+            .addr = @intCast(@intFromPtr(ptr)),
+            .extra = len,
+        };
     }
 
-    /// Create a data `BuiltinAddress` from a buffer.
-    pub fn fromBuffer(data: Buf) BuiltinAddress {
-        return .{ .kind = .data, .data = data };
+    /// Create a `Builtin` from a value data pointer.
+    pub fn fromDataPointer(ptr: anytype) Builtin {
+        const T = @typeInfo(@TypeOf(ptr)).pointer.child;
+        return fromDataComponents(@ptrCast(ptr), @sizeOf(T));
     }
 
-    /// Create a data `BuiltinAddress` from a slice.
-    pub fn fromSlice(data: Buf.SliceType) BuiltinAddress {
-        return .{ .kind = .data, .data = .fromSlice(data) };
+    /// Create a `Builtin` from a data buffer slice.
+    pub fn fromDataBuffer(slice: anytype) Builtin {
+        const T = @typeInfo(@TypeOf(slice)).pointer.child;
+        return fromDataComponents(slice.ptr, slice.len * @sizeOf(T));
     }
 
-    /// Create a function `BuiltinAddress` from a pointer.
-    pub fn fromFunction(fnPtr: *const BuiltinFunction) BuiltinAddress {
-        return .{ .kind = .function, .data = .{ .ptr = @intFromPtr(fnPtr), .len = 0 } };
+    /// Create a `Builtin` from a procedure pointer.
+    pub fn fromProcedure(ptr: *const Procedure) Builtin {
+        return fromClosure(@as(*const Closure, @ptrCast(ptr)), @as(?*const anyopaque, null));
     }
 
-    /// Convert a `BuiltinAddress` to an opaque pointer.
-    /// * Cannot perform type checking
-    pub fn asPointer(self: BuiltinAddress) *const anyopaque {
-        return @ptrFromInt(self.data.ptr);
+    /// Create a `Builtin` from a closure.
+    pub fn fromClosure(ptr: anytype, local_state: anytype) Builtin {
+        comptime { // typecheck the function signature
+            const F = @typeInfo(@TypeOf(ptr)).pointer.child;
+            const S = @TypeOf(local_state);
+
+            const F_info = @typeInfo(F).@"fn";
+            const result = F_info.return_type.?;
+            const params = F_info.params;
+
+            const c_conv = std.builtin.CallingConvention.c;
+            const ConvTag = std.meta.Tag(std.builtin.CallingConvention);
+
+            if (@as(ConvTag, F_info.calling_convention) != @as(ConvTag, c_conv) or F_info.is_generic or F_info.is_var_args) {
+                @compileError("core.Builtin.fromClosure: Expected a zig function with standard C calling convention, got " ++ @typeName(F));
+            }
+
+            if (params.len != 2) {
+                @compileError("core.Builtin.fromClosure: Expected a zig function with exactly two parameters, got " ++ @typeName(F));
+            }
+
+            if (params[0].type != *mem.FiberHeader and params[0].type != core.Fiber) {
+                @compileError("core.Builtin.fromClosure: Expected a zig function with a first parameter of `core.Fiber` or `*core.mem.FiberHeader`, got " ++ @typeName(F));
+            }
+
+            if (params[1].type != S) {
+                @compileError("core.Builtin.fromClosure: Expected a zig function with the second parameter being a pointer to the local state (of type " ++ @typeName(S) ++ "), got " ++ @typeName(F));
+            }
+
+            if (result != Signal) {
+                @compileError("core.Builtin.fromClosure: Expected a zig function with a return type of `core.Builtin.Signal`, got " ++ @typeName(F));
+            }
+        }
+
+        return Builtin{
+            .kind = .function,
+            .addr = @intCast(@intFromPtr(ptr)),
+            .extra = @intCast(@intFromPtr(local_state)),
+        };
     }
 
-    /// Convert a `BuiltinAddress` to a function pointer.
-    /// * Cannot perform type checking
-    pub fn asFunction(self: BuiltinAddress) *const BuiltinFunction {
-        return @ptrFromInt(self.data.ptr);
+    /// Create a pointer view of this `Builtin` as single value data.
+    /// * Does not perform kind-validation outside of safe modes.
+    /// * Does not inspect length: A non-zero-length buffer is a valid input.
+    pub fn asPointer(self: *const Builtin) *const anyopaque {
+        std.debug.assert(self.kind == .data);
+
+        // The address is stored in the first 56 bits of the `addr` field.
+        return @ptrFromInt(self.addr);
     }
 
-    /// Extract the inner `Buffer` of a BuiltinAddress, discarding its `kind`.
-    /// * Cannot perform type checking
-    pub fn asBuffer(self: BuiltinAddress) Buf {
-        return self.data;
+    /// Create a buffer view of this `Builtin` as data.
+    /// * Does not perform kind-validation outside of safe modes.
+    /// * Does not inspect length: A zero-length buffer is a valid input.
+    pub fn asBuffer(self: *const Builtin) []const u8 {
+        std.debug.assert(self.kind == .data);
+
+        const base: [*]const u8 = @ptrFromInt(self.addr);
+
+        return base[0..self.extra];
     }
 
-    /// Convert a `BuiltinAddress` to a function pointer.
-    /// * Cannot perform type checking
-    pub fn asSlice(self: BuiltinAddress) Buf.SliceType {
-        return self.data.asSlice();
+    /// Invoke this `Builtin` as a closure on the provided fiber.
+    /// * Does not perform kind-validation outside of safe modes.
+    /// * See type-level documentation for information on the abi safety of this operation.
+    pub fn invoke(self: *const Builtin, fiber: *mem.FiberHeader) Signal {
+        std.debug.assert(self.kind == .function);
+
+        const func: *const Closure = @ptrFromInt(self.addr);
+
+        return func(fiber, @ptrFromInt(self.extra));
     }
 };
 
@@ -583,7 +737,7 @@ pub const SymbolKind = enum(u16) {
             .constant => Constant,
             .global => Global,
             .function => Function,
-            .builtin => BuiltinAddress,
+            .builtin => Builtin,
             .foreign_address => ForeignAddress,
             .effect => Effect,
             .handler_set => HandlerSet,
@@ -596,7 +750,7 @@ pub const SymbolKind = enum(u16) {
             Constant => .constant,
             Global => .global,
             Function => .function,
-            BuiltinAddress => .builtin,
+            Builtin => .builtin,
             ForeignAddress => .foreign_address,
             HandlerSet => .handler_set,
             Effect => .effect,
@@ -939,90 +1093,6 @@ pub const CallFrame = extern struct {
     set_frame: *SetFrame,
     /// Output register designated where to place a return value from this frame, in the frame above it.
     output: Register,
-};
-
-/// Zig versions of `BuiltinSignal`s that can be returned by a built-in function or assembly code.
-pub const BuiltinSignalError = error{
-    // The built-in function is cancelling a computation it was prompted by.
-    cancel,
-
-    // Misc signals
-
-    /// An unexpected error has occurred in a built-in function; runtime should panic.
-    panic,
-
-    /// Indicates that a guest function call requested the runtime to trap.
-    request_trap,
-};
-
-/// Signals that can be returned by a built-in function / assembly code.
-pub const BuiltinSignal = enum(i64) {
-    // Nominal signals
-
-    /// The built-in function is finished and returning a value.
-    @"return" = 0,
-    // The built-in function is cancelling a computation it was prompted by.
-    cancel = 1,
-
-    // Misc signals
-
-    /// Indicates that a guest function call requested the runtime to trap.
-    request_trap = std.math.minInt(i64),
-
-    /// An unexpected error has occurred in a built-in function; runtime should panic.
-    panic = std.math.maxInt(i64),
-
-    // Standard errors
-
-    /// Indicates that a guest function call reached an invalid state.
-    @"unreachable" = -1,
-    /// Indicates that a built-in function call requested the fiber to trap.
-    function_trapped = -2,
-    /// Indicates that the interpreter encountered an invalid encoding.
-    bad_encoding = -3,
-    /// Indicates an overflow of one of the stacks in a fiber.
-    overflow = -4,
-    /// Indicates an underflow of one of the stacks in a fiber.
-    underflow = -5,
-    /// Indicates that a guest function attempted to call a missing effect handler.
-    missing_evidence = -6,
-};
-
-/// The type of procedures that can operate as "built-in" functions
-/// (those provided by the host environment) within Ribbon's `core.Fiber`.
-///
-/// Can be called within a `Fiber` using the `interpreter.invokeBuiltin` family of functions.
-///
-/// It should be fine to pass a `Fiber` to a function that expects `*mem.FiberHeader`, because
-/// it is simply a wrapper over a pointer; the signature is written this way for clarity.
-///
-/// We use the host's C ABI calling convention for these functions
-/// because we need a specified calling convention for the interface between the vm and the jit.
-pub const BuiltinFunction = fn (*mem.FiberHeader) callconv(.c) BuiltinSignal;
-
-/// A `BuiltinFunction`, but compiled at runtime.
-///
-/// Can be called within a `Fiber` using the `interpreter.invokeBuiltin` family of functions.
-///
-/// This is primarily a memory management structure,
-/// as the jit is expected to disown the memory upon finalization.
-pub const AllocatedBuiltinFunction = extern struct {
-    /// The function's bytes.
-    ptr: [*]align(PAGE_SIZE) const u8,
-    /// The function's length in bytes.
-    ///
-    /// Note that this is not necessarily the length of the mapped memory, as it is page aligned.
-    len: u64,
-
-    /// `munmap` all pages of a native function, freeing the memory.
-    pub fn deinit(self: AllocatedBuiltinFunction) void {
-        std.posix.munmap(@alignCast(self.ptr[0..common.alignTo(self.len, PAGE_SIZE)]));
-    }
-
-    /// Get the function's machine code as a slice.
-    pub fn toSlice(self: AllocatedBuiltinFunction) []align(PAGE_SIZE) const u8 {
-        return self.ptr[0..self.len];
-    }
 };
 
 /// All errors that can occur during execution of an Rvm fiber.
