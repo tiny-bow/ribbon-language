@@ -3136,7 +3136,7 @@ test "encode handler set with upvalues" {
 }
 
 // This is just a placeholder for the test. It won't be called.
-fn dummyBuiltinProc(fiber: *core.mem.FiberHeader) callconv(.C) core.Builtin.Signal {
+fn dummyBuiltinProc(fiber: *core.Fiber) callconv(.C) core.Builtin.Signal {
     _ = fiber;
     return core.Builtin.Signal.@"return";
 }

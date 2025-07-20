@@ -682,7 +682,7 @@ test "invokeBytecode call stack overflow" {
     // invokeBytecode requires 2 frames (one for the wrapper, one for the function).
     const frames_to_push = core.CALL_STACK_SIZE - 1;
     for (0..frames_to_push) |_| {
-        _ = fiber.header.calls.allocPtr();
+        _ = fiber.calls.allocPtr();
     }
 
     // This invocation should fail with an overflow error.
@@ -804,31 +804,29 @@ test "mem_copy with zero size is a no-op" {
 
 // --- Helpers for builtin tests ---
 
-fn simpleBuiltin(fiber: *core.mem.FiberHeader) callconv(.C) core.Builtin.Signal {
+fn simpleBuiltin(fiber: *core.Fiber) callconv(.C) core.Builtin.Signal {
     // Return 555 in the designated return register.
     const regs = fiber.registers.top();
     regs[core.Register.native_ret.getIndex()] = 555;
     return .@"return";
 }
 
-fn trapBuiltin(fiber: *core.mem.FiberHeader) callconv(.C) core.Builtin.Signal {
+fn trapBuiltin(fiber: *core.Fiber) callconv(.C) core.Builtin.Signal {
     _ = fiber;
     return .request_trap;
 }
 
 // This function gets called by bytecode, and it in turn calls other bytecode.
-fn interlacedBuiltin(fiber_header: *core.mem.FiberHeader) callconv(.C) core.Builtin.Signal {
-    const fiber = core.Fiber{ .header = fiber_header };
-
+fn interlacedBuiltin(fiber: *core.Fiber) callconv(.C) core.Builtin.Signal {
     // Get the arguments passed to this builtin from its registers.
-    const builtin_regs = fiber.header.registers.top();
+    const builtin_regs = fiber.registers.top();
     const arg_for_target = builtin_regs[core.Register.r0.getIndex()];
     const target_fn_id_int = builtin_regs[core.Register.r1.getIndex()];
     const target_fn_id = core.FunctionId.fromInt(target_fn_id_int);
 
     // The current function is the builtin itself. To find the bytecode world,
     // we need to go one level down the call stack to the bytecode function that called us.
-    const caller_call_frame: *core.CallFrame = @ptrCast(fiber.header.calls.top_ptr - 1);
+    const caller_call_frame: *core.CallFrame = @ptrCast(fiber.calls.top_ptr - 1);
     const bc_function = @as(*const core.Function, @ptrCast(@alignCast(caller_call_frame.function)));
 
     // Look up the target function in the header of the calling bytecode function.

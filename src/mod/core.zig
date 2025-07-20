@@ -541,7 +541,7 @@ pub const Builtin = packed struct(u128) {
     /// Can be called within a `Fiber` using `interpreter.invokeBuiltin`.
     ///
     /// See `Builtin` for detailed documentation on builtin usage, construction, and lifecycle.
-    pub const Procedure = fn (fiber: *mem.FiberHeader) callconv(.c) Signal;
+    pub const Procedure = fn (fiber: *core.Fiber) callconv(.c) Signal;
 
     /// The type of procedures which have a local state and can operate as "built-in" functions
     /// (those provided by the host environment) within Ribbon's `core.Fiber`.
@@ -549,7 +549,7 @@ pub const Builtin = packed struct(u128) {
     /// Can be called within a `Fiber` using `interpreter.invokeBuiltin`.
     ///
     /// See `Builtin` for detailed documentation on builtin usage, construction, and lifecycle.
-    pub const Closure = fn (fiber: *mem.FiberHeader, local_state: ?*const anyopaque) callconv(.c) Signal;
+    pub const Closure = fn (fiber: *core.Fiber, local_state: ?*const anyopaque) callconv(.c) Signal;
 
     /// Create a `Builtin` from a procedure pointer.
     pub fn fromProcedure(ptr: *const Procedure) Builtin {
@@ -581,8 +581,8 @@ pub const Builtin = packed struct(u128) {
                 @compileError("core.Builtin.fromClosure: Expected a zig function with exactly two parameters, got " ++ @typeName(F));
             }
 
-            if (params[0].type != *mem.FiberHeader and params[0].type != core.Fiber) {
-                @compileError("core.Builtin.fromClosure: Expected a zig function with a first parameter of `core.Fiber` or `*core.mem.FiberHeader`, got " ++ @typeName(F));
+            if (params[0].type != *mem.FiberHeader and params[0].type != *core.Fiber) {
+                @compileError("core.Builtin.fromClosure: Expected a zig function with a first parameter of `*core.Fiber` or `*core.mem.FiberHeader`, got " ++ @typeName(F));
             }
 
             if (params[1].type != S) {
@@ -601,7 +601,7 @@ pub const Builtin = packed struct(u128) {
     }
 
     /// Invoke this `Builtin` on the provided fiber.
-    pub fn invoke(self: *const Builtin, fiber: *mem.FiberHeader) Signal {
+    pub fn invoke(self: *const Builtin, fiber: *core.Fiber) Signal {
         const func: *const Closure = @ptrFromInt(self.addr);
 
         return func(fiber, @ptrFromInt(self.extra));
@@ -1053,36 +1053,18 @@ pub const Error = error{
 pub const mem = comptime_memorySize: {
     const REQUIRED_ALIGNMENT = 8; // we enforce 8-byte alignment on the entire fiber memory
 
-    const FIBER_HEADER = extern struct {
-        /// Stack of virtual register arrays - stores intermediate values up to a word in size, `pl.MAX_REGISTERS` per function.
-        registers: RegisterStack,
-        /// Arbitrary data stack allocator - stores intermediate values that need to be addressed or are larger than a word in size.
-        data: DataStack,
-        /// The call frame stack - tracks in-progress function calls.
-        calls: CallStack,
-        /// The effect handler set stack - manages lexically scoped effect handler sets.
-        sets: SetStack,
-        /// The evidence buffer - stores bindings to currently accessible effect handlers by effect id + linked lists via Evidence
-        evidence: [MAX_EFFECT_TYPES]?*Evidence,
-        /// The cause of a trap, if any was known. Pointee-type depends on the trap.
-        /// * TODO: error handling function that covers this variance
-        trap: ?*const anyopaque,
-        /// Arbitrary user-data pointer, used by runtime environment to store fiber-local contextual data.
-        userdata: ?*anyopaque,
-    };
+    const FIELDS = std.meta.fieldNames(Fiber);
 
-    const FIELDS = std.meta.fieldNames(FIBER_HEADER);
-
-    std.debug.assert(@alignOf(FIBER_HEADER) == REQUIRED_ALIGNMENT);
+    std.debug.assert(@alignOf(Fiber) == REQUIRED_ALIGNMENT);
 
     var offsets: [FIELDS.len]comptime_int = undefined;
-    var total = @sizeOf(FIBER_HEADER);
+    var total = @sizeOf(Fiber);
 
     var k = 0;
     var fieldNames: [FIELDS.len][:0]const u8 = undefined;
 
     for (FIELDS) |fieldName| {
-        const S = @FieldType(FIBER_HEADER, fieldName);
+        const S = @FieldType(Fiber, fieldName);
 
         const alignment, const size = if (common.canHaveDecls(S)) .{ S.mem.ALIGNMENT, S.mem.SIZE } else continue;
 
@@ -1140,18 +1122,6 @@ pub const mem = comptime_memorySize: {
     };
 
     break :comptime_memorySize struct {
-        /// After initializing a `Fiber`, its memory has the following layout:
-        ///
-        /// 0. `FiberHeader`
-        /// 1. Memory block for the registers `Stack`
-        /// 2. Memory block for the next `Stack`
-        ///
-        /// ... etc
-        ///
-        /// This is possible because care has been taken to ensure all the stacks and the header are 8-byte aligned,
-        /// so there actually shouldn't be any padding necessary on most platforms.
-        pub const FiberHeader = FIBER_HEADER;
-
         /// The alignment required for the full fiber's `memory`.
         ///
         /// We enforce 8-byte alignment; this eliminates the need for padding.
@@ -1207,18 +1177,31 @@ comptime {
 /// All data for a `Fiber` is stored contiguously in a single allocation;
 /// they can be allocated and freed very efficiently.
 pub const Fiber = extern struct {
-    /// Pointer to the beginning of the fiber's memory block.
-    header: *mem.FiberHeader,
+    /// Stack of virtual register arrays - stores intermediate values up to a word in size, `pl.MAX_REGISTERS` per function.
+    registers: RegisterStack,
+    /// Arbitrary data stack allocator - stores intermediate values that need to be addressed or are larger than a word in size.
+    data: DataStack,
+    /// The call frame stack - tracks in-progress function calls.
+    calls: CallStack,
+    /// The effect handler set stack - manages lexically scoped effect handler sets.
+    sets: SetStack,
+    /// The evidence buffer - stores bindings to currently accessible effect handlers by effect id + linked lists via Evidence
+    evidence: [MAX_EFFECT_TYPES]?*Evidence,
+    /// The cause of a trap, if any was known. Pointee-type depends on the trap.
+    /// * TODO: error handling function that covers this variance
+    trap: ?*const anyopaque,
+    /// Arbitrary user-data pointer, used by runtime environment to store fiber-local contextual data.
+    userdata: ?*const anyopaque,
 
     /// Allocates and initializes a new fiber.
-    pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!Fiber {
+    pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!*Fiber {
         const buf = try allocator.allocAdvancedWithRetAddr(u8, mem.ALIGNMENT, mem.SIZE, @returnAddress());
 
         log.debug("allocated address range {x} to {x} for {s}", .{ @intFromPtr(buf.ptr), @intFromPtr(buf.ptr) + buf.len, @typeName(Fiber) });
 
-        const header: *mem.FiberHeader = @ptrCast(buf.ptr);
+        const header: *Fiber = @ptrCast(buf.ptr);
 
-        fiber_fields: inline for (comptime std.meta.fieldNames(mem.FiberHeader)) |fieldName| {
+        fiber_fields: inline for (comptime std.meta.fieldNames(Fiber)) |fieldName| {
             inline for (&.{ "loop", "trap", "breakpoint", "evidence", "userdata" }) |ignoredField| {
                 if (comptime std.mem.eql(u8, fieldName, ignoredField)) {
                     continue :fiber_fields;
@@ -1229,31 +1212,29 @@ pub const Fiber = extern struct {
             @field(header, fieldName) = .init(@alignCast(buf.ptr + memoryOffset));
         }
 
-        return Fiber{
-            .header = header,
-        };
+        return header;
     }
 
     /// De-initializes the fiber, freeing its memory.
-    pub fn deinit(self: Fiber, allocator: std.mem.Allocator) void {
-        const buf: []align(mem.ALIGNMENT) u8 = @alignCast(@as([*]u8, @ptrCast(self.header))[0..mem.SIZE]);
+    pub fn deinit(self: *Fiber, allocator: std.mem.Allocator) void {
+        const buf: []align(mem.ALIGNMENT) u8 = @alignCast(@as([*]u8, @ptrCast(self))[0..mem.SIZE]);
         allocator.free(buf);
     }
 
     /// Get a pointer to one of the stacks' memory block.
     /// * This function can be called at both runtime and comptime.
     /// * The name of the stack can be either a string or an enum literal.
-    pub fn getStack(self: Fiber, stackName: anytype) [*]u8 {
+    pub fn getStack(self: *Fiber, stackName: anytype) [*]u8 {
         return @as([*]u8, @ptrCast(self.header)) + mem.getOffset(stackName);
     }
 
     /// Set the userdata pointer for this fiber.
-    pub fn setUserdata(self: *Fiber, data: ?*anyopaque) void {
-        self.header.userdata = data;
+    pub fn setUserdata(self: *Fiber, data: ?*const anyopaque) void {
+        self.userdata = data;
     }
 
     /// Get the userdata pointer for this fiber.
-    pub fn getUserdata(self: *const Fiber) ?*anyopaque {
-        return self.header.userdata;
+    pub fn getUserdata(self: *const Fiber) ?*const anyopaque {
+        return self.userdata;
     }
 };

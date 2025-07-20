@@ -38,7 +38,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         pub fn init(memory: [*]align(mem.ALIGNMENT) u8) Self {
             const ptr: [*]T = @ptrCast(memory);
             log.debug("initializing {s} stack at {d} to {d}", .{ @typeName(T), @intFromPtr(ptr), @intFromPtr(ptr + STACK_SIZE) });
-            return Self {
+            return Self{
                 .top_ptr = ptr - 1,
                 .base = ptr,
                 // TODO: are we off by one between here and the assembly code?
@@ -69,7 +69,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         /// * slice is a view into the stack's memory, the last element of the slice is the top of the stack
         /// * does not test if the stack has space for the values
         pub fn allocSlice(self: *Self, n: usize) []T {
-            const out = self.top_ptr[1..n + 1];
+            const out = self.top_ptr[1 .. n + 1];
             self.increment(n);
             return out;
         }
@@ -167,21 +167,20 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Checks if the stack has space for a specified number of elements.
-        pub fn hasSpace(self: *Self, additionalCount: usize) bool {
+        pub fn hasSpace(self: *const Self, additionalCount: usize) bool {
             return @intFromPtr(self.top_ptr + additionalCount) < @intFromPtr(self.limit);
         }
 
         /// Checks if the stack has no values
-        pub fn isEmpty(self: *Self) bool {
+        pub fn isEmpty(self: *const Self) bool {
             return @intFromPtr(self.top_ptr) < @intFromPtr(self.base);
         }
 
         /// Returns the number of values on the stack
-        pub fn count(self: *Self) usize {
+        pub fn count(self: *const Self) usize {
             const a = @intFromPtr(self.base);
             const b = @intFromPtr(self.top_ptr);
-            return if (b < a) 0
-            else b - a + 1;
+            return if (b < a) 0 else b - a + 1;
         }
     };
 }

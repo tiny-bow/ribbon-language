@@ -29,29 +29,29 @@ pub const BuiltinResult = union(enum) {
 };
 
 /// Invokes a `core.BuiltinFunction` on the provided fiber, returning the result.
-pub fn invokeBuiltin(self: core.Fiber, evidence: ?*core.Evidence, builtin: *const core.Builtin, arguments: []const core.RegisterBits) core.Error!BuiltinResult {
-    if (!self.header.calls.hasSpace(1)) {
+pub fn invokeBuiltin(self: *core.Fiber, evidence: ?*core.Evidence, builtin: *const core.Builtin, arguments: []const core.RegisterBits) core.Error!BuiltinResult {
+    if (!self.calls.hasSpace(1)) {
         return error.Overflow;
     }
 
-    self.header.calls.push(core.CallFrame{
+    self.calls.push(core.CallFrame{
         .function = @ptrCast(builtin),
         .evidence = evidence,
-        .data = self.header.data.top_ptr,
-        .set_frame = self.header.sets.top(),
-        .vregs = self.header.registers.allocPtr(),
+        .data = self.data.top_ptr,
+        .set_frame = self.sets.top(),
+        .vregs = self.registers.allocPtr(),
         .ip = undefined,
         .output = .scratch,
     });
 
-    const newRegisters = self.header.registers.allocPtr();
+    const newRegisters = self.registers.allocPtr();
     @memcpy(newRegisters[0..arguments.len], arguments);
 
-    return switch (builtin.invoke(self.header)) {
+    return switch (builtin.invoke(self)) {
         .cancel => {
-            self.header.calls.pop();
+            self.calls.pop();
 
-            const oldRegisters = self.header.registers.popPtr();
+            const oldRegisters = self.registers.popPtr();
 
             return .{ .cancel = .{
                 .value = oldRegisters[comptime core.Register.native_ret.getIndex()],
@@ -59,10 +59,10 @@ pub fn invokeBuiltin(self: core.Fiber, evidence: ?*core.Evidence, builtin: *cons
             } };
         },
         .@"return" => {
-            self.header.calls.pop();
+            self.calls.pop();
 
             return .{
-                .@"return" = self.header.registers.popPtr()[comptime core.Register.native_ret.getIndex()],
+                .@"return" = self.registers.popPtr()[comptime core.Register.native_ret.getIndex()],
             };
         },
 
@@ -105,16 +105,16 @@ fn getOrInitWrapper() *const core.Function {
 }
 
 /// Invokes a `core.Function` on the provided fiber, returning the result.
-pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []const u64) core.Error!u64 {
-    if (!self.header.calls.hasSpace(2)) {
+pub fn invokeBytecode(self: *core.Fiber, fun: *const core.Function, arguments: []const u64) core.Error!u64 {
+    if (!self.calls.hasSpace(2)) {
         return error.Overflow;
     }
 
-    const newRegisters = self.header.registers.allocSlice(2);
+    const newRegisters = self.registers.allocSlice(2);
     @memcpy(newRegisters[1][0..arguments.len], arguments);
 
-    const original_data_top_ptr = self.header.data.top_ptr;
-    defer self.header.data.top_ptr = original_data_top_ptr;
+    const original_data_top_ptr = self.data.top_ptr;
+    defer self.data.top_ptr = original_data_top_ptr;
 
     // Allocate space for the function's local variables on the data stack.
     const alignment = fun.layout.alignment;
@@ -125,11 +125,11 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
     const total_bytes_to_alloc = padding_bytes + size;
     const total_u64s_to_alloc = (total_bytes_to_alloc + @sizeOf(u64) - 1) / @sizeOf(u64);
 
-    if (!self.header.data.hasSpace(total_u64s_to_alloc)) {
+    if (!self.data.hasSpace(total_u64s_to_alloc)) {
         return error.Overflow;
     }
     const new_frame_data_ptr: [*]core.RegisterBits = @alignCast(@ptrCast(aligned_data_ptr_u8));
-    _ = self.header.data.allocSlice(total_u64s_to_alloc);
+    _ = self.data.allocSlice(total_u64s_to_alloc);
 
     log.debug("invoking bytecode function {x} with extents {x} to {x}", .{
         @intFromPtr(fun),
@@ -139,21 +139,21 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
 
     const wrapper = getOrInitWrapper();
 
-    self.header.calls.push(core.CallFrame{
+    self.calls.push(core.CallFrame{
         .function = wrapper,
         .evidence = null,
-        .data = self.header.data.top_ptr,
-        .set_frame = self.header.sets.top(),
+        .data = self.data.top_ptr,
+        .set_frame = self.sets.top(),
         .vregs = &newRegisters[0],
         .ip = wrapper.extents.base,
         .output = .scratch,
     });
 
-    self.header.calls.push(core.CallFrame{
+    self.calls.push(core.CallFrame{
         .function = @ptrCast(fun),
         .evidence = null,
         .data = new_frame_data_ptr,
-        .set_frame = self.header.sets.top(),
+        .set_frame = self.sets.top(),
         .vregs = &newRegisters[1],
         .ip = fun.extents.base,
         .output = .native_ret,
@@ -163,10 +163,10 @@ pub fn invokeBytecode(self: core.Fiber, fun: *const core.Function, arguments: []
 
     // The 'fun' frame was popped by its 'return' instruction. 'eval' returns
     // after the 'wrapper' frame hits a 'halt'. We now pop the wrapper frame.
-    const popped_wrapper_frame = self.header.calls.popPtr();
+    const popped_wrapper_frame = self.calls.popPtr();
     std.debug.assert(popped_wrapper_frame.function == @as(*const anyopaque, wrapper));
 
-    const registers = self.header.registers.popPtr();
+    const registers = self.registers.popPtr();
 
     return registers[comptime core.Register.native_ret.getIndex()];
 }
@@ -188,9 +188,9 @@ pub const EvalSignal = enum(i64) {
 };
 
 /// Run the interpreter loop until `halt`; and optionally stop at breakpoints.
-pub fn eval(self: core.Fiber, comptime mode: BreakpointMode) core.Error!if (mode == .breakpoints_halt) EvalSignal else void {
+pub fn eval(self: *core.Fiber, comptime mode: BreakpointMode) core.Error!if (mode == .breakpoints_halt) EvalSignal else void {
     while (true) {
-        run(true, self.header) catch |signalOrError| {
+        run(true, self) catch |signalOrError| {
             if (comptime mode == .breakpoints_halt) {
                 switch (signalOrError) {
                     LoopSignalErr.breakpoint => return .breakpoint,
@@ -221,8 +221,8 @@ pub const StepSignal = enum(i64) {
 };
 
 /// Run the interpreter loop for a single instruction.
-pub fn step(self: core.Fiber) core.Error!?StepSignal {
-    run(false, self.header) catch |signalOrError| {
+pub fn step(self: *core.Fiber) core.Error!?StepSignal {
+    run(false, self) catch |signalOrError| {
         switch (signalOrError) {
             StepSignalErr.@"return" => return .@"return",
             StepSignalErr.cancel => return .cancel,
@@ -250,7 +250,7 @@ fn SignalSubset(comptime isLoop: bool) type {
     return if (isLoop) LoopSignalErr else StepSignalErr;
 }
 
-fn invokeForeign(self: *core.mem.FiberHeader, current: anytype, registerId: core.Register, functionOpaquePtr: *const anyopaque, argumentRegisterIds: []const core.Register) !void {
+fn invokeForeign(self: *core.Fiber, current: anytype, registerId: core.Register, functionOpaquePtr: *const anyopaque, argumentRegisterIds: []const core.Register) !void {
     _ = self;
 
     if (argumentRegisterIds.len > core.MAX_FOREIGN_ARGUMENTS) {
@@ -268,7 +268,7 @@ fn invokeForeign(self: *core.mem.FiberHeader, current: anytype, registerId: core
     current.callFrame.vregs[registerId.getIndex()] = retVal;
 }
 
-fn invokeInternal(self: *core.mem.FiberHeader, current: anytype, registerId: core.Register, functionOpaquePtr: *const anyopaque, argumentRegisterIds: []const core.Register) !void {
+fn invokeInternal(self: *core.Fiber, current: anytype, registerId: core.Register, functionOpaquePtr: *const anyopaque, argumentRegisterIds: []const core.Register) !void {
     switch (core.InternalFunctionKind.fromAddress(functionOpaquePtr)) {
         .bytecode => {
             const functionPtr: *const core.Function = @ptrCast(@alignCast(functionOpaquePtr));
@@ -282,7 +282,7 @@ fn invokeInternal(self: *core.mem.FiberHeader, current: anytype, registerId: cor
                 arguments[i] = current.callFrame.vregs[reg.getIndex()];
             }
 
-            const result = try invokeBuiltin(.{ .header = self }, null, functionPtr, arguments);
+            const result = try invokeBuiltin(self, null, functionPtr, arguments);
             switch (result) {
                 .cancel => |cancelInfo| {
                     const cancelledSet = cancelInfo.set_frame;
@@ -317,7 +317,7 @@ fn invokeInternal(self: *core.mem.FiberHeader, current: anytype, registerId: cor
 }
 
 fn pushBytecodeCall(
-    self: *core.mem.FiberHeader,
+    self: *core.Fiber,
     caller_frame: *const core.CallFrame,
     function: *const core.Function,
     evidence: ?*core.Evidence,
@@ -358,7 +358,7 @@ fn pushBytecodeCall(
     }
 }
 
-fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || SignalSubset(isLoop))!void {
+fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isLoop))!void {
     log.debug("begin {s}", .{if (isLoop) "loop" else "step"});
 
     const State = struct {
@@ -368,7 +368,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
         instruction: Instruction,
         tempRegisters: core.RegisterArray,
 
-        fn decode(st: *@This(), header: *core.mem.FiberHeader) Instruction.OpCode {
+        fn decode(st: *@This(), header: *core.Fiber) Instruction.OpCode {
             st.callFrame = header.calls.top();
             std.debug.assert(@intFromPtr(st.callFrame) >= @intFromPtr(header.calls.base));
 
@@ -389,7 +389,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             return st.instruction.code;
         }
 
-        fn advance(st: *@This(), header: *core.mem.FiberHeader, comptime signal: StepSignalErr) SignalSubset(isLoop)!Instruction.OpCode {
+        fn advance(st: *@This(), header: *core.Fiber, comptime signal: StepSignalErr) SignalSubset(isLoop)!Instruction.OpCode {
             if (comptime isLoop) {
                 return st.decode(header);
             } else {
@@ -397,7 +397,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
             }
         }
 
-        fn step(st: *@This(), header: *core.mem.FiberHeader) SignalSubset(isLoop)!Instruction.OpCode {
+        fn step(st: *@This(), header: *core.Fiber) SignalSubset(isLoop)!Instruction.OpCode {
             return if (comptime isLoop) st.decode(header) else @errorFromInt(@intFromError(error.step));
         }
     };
@@ -660,7 +660,7 @@ fn run(comptime isLoop: bool, self: *core.mem.FiberHeader) (core.Error || Signal
                         arguments[i] = current.callFrame.vregs[reg.getIndex()];
                     }
 
-                    const result = try invokeBuiltin(.{ .header = self }, evidencePtr, functionPtr, arguments);
+                    const result = try invokeBuiltin(self, evidencePtr, functionPtr, arguments);
                     switch (result) {
                         .cancel => |cancelVal| {
                             const cancelledSet = cancelVal.set_frame;

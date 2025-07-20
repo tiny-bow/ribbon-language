@@ -106,9 +106,9 @@ pub const Builder = struct {
         };
     }
 
-    const REGISTERS_TOP_PTR_OFFSET = @offsetOf(core.mem.FiberHeader, "registers") + @offsetOf(core.RegisterStack, "top_ptr");
+    const REGISTERS_TOP_PTR_OFFSET = @offsetOf(core.Fiber, "registers") + @offsetOf(core.RegisterStack, "top_ptr");
 
-    const FRAMES_TOP_PTR_OFFSET = @offsetOf(core.mem.FiberHeader, "calls") + @offsetOf(core.CallStack, "top_ptr");
+    const FRAMES_TOP_PTR_OFFSET = @offsetOf(core.Fiber, "calls") + @offsetOf(core.CallStack, "top_ptr");
 
     // comptime {
     //     @compileError(std.fmt.comptimePrint("{x} {x}", .{ REGISTERS_TOP_PTR_OFFSET, FRAMES_TOP_PTR_OFFSET }));
