@@ -91,7 +91,7 @@ fn getOrInitWrapper() *const core.Function {
     const buffer: [*]core.InstructionBits = @ptrCast(&static.buffer);
 
     static.function = core.Function{
-        .header = core.EMPTY_HEADER,
+        .unit = core.EMPTY_BYTECODE,
         .extents = .{
             .base = buffer,
             .upper = buffer + 1,
@@ -303,7 +303,7 @@ fn invokeInternal(self: *core.Fiber, current: anytype, registerId: core.Register
                         self.data.top_ptr = setFrame.base;
 
                         for (setFrame.handler_set.handlers.asSlice()) |*handler| {
-                            const effectIndex = current.function.header.get(handler.effect).toIndex();
+                            const effectIndex = current.function.unit.get(handler.effect).toIndex();
                             const evidencePointerSlot = &self.evidence[effectIndex];
 
                             evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
@@ -428,7 +428,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
 
             const handlerSetId = current.instruction.data.push_set.H;
 
-            const handlerSet: *const core.HandlerSet = current.function.header.get(handlerSetId);
+            const handlerSet: *const core.HandlerSet = current.function.unit.get(handlerSetId);
 
             if (!self.data.hasSpace(slot_size * handlerSet.handlers.len)) {
                 @branchHint(.cold);
@@ -448,7 +448,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
             current.callFrame.set_frame = setFrame;
 
             for (handlerSet.handlers.asSlice(), 0..) |*handler, i| {
-                const effectIndex = current.function.header.get(handler.effect).toIndex();
+                const effectIndex = current.function.unit.get(handler.effect).toIndex();
 
                 const evidencePointerSlot = &self.evidence[effectIndex];
                 const oldEvidence = evidencePointerSlot.*;
@@ -475,7 +475,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
             current.callFrame.set_frame = self.sets.top();
 
             for (setFrame.handler_set.handlers.asSlice()) |*handler| {
-                const effectIndex = current.function.header.get(handler.effect).toIndex();
+                const effectIndex = current.function.unit.get(handler.effect).toIndex();
                 const evidencePointerSlot = &self.evidence[effectIndex];
 
                 evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
@@ -554,7 +554,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
             const argsBase: [*]const core.Register = @ptrCast(@alignCast(current.callFrame.ip));
             const argumentRegisterIds = argsBase[0..argumentCount];
 
-            const functionOpaquePtr = current.function.header.get(functionId.cast(anyopaque));
+            const functionOpaquePtr = current.function.unit.get(functionId.cast(anyopaque));
 
             const arg_byte_count = argumentCount * @sizeOf(core.Register);
             const arg_word_count = (arg_byte_count + @sizeOf(core.InstructionBits) - 1) / @sizeOf(core.InstructionBits);
@@ -595,7 +595,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
             const argsBase: [*]const core.Register = @ptrCast(@alignCast(current.callFrame.ip));
             const argumentRegisterIds = argsBase[0..argumentCount];
 
-            const functionOpaquePtr = current.function.header.get(functionId.cast(anyopaque));
+            const functionOpaquePtr = current.function.unit.get(functionId.cast(anyopaque));
 
             const arg_byte_count = argumentCount * @sizeOf(core.Register);
             const arg_word_count = (arg_byte_count + @sizeOf(core.InstructionBits) - 1) / @sizeOf(core.InstructionBits);
@@ -622,7 +622,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
             std.debug.assert(current.function.extents.boundsCheck(newIp));
             current.callFrame.ip = newIp;
 
-            const promptIndex = current.function.header.get(promptId).toIndex();
+            const promptIndex = current.function.unit.get(promptId).toIndex();
 
             const evidencePtr = find_evidence: {
                 if (current.callFrame.evidence) |frame_evidence| {
@@ -677,7 +677,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
                                 self.data.top_ptr = setFrame.base;
 
                                 for (setFrame.handler_set.handlers.asSlice()) |*h| {
-                                    const effectIndex = current.function.header.get(h.effect).toIndex();
+                                    const effectIndex = current.function.unit.get(h.effect).toIndex();
                                     const evidencePointerSlot = &self.evidence[effectIndex];
 
                                     evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
@@ -739,7 +739,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
                 self.data.top_ptr = setFrame.base;
 
                 for (setFrame.handler_set.handlers.asSlice()) |*handler| {
-                    const effectIndex = current.function.header.get(handler.effect).toIndex();
+                    const effectIndex = current.function.unit.get(handler.effect).toIndex();
                     const evidencePointerSlot = &self.evidence[effectIndex];
 
                     evidencePointerSlot.* = evidencePointerSlot.*.?.previous;
@@ -818,7 +818,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
             const registerIdY = current.instruction.data.mem_copy_b.Ry;
             const constantId = current.instruction.data.mem_copy_b.C;
 
-            const constant: []const u8 = current.function.header.get(constantId).asSlice();
+            const constant: []const u8 = current.function.unit.get(constantId).asSlice();
 
             const dest: [*]u8 = @ptrFromInt(current.callFrame.vregs[registerIdX.getIndex()]);
             const size: u64 = current.callFrame.vregs[registerIdY.getIndex()];
@@ -895,7 +895,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
             const globalId = current.instruction.data.addr_g.G;
             const registerId = current.instruction.data.addr_g.R;
 
-            const global: *const core.Global = current.function.header.get(globalId);
+            const global: *const core.Global = current.function.unit.get(globalId);
 
             current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(global.asPtr());
 
@@ -905,7 +905,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
             const functionId = current.instruction.data.addr_f.F;
             const registerId = current.instruction.data.addr_f.R;
 
-            const function: *const core.Function = current.function.header.get(functionId);
+            const function: *const core.Function = current.function.unit.get(functionId);
 
             current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(function);
 
@@ -915,7 +915,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
             const builtinId = current.instruction.data.addr_b.B;
             const registerId = current.instruction.data.addr_b.R;
 
-            const builtin: *const core.Builtin = current.function.header.get(builtinId);
+            const builtin: *const core.Builtin = current.function.unit.get(builtinId);
 
             current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(builtin);
 
@@ -925,7 +925,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
             const foreignId = current.instruction.data.addr_x.X;
             const registerId = current.instruction.data.addr_x.R;
 
-            const foreign: core.ForeignAddress = current.function.header.get(foreignId).*;
+            const foreign: core.ForeignAddress = current.function.unit.get(foreignId).*;
 
             current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(foreign);
 
@@ -935,7 +935,7 @@ fn run(comptime isLoop: bool, self: *core.Fiber) (core.Error || SignalSubset(isL
             const constantId = current.instruction.data.addr_c.C;
             const registerId = current.instruction.data.addr_c.R;
 
-            const constant: *const core.Constant = current.function.header.get(constantId);
+            const constant: *const core.Constant = current.function.unit.get(constantId);
 
             current.callFrame.vregs[registerId.getIndex()] = @intFromPtr(constant.asPtr());
 

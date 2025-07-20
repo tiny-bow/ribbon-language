@@ -36,7 +36,7 @@ test "interpreter unconditional branch skips code" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
 
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
@@ -78,7 +78,7 @@ test "interpreter conditional branch takes then path on true" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
 
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
@@ -122,7 +122,7 @@ test "interpreter conditional branch takes else path on false" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
 
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
@@ -167,7 +167,7 @@ test "interpreter simple loop" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
 
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
@@ -195,7 +195,7 @@ test "interpreter multiple arguments" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
 
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
@@ -222,7 +222,7 @@ test "interpreter subtraction" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
 
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
@@ -259,7 +259,7 @@ test "interpreter local variable store and load" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
 
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
@@ -324,7 +324,7 @@ test "interpreter multiple local variables with varied alignment" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
 
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
@@ -379,7 +379,7 @@ test "interpreter basic effect handling" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
 
@@ -435,7 +435,7 @@ test "interpreter effect cancellation" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
 
@@ -498,7 +498,7 @@ test "interpreter upvalue access from handler" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
 
@@ -572,7 +572,7 @@ test "interpreter effect modulation via re-prompt" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
 
@@ -652,7 +652,7 @@ test "interpreter nested effect cancellation" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
 
@@ -674,7 +674,7 @@ test "invokeBytecode call stack overflow" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
     var fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
 
@@ -707,7 +707,7 @@ test "invokeBytecode data stack overflow" {
     defer table.deinit();
 
     // Manually patch the function's layout after encoding.
-    var function: *core.Function = @ptrCast(@constCast(table.bytecode.header.get(main_id)));
+    var function: *core.Function = @ptrCast(@constCast(table.bytecode.get(main_id)));
     function.layout.size = huge_size;
 
     var fiber = try core.Fiber.init(allocator);
@@ -753,7 +753,7 @@ test "mem_set with zero size is a no-op" {
     var fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
 
-    const result = try interpreter.invokeBytecode(fiber, table.bytecode.header.get(main_id), &.{});
+    const result = try interpreter.invokeBytecode(fiber, table.bytecode.get(main_id), &.{});
     // The result should be the original, unmodified value.
     try testing.expectEqual(@as(u64, 0x12345678_87654321), result);
 }
@@ -797,7 +797,7 @@ test "mem_copy with zero size is a no-op" {
     var fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
 
-    const result = try interpreter.invokeBytecode(fiber, table.bytecode.header.get(main_id), &.{});
+    const result = try interpreter.invokeBytecode(fiber, table.bytecode.get(main_id), &.{});
     // The result should be the original destination value, not the source value.
     try testing.expectEqual(@as(u64, 0x11111111_11111111), result);
 }
@@ -830,7 +830,7 @@ fn interlacedBuiltin(fiber: *core.Fiber) callconv(.C) core.Builtin.Signal {
     const bc_function = @as(*const core.Function, @ptrCast(@alignCast(caller_call_frame.function)));
 
     // Look up the target function in the header of the calling bytecode function.
-    const target_function = bc_function.header.get(target_fn_id);
+    const target_function = bc_function.unit.get(target_fn_id);
 
     // Invoke the target bytecode function.
     const result = interpreter.invokeBytecode(fiber, target_function, &.{arg_for_target}) catch {
@@ -869,7 +869,7 @@ test "interpreter builtin function usage" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
 
@@ -912,7 +912,7 @@ test "interpreter interlaced bytecode->builtin->bytecode noneffectful" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
 
@@ -943,7 +943,7 @@ test "builtin function requests trap" {
     var table = try tb.encode(allocator);
     defer table.deinit();
 
-    const function = table.bytecode.header.get(main_id);
+    const function = table.bytecode.get(main_id);
     const fiber = try core.Fiber.init(allocator);
     defer fiber.deinit(allocator);
 

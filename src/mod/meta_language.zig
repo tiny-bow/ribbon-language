@@ -40,8 +40,8 @@ pub const Context = struct {
         return self.compiler.getArtifact(id);
     }
 
-    pub fn addArtifact(self: *Context, artifact: core.Bytecode) !BytecodeId {
-        return self.compiler.addArtifact(artifact.header);
+    pub fn addArtifact(self: *Context, artifact: *core.Bytecode) !BytecodeId {
+        return self.compiler.addArtifact(artifact);
     }
 
     pub fn delArtifact(self: *Context, id: BytecodeId) void {
@@ -66,9 +66,9 @@ pub const Context = struct {
         return compiler;
     }
 
-    pub fn resolveCompilation(self: *Context, compilation: *Compilation) !struct { BytecodeId, core.Bytecode } {
+    pub fn resolveCompilation(self: *Context, compilation: *Compilation) !struct { BytecodeId, *const core.Bytecode } {
         const artifact = try self.compiler.compileJob(compilation.job);
-        return .{ artifact.id, core.Bytecode{ .header = @alignCast(@ptrCast(artifact.value)) } };
+        return .{ artifact.id, @alignCast(@ptrCast(artifact.value)) };
     }
 };
 

@@ -539,7 +539,7 @@ pub const Job = struct {
 /// The default target for compiling Ribbon IR into bytecode.
 pub const BytecodeTarget = struct {
     compiler: *Compiler,
-    artifacts: common.UniqueReprMap(ArtifactId, core.Bytecode) = .{},
+    artifacts: common.UniqueReprMap(ArtifactId, *core.Bytecode) = .{},
 
     /// Get a `backend.Target` object from this bytecode target.
     pub fn target(self: *BytecodeTarget) Target {
@@ -567,19 +567,19 @@ pub const BytecodeTarget = struct {
     /// Given a compilation job, compile the IR in its context into a bytecode artifact.
     pub fn runJob(self: *BytecodeTarget, job: *Job) Target.Error!Artifact {
         // TODO: Compile the IR context into bytecode.
-        const compiled = common.todo(core.Bytecode, .{job});
+        const compiled = common.todo(*core.Bytecode, .{job});
 
         try self.artifacts.put(self.compiler.allocator, job.id, compiled);
 
         return Artifact{
             .id = job.id,
-            .value = @ptrCast(compiled.header),
+            .value = @ptrCast(compiled),
         };
     }
 
     /// Add a compiled bytecode artifact and get its ID.
     pub fn addArtifact(self: *BytecodeTarget, artifact: *anyopaque) Target.Error!ArtifactId {
-        const compiled: core.Bytecode = .{ .header = @alignCast(@ptrCast(artifact)) };
+        const compiled: *core.Bytecode = @alignCast(@ptrCast(artifact));
         const id = self.compiler.fresh_id.next();
 
         try self.artifacts.put(self.compiler.allocator, id, compiled);
@@ -593,7 +593,7 @@ pub const BytecodeTarget = struct {
 
         return Artifact{
             .id = id,
-            .value = @ptrCast(compiled.header),
+            .value = @ptrCast(compiled),
         };
     }
 

@@ -155,17 +155,52 @@ pub const InstructionBits: type = std.meta.Int(.unsigned, common.bitsFromBytes(B
 pub const RegisterBits: type = std.meta.Int(.unsigned, REGISTER_SIZE_BITS);
 
 /// A bytecode binary unit. Not necessarily self contained; may reference other units.
-/// Light wrapper for `core.Header`.
+/// Light wrapper for `core.Bytecode`.
 ///
 /// See `bytecode` module for construction methods.
-pub const Bytecode = packed struct(u64) {
-    /// The bytecode unit header.
-    header: *const Header,
+pub const Bytecode = extern struct {
+    /// The total size of the program.
+    size: u64 = @sizeOf(Bytecode),
+    /// Address table used by instructions this Bytecode owns.
+    address_table: AddressTable = .{},
+    /// Symbol bindings for the address table; what this program calls different addresses.
+    ///
+    /// Not necessarily a complete listing for all bindings;
+    /// only what it wants to be known externally.
+    symbol_table: SymbolTable = .{},
+
+    /// Get an address from an ID.
+    /// * Does not perform any validation outside of debug mode
+    pub fn get(self: *const Bytecode, id: anytype) *const StaticTypeFromId(@TypeOf(id)) {
+        return self.address_table.get(id);
+    }
+
+    /// Get the address of a symbol by name, in a type-generic manner.
+    /// * **Note**: This uses the raw table to lookup a symbol. While we do store symbol hashes to
+    /// speed this up a bit, for large symbol tables it is likely better to use a hashmap.
+    pub fn lookupAddress(self: *const Bytecode, name: []const u8) ?struct { SymbolKind, *const anyopaque } {
+        const id = self.symbol_table.lookupId(name) orelse return null;
+        return .{ self.address_table.getKind(id), self.address_table.getAddress(id) };
+    }
+
+    /// Get the address of a symbol within a given type by name.
+    /// * **Note**: This uses the raw table to lookup a symbol. While we do store symbol hashes to
+    /// speed this up a bit, for large symbol tables it is likely better to use a hashmap.
+    pub fn lookupAddressOf(self: *const Bytecode, comptime T: type, name: []const u8) error{TypeError}!?*const T {
+        const K = SymbolKind.fromType(T);
+
+        const erased = self.lookupAddress(name) orelse return null;
+
+        return if (erased[0] == K) @ptrCast(@alignCast(erased[1])) else {
+            @branchHint(.unlikely);
+            return error.TypeError;
+        };
+    }
 
     /// De-initialize the bytecode unit, freeing the memory that it owns.
-    pub fn deinit(self: Bytecode, allocator: std.mem.Allocator) void {
-        const base: [*]const u8 = @ptrCast(self.header);
-        const buf: []align(PAGE_SIZE) const u8 = @alignCast(base[0 .. @sizeOf(Header) + self.header.size]);
+    pub fn deinit(self: *Bytecode, allocator: std.mem.Allocator) void {
+        const base: [*]const u8 = @ptrCast(self);
+        const buf: []align(PAGE_SIZE) const u8 = @alignCast(base[0 .. @sizeOf(Bytecode) + self.size]);
         allocator.free(buf);
     }
 };
@@ -410,8 +445,9 @@ pub const Effect = enum(std.math.IntFittingRange(0, MAX_EFFECT_TYPES)) {
         return @intFromEnum(self);
     }
 };
+
 /// A minimal valid header for core.Function
-pub const EMPTY_HEADER: *const Header = &Header{};
+pub const EMPTY_BYTECODE: *const Bytecode = &Bytecode{ .size = 0 };
 
 /// Abstraction for the disambiguation of bytecode and builtin functions.
 /// When you take the address of a function, the type is lost; but we can recover it by inspecting the first byte at the address for this marker type.
@@ -433,9 +469,9 @@ pub const Function = extern struct {
     /// * This must remain as the first field and must not be mutated, because we allow taking the address of static values in the VM.
     ///   In order to disambiguate these addresses' types later (ie, builtin vs bytecode), we inspect the first byte of the address. See also `core.Builtin.kind`.
     kind: InternalFunctionKind = .bytecode,
-    /// The `Header` that owns this function,
+    /// The `Bytecode` that owns this function,
     /// which we rely on to resolve the ids encoded in the function's instructions.
-    header: *const Header,
+    unit: *const Bytecode,
     /// A pair of offsets:
     /// * `base`: the function's first instruction in the bytecode unit; the entry point
     /// * `upper`: one past the end of its instructions; for bounds checking
@@ -901,47 +937,6 @@ pub const SymbolTable = extern struct {
         }
 
         return null;
-    }
-};
-
-/// Metadata for a Ribbon program.
-pub const Header = extern struct {
-    /// The total size of the program.
-    size: u64 = @sizeOf(Header),
-    /// Address table used by instructions this header owns.
-    address_table: AddressTable = .{},
-    /// Symbol bindings for the address table; what this program calls different addresses.
-    ///
-    /// Not necessarily a complete listing for all bindings;
-    /// only what it wants to be known externally.
-    symbol_table: SymbolTable = .{},
-
-    /// Get an address from an ID.
-    /// * Does not perform any validation outside of debug mode
-    pub fn get(self: *const Header, id: anytype) *const StaticTypeFromId(@TypeOf(id)) {
-        return self.address_table.get(id);
-    }
-
-    /// Get the address of a symbol by name, in a type-generic manner.
-    /// * **Note**: This uses the raw table to lookup a symbol. While we do store symbol hashes to
-    /// speed this up a bit, for large symbol tables it is likely better to use a hashmap.
-    pub fn lookupAddress(self: *const Header, name: []const u8) ?struct { SymbolKind, *const anyopaque } {
-        const id = self.symbol_table.lookupId(name) orelse return null;
-        return .{ self.address_table.getKind(id), self.address_table.getAddress(id) };
-    }
-
-    /// Get the address of a symbol within a given type by name.
-    /// * **Note**: This uses the raw table to lookup a symbol. While we do store symbol hashes to
-    /// speed this up a bit, for large symbol tables it is likely better to use a hashmap.
-    pub fn lookupAddressOf(self: *const Header, comptime T: type, name: []const u8) error{TypeError}!?*const T {
-        const K = SymbolKind.fromType(T);
-
-        const erased = self.lookupAddress(name) orelse return null;
-
-        return if (erased[0] == K) @ptrCast(@alignCast(erased[1])) else {
-            @branchHint(.unlikely);
-            return error.TypeError;
-        };
     }
 };
 

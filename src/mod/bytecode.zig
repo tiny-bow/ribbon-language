@@ -39,12 +39,12 @@ test {
 /// Error type shared by bytecode apis.
 pub const Error = binary.Error;
 
-/// A table of bytecode, containing the header, statics, and linker map.
+/// A table of bytecode, containing the unit, statics, and linker map.
 pub const Table = struct {
     /// The map of unbound locations and their fixups.
     linker_map: LinkerMap,
     /// The bytecode unit.
-    bytecode: core.Bytecode,
+    bytecode: *core.Bytecode,
 
     /// Deinitialize the table, freeing all memory.
     pub fn deinit(self: *Table) void {
@@ -460,19 +460,19 @@ pub const TableBuilder = struct {
         // sanity check: For core.deinit to work, the header must be the base pointer of the buffer
         std.debug.assert(header_rel.isBase());
 
-        const header = header_rel.toTypedPtr(*core.Header, buf);
+        const header = header_rel.toTypedPtr(*core.Bytecode, buf);
 
         header.size += statics_size;
 
         // Wrap the encoded header in a `core.Bytecode` structure, and that in a `Table` with the linker
         return Table{
             .linker_map = linker_map,
-            .bytecode = core.Bytecode{ .header = header },
+            .bytecode = header,
         };
     }
 };
 
-/// Builder for bytecode headers. See `core.Header`.
+/// Builder for bytecode headers. See `core.Bytecode`.
 /// * This is a lower-level utility api used by the `TableBuilder`.
 pub const HeaderBuilder = struct {
     /// Binds *fully-qualified* names to AddressTable ids
@@ -532,9 +532,9 @@ pub const HeaderBuilder = struct {
         return id;
     }
 
-    /// Encode the current state of the table into a `core.Header` structure, returning its relative address.
+    /// Encode the current state of the table into a `core.Bytecode` structure, returning its relative address.
     pub fn encode(self: *const HeaderBuilder, encoder: *Encoder) Encoder.Error!RelativeAddress {
-        const header_rel = try encoder.createRel(core.Header);
+        const header_rel = try encoder.createRel(core.Bytecode);
 
         const start_size = encoder.getEncodedSize();
 
@@ -543,11 +543,11 @@ pub const HeaderBuilder = struct {
 
         const end_size = encoder.getEncodedSize();
 
-        const header = encoder.relativeToPointer(*core.Header, header_rel);
+        const header = encoder.relativeToPointer(*core.Bytecode, header_rel);
         header.size = end_size - start_size;
 
-        try symbol_table.write(encoder, header_rel.applyOffset(@intCast(@offsetOf(core.Header, "symbol_table"))));
-        try address_table.write(encoder, header_rel.applyOffset(@intCast(@offsetOf(core.Header, "address_table"))));
+        try symbol_table.write(encoder, header_rel.applyOffset(@intCast(@offsetOf(core.Bytecode, "symbol_table"))));
+        try address_table.write(encoder, header_rel.applyOffset(@intCast(@offsetOf(core.Bytecode, "address_table"))));
 
         return header_rel;
     }
@@ -599,7 +599,7 @@ pub const SymbolTableBuilder = struct {
         /// Expected usage:
         /// 1. Reserve bytecode header space at the start of encoding region.
         /// 2. Generate the address table with `SymbolTableBuilder.encode`, returning this structure.
-        /// 3. Offset the header address with `rel_addr.applyOffset(@offsetOf(core.Header), "symbol_table")`.
+        /// 3. Offset the header address with `rel_addr.applyOffset(@offsetOf(core.Bytecode), "symbol_table")`.
         /// 4. Pass the offset relative address to this method.
         /// 5. Finalize the encoder with `Encoder.finalize` in order for fixups added by this function to complete patching of the header.
         pub fn write(self: *const ProtoSymbolTable, encoder: *Encoder, table_rel: RelativeAddress) Encoder.Error!void {
@@ -801,7 +801,7 @@ pub const AddressTableBuilder = struct {
         /// Expected usage:
         /// 1. Reserve bytecode header space at the start of encoding region.
         /// 2. Generate the address table with `AddressTableBuilder.encode`, returning this structure.
-        /// 3. Offset the header address with `rel_addr.applyOffset(@offsetOf(core.Header), "address_table")`.
+        /// 3. Offset the header address with `rel_addr.applyOffset(@offsetOf(core.Bytecode), "address_table")`.
         /// 4. Pass the offset relative address to this method.
         /// 5. Finalize the encoder with `Encoder.finalize` in order for fixups added by this function to complete patching of the header.
         pub fn write(self: *const ProtoAddressTable, encoder: *Encoder, table_rel: RelativeAddress) Encoder.Error!void {
@@ -1708,7 +1708,7 @@ pub const FunctionBuilder = struct {
             // Add a fixup for the function's header reference
             try encoder.bindFixup(
                 .absolute,
-                .{ .relative = entry_addr_rel.applyOffset(@intCast(@offsetOf(core.Function, "header"))) },
+                .{ .relative = entry_addr_rel.applyOffset(@intCast(@offsetOf(core.Function, "unit"))) },
                 .{ .relative = .base },
                 null,
             );
@@ -2519,7 +2519,7 @@ test "encode simple function with wide instruction" {
     var disas_buf = std.ArrayList(u8).init(tb.gpa);
     defer disas_buf.deinit();
 
-    const main_func = table.bytecode.header.get(main_id);
+    const main_func = table.bytecode.get(main_id);
     const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
     try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
 
@@ -2558,7 +2558,7 @@ test "encode function with branch and dead code" {
     var disas_buf = std.ArrayList(u8).init(tb.gpa);
     defer disas_buf.deinit();
 
-    const main_func = table.bytecode.header.get(main_id);
+    const main_func = table.bytecode.get(main_id);
     const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
     try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
 
@@ -2603,7 +2603,7 @@ test "encode function call" {
     {
         var disas_buf = std.ArrayList(u8).init(tb.gpa);
         defer disas_buf.deinit();
-        const main_func = table.bytecode.header.get(main_id);
+        const main_func = table.bytecode.get(main_id);
         const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
         try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
 
@@ -2621,7 +2621,7 @@ test "encode function call" {
     {
         var disas_buf = std.ArrayList(u8).init(tb.gpa);
         defer disas_buf.deinit();
-        const add_func = table.bytecode.header.get(add_id);
+        const add_func = table.bytecode.get(add_id);
         const code_slice = add_func.extents.base[0..@divExact(@intFromPtr(add_func.extents.upper) - @intFromPtr(add_func.extents.base), @sizeOf(core.InstructionBits))];
         try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
 
@@ -2657,14 +2657,14 @@ test "encode static data reference" {
     defer table.deinit();
 
     // Check that the loaded constant is correct
-    const data: *const core.Constant = table.bytecode.header.get(const_id);
+    const data: *const core.Constant = table.bytecode.get(const_id);
     const data_ptr: *const u64 = @alignCast(@ptrCast(data.asPtr()));
     try testing.expectEqual(@as(u64, 0xCAFEBABE_DECAF_BAD), data_ptr.*);
 
     // Check disassembly
     var disas_buf = std.ArrayList(u8).init(tb.gpa);
     defer disas_buf.deinit();
-    const main_func = table.bytecode.header.get(main_id);
+    const main_func = table.bytecode.get(main_id);
     const main_len = @divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits));
     try disas(main_func.extents.base[0..main_len], .{ .buffer_address = false }, disas_buf.writer());
 
@@ -2764,7 +2764,7 @@ test "encode local variable reference" {
     var disas_buf = std.ArrayList(u8).init(tb.gpa);
     defer disas_buf.deinit();
 
-    const main_func = table.bytecode.header.get(main_id);
+    const main_func = table.bytecode.get(main_id);
     const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
     try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
 
@@ -2811,7 +2811,7 @@ test "encode function with conditional branch" {
     var disas_buf = std.ArrayList(u8).init(tb.gpa);
     defer disas_buf.deinit();
 
-    const main_func = table.bytecode.header.get(main_id);
+    const main_func = table.bytecode.get(main_id);
     const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
     try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
 
@@ -2864,7 +2864,7 @@ test "data builder with internal pointer fixup" {
     defer table.deinit();
 
     // Verify the structure after encoding and linking
-    const data: *const core.Constant = table.bytecode.header.get(const_id);
+    const data: *const core.Constant = table.bytecode.get(const_id);
     const node1_ptr: *const Node = @alignCast(@ptrCast(data.asPtr()));
 
     try testing.expectEqual(@as(u64, 111), node1_ptr.value);
@@ -2911,10 +2911,10 @@ test "data builder with external function pointer fixup" {
     defer table.deinit();
 
     // Verify
-    const data: *const core.Constant = table.bytecode.header.get(const_id);
+    const data: *const core.Constant = table.bytecode.get(const_id);
     const my_struct_ptr: *const StructWithFnPtr = @alignCast(@ptrCast(data.asPtr()));
 
-    const func_ptr = table.bytecode.header.get(func_id);
+    const func_ptr = table.bytecode.get(func_id);
 
     try testing.expectEqual(@as(u64, 42), my_struct_ptr.id);
     try testing.expect(my_struct_ptr.handler == @as(?*const fn () void, @ptrCast(func_ptr)));
@@ -2989,7 +2989,7 @@ test "encode handler set" {
     {
         var disas_buf = std.ArrayList(u8).init(tb.gpa);
         defer disas_buf.deinit();
-        const main_func = table.bytecode.header.get(main_id);
+        const main_func = table.bytecode.get(main_id);
         const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
         try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
 
@@ -3007,7 +3007,7 @@ test "encode handler set" {
     {
         var disas_buf = std.ArrayList(u8).init(tb.gpa);
         defer disas_buf.deinit();
-        const handler_func: *const core.Function = table.bytecode.header.get(handler_fn_id);
+        const handler_func: *const core.Function = table.bytecode.get(handler_fn_id);
         const code_slice = handler_func.extents.base[0..@divExact(@intFromPtr(handler_func.extents.upper) - @intFromPtr(handler_func.extents.base), @sizeOf(core.InstructionBits))];
         try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
 
@@ -3058,8 +3058,8 @@ test "encode handler set with cancellation" {
     var table = try tb.builder.encode(tb.gpa);
     defer table.deinit();
 
-    const main_func = table.bytecode.header.get(main_id);
-    const set: *const core.HandlerSet = table.bytecode.header.get(handler_set_id);
+    const main_func = table.bytecode.get(main_id);
+    const set: *const core.HandlerSet = table.bytecode.get(handler_set_id);
     const cancel_addr = set.cancellation.address;
 
     // The entry block has 3 instructions (push, prompt, br), taking 3 words.
@@ -3122,7 +3122,7 @@ test "encode handler set with upvalues" {
     // Verify handler function disassembly
     var disas_buf = std.ArrayList(u8).init(tb.gpa);
     defer disas_buf.deinit();
-    const h_func: *const core.Function = table.bytecode.header.get(handler_fn_id);
+    const h_func: *const core.Function = table.bytecode.get(handler_fn_id);
     const code_slice = h_func.extents.base[0..@divExact(@intFromPtr(h_func.extents.upper) - @intFromPtr(h_func.extents.base), @sizeOf(core.InstructionBits))];
     try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
 
@@ -3166,14 +3166,14 @@ test "bind builtin function" {
 
     // Verification
     // 1. Check the address in the header
-    const builtin_addr: *const core.Builtin = table.bytecode.header.get(builtin_id);
+    const builtin_addr: *const core.Builtin = table.bytecode.get(builtin_id);
     try testing.expectEqual(builtin_addr.kind, .builtin);
     try testing.expectEqual(@intFromPtr(&dummyBuiltinProc), builtin_addr.addr);
 
     // 2. Check the disassembly
     var disas_buf = std.ArrayList(u8).init(tb.gpa);
     defer disas_buf.deinit();
-    const main_func = table.bytecode.header.get(main_id);
+    const main_func = table.bytecode.get(main_id);
     const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
     try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
 
