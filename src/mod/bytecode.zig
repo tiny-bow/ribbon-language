@@ -164,7 +164,7 @@ pub const TableBuilder = struct {
     }
 
     /// Create an entry for a static value in the bytecode header.
-    pub fn createHeaderEntry(self: *TableBuilder, comptime kind: core.SymbolKind, name: ?[]const u8) error{ BadEncoding, OutOfMemory }!core.IdFromSymbolKind(kind) {
+    pub fn createHeaderEntry(self: *TableBuilder, comptime kind: core.SymbolKind, name: ?[]const u8) error{ BadEncoding, OutOfMemory }!kind.asIdType() {
         // get the next static id
         const static_id = self.header.getNextId();
         const typed_id = static_id.bitcast(kind.toType(), core.STATIC_ID_BITS);
@@ -1457,7 +1457,7 @@ pub const HandlerSetBuilder = struct {
             .absolute,
             .{ .relative = handler_set_rel.applyOffset(@intCast(@offsetOf(core.HandlerSet, "handlers"))) },
             .{ .relative = handlers_buf_rel },
-            @bitOffsetOf(core.HandlerBuffer, "ptr"),
+            @bitOffsetOf(core.HandlerSet.Buffer, "ptr"),
         );
 
         // encode each handler in the set and create a fixup for it

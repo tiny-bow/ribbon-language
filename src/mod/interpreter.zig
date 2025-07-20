@@ -91,7 +91,6 @@ fn getOrInitWrapper() *const core.Function {
     const buffer: [*]core.InstructionBits = @ptrCast(&static.buffer);
 
     static.function = core.Function{
-        .unit = core.EMPTY_BYTECODE,
         .extents = .{
             .base = buffer,
             .upper = buffer + 1,
