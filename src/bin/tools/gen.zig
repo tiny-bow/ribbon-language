@@ -1335,14 +1335,14 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.C
 fn generateHeaderAssembly(includePlaceholders: bool, writer: anytype) !void {
     try writer.print("%define OP_SIZE 0x{x}\n\n", .{core.OPCODE_SIZE});
 
-    inline for (comptime std.meta.fieldNames(core.mem.FiberHeader)) |fieldName| {
-        const baseOffset = @offsetOf(core.mem.FiberHeader, fieldName);
+    inline for (comptime std.meta.fieldNames(core.Fiber)) |fieldName| {
+        const baseOffset = @offsetOf(core.Fiber, fieldName);
 
         // Because the `Stack` structure has its top_ptr at the beginning of its data,
         // we can just use the stack's offset as the top_ptr offset, which is all we need.
         try writer.print("%define Fiber.{s} 0x{x}\n", .{ fieldName, baseOffset });
 
-        const T: type = @FieldType(core.mem.FiberHeader, fieldName);
+        const T: type = @FieldType(core.Fiber, fieldName);
 
         if (comptime common.hasDecl(T, .IS_RIBBON_STACK)) {
             try writer.print("%define Fiber.{s}.base 0x{x}\n", .{ fieldName, baseOffset + @offsetOf(T, "base") });

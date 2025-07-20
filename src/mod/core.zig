@@ -1070,7 +1070,7 @@ pub const mem = comptime_memorySize: {
 
         if (alignment != REQUIRED_ALIGNMENT) {
             @compileError(std.fmt.comptimePrint(
-                \\[Fiber.mem] - field "{s}" (of type `{s}`) in `FiberHeader` has incorrect alignment for its memory block;
+                \\[Fiber.mem] - field "{s}" (of type `{s}`) in `Fiber` has incorrect alignment for its memory block;
                 \\              it is {d} but it should be == {}"
                 \\
             , .{ fieldName, @typeName(S), alignment, REQUIRED_ALIGNMENT }));
@@ -1128,13 +1128,13 @@ pub const mem = comptime_memorySize: {
         pub const ALIGNMENT = REQUIRED_ALIGNMENT;
 
         /// The total number of bytes required to store the full fiber's `memory`.
-        /// * includes the `mem.FiberHeader` and all stacks' memory blocks.
+        /// * includes the `Fiber` and all stacks' memory blocks.
         pub const SIZE = total;
 
         /// The offsets of each section within the fiber's `memory`.
         pub const OFFSETS = finalOffsets;
 
-        /// Byte block type representing a full `Fiber`, with its `mem.FiberHeader` and stacks' memory blocks.
+        /// Byte block type representing a full `Fiber`, with all of its memory blocks.
         pub const FiberBuffer: type = extern struct {
             bytes: [SIZE]u8 align(REQUIRED_ALIGNMENT),
         };
