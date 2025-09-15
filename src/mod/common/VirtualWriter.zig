@@ -177,7 +177,7 @@ pub fn new(comptime USABLE_ADDRESS_SPACE: comptime_int) type {
             const bytes = avail[padding..total_size];
             self.cursor += bytes.len;
 
-            return @alignCast(@ptrCast(bytes));
+            return @ptrCast(@alignCast(bytes));
         }
 
         /// Same as `std.mem.Allocator.dupe`, but copies a slice into the virtual address space of the writer.

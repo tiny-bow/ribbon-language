@@ -118,7 +118,7 @@ pub fn short(comptime T: type, comptime MUT: common.Mutability) type {
             return self.asPtr()[0..self.len];
         }
 
-        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        pub fn format(self: Self, writer: *std.io.Writer) !void {
             if (comptime @typeInfo(PointerType).pointer.child == u8) {
                 try writer.print("\"{s}\"", .{self.asSlice()});
             } else {
@@ -175,7 +175,7 @@ pub fn fixed(comptime T: type, comptime CAPACITY: comptime_int) type {
         }
 
         /// `std.fmt` impl
-        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        pub fn format(self: Self, writer: *std.io.Writer) !void {
             if (comptime T == u8) {
                 try writer.print("\"{s}\"", .{self.asSlice()});
             } else {

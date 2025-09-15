@@ -68,7 +68,7 @@ pub const Context = struct {
 
     pub fn resolveCompilation(self: *Context, compilation: *Compilation) !struct { BytecodeId, *const core.Bytecode } {
         const artifact = try self.compiler.compileJob(compilation.job);
-        return .{ artifact.id, @alignCast(@ptrCast(artifact.value)) };
+        return .{ artifact.id, @ptrCast(@alignCast(artifact.value)) };
     }
 };
 
@@ -826,42 +826,42 @@ pub const Value = packed struct(u64) {
     pub fn asBytecode(self: Value) ?*core.Function {
         if (!self.isBytecode()) return null;
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the builtin address payload of a value.
     pub fn asBuiltin(self: Value) ?*core.Builtin {
         if (!self.isBuiltin()) return null;
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the foreign address payload of a value.
     pub fn asForeign(self: Value) ?core.ForeignAddress {
         if (!self.isForeign()) return null;
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the string payload of a value.
     pub fn asString(self: Value) ?*IString {
         if (!self.isString()) return null;
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the cst payload of a value.
     pub fn asCst(self: Value) ?*source.SyntaxTree {
         if (!self.isCst()) return null;
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the expr payload of a value.
     pub fn asExpr(self: Value) ?*Expr {
         if (!self.isExpr()) return null;
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the f64 payload of a value. See also `asF64`.
@@ -932,7 +932,7 @@ pub const Value = packed struct(u64) {
     pub fn forceBytecode(self: Value) *core.Bytecode {
         std.debug.assert(self.isBytecode());
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the builtin address payload of a value. See also `asBuiltin`.
@@ -940,7 +940,7 @@ pub const Value = packed struct(u64) {
     pub fn forceBuiltin(self: Value) *core.Builtin {
         std.debug.assert(self.isBuiltin());
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the foreign address payload of a value. See also `asForeign`.
@@ -948,7 +948,7 @@ pub const Value = packed struct(u64) {
     pub fn forceForeign(self: Value) core.ForeignAddress {
         std.debug.assert(self.isForeign());
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the string payload of a value. See also `asString`.
@@ -956,7 +956,7 @@ pub const Value = packed struct(u64) {
     pub fn forceString(self: Value) *IString {
         std.debug.assert(self.isString());
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the cst payload of a value. See also `asCst`.
@@ -964,7 +964,7 @@ pub const Value = packed struct(u64) {
     pub fn forceCst(self: Value) *source.SyntaxTree {
         std.debug.assert(self.isCst());
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the expression payload of a value. See also `asExpr`.
@@ -972,7 +972,7 @@ pub const Value = packed struct(u64) {
     pub fn forceExpr(self: Value) *Expr {
         std.debug.assert(self.isExpr());
 
-        return @alignCast(@ptrCast(self.val_bits.forceObject()));
+        return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 };
 
@@ -1120,9 +1120,7 @@ pub const Expr = struct {
 
         pub fn format(
             self: *const Operator,
-            comptime _: []const u8,
-            _: std.fmt.FormatOptions,
-            writer: anytype,
+            writer: *std.io.Writer,
         ) !void {
             switch (self.operands.len) {
                 1 => {
@@ -1190,7 +1188,7 @@ pub const Expr = struct {
     /// Writes a source-text representation of the expression to the given writer.
     /// * This is *not* the same as the original text parsed to produce this expression;
     ///   it is a canonical representation of the expression.
-    pub fn display(self: *const Expr, bp: i16, writer: anytype) !void {
+    pub fn display(self: *const Expr, bp: i16, writer: *std.io.Writer) !void {
         const need_parens = self.data.mayRequireParens() and self.precedence() < bp;
 
         if (need_parens) try writer.writeByte('(');
@@ -1204,14 +1202,14 @@ pub const Expr = struct {
             .list => {
                 try writer.writeAll("⟨ ");
                 for (self.data.list) |child| {
-                    try writer.print("{}, ", .{child});
+                    try writer.print("{f}, ", .{child});
                 }
                 try writer.writeAll("⟩");
             },
             .tuple => {
                 try writer.writeAll("(");
                 for (self.data.tuple, 0..) |child, i| {
-                    try writer.print("{}", .{child});
+                    try writer.print("{f}", .{child});
 
                     if (i < self.data.tuple.len - 1) {
                         try writer.writeAll(", ");
@@ -1224,20 +1222,20 @@ pub const Expr = struct {
             .array => {
                 try writer.writeAll("[ ");
                 for (self.data.array) |child| {
-                    try writer.print("{}, ", .{child});
+                    try writer.print("{f}, ", .{child});
                 }
                 try writer.writeAll("]");
             },
             .compound => {
                 try writer.writeAll("{ ");
                 for (self.data.compound) |child| {
-                    try writer.print("{}, ", .{child});
+                    try writer.print("{f}, ", .{child});
                 }
                 try writer.writeAll("}");
             },
             .seq => {
                 for (self.data.seq, 0..) |child, i| {
-                    try writer.print("{}", .{child});
+                    try writer.print("{f}", .{child});
                     if (i < self.data.seq.len - 1) {
                         try writer.writeAll("; ");
                     }
@@ -1249,10 +1247,10 @@ pub const Expr = struct {
                     try child.display(0, writer);
                 }
             },
-            .operator => try writer.print("{}", .{self.data.operator}),
-            .decl => try writer.print("{} := {}", .{ self.data.decl[0], self.data.decl[1] }),
-            .set => try writer.print("{} = {}", .{ self.data.set[0], self.data.set[1] }),
-            .lambda => try writer.print("fun {}. {}", .{ self.data.lambda[0], self.data.lambda[1] }),
+            .operator => try writer.print("{f}", .{self.data.operator}),
+            .decl => try writer.print("{f} := {f}", .{ self.data.decl[0], self.data.decl[1] }),
+            .set => try writer.print("{f} = {f}", .{ self.data.set[0], self.data.set[1] }),
+            .lambda => try writer.print("fun {f}. {f}", .{ self.data.lambda[0], self.data.lambda[1] }),
         }
 
         if (need_parens) try writer.writeByte(')');
@@ -1261,9 +1259,7 @@ pub const Expr = struct {
     /// `std.fmt` impl
     pub fn format(
         self: *const Expr,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
+        writer: *std.io.Writer,
     ) !void {
         try self.display(std.math.minInt(i16), writer);
     }
@@ -1302,12 +1298,10 @@ pub fn parseCst(allocator: std.mem.Allocator, src: []const u8, cst: source.Synta
         },
 
         cst_types.String => {
-            var buf = std.ArrayList(u8).init(allocator);
+            var buf = std.io.Writer.Allocating.init(allocator);
             defer buf.deinit();
 
-            const writer = buf.writer();
-
-            try assembleString(writer, src, cst);
+            try assembleString(&buf.writer, src, cst);
 
             return Expr{
                 .source = cst.source,
@@ -1603,14 +1597,14 @@ pub fn parseCst(allocator: std.mem.Allocator, src: []const u8, cst: source.Synta
         },
 
         else => {
-            log.debug("parseCst: unexpected cst type {}", .{cst.type});
+            log.debug("parseCst: unexpected cst type {f}", .{cst.type});
             unreachable;
         },
     }
 }
 
 /// Dumps an rml concrete syntax tree to a string.
-pub fn dumpCstSExprs(src: []const u8, cst: source.SyntaxTree, writer: anytype) !void {
+pub fn dumpCstSExprs(src: []const u8, cst: source.SyntaxTree, writer: *std.io.Writer) !void {
     switch (cst.type) {
         cst_types.Identifier, cst_types.Int => try writer.print("{s}", .{cst.token.data.sequence.asSlice()}),
         cst_types.String => {
@@ -1650,7 +1644,7 @@ pub fn dumpCstSExprs(src: []const u8, cst: source.SyntaxTree, writer: anytype) !
                     try writer.writeAll("⟨");
                     try writer.print("{s}", .{cst.token.data.sequence.asSlice()});
                 },
-                else => try writer.print("⟨{}", .{cst.token}),
+                else => try writer.print("⟨{f}", .{cst.token}),
             }
         },
     }
@@ -1737,25 +1731,25 @@ pub fn getCst(
     const out = parser.pratt(std.math.minInt(i16));
 
     if (std.debug.runtime_safety) {
-        log.debug("getCst: parser result: {!?}", .{out});
+        log.debug("getCst: parser result: {!?f}", .{out});
 
         if (std.meta.isError(out) or (try out) == null or !parser.isEof()) {
-            log.debug("getCst: parser result was null or error, or did not consume input {} {} {}", .{ std.meta.isError(out), if (!std.meta.isError(out)) (try out) == null else false, !parser.isEof() });
+            log.debug("getCst: parser result was null or error, or did not consume input {any} {any} {any}", .{ std.meta.isError(out), if (!std.meta.isError(out)) (try out) == null else false, !parser.isEof() });
 
             if (parser.lexer.peek()) |maybe_cached_token| {
                 if (maybe_cached_token) |cached_token| {
-                    log.debug("getCst: unused token in lexer cache {}: `{s}` ({x})", .{ parser.lexer.inner.location, cached_token, cached_token });
+                    log.debug("getCst: unused token in lexer cache {f}: `{f}`", .{ parser.lexer.inner.location, cached_token });
                 }
             } else |err| {
-                log.debug("syntax error: {}", .{err});
+                log.debug("syntax error: {s}", .{@errorName(err)});
             }
 
             const rem = src[parser.lexer.inner.location.buffer..];
 
             if (parser.lexer.inner.iterator.peek_cache) |cached_char| {
-                log.debug("getCst: unused character in lexer cache {}: `{u}` ({x})", .{ parser.lexer.inner.location, cached_char, cached_char });
+                log.debug("getCst: unused character in lexer cache {f}: `{u}` ({x})", .{ parser.lexer.inner.location, cached_char, cached_char });
             } else if (rem.len > 0) {
-                log.debug("getCst: unexpected input after parsing {}: `{s}` ({any})", .{ parser.lexer.inner.location, rem, rem });
+                log.debug("getCst: unexpected input after parsing {f}: `{s}` ({x})", .{ parser.lexer.inner.location, rem, rem });
             }
         }
     }
@@ -1771,7 +1765,7 @@ pub fn getExpr(
     lexer_settings: source.LexerSettings,
     source_name: []const u8,
     src: []const u8,
-) (source.SyntaxError || error{ InvalidString, InvalidEscape })!?Expr {
+) (source.SyntaxError || error{ InvalidString, InvalidEscape } || std.io.Writer.Error)!?Expr {
     var cst = try getCst(allocator, lexer_settings, source_name, src) orelse return null;
     defer cst.deinit(allocator);
 
@@ -1811,13 +1805,13 @@ pub const cst_types = gen: {
 /// Assembles an rml concrete syntax tree string literal into a buffer.
 /// * This requires the start and end components of the provided syntax tree to be from the same source buffer;
 ///   other contents are ignored, and the string is assembled from the intermediate source text.
-pub fn assembleString(writer: anytype, src: []const u8, string: source.SyntaxTree) !void {
+pub fn assembleString(writer: *std.io.Writer, src: []const u8, string: source.SyntaxTree) !void {
     std.debug.assert(string.type == cst_types.String);
 
     const subexprs = string.operands.asSlice();
 
     if (!std.mem.eql(u8, subexprs[0].source.name, subexprs[subexprs.len - 1].source.name)) {
-        log.err("assembleString: input string tree has mismatched source origins, {} and {}", .{
+        log.err("assembleString: input string tree has mismatched source origins, {f} and {f}", .{
             subexprs[0],
             subexprs[subexprs.len - 1],
         });
@@ -1828,7 +1822,7 @@ pub fn assembleString(writer: anytype, src: []const u8, string: source.SyntaxTre
     const end_loc = subexprs[subexprs.len - 1].source.location;
 
     if (start_loc.buffer > end_loc.buffer or end_loc.buffer > src.len) {
-        log.err("assembleString: invalid string {} -> {}", .{ start_loc, end_loc });
+        log.err("assembleString: invalid string {f} -> {f}", .{ start_loc, end_loc });
         return error.InvalidString;
     }
 
@@ -1874,24 +1868,24 @@ pub fn nuds() [10]source.Nud {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("function: parsing token {}", .{token});
+                    log.debug("function: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard fn token
                     var patt = try parser.pratt(std.math.minInt(i16)) orelse {
                         log.debug("function: no pattern found; panic", .{});
                         return error.UnexpectedInput;
                     };
                     errdefer patt.deinit(parser.allocator);
-                    log.debug("function: got pattern {}", .{patt});
+                    log.debug("function: got pattern {f}", .{patt});
                     if (try parser.lexer.peek()) |next_tok| {
                         if (next_tok.tag == .special and next_tok.data.special.escaped == false and next_tok.data.special.punctuation == .dot) {
-                            log.debug("function: found dot token {}", .{next_tok});
+                            log.debug("function: found dot token {f}", .{next_tok});
                             try parser.lexer.advance(); // discard dot
                             var inner = try parser.pratt(std.math.minInt(i16)) orelse {
                                 log.debug("function: no inner expression found; panic", .{});
                                 return error.UnexpectedEof;
                             };
                             errdefer inner.deinit(parser.allocator);
-                            log.debug("function: got inner expression {}", .{inner});
+                            log.debug("function: got inner expression {f}", .{inner});
                             const buff: []source.SyntaxTree = try parser.allocator.alloc(source.SyntaxTree, 2);
                             buff[0] = patt;
                             buff[1] = inner;
@@ -1903,7 +1897,7 @@ pub fn nuds() [10]source.Nud {
                                 .operands = .fromSlice(buff),
                             };
                         } else {
-                            log.debug("function: expected dot token, found {}; panic", .{next_tok});
+                            log.debug("function: expected dot token, found {f}; panic", .{next_tok});
                             return error.UnexpectedInput;
                         }
                     } else {
@@ -1924,7 +1918,7 @@ pub fn nuds() [10]source.Nud {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("leading_br: parsing token {}", .{token});
+                    log.debug("leading_br: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard linebreak
                     return source.SyntaxTree{
                         .source = .{ .name = parser.settings.source_name, .location = token.location },
@@ -1947,17 +1941,17 @@ pub fn nuds() [10]source.Nud {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("indent: parsing token {}", .{token});
+                    log.debug("indent: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard indent
                     var inner = try parser.pratt(std.math.minInt(i16)) orelse {
                         log.debug("indent: no inner expression found; panic", .{});
                         return error.UnexpectedEof;
                     };
                     errdefer inner.deinit(parser.allocator);
-                    log.debug("indent: got {} interior, looking for end of block token", .{inner});
+                    log.debug("indent: got {f} interior, looking for end of block token", .{inner});
                     if (try parser.lexer.peek()) |next_tok| {
                         if (next_tok.tag == .indentation and next_tok.data.indentation == .unindent) {
-                            log.debug("indent: found end of block token {}", .{next_tok});
+                            log.debug("indent: found end of block token {f}", .{next_tok});
                             const buff: []source.SyntaxTree = try parser.allocator.alloc(source.SyntaxTree, 1);
                             buff[0] = inner;
                             try parser.lexer.advance(); // discard indent
@@ -1969,7 +1963,7 @@ pub fn nuds() [10]source.Nud {
                                 .operands = .fromSlice(buff),
                             };
                         } else {
-                            log.debug("indent: found unexpected token {}; panic", .{next_tok});
+                            log.debug("indent: found unexpected token {f}; panic", .{next_tok});
                             return error.UnexpectedInput;
                         }
                     } else {
@@ -1990,17 +1984,17 @@ pub fn nuds() [10]source.Nud {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("block: parsing token {}", .{token});
+                    log.debug("block: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard beginning paren
                     var inner = try parser.pratt(std.math.minInt(i16)) orelse none: {
                         log.debug("block: no inner expression found", .{});
                         break :none null;
                     };
                     errdefer if (inner) |*i| i.deinit(parser.allocator);
-                    log.debug("block: got {?} interior, looking for end of block token", .{inner});
+                    log.debug("block: got {?f} interior, looking for end of block token", .{inner});
                     if (try parser.lexer.peek()) |next_tok| {
                         if (next_tok.tag == .special and next_tok.data.special.punctuation == token.data.special.punctuation.invert().? and next_tok.data.special.escaped == false) {
-                            log.debug("block: found end of block token {}", .{next_tok});
+                            log.debug("block: found end of block token {f}", .{next_tok});
                             try parser.lexer.advance(); // discard end paren
                             return source.SyntaxTree{
                                 .source = .{ .name = parser.settings.source_name, .location = token.location },
@@ -2014,7 +2008,7 @@ pub fn nuds() [10]source.Nud {
                                 } else .empty,
                             };
                         } else {
-                            log.debug("block: found unexpected token {}; panic", .{next_tok});
+                            log.debug("block: found unexpected token {f}; panic", .{next_tok});
                             return error.UnexpectedInput;
                         }
                     } else {
@@ -2035,35 +2029,35 @@ pub fn nuds() [10]source.Nud {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("single_quote: parsing token {}", .{token});
+                    log.debug("single_quote: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard beginning quote
                     const content = try parser.lexer.next() orelse {
                         log.debug("single_quote: no content found; panic", .{});
                         return error.UnexpectedEof;
                     };
-                    log.debug("single_quote: found content token {}", .{content});
+                    log.debug("single_quote: found content token {f}", .{content});
                     var require_literal = false;
                     var consume_next = false;
                     var require_symbol = false;
                     switch (content.tag) {
                         .special => {
                             if (content.data.special.escaped) {
-                                log.debug("single_quote: found escaped token {}", .{content});
+                                log.debug("single_quote: found escaped token {f}", .{content});
                                 require_literal = true;
                             } else {
-                                log.debug("single_quote: found punctuation, unescaped {}", .{content});
+                                log.debug("single_quote: found punctuation, unescaped {f}", .{content});
                                 if (content.data.special.punctuation == .backslash) {
                                     log.debug("single_quote: found unescaped backslash token; expect escape sequence char literal", .{});
                                     consume_next = true;
                                     require_literal = true;
                                 } else if (content.data.special.punctuation == .single_quote) {
-                                    log.debug("single_quote: found end quote token {}", .{content});
+                                    log.debug("single_quote: found end quote token {f}", .{content});
                                     const is_space = content.location.buffer > token.location.buffer + 1;
                                     if (!is_space) {
-                                        log.debug("token {} not expected with no space between proceeding token; panic", .{content});
+                                        log.debug("token {f} not expected with no space between proceeding token; panic", .{content});
                                         return error.UnexpectedInput;
                                     }
-                                    log.debug("single_quote: found end quote token {} with space between proceeding token", .{content});
+                                    log.debug("single_quote: found end quote token {f} with space between proceeding token", .{content});
                                     require_literal = true;
                                 }
                             }
@@ -2075,12 +2069,12 @@ pub fn nuds() [10]source.Nud {
                             }
                         },
                         else => {
-                            log.debug("single_quote: found unexpected token {}; panic", .{content});
+                            log.debug("single_quote: found unexpected token {f}; panic", .{content});
                             return error.UnexpectedInput;
                         },
                     }
                     if (require_literal) {
-                        log.debug("single_quote: require literal - content token {}", .{content});
+                        log.debug("single_quote: require literal - content token {f}", .{content});
                         const secondary = if (consume_next) consume: {
                             log.debug("single_quote: required to consume next token", .{});
                             break :consume try parser.lexer.next() orelse {
@@ -2093,7 +2087,7 @@ pub fn nuds() [10]source.Nud {
                             return error.UnexpectedEof;
                         };
                         if (end_quote.tag != .special or end_quote.data.special.escaped != false or end_quote.data.special.punctuation != .single_quote) {
-                            log.debug("single_quote: expected single quote to end literal, found {}; panic", .{end_quote});
+                            log.debug("single_quote: expected single quote to end literal, found {f}; panic", .{end_quote});
                             return error.UnexpectedInput;
                         }
                         const buff = try parser.allocator.alloc(source.SyntaxTree, if (consume_next) 3 else 2);
@@ -2130,7 +2124,7 @@ pub fn nuds() [10]source.Nud {
                             .operands = .fromSlice(buff),
                         };
                     } else if (require_symbol) {
-                        log.debug("single_quote: require symbol token {}", .{content});
+                        log.debug("single_quote: require symbol token {f}", .{content});
                         return source.SyntaxTree{
                             .source = .{ .name = parser.settings.source_name, .location = token.location },
                             .precedence = bp,
@@ -2142,7 +2136,7 @@ pub fn nuds() [10]source.Nud {
                     log.debug("single_quote: not explicitly a literal or symbol, checking for end quote", .{});
                     if (try parser.lexer.peek()) |end_tok| {
                         if (end_tok.tag == .special and end_tok.data.special.escaped == false and end_tok.data.special.punctuation == .single_quote) {
-                            log.debug("single_quote: found end of quote token {}", .{end_tok});
+                            log.debug("single_quote: found end of quote token {f}", .{end_tok});
                             try parser.lexer.advance(); // discard end quote
                             const buff = try parser.allocator.alloc(source.SyntaxTree, 2);
                             buff[0] = .{
@@ -2167,7 +2161,7 @@ pub fn nuds() [10]source.Nud {
                                 .operands = .fromSlice(buff),
                             };
                         } else {
-                            log.debug("single_quote: found unexpected token {}; not a char literal", .{end_tok});
+                            log.debug("single_quote: found unexpected token {f}; not a char literal", .{end_tok});
                         }
                     } else {
                         log.debug("single_quote: no end quote token found; not a char literal", .{});
@@ -2193,13 +2187,13 @@ pub fn nuds() [10]source.Nud {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("string: parsing token {}", .{token});
+                    log.debug("string: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard beginning quote
                     var buff: common.ArrayList(source.SyntaxTree) = .empty;
                     defer buff.deinit(parser.allocator);
                     while (try parser.lexer.next()) |next_token| {
                         if (next_token.tag == .special and !next_token.data.special.escaped and next_token.data.special.punctuation == token.data.special.punctuation) {
-                            log.debug("string: found end of string token {}", .{next_token});
+                            log.debug("string: found end of string token {f}", .{next_token});
                             try buff.append(parser.allocator, source.SyntaxTree{
                                 .source = .{ .name = parser.settings.source_name, .location = next_token.location },
                                 .precedence = bp,
@@ -2242,7 +2236,7 @@ pub fn nuds() [10]source.Nud {
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
                     log.debug("leaf: parsing token", .{});
-                    log.debug("{}", .{token});
+                    log.debug("{f}", .{token});
                     const s = token.data.sequence.asSlice();
                     log.debug("leaf: checking token {s}", .{s});
                     try parser.lexer.advance(); // discard leaf
@@ -2288,7 +2282,7 @@ pub fn nuds() [10]source.Nud {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("logical_not: parsing token {}", .{token});
+                    log.debug("logical_not: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard not
                     var inner = try parser.pratt(bp) orelse none: {
                         log.debug("logical_not: no inner expression found", .{});
@@ -2320,7 +2314,7 @@ pub fn nuds() [10]source.Nud {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("unary_minus: parsing token {}", .{token});
+                    log.debug("unary_minus: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard -
                     var inner = try parser.pratt(bp) orelse none: {
                         log.debug("unary_minus: no inner expression found", .{});
@@ -2352,7 +2346,7 @@ pub fn nuds() [10]source.Nud {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("unary_plus: parsing token {}", .{token});
+                    log.debug("unary_plus: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard +
                     var inner = try parser.pratt(bp) orelse none: {
                         log.debug("unary_plus: no inner expression found", .{});
@@ -2391,7 +2385,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("decl: parsing token {}", .{token});
+                    log.debug("decl: parsing token {f}", .{token});
                     if (lhs.precedence == bp) {
                         log.debug("decl: lhs has same binding power; panic", .{});
                         return error.UnexpectedInput;
@@ -2426,7 +2420,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("set: parsing token {}", .{token});
+                    log.debug("set: parsing token {f}", .{token});
                     if (lhs.precedence == bp) {
                         log.debug("set: lhs has same binding power; panic", .{});
                         return error.UnexpectedInput;
@@ -2461,7 +2455,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("list: lhs {}", .{lhs});
+                    log.debug("list: lhs {f}", .{lhs});
                     try parser.lexer.advance(); // discard linebreak
                     if (try parser.lexer.peek()) |next_token| {
                         if (next_token.tag == .indentation and next_token.data.indentation == .unindent) {
@@ -2485,7 +2479,7 @@ pub fn leds() [17]source.Led {
                         };
                     };
                     errdefer rhs.deinit(parser.allocator);
-                    log.debug("list: found rhs {}", .{rhs});
+                    log.debug("list: found rhs {f}", .{rhs});
                     if (lhs.type == cst_types.List and rhs.type == cst_types.List) {
                         log.debug("list: both lhs and rhs are lists, concatenating", .{});
                         const lhs_operands = lhs.operands.asSlice();
@@ -2566,7 +2560,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("seq: lhs {}", .{lhs});
+                    log.debug("seq: lhs {f}", .{lhs});
                     try parser.lexer.advance(); // discard linebreak
                     if (try parser.lexer.peek()) |next_token| {
                         if (next_token.tag == .indentation and next_token.data.indentation == .unindent) {
@@ -2582,7 +2576,7 @@ pub fn leds() [17]source.Led {
                         return lhs;
                     };
                     errdefer rhs.deinit(parser.allocator);
-                    log.debug("seq: found rhs {}", .{rhs});
+                    log.debug("seq: found rhs {f}", .{rhs});
                     if (lhs.type == cst_types.Seq and rhs.type == cst_types.Seq) {
                         log.debug("seq: both lhs and rhs are seqs, concatenating", .{});
                         const lhs_operands = lhs.operands.asSlice();
@@ -2657,20 +2651,20 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("apply: {} {}", .{ lhs, token });
+                    log.debug("apply: {f} {f}", .{ lhs, token });
                     const applicable_leds = try parser.syntax.findLeds(std.math.minInt(i16), &token);
                     if (applicable_leds.len != 1) { // self
-                        log.debug("apply: found {} applicable led(s), rejecting", .{applicable_leds.len});
+                        log.debug("apply: found {d} applicable led(s), rejecting", .{applicable_leds.len});
                         return null;
                     } else {
-                        log.debug("apply: no applicable led(s) found for token {} with bp >= {}", .{ token, 1 });
+                        log.debug("apply: no applicable led(s) found for token {f} with bp >= {}", .{ token, 1 });
                     }
                     var rhs = try parser.pratt(bp + 1) orelse {
                         log.debug("apply: unable to parse rhs, rejecting", .{});
                         return null;
                     };
                     errdefer rhs.deinit(parser.allocator);
-                    log.debug("apply: rhs {}", .{rhs});
+                    log.debug("apply: rhs {f}", .{rhs});
                     if (lhs.type == cst_types.Apply) {
                         log.debug("apply: lhs is an apply, concatenating rhs", .{});
                         const lhs_operands = lhs.operands.asSlice();
@@ -2721,7 +2715,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("mul: parsing token {}", .{token});
+                    log.debug("mul: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard operator
                     const rhs = if (try parser.pratt(bp + 1)) |r| r else {
                         log.debug("mul: no rhs; panic", .{});
@@ -2752,7 +2746,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("div: parsing token {}", .{token});
+                    log.debug("div: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard operator
                     const rhs = if (try parser.pratt(bp + 1)) |r| r else {
                         log.debug("div: no rhs; panic", .{});
@@ -2783,7 +2777,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("add: parsing token {}", .{token});
+                    log.debug("add: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard operator
                     const rhs = if (try parser.pratt(bp + 1)) |r| r else {
                         log.debug("add: no rhs; panic", .{});
@@ -2814,7 +2808,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("sub: parsing token {}", .{token});
+                    log.debug("sub: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard operator
                     const rhs = if (try parser.pratt(bp + 1)) |r| r else {
                         log.debug("sub: no rhs; panic", .{});
@@ -2846,7 +2840,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("eq: parsing token {}", .{token});
+                    log.debug("eq: parsing token {f}", .{token});
                     if (lhs.precedence == bp) {
                         log.debug("eq: lhs has same binding power; panic", .{});
                         return error.UnexpectedInput;
@@ -2882,7 +2876,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("neq: parsing token {}", .{token});
+                    log.debug("neq: parsing token {f}", .{token});
                     if (lhs.precedence == bp) {
                         log.debug("neq: lhs has same binding power; panic", .{});
                         return error.UnexpectedInput;
@@ -2918,7 +2912,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("lt: parsing token {}", .{token});
+                    log.debug("lt: parsing token {f}", .{token});
                     if (lhs.precedence == bp) {
                         log.debug("lt: lhs has same binding power; panic", .{});
                         return error.UnexpectedInput;
@@ -2954,7 +2948,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("gt: parsing token {}", .{token});
+                    log.debug("gt: parsing token {f}", .{token});
                     if (lhs.precedence == bp) {
                         log.debug("gt: lhs has same binding power; panic", .{});
                         return error.UnexpectedInput;
@@ -2990,7 +2984,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("leq: parsing token {}", .{token});
+                    log.debug("leq: parsing token {f}", .{token});
                     if (lhs.precedence == bp) {
                         log.debug("leq: lhs has same binding power; panic", .{});
                         return error.UnexpectedInput;
@@ -3026,7 +3020,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("geq: parsing token {}", .{token});
+                    log.debug("geq: parsing token {f}", .{token});
                     if (lhs.precedence == bp) {
                         log.debug("geq: lhs has same binding power; panic", .{});
                         return error.UnexpectedInput;
@@ -3062,7 +3056,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("logical_and: parsing token {}", .{token});
+                    log.debug("logical_and: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard operator
                     const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
                         log.debug("logical_and: no rhs; panic", .{});
@@ -3094,7 +3088,7 @@ pub fn leds() [17]source.Led {
                     bp: i16,
                     token: source.Token,
                 ) source.SyntaxError!?source.SyntaxTree {
-                    log.debug("logical_or: parsing token {}", .{token});
+                    log.debug("logical_or: parsing token {f}", .{token});
                     try parser.lexer.advance(); // discard operator
                     const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
                         log.debug("logical_or: no rhs; panic", .{});
@@ -3129,15 +3123,14 @@ test "expr_parse" {
             var expr = try parseCst(std.testing.allocator, input, syn);
             defer expr.deinit(std.testing.allocator);
 
-            log.info("input: {s}\nresult: {any}", .{ input, expr });
+            log.info("input: {s}\nresult: {f}", .{ input, expr });
 
-            var buf = std.ArrayList(u8).init(std.testing.allocator);
+            var buf = std.io.Writer.Allocating.init(std.testing.allocator);
             defer buf.deinit();
 
-            const writer = buf.writer();
-            try writer.print("{any}", .{expr});
+            try buf.writer.print("{f}", .{expr});
 
-            try std.testing.expectEqualStrings(expect, buf.items);
+            try std.testing.expectEqualStrings(expect, buf.written());
         }
     }.testExpr, &.{
         .{ .input = "1 + 2", .expect = "1 + 2" }, // 0
@@ -3163,25 +3156,25 @@ test "cst_parse" {
             };
             defer syn.deinit(std.testing.allocator);
 
-            log.info("input: {s}\nresult: {}", .{ input, std.fmt.Formatter(struct {
+            const Data = struct { input: []const u8, syn: source.SyntaxTree };
+            log.info("input: {s}\nresult: {f}", .{ input, std.fmt.Formatter(Data, struct {
                 pub fn formatter(
-                    data: struct { input: []const u8, syn: source.SyntaxTree },
-                    comptime _: []const u8,
-                    _: std.fmt.FormatOptions,
-                    writer: anytype,
-                ) !void {
-                    return dumpCstSExprs(data.input, data.syn, writer);
+                    data: Data,
+                    writer: *std.io.Writer,
+                ) error{WriteFailed}!void {
+                    dumpCstSExprs(data.input, data.syn, writer) catch |err| {
+                        log.err("Failed to dump CST S-expr: {s}", .{@errorName(err)});
+                        return error.WriteFailed;
+                    };
                 }
             }.formatter){ .data = .{ .input = input, .syn = syn } } });
 
-            var buf = std.ArrayList(u8).init(std.testing.allocator);
+            var buf = std.io.Writer.Allocating.init(std.testing.allocator);
             defer buf.deinit();
 
-            const writer = buf.writer();
+            try dumpCstSExprs(input, syn, &buf.writer);
 
-            try dumpCstSExprs(input, syn, writer);
-
-            try std.testing.expectEqualStrings(expect, buf.items);
+            try std.testing.expectEqualStrings(expect, buf.written());
         }
     }.testCst, &.{
         .{ .input = "\n1", .expect = "1" }, // 0
@@ -3266,7 +3259,7 @@ test "value_basics" {
     {
         const a: [:0]const u8 = "test_string";
 
-        const b: [:0]align(8) u8 = try std.testing.allocator.allocWithOptions(u8, a.len, 8, 0);
+        const b: [:0]align(8) u8 = try std.testing.allocator.allocWithOptions(u8, a.len, .fromByteUnits(8), 0);
         defer std.testing.allocator.free(b);
 
         @memcpy(b, a);

@@ -115,7 +115,7 @@ pub const RelativeAddress = enum(u64) {
     /// * Runtime align check is performed in safe modes.
     pub fn toTypedPtr(self: RelativeAddress, comptime T: type, buf: common.MutVirtualMemory) T {
         // Use zig safe mode bounds check instead of offseting base.ptr
-        return @alignCast(@ptrCast(&buf[@intFromEnum(self)]));
+        return @ptrCast(@alignCast(&buf[@intFromEnum(self)]));
     }
 
     /// Resolve a relative address to an absolute pointer given a base memory region.
@@ -155,7 +155,7 @@ pub fn init(allocator: std.mem.Allocator) AllocWriter {
 pub fn initCapacity(allocator: std.mem.Allocator) error{OutOfMemory}!AllocWriter {
     return AllocWriter{
         .allocator = allocator,
-        .memory = try allocator.alignedAlloc(u8, common.PAGE_SIZE, common.PAGE_SIZE),
+        .memory = try allocator.alignedAlloc(u8, .fromByteUnits(common.PAGE_SIZE), common.PAGE_SIZE),
     };
 }
 
@@ -250,7 +250,7 @@ pub fn finalize(self: *AllocWriter) error{ BadEncoding, OutOfMemory }!common.Mut
         } else |err| {
             log.debug("AllocWriter: Allocator refused to reallocate ({}), trying alloc + memcpy", .{err});
 
-            const new_memory = try self.allocator.alignedAlloc(u8, common.PAGE_SIZE, self.cursor);
+            const new_memory = try self.allocator.alignedAlloc(u8, .fromByteUnits(common.PAGE_SIZE), self.cursor);
 
             @memcpy(new_memory[0..self.cursor], self.memory[0..self.cursor]);
 
@@ -273,7 +273,7 @@ pub fn ensureCapacity(self: *AllocWriter, cap: u64) Error!void {
     while (new_cap < cap) new_cap *= 2;
 
     if (new_cap != self.memory.len) {
-        const new_memory = try self.allocator.alignedAlloc(u8, common.PAGE_SIZE, new_cap);
+        const new_memory = try self.allocator.alignedAlloc(u8, .fromByteUnits(common.PAGE_SIZE), new_cap);
 
         @memcpy(new_memory[0..self.memory.len], self.memory);
 

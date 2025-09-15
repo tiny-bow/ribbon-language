@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const nasm = @import("nasm");
+// const nasm = @import("nasm");
 
 const SUPPORTED_ARCH = &.{.x86_64};
 const SUPPORTED_OS = &.{ .windows, .linux };
@@ -186,7 +186,6 @@ pub fn build(b: *std.Build) !void {
 
     // create tests //
     const abi_test = b.addTest(.{ .root_module = abi_mod });
-    // assembler mod is a dep
     const bytecode_test = b.addTest(.{ .root_module = bytecode_mod });
     const core_test = b.addTest(.{ .root_module = core_mod });
     const gen_test = b.addTest(.{ .root_module = gen_mod });
@@ -364,9 +363,9 @@ pub fn build(b: *std.Build) !void {
 }
 
 fn parseZon(b: *std.Build, comptime T: type) T {
-    const zonText = std.fs.cwd().readFileAllocOptions(b.allocator, "build.zig.zon", std.math.maxInt(usize), 2048, 1, 0) catch @panic("Unable to read build.zig.zon");
+    const zonText = std.fs.cwd().readFileAllocOptions(b.allocator, "build.zig.zon", std.math.maxInt(usize), 2048, .@"1", 0) catch @panic("Unable to read build.zig.zon");
 
-    var parseStatus = std.zon.parse.Status{};
+    var parseStatus = std.zon.parse.Diagnostics{};
 
     return std.zon.parse.fromSlice(
         T,
@@ -382,29 +381,29 @@ fn parseZon(b: *std.Build, comptime T: type) T {
         while (it.next()) |parseErr| {
             const loc = parseErr.getLocation(&parseStatus);
 
-            std.debug.print("[build.zig.zon:{}]: {s}\n", .{ loc.line + 1, parseErr.fmtMessage(&parseStatus) });
+            std.debug.print("[build.zig.zon:{}]: {f}\n", .{ loc.line + 1, parseErr.fmtMessage(&parseStatus) });
         }
 
         std.process.exit(1);
     };
 }
 
-fn zigObjectFmtToNasm(zigFmt: std.Target.ObjectFormat) []const u8 {
-    switch (zigFmt) {
-        .coff => return "coff",
-        .elf => return "elf64",
+// fn zigObjectFmtToNasm(zigFmt: std.Target.ObjectFormat) []const u8 {
+//     switch (zigFmt) {
+//         .coff => return "coff",
+//         .elf => return "elf64",
 
-        else => std.debug.panic(
-            \\
-            \\
-            \\Object format `{s}` is not supported by Ribbon.
-            \\
-            \\
-        ,
-            .{@tagName(zigFmt)},
-        ),
-    }
-}
+//         else => std.debug.panic(
+//             \\
+//             \\
+//             \\Object format `{s}` is not supported by Ribbon.
+//             \\
+//             \\
+//         ,
+//             .{@tagName(zigFmt)},
+//         ),
+//     }
+// }
 
 fn validateTarget(target: std.Target) void {
     if (std.mem.indexOfScalar(std.Target.Cpu.Arch, SUPPORTED_ARCH, target.cpu.arch) == null) {

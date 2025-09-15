@@ -1387,7 +1387,7 @@ pub const NodeKind = packed struct(u16) {
     }
 
     /// `std.fmt` impl
-    pub fn format(self: NodeKind, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: NodeKind, writer: *std.io.Writer) !void {
         try writer.print("{s}:{s}", .{
             @tagName(self.getTag()),
             @tagName(self.getDiscriminator()),
@@ -1736,7 +1736,7 @@ pub const Node = struct {
                     {
                         ref_list.appendAssumeCapacity(init_value);
                     } else {
-                        log.debug("Unexpected node kind for structure {s} field decl {s}: expected {}, got {}", .{
+                        log.debug("Unexpected node kind for structure {s} field decl {s}: expected {f}, got {f}", .{
                             struct_name,
                             decl.name,
                             node_kind,
@@ -2767,15 +2767,15 @@ test "ir integration - merging child context with cyclic nodes" {
     try testing.expect(root_ctx.asRoot().?.getContext(child_id) == null);
 
     // Find the merged blocks. We'll identify them by their structure.
-    var merged_blocks = std.ArrayList(ir.Ref).init(gpa);
-    defer merged_blocks.deinit();
+    var merged_blocks = common.ArrayList(ir.Ref).empty;
+    defer merged_blocks.deinit(gpa);
 
     var root_it = root_ctx.nodes.keyIterator();
     while (root_it.next()) |ref| {
         if (ref.node_kind.getTag() == .structure and
             ir.discriminants.force(ir.StructureKind, ref.node_kind.getDiscriminator()) == .block)
         {
-            try merged_blocks.append(ref.*);
+            try merged_blocks.append(gpa, ref.*);
         }
     }
     try testing.expectEqual(@as(usize, 2), merged_blocks.items.len);

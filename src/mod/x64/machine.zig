@@ -30,7 +30,7 @@ test {
 const abi = @import("abi");
 
 /// Disassemble an allocated machine function, printing to the provided writer.
-pub fn disas(mem: common.VirtualMemory, options: assembler.DisassemblerOptions, writer: anytype) !void {
+pub fn disas(mem: common.VirtualMemory, options: assembler.DisassemblerOptions, writer: *std.io.Writer) !void {
     return assembler.disas(mem, options, writer);
 }
 
@@ -633,12 +633,10 @@ test "x64_machine_basic_integration" {
     const exe = try jit.finalize();
     defer exe.deinit();
 
-    var str = std.ArrayList(u8).init(allocator);
-    defer str.deinit();
+    var buf = std.io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
 
-    const writer = str.writer();
+    try machine.disas(exe.toSlice(), .{ .display = .{ .function_address = false } }, &buf.writer);
 
-    try machine.disas(exe.toSlice(), .{ .display = .{ .function_address = false } }, writer);
-
-    try std.testing.expectEqualStrings(expected_disas, str.items); // FIXME: this is not the expected output
+    try std.testing.expectEqualStrings(expected_disas, buf.written()); // FIXME: this is not the expected output
 }

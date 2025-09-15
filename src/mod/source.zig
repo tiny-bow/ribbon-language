@@ -27,8 +27,8 @@ pub const Source = struct {
     name: []const u8 = "anonymous",
     location: Location = .{},
 
-    pub fn format(self: *const Source, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("[{s}:{}:{}]", .{ self.name, self.location.visual.line, self.location.visual.column });
+    pub fn format(self: *const Source, writer: *std.io.Writer) !void {
+        try writer.print("[{s}:{d}:{d}]", .{ self.name, self.location.visual.line, self.location.visual.column });
     }
 
     pub fn dupe(self: *const Source, allocator: std.mem.Allocator) !Source {
@@ -108,8 +108,8 @@ pub const Location = packed struct {
         };
     }
 
-    pub fn format(self: *const Location, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("[{}:{} ({})]", .{ self.visual.line, self.visual.column, self.buffer });
+    pub fn format(self: *const Location, writer: *std.io.Writer) !void {
+        try writer.print("[{d}:{d} ({d})]", .{ self.visual.line, self.visual.column, self.buffer });
     }
 };
 
@@ -172,12 +172,12 @@ pub const Token = extern struct {
     /// The actual value of the token.
     data: TokenData,
 
-    pub fn format(self: Token, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("{}:", .{self.location});
+    pub fn format(self: Token, writer: *std.io.Writer) !void {
+        try writer.print("{f}:", .{self.location});
         switch (self.tag) {
             .sequence => try writer.print("s⟨{s}⟩", .{self.data.sequence.asSlice()}),
             .linebreak => try writer.print("b⟨⇓⟩", .{}),
-            .indentation => try writer.print("i⟨{}⟩", .{@intFromEnum(self.data.indentation)}),
+            .indentation => try writer.print("i⟨{d}⟩", .{@intFromEnum(self.data.indentation)}),
             .special => if (self.data.special.escaped) {
                 try writer.print("p⟨\\{u}⟩", .{self.data.special.punctuation.toChar()});
             } else {
@@ -283,6 +283,11 @@ pub const Punctuation = enum(common.Char) {
     backslash = '\\',
     /// `#`
     hash = '#',
+
+    /// `std.fmt` impl
+    pub fn format(self: Punctuation, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("{u}", .{self.toChar()});
+    }
 
     /// Inverts bracket-like punctuation, ie `(` to `)`.
     pub fn invert(self: Punctuation) ?Punctuation {
@@ -457,7 +462,7 @@ pub const Lexer0 = struct {
         var tag: TokenType = undefined;
 
         if (self.levels_queued != 0) {
-            log.debug("processing queued indentation level {}", .{self.levels_queued});
+            log.debug("processing queued indentation level {d}", .{self.levels_queued});
 
             if (self.levels_queued > 0) {
                 self.levels = self.levels + 1;
@@ -493,7 +498,7 @@ pub const Lexer0 = struct {
 
         const ch = try self.nextChar() orelse {
             if (self.levels > 1) {
-                log.debug("processing 1st ch EOF with {} indentation levels", .{self.levels});
+                log.debug("processing 1st ch EOF with {d} indentation levels", .{self.levels});
                 self.levels_queued = self.levels - 2;
                 self.levels -= 1;
 
@@ -535,7 +540,7 @@ pub const Lexer0 = struct {
                 std.debug.assert(oldLen > 0);
 
                 if (newIndent > oldIndent) {
-                    log.debug("increasing indentation to {} ({})", .{ oldLen, newIndent });
+                    log.debug("increasing indentation to {d} ({d})", .{ oldLen, newIndent });
 
                     self.indentation[self.levels] = @intCast(newIndent); // TODO: check for overflow?
                     self.levels += 1;
@@ -547,19 +552,19 @@ pub const Lexer0 = struct {
                     var newIndentIndex = self.levels - 1;
                     while (true) {
                         const indent = self.indentation[newIndentIndex];
-                        log.debug("checking vs indentation level {} ({})", .{ newIndentIndex, indent });
+                        log.debug("checking vs indentation level {d} ({d})", .{ newIndentIndex, indent });
 
                         if (indent == newIndent) break;
 
                         if (indent < newIndent) {
-                            log.err("unmatched indentation level {}", .{newIndent});
+                            log.err("unmatched indentation level {d}", .{newIndent});
                             return error.UnexpectedIndent;
                         }
 
                         newIndentIndex -= 1;
                     }
 
-                    log.debug("decreasing indentation to {} ({})", .{ newIndentIndex, newIndent });
+                    log.debug("decreasing indentation to {d} ({d})", .{ newIndentIndex, newIndent });
 
                     const level_delta = oldLen - (newIndentIndex + 1);
                     std.debug.assert(level_delta > 0);
@@ -571,7 +576,7 @@ pub const Lexer0 = struct {
                     tag = .indentation;
                     break :char_switch TokenData{ .indentation = .unindent };
                 } else {
-                    log.debug("same indentation level {} ({})", .{ self.levels - 1, n });
+                    log.debug("same indentation level {d} ({d})", .{ self.levels - 1, n });
 
                     tag = .linebreak;
                     break :char_switch TokenData{ .linebreak = {} };
@@ -601,7 +606,7 @@ pub const Lexer0 = struct {
 
                     continue :char_switch try self.nextChar() orelse {
                         if (self.levels > 1) {
-                            log.debug("processing nth ch EOF with {} indentation levels", .{self.levels});
+                            log.debug("processing nth ch EOF with {d} indentation levels", .{self.levels});
 
                             self.levels_queued = self.levels - 2;
                             self.levels -= 1;
@@ -709,11 +714,11 @@ pub const SyntaxTree = struct {
     }
 
     /// `std.fmt` impl
-    pub fn format(self: *const SyntaxTree, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: *const SyntaxTree, writer: *std.io.Writer) !void {
         if (self.operands.len == 0) {
-            try writer.print("﴾{}, {}﴿", .{ @intFromEnum(self.type), self.token });
+            try writer.print("﴾{d}, {f}﴿", .{ @intFromEnum(self.type), self.token });
         } else {
-            try writer.print("﴾{}, {}, {any}﴿", .{ @intFromEnum(self.type), self.token, self.operands.asSlice() });
+            try writer.print("﴾{d}, {f}, {any}﴿", .{ @intFromEnum(self.type), self.token, self.operands.asSlice() });
         }
     }
 };
@@ -743,12 +748,12 @@ pub fn PatternModifier(comptime P: type) type {
 
         const Q = if (common.hasDecl(P, .QueryType)) P.QueryType else P;
 
-        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        pub fn format(self: *const Self, writer: *std.io.Writer) !void {
             switch (self.*) {
                 .none => try writer.print("none", .{}),
                 .any => try writer.print("any", .{}),
-                .standard => try writer.print("{}", .{self.standard}),
-                .inverted => try writer.print("inv({})", .{self.inverted}),
+                .standard => try writer.print("{any}", .{self.standard}),
+                .inverted => try writer.print("inv({any})", .{self.inverted}),
                 .none_of => try writer.print("none({any})", .{self.none_of}),
                 .one_of => try writer.print("one({any})", .{self.one_of}),
                 .any_of => try writer.print("any({any})", .{self.any_of}),
@@ -854,7 +859,7 @@ pub fn PatternModifier(comptime P: type) type {
 pub const TokenPattern = union(TokenType) {
     pub const QueryType = *const Token;
     sequence: PatternModifier(common.Buffer.short(u8, .constant)),
-    linebreak: void,
+    linebreak,
     indentation: PatternModifier(IndentationDelta),
     special: PatternModifier(struct {
         const Self = @This();
@@ -862,17 +867,17 @@ pub const TokenPattern = union(TokenType) {
         escaped: PatternModifier(bool),
         punctuation: PatternModifier(Punctuation),
 
-        pub fn format(self: *const Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-            try writer.print("{}, {}", .{ self.escaped, self.punctuation });
+        pub fn format(self: *const Self, writer: *std.io.Writer) !void {
+            try writer.print("{f}, {f}", .{ self.escaped, self.punctuation });
         }
     }),
 
-    pub fn format(self: *const TokenPattern, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: *const TokenPattern, writer: *std.io.Writer) !void {
         switch (self.*) {
-            .sequence => try writer.print("s⟨{}⟩", .{self.sequence}),
-            .linebreak => try writer.print("b⟨{}⟩", .{self.linebreak}),
-            .indentation => try writer.print("i⟨{}⟩", .{self.indentation}),
-            .special => try writer.print("p⟨{}⟩", .{self.special}),
+            .sequence => try writer.print("s⟨{f}⟩", .{self.sequence}),
+            .linebreak => try writer.print("b⟨~⟩", .{}),
+            .indentation => try writer.print("i⟨{f}⟩", .{self.indentation}),
+            .special => try writer.print("p⟨{f}⟩", .{self.special}),
         }
     }
 };
@@ -912,7 +917,7 @@ pub fn PatternSet(comptime T: type) type {
                 args: anytype,
             ) ParserSignal {
                 const closure_args = .{self.userdata} ++ args;
-                return @call(.auto, @as(*const FunctionType(@TypeOf(closure_args), ParserSignal, .C), @ptrCast(self.callback)), closure_args);
+                return @call(.auto, @as(*const FunctionType(@TypeOf(closure_args), ParserSignal, .c), @ptrCast(self.callback)), closure_args);
             }
         };
 
@@ -1034,9 +1039,9 @@ pub const Syntax = struct {
     }
 };
 
-const NudCallbackMarker = fn () callconv(.C) void;
+const NudCallbackMarker = fn () callconv(.c) void;
 
-const LedCallbackMarker = fn () callconv(.C) void;
+const LedCallbackMarker = fn () callconv(.c) void;
 
 pub fn Pattern(comptime T: type) type {
     return struct {
@@ -1211,7 +1216,7 @@ pub const Parser = struct {
         log.debug("pratt: found {} nuds", .{nuds.len});
 
         if (nuds.len == 0) {
-            log.debug("pratt: unexpected token {}, no valid nuds found", .{token});
+            log.debug("pratt: unexpected token {f}, no valid nuds found", .{token});
             return null;
         }
 
@@ -1226,18 +1231,18 @@ pub const Parser = struct {
                     return out;
                 },
                 .panic => {
-                    log.debug("pratt: nud {s} for {} panicked", .{ nud.name, token });
+                    log.debug("pratt: nud {s} for {f} panicked", .{ nud.name, token });
                     return err;
                 },
                 .reject => {
                     log.debug("restoring saved state", .{});
                     self.lexer = save_state;
-                    log.debug("pratt: nud {s} for {} rejected", .{ nud.name, token });
+                    log.debug("pratt: nud {s} for {f} rejected", .{ nud.name, token });
                     continue :nuds;
                 },
             }
         } else {
-            log.debug("pratt: all nuds rejected token {}", .{token});
+            log.debug("pratt: all nuds rejected token {f}", .{token});
             return null;
         }
     }
@@ -1248,7 +1253,7 @@ pub const Parser = struct {
         log.debug("pratt: found {} leds", .{leds.len});
 
         if (leds.len == 0) {
-            log.debug("pratt: unexpected token {}, no valid leds found", .{token});
+            log.debug("pratt: unexpected token {f}, no valid leds found", .{token});
             return null;
         }
 
@@ -1264,18 +1269,18 @@ pub const Parser = struct {
                     return out;
                 },
                 .panic => {
-                    log.debug("pratt: led {s} for {} panicked", .{ led.name, token });
+                    log.debug("pratt: led {s} for {f} panicked", .{ led.name, token });
                     return err;
                 },
                 .reject => {
                     log.debug("restoring saved state", .{});
                     self.lexer = save_state;
-                    log.debug("pratt: led {s} for {} rejected", .{ led.name, token });
+                    log.debug("pratt: led {s} for {f} rejected", .{ led.name, token });
                     continue :leds;
                 },
             }
         } else {
-            log.debug("pratt: all leds rejected token {}", .{token});
+            log.debug("pratt: all leds rejected {f}", .{token});
             return null;
         }
     }
@@ -1291,7 +1296,7 @@ pub const Parser = struct {
         if (self.settings.ignore_space) {
             while (first_token.tag == .linebreak or first_token.tag == .indentation) {
                 if (self.settings.ignore_space) {
-                    log.debug("pratt: ignoring whitespace token {}", .{first_token});
+                    log.debug("pratt: ignoring whitespace {f}", .{first_token});
                     try self.lexer.advance();
                     _ = try self.lexer.peek() orelse {
                         log.debug("pratt: input is all whitespace, returning null", .{});
@@ -1303,7 +1308,7 @@ pub const Parser = struct {
             }
         }
 
-        log.debug("pratt: first token {}; bp: {}", .{ first_token, binding_power });
+        log.debug("pratt: first token {f}; bp: {d}", .{ first_token, binding_power });
 
         var lhs = lhs: while (try self.lexer.peek()) |nth_first_token| {
             const x = try self.parseNud(binding_power, nth_first_token) orelse {
@@ -1337,7 +1342,7 @@ pub const Parser = struct {
             if (self.settings.ignore_space) {
                 while (curr_token.tag == .linebreak or curr_token.tag == .indentation) {
                     if (self.settings.ignore_space) {
-                        log.debug("pratt: ignoring whitespace token {}", .{curr_token});
+                        log.debug("pratt: ignoring whitespace token {f}", .{curr_token});
                         try self.lexer.advance();
                         curr_token = try self.lexer.peek() orelse {
                             log.debug("pratt: remaining input is all whitespace, returning lhs", .{});
@@ -1349,16 +1354,16 @@ pub const Parser = struct {
                 }
             }
 
-            log.debug("pratt: infix token {}", .{curr_token});
+            log.debug("pratt: infix {f}", .{curr_token});
 
             if (try self.parseLed(binding_power, curr_token, lhs)) |new_lhs| {
-                log.debug("pratt: infix token {} accepted", .{curr_token});
+                log.debug("pratt: infix {f} accepted", .{curr_token});
                 save_state = self.lexer;
                 lhs = new_lhs;
             } else {
                 log.debug("restoring saved state", .{});
                 self.lexer = save_state;
-                log.debug("pratt: token {} rejected as infix", .{curr_token});
+                log.debug("pratt: {f} rejected as infix", .{curr_token});
                 break;
             }
         } else {

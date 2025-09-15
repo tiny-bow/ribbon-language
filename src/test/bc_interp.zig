@@ -804,20 +804,20 @@ test "mem_copy with zero size is a no-op" {
 
 // --- Helpers for builtin tests ---
 
-fn simpleBuiltin(fiber: *core.Fiber) callconv(.C) core.Builtin.Signal {
+fn simpleBuiltin(fiber: *core.Fiber) callconv(.c) core.Builtin.Signal {
     // Return 555 in the designated return register.
     const regs = fiber.registers.top();
     regs[core.Register.native_ret.getIndex()] = 555;
     return .@"return";
 }
 
-fn trapBuiltin(fiber: *core.Fiber) callconv(.C) core.Builtin.Signal {
+fn trapBuiltin(fiber: *core.Fiber) callconv(.c) core.Builtin.Signal {
     _ = fiber;
     return .request_trap;
 }
 
 // This function gets called by bytecode, and it in turn calls other bytecode.
-fn interlacedBuiltin(fiber: *core.Fiber) callconv(.C) core.Builtin.Signal {
+fn interlacedBuiltin(fiber: *core.Fiber) callconv(.c) core.Builtin.Signal {
     // Get the arguments passed to this builtin from its registers.
     const builtin_regs = fiber.registers.top();
     const arg_for_target = builtin_regs[core.Register.r0.getIndex()];

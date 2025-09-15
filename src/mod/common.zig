@@ -915,7 +915,7 @@ pub const Any = struct {
     pub fn to(self: Any, comptime T: type) ?*T {
         if (std.mem.eql(u8, @typeName(T), self.type_name)) return null;
 
-        return @alignCast(@ptrCast(self.ptr));
+        return @ptrCast(@alignCast(self.ptr));
     }
 
     /// Convert this `Any` to a pointer of type `T`. Only checks the type id in safe modes.
@@ -932,7 +932,7 @@ pub const Any = struct {
             }
         }
 
-        return @alignCast(@ptrCast(self.ptr));
+        return @ptrCast(@alignCast(self.ptr));
     }
 };
 
@@ -955,9 +955,9 @@ pub fn isEnumVariant(comptime T: type, value: anytype) bool {
     return std.mem.indexOfScalar(std.meta.Tag(T), &field_values, value) != null;
 }
 
-pub fn stream(reader: anytype, writer: anytype) !void {
+pub fn stream(reader: *std.io.Reader, writer: *std.io.Writer) !void {
     while (true) {
-        const byte: u8 = reader.readByte() catch return;
+        const byte: u8 = reader.takeByte() catch return;
         try writer.writeByte(byte);
     }
 }
@@ -992,8 +992,8 @@ pub const SnapshotTestName = union(enum) {
 
 /// Run a suite of input/output tests.
 pub fn snapshotTest(comptime test_name: SnapshotTestName, comptime test_func: fn (input: []const u8, expect: []const u8) anyerror!void, comptime tests: []const struct { input: []const u8, expect: anyerror![]const u8 }) !void {
-    var failures = std.ArrayList(usize).init(std.heap.page_allocator);
-    defer failures.deinit();
+    var failures = ArrayList(usize).empty;
+    defer failures.deinit(std.heap.page_allocator);
 
     testing: for (tests, 0..) |t, i| {
         log.info("test {}/{}", .{ i, tests.len });
@@ -1002,7 +1002,7 @@ pub fn snapshotTest(comptime test_name: SnapshotTestName, comptime test_func: fn
         if (t.expect) |expect_str| {
             test_func(input, expect_str) catch |err| {
                 log.err("input {s} failed: {}", .{ input, err });
-                failures.append(i) catch unreachable;
+                failures.append(std.heap.page_allocator, i) catch unreachable;
                 continue :testing;
             };
 
@@ -1013,14 +1013,14 @@ pub fn snapshotTest(comptime test_name: SnapshotTestName, comptime test_func: fn
             const maybe_err = test_func(input, "");
             if (maybe_err) |_| { // void
                 log.err("input {s} succeeded; but expected {}", .{ input, expect_err });
-                failures.append(i) catch unreachable;
+                failures.append(std.heap.page_allocator, i) catch unreachable;
             } else |err| {
                 if (err == error.TestFailure or err == error.TestExpectedEqual) {
                     log.err("input {s} succeeded, but the output was wrong; expected {}", .{ input, expect_err });
-                    failures.append(i) catch unreachable;
+                    failures.append(std.heap.page_allocator, i) catch unreachable;
                 } else if (expect_err != err) {
                     log.err("input {s} failed: {}; but expected {}", .{ input, err, expect_err });
-                    failures.append(i) catch unreachable;
+                    failures.append(std.heap.page_allocator, i) catch unreachable;
                 } else {
                     log.info("input {s} failed as expected", .{input});
                 }

@@ -66,7 +66,7 @@ pub fn of(comptime T: type, comptime bits: comptime_int) type {
             return self;
         }
 
-        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        pub fn format(self: Self, writer: *std.io.Writer) !void {
             if (self == .null) {
                 try writer.writeAll(@typeName(T) ++ ":null");
             } else {

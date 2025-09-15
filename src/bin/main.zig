@@ -33,8 +33,8 @@ pub fn main() !void {
 
     var line_count: u32 = 0;
 
-    var line_accumulator = std.ArrayList(u8).init(allocator);
-    defer line_accumulator.deinit();
+    var line_accumulator = std.ArrayList(u8).empty;
+    defer line_accumulator.deinit(allocator);
 
     while (R.getInput(">") catch |err| {
         switch (err) {
@@ -59,7 +59,7 @@ pub fn main() !void {
 
         line_count += 1;
 
-        line_accumulator.appendSlice(input) catch @panic("OOM in line accumulator");
+        line_accumulator.appendSlice(allocator, input) catch @panic("OOM in line accumulator");
 
         var expr = ribbon.meta_language.getExpr(
             allocator,
@@ -84,6 +84,6 @@ pub fn main() !void {
 
         line_accumulator.clearRetainingCapacity();
 
-        std.debug.print("{}\n", .{expr});
+        std.debug.print("{f}\n", .{expr});
     }
 }

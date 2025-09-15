@@ -98,11 +98,11 @@ pub const MAX_FOREIGN_ARGUMENTS = 4;
 /// * This function cannot handle stack operands, and you must perform aggregate splitting yourself on platforms where this is necessary.
 pub fn callForeign(fnPtr: *const anyopaque, args: []const usize) usize {
     return switch (args.len) {
-        0 => @as(*const fn () callconv(.c) usize, @alignCast(@ptrCast(fnPtr)))(),
-        1 => @as(*const fn (usize) callconv(.c) usize, @alignCast(@ptrCast(fnPtr)))(args[0]),
-        2 => @as(*const fn (usize, usize) callconv(.c) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1]),
-        3 => @as(*const fn (usize, usize, usize) callconv(.c) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2]),
-        4 => @as(*const fn (usize, usize, usize, usize) callconv(.c) usize, @alignCast(@ptrCast(fnPtr)))(args[0], args[1], args[2], args[3]),
+        0 => @as(*const fn () callconv(.c) usize, @ptrCast(@alignCast(fnPtr)))(),
+        1 => @as(*const fn (usize) callconv(.c) usize, @ptrCast(@alignCast(fnPtr)))(args[0]),
+        2 => @as(*const fn (usize, usize) callconv(.c) usize, @ptrCast(@alignCast(fnPtr)))(args[0], args[1]),
+        3 => @as(*const fn (usize, usize, usize) callconv(.c) usize, @ptrCast(@alignCast(fnPtr)))(args[0], args[1], args[2]),
+        4 => @as(*const fn (usize, usize, usize, usize) callconv(.c) usize, @ptrCast(@alignCast(fnPtr)))(args[0], args[1], args[2], args[3]),
         else => unreachable,
     };
 }
@@ -337,7 +337,7 @@ pub const Register = enum(std.math.IntFittingRange(0, MAX_REGISTERS)) {
         return @intFromEnum(self) * REGISTER_SIZE_BYTES;
     }
 
-    pub fn format(self: Register, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: Register, writer: *std.io.Writer) !void {
         try writer.print("r{d}", .{@intFromEnum(self)});
     }
 };
@@ -501,7 +501,7 @@ pub const Global = packed struct {
     }
 
     pub fn asPtr(self: *const Global) [*]u8 {
-        const base = @as([*]u8, @constCast(@ptrCast(self))) + @sizeOf(Global);
+        const base = @as([*]u8, @ptrCast(@constCast(self))) + @sizeOf(Global);
         const padding = common.alignDelta(base, self.layout.alignment);
 
         return base + padding;
@@ -852,7 +852,7 @@ pub const Fiber = extern struct {
 
     /// Allocates and initializes a new fiber.
     pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!*Fiber {
-        const buf = try allocator.allocAdvancedWithRetAddr(u8, mem.ALIGNMENT, mem.SIZE, @returnAddress());
+        const buf = try allocator.allocAdvancedWithRetAddr(u8, std.mem.Alignment.fromByteUnits(mem.ALIGNMENT), mem.SIZE, @returnAddress());
 
         log.debug("allocated address range {x} to {x} for {s}", .{ @intFromPtr(buf.ptr), @intFromPtr(buf.ptr) + buf.len, @typeName(Fiber) });
 

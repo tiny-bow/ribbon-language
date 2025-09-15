@@ -106,7 +106,7 @@ pub const Location = struct {
         h.update(std.mem.asBytes(&self.offset.type_name));
     }
 
-    pub fn format(self: Location, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: Location, writer: *std.io.Writer) !void {
         try writer.print("{s}:{x}/{s}:{x}", .{
             self.region.type_name,
             self.region.id.toInt(),
@@ -363,11 +363,11 @@ pub const LocationMap = struct {
     pub fn registerLocation(self: *LocationMap, location: Location) error{ BadEncoding, OutOfMemory }!void {
         const gop = try self.addresses.getOrPut(self.gpa, location);
         if (gop.found_existing) {
-            log.debug("LocationMap.registerLocation: {} already exists in map", .{location});
+            log.debug("LocationMap.registerLocation: {f} already exists in map", .{location});
             return error.BadEncoding;
         } else {
             gop.value_ptr.* = null;
-            log.debug("LocationMap.registerLocation: {} registered in map", .{location});
+            log.debug("LocationMap.registerLocation: {f} registered in map", .{location});
         }
     }
 
@@ -375,18 +375,18 @@ pub const LocationMap = struct {
     /// * This is used to finalize the location of a data reference after it has been registered with `registerLocation`.
     pub fn bindLocation(self: *LocationMap, location: Location, rel: RelativeAddress) error{ BadEncoding, OutOfMemory }!void {
         const entry = self.addresses.getPtr(location) orelse {
-            log.debug("LocationMap.bindLocation: {} does not exist in map", .{location});
+            log.debug("LocationMap.bindLocation: {f} does not exist in map", .{location});
             return error.BadEncoding;
         };
 
         if (entry.* != null) {
-            log.debug("LocationMap.bindLocation: {} already bound in map", .{location});
+            log.debug("LocationMap.bindLocation: {f} already bound in map", .{location});
             return error.BadEncoding;
         }
 
         entry.* = rel;
 
-        log.debug("LocationMap.bindLocation: {} bound to @{x} in map", .{ location, rel.toInt() });
+        log.debug("LocationMap.bindLocation: {f} bound to @{x} in map", .{ location, rel.toInt() });
     }
 
     /// Create a new fixup.
@@ -627,9 +627,9 @@ pub const Encoder = struct {
         const new = !gop.found_existing;
 
         if (new) {
-            log.debug("Encoder.visitLocation: {} has not been visited, adding to visitor set", .{location});
+            log.debug("Encoder.visitLocation: {f} has not been visited, adding to visitor set", .{location});
         } else {
-            log.debug("Encoder.visitLocation: {} has already been visited", .{location});
+            log.debug("Encoder.visitLocation: {f} has already been visited", .{location});
         }
 
         return new;
@@ -637,7 +637,7 @@ pub const Encoder = struct {
 
     /// Append a marker in the visitor set to indicate a location has been skipped and should be validated later.
     pub fn skipLocation(self: *Encoder, location: Location) error{OutOfMemory}!void {
-        log.debug("Encoder.skipLocation: marking {} as skipped", .{location});
+        log.debug("Encoder.skipLocation: marking {f} as skipped", .{location});
 
         try self.skipped_locations.put(self.temp_allocator, location, {});
     }
@@ -647,7 +647,7 @@ pub const Encoder = struct {
         var it = self.skipped_locations.keyIterator();
         while (it.next()) |location| {
             if (self.visited_locations.get(location.*) == null) {
-                log.debug("Encoder.validateSkippedLocations: {} was skipped but not re-visited later", .{location.*});
+                log.debug("Encoder.validateSkippedLocations: {f} was skipped but not re-visited later", .{location.*});
                 return error.BadEncoding;
             }
         }

@@ -2,23 +2,19 @@
     .name = .ribbon,
     .fingerprint = 0xf11903a43ca0fa41,
     .version = "0.1.3-draft",
-    // FIXME: use lazy dependencies; drop nasm
+    // FIXME: use lazy dependencies
     .dependencies = .{
-        .r64 = .{
-            .url = "git+https://github.com/tiny-bow/r64#ac2417abd586d5c4ffd836f6b4a3dee772d7bd48",
-            .hash = "r64-0.1.0-AAAAADbFAwDiumE2Ryle1HMxBJ57WWRM4qaSnBo2l136",
-        },
         .rg = .{
-            .url = "git+https://github.com/tiny-bow/rg#7d9574c4de3b1dac42c5c0e411b094732851929e",
-            .hash = "rg-0.1.0-wrB3Tdjy7ALv1mWb6bdWcC8hSLm4UNWOjR_Z8Z3fsJt0",
+            .url = "git+https://github.com/tiny-bow/rg#db7a590bb184c793ee0a23e07a5ef7cc580864ae",
+            .hash = "rg-0.15.1-pACrkSwwMgOF9xNpd-nfu-gm2a-rmhJcRkqMfpuDcoKo",
         },
         .repl = .{
-            .url = "git+https://github.com/tiny-bow/repl#65188d49a9a1bb9f15e929e02eaf0ae954e0e141",
-            .hash = "repl-0.1.0-f-UafbjOAAAnd8-THOX5ZSRSVNysnPf3KPnycpDXTCR7",
+            .url = "git+https://github.com/tiny-bow/repl#96fa3621dabaf6ea70f6ddd41b9f78e9ca426b9a",
+            .hash = "repl-0.1.0-f-UafZ3QAAAuCpa_T-zPWvnKkYFjVUImw010qKYhc_aw",
         },
-        .nasm = .{
-            .url = "git+https://github.com/allyourcodebase/nasm#c153aec97cfe50a4600d9cf3d5f703d58f9ccd56",
-            .hash = "nasm-2.16.1-4-J30EdyVnXADate9iz7jWR4Q9tL1jU9S2Lw7PGgfOjP0v",
+        .r64 = .{
+            .url = "git+https://github.com/tiny-bow/r64#76fa36daa980c9b7603c541883eb32c05d9f15e9",
+            .hash = "r64-0.1.0-AAAAAPrEAwCnRnNskrv_-DQx9ZuZ-BHyIjv8DoMTlzbf",
         },
     },
     .paths = .{

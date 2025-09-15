@@ -62,7 +62,7 @@ pub fn disas(bc: []const core.InstructionBits, options: struct {
     indent: ?[]const u8 = "    ",
     /// Instruction separator.
     separator: []const u8 = "\n",
-}, writer: anytype) (error{BadEncoding} || @TypeOf(writer).Error)!void {
+}, writer: *std.io.Writer) (error{BadEncoding} || std.io.Writer.Error)!void {
     var decoder = Decoder.init(bc);
 
     if (options.buffer_address) {
@@ -72,7 +72,7 @@ pub fn disas(bc: []const core.InstructionBits, options: struct {
     const indent = if (options.indent) |s| s else "";
 
     while (try decoder.next()) |item| {
-        try writer.print("{s}{}{s}", .{ indent, item, options.separator });
+        try writer.print("{s}{f}{s}", .{ indent, item, options.separator });
     }
 }
 
@@ -211,7 +211,7 @@ pub const TableBuilder = struct {
     ) error{ BadEncoding, OutOfMemory }!*FunctionBuilder {
         // if we're not tracking this id we can't create a builder for it
         const entry = self.statics.getPtr(id.cast(anyopaque)) orelse {
-            log.debug("TableBuilder.createFunctionBuilder: {} does not exist", .{id});
+            log.debug("TableBuilder.createFunctionBuilder: {f} does not exist", .{id});
             return error.BadEncoding;
         };
 
@@ -252,7 +252,7 @@ pub const TableBuilder = struct {
 
         // if we're not tracking this id we can't create a builder for it
         const entry = self.statics.getPtr(static_id) orelse {
-            log.debug("TableBuilder.createFunctionBuilder: {} does not exist", .{id});
+            log.debug("TableBuilder.createFunctionBuilder: {f} does not exist", .{id});
             return error.BadEncoding;
         };
 
@@ -288,7 +288,7 @@ pub const TableBuilder = struct {
     pub fn createHandlerSet(self: *TableBuilder, id: core.HandlerSetId) error{ BadEncoding, OutOfMemory }!*HandlerSetBuilder {
         // if we're not tracking this id we can't create a builder for it
         const entry = self.statics.getPtr(id.cast(anyopaque)) orelse {
-            log.debug("TableBuilder.createHandlerSetBuilder: {} does not exist", .{id});
+            log.debug("TableBuilder.createHandlerSetBuilder: {f} does not exist", .{id});
             return error.BadEncoding;
         };
 
@@ -327,7 +327,7 @@ pub const TableBuilder = struct {
     pub fn bindEffect(self: *TableBuilder, id: core.EffectId, effect: core.Effect) error{ BadEncoding, OutOfMemory }!void {
         // we must be tracking the id to manage the effect
         const entry = self.statics.getPtr(id.cast(anyopaque)) orelse {
-            log.debug("TableBuilder.createEffect: {} does not exist", .{id});
+            log.debug("TableBuilder.createEffect: {f} does not exist", .{id});
             return error.BadEncoding;
         };
 
@@ -353,7 +353,7 @@ pub const TableBuilder = struct {
     pub fn bindBuiltinProcedure(self: *TableBuilder, id: core.BuiltinId, func: *const core.Builtin.Procedure) error{ BadEncoding, OutOfMemory }!void {
         // we must be tracking the id to manage the builtin Procedure
         const entry = self.statics.getPtr(id.cast(anyopaque)) orelse {
-            log.debug("TableBuilder.bindBuiltinProcedure: {} does not exist", .{id});
+            log.debug("TableBuilder.bindBuiltinProcedure: {f} does not exist", .{id});
             return error.BadEncoding;
         };
 
@@ -570,7 +570,7 @@ pub const SymbolTableBuilder = struct {
     /// Bind a fully qualified name to an address table id of a constant.
     pub fn bind(self: *SymbolTableBuilder, allocator: std.mem.Allocator, name: []const u8, id: core.StaticId) error{ BadEncoding, OutOfMemory }!void {
         if (name.len == 0) {
-            log.debug("SymbolTableBuilder.bind: Failed to export {}; Name string cannot be empty", .{id});
+            log.debug("SymbolTableBuilder.bind: Failed to export {f}; Name string cannot be empty", .{id});
             return error.BadEncoding;
         }
 
@@ -1017,7 +1017,7 @@ pub const DataBuilder = struct {
         };
 
         if (!try encoder.visitLocation(location)) {
-            log.debug("DataBuilder.encode: {} has already been encoded, skipping", .{self.id});
+            log.debug("DataBuilder.encode: {f} has already been encoded, skipping", .{self.id});
             return;
         }
 
@@ -1348,7 +1348,7 @@ pub const HandlerSetBuilder = struct {
     ///   Recommended usage pattern is to use `TableBuilder` to manage statics.
     pub fn bindHandler(self: *HandlerSetBuilder, effect: core.EffectId, function: *FunctionBuilder) error{ BadEncoding, OutOfMemory }!core.HandlerId {
         if (function.parent) |parent| {
-            log.debug("HandlerSetBuilder.bindHandlerFunction: function already bound to {}", .{parent});
+            log.debug("HandlerSetBuilder.bindHandlerFunction: function already bound to {f}", .{parent});
             return error.BadEncoding;
         }
 
@@ -1425,7 +1425,7 @@ pub const HandlerSetBuilder = struct {
         };
 
         if (!try encoder.visitLocation(location)) {
-            log.debug("HandlerSetBuilder.encode: {} has already been encoded, skipping", .{self.id});
+            log.debug("HandlerSetBuilder.encode: {f} has already been encoded, skipping", .{self.id});
             return;
         }
 
@@ -1581,7 +1581,7 @@ pub const FunctionBuilder = struct {
     ///   Recommended usage pattern is to use `TableBuilder` to manage statics.
     pub fn bindHandlerSet(self: *FunctionBuilder, builder: *HandlerSetBuilder) error{OutOfMemory}!void {
         if (builder.function) |old_function| {
-            log.debug("FunctionBuilder.bindHandlerSet: Handler set builder already bound to function {}", .{old_function});
+            log.debug("FunctionBuilder.bindHandlerSet: Handler set builder already bound to function {f}", .{old_function});
             return error.OutOfMemory;
         }
 
@@ -1633,12 +1633,12 @@ pub const FunctionBuilder = struct {
         const location = encoder.localLocationId(self.id);
 
         if (maybe_upvalue_fixups == null and self.parent != null) {
-            log.debug("FunctionBuilder.encode: {} has a parent but no parent locals map was provided; assuming this is the top-level TableBuilder hitting a pre-declared handler function, skipping", .{self.id});
+            log.debug("FunctionBuilder.encode: {f} has a parent but no parent locals map was provided; assuming this is the top-level TableBuilder hitting a pre-declared handler function, skipping", .{self.id});
             return encoder.skipLocation(location);
         }
 
         if (!try encoder.visitLocation(location)) {
-            log.debug("FunctionBuilder.encode: {} has already been encoded, skipping", .{self.id});
+            log.debug("FunctionBuilder.encode: {f} has already been encoded, skipping", .{self.id});
             return;
         }
 
@@ -1749,7 +1749,7 @@ pub const FunctionBuilder = struct {
                     encoder.temp_allocator,
                     upvalue_id,
                     local_fixups.get(local_id) orelse {
-                        log.err("FunctionBuilder.encode: Local variable {} referenced by upvalue {} in handler set {} does not exist", .{ local_id, upvalue_id, handler_set.id });
+                        log.err("FunctionBuilder.encode: Local variable {f} referenced by upvalue {f} in handler set {f} does not exist", .{ local_id, upvalue_id, handler_set.id });
                         return error.BadEncoding;
                     },
                 );
@@ -1883,7 +1883,7 @@ pub const SequenceBuilder = struct {
     /// Push an effect handler set onto the stack at the current sequence position.
     pub fn pushHandlerSet(self: *SequenceBuilder, handler_set: *HandlerSetBuilder) Encoder.Error!void {
         if (handler_set.function != self.function) {
-            log.err("BlockBuilder.pushHandlerSet: {} does not belong to the block's parent {}", .{ handler_set.id, self.function });
+            log.err("BlockBuilder.pushHandlerSet: {f} does not belong to the block's parent {any}", .{ handler_set.id, self.function });
             return error.BadEncoding;
         }
 
@@ -1899,7 +1899,7 @@ pub const SequenceBuilder = struct {
     /// Pop an effect handler set from the stack at the current sequence position.
     pub fn popHandlerSet(self: *SequenceBuilder, handler_set: *HandlerSetBuilder) Encoder.Error!void {
         if (handler_set.function != self.function) {
-            log.err("BlockBuilder.popHandlerSet: {} does not belong to the block's parent {}", .{ handler_set.id, self.function });
+            log.err("BlockBuilder.popHandlerSet: {f} does not belong to the block's parent {any}", .{ handler_set.id, self.function });
             return error.BadEncoding;
         }
 
@@ -1917,12 +1917,15 @@ pub const SequenceBuilder = struct {
     /// * This allows cancellation to terminate a block and still use its terminator
     pub fn bindHandlerSetCancellationLocation(self: *SequenceBuilder, handler_set: *HandlerSetBuilder) Encoder.Error!void {
         if (handler_set.function != self.function) {
-            log.err("BlockBuilder.bindHandlerSetCancellationLocation: {} does not belong to the block's parent {}", .{ handler_set.id, self.function });
+            log.err("BlockBuilder.bindHandlerSetCancellationLocation: {f} does not belong to the block's parent {any}", .{ handler_set.id, self.function });
             return error.BadEncoding;
         }
 
         try self.proto(.{
-            .instruction = undefined,
+            .instruction = .{
+                .code = .addr_b,
+                .data = .{ .addr_b = .{} },
+            },
             .additional = .{ .cancellation_location = try handler_set.cancellationLocation() },
         });
     }
@@ -2090,7 +2093,7 @@ pub const BlockBuilder = struct {
         const location = encoder.localLocationId(self.id);
 
         if (!try encoder.visitLocation(location)) {
-            log.debug("BlockBuilder.encode: {} has already been encoded, skipping", .{self.id});
+            log.debug("BlockBuilder.encode: {f} has already been encoded, skipping", .{self.id});
             return;
         }
 
@@ -2115,7 +2118,7 @@ pub const BlockBuilder = struct {
     /// Helper method that returns a `BadEncoding` error if the block is already terminated.
     pub fn ensureUnterminated(self: *BlockBuilder) Encoder.Error!void {
         if (self.terminator) |_| {
-            log.debug("BlockBuilder.ensureUnterminated: {} is already terminated; cannot append additional instructions", .{self.id});
+            log.debug("BlockBuilder.ensureUnterminated: {f} is already terminated; cannot append additional instructions", .{self.id});
             return error.BadEncoding;
         }
     }
@@ -2185,7 +2188,7 @@ pub const ProtoInstr = struct {
                 .addr_l => {
                     const local_id: core.LocalId = @enumFromInt(self.instruction.data.addr_l.I);
                     instr.data.addr_l.I = @intCast(local_fixups.get(local_id) orelse {
-                        log.err("ProtoInstr.encode: Local variable {} not found in local fixup map", .{local_id});
+                        log.err("ProtoInstr.encode: Local variable {f} not found in local fixup map", .{local_id});
                         return error.BadEncoding;
                     });
                 },
@@ -2198,7 +2201,7 @@ pub const ProtoInstr = struct {
 
                     const upvalue_id: core.UpvalueId = @enumFromInt(self.instruction.data.addr_u.I);
                     instr.data.addr_u.I = @intCast(map.get(upvalue_id) orelse {
-                        log.err("ProtoInstr.encode: Upvalue {} not found in upvalue fixup map", .{upvalue_id});
+                        log.err("ProtoInstr.encode: Upvalue {f} not found in upvalue fixup map", .{upvalue_id});
                         return error.BadEncoding;
                     });
                 },
@@ -2303,7 +2306,9 @@ pub const Decoder = struct {
         trailing: Trailing,
 
         /// `std.fmt` impl
-        pub fn format(self: *const Item, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        pub fn format(self: *const Item, writer: *std.io.Writer) !void {
+            @setEvalBranchQuota(10_000);
+
             try writer.print("{s}", .{@tagName(self.instruction.code)});
 
             inline for (comptime std.meta.fieldNames(Instruction.OpCode)) |opcode_name| {
@@ -2318,7 +2323,7 @@ pub const Decoder = struct {
                         const Operand = @TypeOf(operand);
 
                         switch (Operand) {
-                            core.Register => try writer.print(" {}", .{operand}),
+                            core.Register => try writer.print(" {f}", .{operand}),
 
                             core.UpvalueId,
                             core.GlobalId,
@@ -2334,11 +2339,11 @@ pub const Decoder = struct {
                                 if (operand == .null) {
                                     try writer.writeAll("null");
                                 } else {
-                                    try std.fmt.formatInt(operand.toInt(), 16, .lower, .{
+                                    try writer.printInt(operand.toInt(), 16, .lower, .{
                                         .width = @sizeOf(Static) * 2,
                                         .fill = '0',
                                         .alignment = .right,
-                                    }, writer);
+                                    });
                                 }
                             },
 
@@ -2370,14 +2375,14 @@ pub const Decoder = struct {
         /// Trailing operand is a wide immediate value, decoded as `Decoder.Imm`.
         wide_imm: Imm,
 
-        fn show(self: Trailing, code: Instruction.OpCode, writer: anytype) !void {
+        fn show(self: Trailing, code: Instruction.OpCode, writer: *std.io.Writer) !void {
             switch (self) {
                 .none => {},
                 .call_args => |args| {
                     try writer.writeAll(" .. (");
 
                     for (args, 0..) |arg, i| {
-                        try writer.print("{}", .{arg});
+                        try writer.print("{f}", .{arg});
 
                         if (i < args.len - 1) {
                             try writer.writeAll(" ");
@@ -2402,7 +2407,7 @@ pub const Decoder = struct {
         /// 64 bits of the immediate word were used by the trailing operand.
         word: u64,
 
-        fn show(self: Imm, code: Instruction.OpCode, writer: anytype) !void {
+        fn show(self: Imm, code: Instruction.OpCode, writer: *std.io.Writer) !void {
             const name = code.wideOperandName() orelse "UnexpectedImm";
             switch (self) {
                 .byte => |operand| try writer.print(" .. {s}:{x:0>2}", .{ name, operand }),
@@ -2516,12 +2521,12 @@ test "encode simple function with wide instruction" {
     var table = try tb.builder.encode(tb.gpa);
     defer table.deinit();
 
-    var disas_buf = std.ArrayList(u8).init(tb.gpa);
-    defer disas_buf.deinit();
+    var disas_w = std.io.Writer.Allocating.init(tb.gpa);
+    defer disas_w.deinit();
 
     const main_func = table.bytecode.get(main_id);
     const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
-    try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+    try disas(code_slice, .{ .buffer_address = false }, &disas_w.writer);
 
     const expected =
         \\    bit_copy64c r1 .. I:0000000000001234
@@ -2529,7 +2534,7 @@ test "encode simple function with wide instruction" {
         \\    return r0
         \\
     ;
-    try testing.expectEqualStrings(expected, disas_buf.items);
+    try testing.expectEqualStrings(expected, disas_w.written());
 }
 
 test "encode function with branch and dead code" {
@@ -2555,12 +2560,12 @@ test "encode function with branch and dead code" {
     var table = try tb.builder.encode(tb.gpa);
     defer table.deinit();
 
-    var disas_buf = std.ArrayList(u8).init(tb.gpa);
-    defer disas_buf.deinit();
+    var disas_w = std.io.Writer.Allocating.init(tb.gpa);
+    defer disas_w.deinit();
 
     const main_func = table.bytecode.get(main_id);
     const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
-    try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+    try disas(code_slice, .{ .buffer_address = false }, &disas_w.writer);
 
     const expected =
         \\    bit_copy64c r0 .. I:0000000000000001
@@ -2571,7 +2576,7 @@ test "encode function with branch and dead code" {
         \\    halt
         \\
     ;
-    try testing.expectEqualStrings(expected, disas_buf.items);
+    try testing.expectEqualStrings(expected, disas_w.written());
 }
 
 test "encode function call" {
@@ -2601,11 +2606,12 @@ test "encode function call" {
 
     // Disassemble and check main
     {
-        var disas_buf = std.ArrayList(u8).init(tb.gpa);
-        defer disas_buf.deinit();
+        var disas_w = std.io.Writer.Allocating.init(tb.gpa);
+        defer disas_w.deinit();
+
         const main_func = table.bytecode.get(main_id);
         const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
-        try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+        try disas(code_slice, .{ .buffer_address = false }, &disas_w.writer);
 
         const expected_main =
             \\    bit_copy64c r1 .. I:000000000000000a
@@ -2614,23 +2620,23 @@ test "encode function call" {
             \\    return r0
             \\
         ;
-        try testing.expectEqualStrings(expected_main, disas_buf.items);
+        try testing.expectEqualStrings(expected_main, disas_w.written());
     }
 
     // Disassemble and check add
     {
-        var disas_buf = std.ArrayList(u8).init(tb.gpa);
-        defer disas_buf.deinit();
+        var disas_w = std.io.Writer.Allocating.init(tb.gpa);
+        defer disas_w.deinit();
         const add_func = table.bytecode.get(add_id);
         const code_slice = add_func.extents.base[0..@divExact(@intFromPtr(add_func.extents.upper) - @intFromPtr(add_func.extents.base), @sizeOf(core.InstructionBits))];
-        try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+        try disas(code_slice, .{ .buffer_address = false }, &disas_w.writer);
 
         const expected_add =
             \\    i_add64 r0 r0 r1
             \\    return r0
             \\
         ;
-        try testing.expectEqualStrings(expected_add, disas_buf.items);
+        try testing.expectEqualStrings(expected_add, disas_w.written());
     }
 }
 
@@ -2658,15 +2664,17 @@ test "encode static data reference" {
 
     // Check that the loaded constant is correct
     const data: *const core.Constant = table.bytecode.get(const_id);
-    const data_ptr: *const u64 = @alignCast(@ptrCast(data.asPtr()));
+    const data_ptr: *const u64 = @ptrCast(@alignCast(data.asPtr()));
     try testing.expectEqual(@as(u64, 0xCAFEBABE_DECAF_BAD), data_ptr.*);
 
     // Check disassembly
-    var disas_buf = std.ArrayList(u8).init(tb.gpa);
-    defer disas_buf.deinit();
+
+    var disas_w = std.io.Writer.Allocating.init(tb.gpa);
+    defer disas_w.deinit();
+
     const main_func = table.bytecode.get(main_id);
     const main_len = @divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits));
-    try disas(main_func.extents.base[0..main_len], .{ .buffer_address = false }, disas_buf.writer());
+    try disas(main_func.extents.base[0..main_len], .{ .buffer_address = false }, &disas_w.writer);
 
     const expected_disas =
         \\    addr_c r0 C:00000000
@@ -2674,7 +2682,7 @@ test "encode static data reference" {
         \\    return r1
         \\
     ;
-    try testing.expectEqualStrings(expected_disas, disas_buf.items);
+    try testing.expectEqualStrings(expected_disas, disas_w.written());
 }
 
 test "encode external reference creates linker fixup" {
@@ -2761,12 +2769,12 @@ test "encode local variable reference" {
     var table = try tb.builder.encode(tb.gpa);
     defer table.deinit();
 
-    var disas_buf = std.ArrayList(u8).init(tb.gpa);
-    defer disas_buf.deinit();
+    var disas_w = std.io.Writer.Allocating.init(tb.gpa);
+    defer disas_w.deinit();
 
     const main_func = table.bytecode.get(main_id);
     const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
-    try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+    try disas(code_slice, .{ .buffer_address = false }, &disas_w.writer);
 
     const expected =
         \\    addr_l r1 I:0028
@@ -2775,7 +2783,7 @@ test "encode local variable reference" {
         \\    unreachable
         \\
     ;
-    try testing.expectEqualStrings(expected, disas_buf.items);
+    try testing.expectEqualStrings(expected, disas_w.written());
 }
 
 test "encode function with conditional branch" {
@@ -2808,12 +2816,12 @@ test "encode function with conditional branch" {
     var table = try tb.builder.encode(tb.gpa);
     defer table.deinit();
 
-    var disas_buf = std.ArrayList(u8).init(tb.gpa);
-    defer disas_buf.deinit();
+    var disas_w = std.io.Writer.Allocating.init(tb.gpa);
+    defer disas_w.deinit();
 
     const main_func = table.bytecode.get(main_id);
     const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
-    try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+    try disas(code_slice, .{ .buffer_address = false }, &disas_w.writer);
 
     // Expected offsets are calculated based on sequential layout of visited blocks: entry, then, else, merge.
     // br_if (word 2) -> then (word 3, offset +1), else (word 6, offset +4)
@@ -2829,7 +2837,7 @@ test "encode function with conditional branch" {
         \\    return r1
         \\
     ;
-    try testing.expectEqualStrings(expected, disas_buf.items);
+    try testing.expectEqualStrings(expected, disas_w.written());
 }
 
 test "data builder with internal pointer fixup" {
@@ -2865,7 +2873,7 @@ test "data builder with internal pointer fixup" {
 
     // Verify the structure after encoding and linking
     const data: *const core.Constant = table.bytecode.get(const_id);
-    const node1_ptr: *const Node = @alignCast(@ptrCast(data.asPtr()));
+    const node1_ptr: *const Node = @ptrCast(@alignCast(data.asPtr()));
 
     try testing.expectEqual(@as(u64, 111), node1_ptr.value);
     try testing.expect(node1_ptr.next != null);
@@ -2912,7 +2920,7 @@ test "data builder with external function pointer fixup" {
 
     // Verify
     const data: *const core.Constant = table.bytecode.get(const_id);
-    const my_struct_ptr: *const StructWithFnPtr = @alignCast(@ptrCast(data.asPtr()));
+    const my_struct_ptr: *const StructWithFnPtr = @ptrCast(@alignCast(data.asPtr()));
 
     const func_ptr = table.bytecode.get(func_id);
 
@@ -2987,11 +2995,11 @@ test "encode handler set" {
 
     // Verify main function disassembly
     {
-        var disas_buf = std.ArrayList(u8).init(tb.gpa);
-        defer disas_buf.deinit();
+        var disas_w = std.io.Writer.Allocating.init(tb.gpa);
+        defer disas_w.deinit();
         const main_func = table.bytecode.get(main_id);
         const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
-        try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+        try disas(code_slice, .{ .buffer_address = false }, &disas_w.writer);
 
         const expected_main =
             \\    push_set H:00000002
@@ -3000,23 +3008,23 @@ test "encode handler set" {
             \\    return r0
             \\
         ;
-        try testing.expectEqualStrings(expected_main, disas_buf.items);
+        try testing.expectEqualStrings(expected_main, disas_w.written());
     }
 
     // Verify handler function disassembly
     {
-        var disas_buf = std.ArrayList(u8).init(tb.gpa);
-        defer disas_buf.deinit();
+        var disas_w = std.io.Writer.Allocating.init(tb.gpa);
+        defer disas_w.deinit();
         const handler_func: *const core.Function = table.bytecode.get(handler_fn_id);
         const code_slice = handler_func.extents.base[0..@divExact(@intFromPtr(handler_func.extents.upper) - @intFromPtr(handler_func.extents.base), @sizeOf(core.InstructionBits))];
-        try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+        try disas(code_slice, .{ .buffer_address = false }, &disas_w.writer);
 
         const expected_handler =
             \\    bit_copy64c r0 .. I:000000000000002a
             \\    return r0
             \\
         ;
-        try testing.expectEqualStrings(expected_handler, disas_buf.items);
+        try testing.expectEqualStrings(expected_handler, disas_w.written());
     }
 }
 
@@ -3120,11 +3128,13 @@ test "encode handler set with upvalues" {
     defer table.deinit();
 
     // Verify handler function disassembly
-    var disas_buf = std.ArrayList(u8).init(tb.gpa);
-    defer disas_buf.deinit();
+
+    var disas_w = std.io.Writer.Allocating.init(tb.gpa);
+    defer disas_w.deinit();
+
     const h_func: *const core.Function = table.bytecode.get(handler_fn_id);
     const code_slice = h_func.extents.base[0..@divExact(@intFromPtr(h_func.extents.upper) - @intFromPtr(h_func.extents.base), @sizeOf(core.InstructionBits))];
-    try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+    try disas(code_slice, .{ .buffer_address = false }, &disas_w.writer);
 
     const expected_handler =
         \\    addr_u r0 I:0008
@@ -3132,11 +3142,11 @@ test "encode handler set with upvalues" {
         \\    return r1
         \\
     ;
-    try testing.expectEqualStrings(expected_handler, disas_buf.items);
+    try testing.expectEqualStrings(expected_handler, disas_w.written());
 }
 
 // This is just a placeholder for the test. It won't be called.
-fn dummyBuiltinProc(fiber: *core.Fiber) callconv(.C) core.Builtin.Signal {
+fn dummyBuiltinProc(fiber: *core.Fiber) callconv(.c) core.Builtin.Signal {
     _ = fiber;
     return core.Builtin.Signal.@"return";
 }
@@ -3171,16 +3181,18 @@ test "bind builtin function" {
     try testing.expectEqual(@intFromPtr(&dummyBuiltinProc), builtin_addr.addr);
 
     // 2. Check the disassembly
-    var disas_buf = std.ArrayList(u8).init(tb.gpa);
-    defer disas_buf.deinit();
+
+    var disas_w = std.io.Writer.Allocating.init(tb.gpa);
+    defer disas_w.deinit();
+
     const main_func = table.bytecode.get(main_id);
     const code_slice = main_func.extents.base[0..@divExact(@intFromPtr(main_func.extents.upper) - @intFromPtr(main_func.extents.base), @sizeOf(core.InstructionBits))];
-    try disas(code_slice, .{ .buffer_address = false }, disas_buf.writer());
+    try disas(code_slice, .{ .buffer_address = false }, &disas_w.writer);
 
     const expected_disas =
         \\    call_c r0 F:00000000 I:00 .. ()
         \\    halt
         \\
     ;
-    try testing.expectEqualStrings(expected_disas, disas_buf.items);
+    try testing.expectEqualStrings(expected_disas, disas_w.written());
 }

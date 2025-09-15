@@ -30,7 +30,7 @@ pub const InstructionName = union(enum) {
     wrapped: struct { []const u8, []const u8 },
 
     /// Writes the instruction name to the given `writer`, formatted with using the provided mnemonic.
-    pub fn fmt(self: *const InstructionName, mnemonic: []const u8, writer: anytype) !void {
+    pub fn fmt(self: *const InstructionName, mnemonic: []const u8, writer: *std.io.Writer) !void {
         try formatInstructionName(mnemonic, self.*, writer);
     }
 
@@ -40,7 +40,7 @@ pub const InstructionName = union(enum) {
     }
 
     /// `std.fmt.format` impl
-    pub fn format(self: *const InstructionName, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: *const InstructionName, writer: *std.io.Writer) !void {
         try formatInstructionName("%", self.*, writer);
     }
 
@@ -218,7 +218,7 @@ pub const Operand = enum {
     /// ```
     /// .register => "`Register`"
     /// ```
-    pub fn writeContextualReference(self: Operand, writer: anytype) !void {
+    pub fn writeContextualReference(self: Operand, writer: *std.io.Writer) !void {
         try writer.writeByte('`');
         _ = try self.writeShorthandType(writer);
         try writer.writeByte('`');
@@ -256,7 +256,7 @@ pub const Operand = enum {
     /// ```
     /// .register => "Register"
     /// ```
-    pub fn writeShorthandType(self: Operand, writer: anytype) !void {
+    pub fn writeShorthandType(self: Operand, writer: *std.io.Writer) !void {
         switch (self) {
             .register => try writer.writeAll("Register"),
             .upvalue => try writer.writeAll("UpvalueId"),
@@ -279,7 +279,7 @@ pub const Operand = enum {
     /// ```
     /// .register => "R"
     /// ```
-    pub fn writeShortcode(self: Operand, writer: anytype) !void {
+    pub fn writeShortcode(self: Operand, writer: *std.io.Writer) !void {
         try writer.writeByte(self.getShortcode());
     }
 
@@ -355,7 +355,7 @@ pub fn wordBoundaryHeuristic(operand: Operand, wordOffset: anytype) bool {
     return false;
 }
 
-pub fn formatInstructionName(mnemonic: []const u8, instr: InstructionName, writer: anytype) !void {
+pub fn formatInstructionName(mnemonic: []const u8, instr: InstructionName, writer: *std.io.Writer) !void {
     switch (instr) {
         .mnemonic => try writer.print("{s}", .{mnemonic}),
         .overridden => |o| try writer.print("{s}", .{o}),
@@ -395,7 +395,7 @@ pub fn formatInstructionName(mnemonic: []const u8, instr: InstructionName, write
     }
 }
 
-pub fn formatIndex(index: usize, operands: []const Operand, writer: anytype) !void {
+pub fn formatIndex(index: usize, operands: []const Operand, writer: *std.io.Writer) !void {
     var relativeIndex: usize = 0;
 
     for (0..index) |i| {
@@ -407,7 +407,7 @@ pub fn formatIndex(index: usize, operands: []const Operand, writer: anytype) !vo
     try writer.writeByte("xyzw"[relativeIndex]);
 }
 
-pub fn formatOperand(index: usize, operands: []const Operand, writer: anytype) !usize {
+pub fn formatOperand(index: usize, operands: []const Operand, writer: *std.io.Writer) !usize {
     const operand = operands[index];
 
     try operand.writeShortcode(writer);
