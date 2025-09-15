@@ -501,7 +501,7 @@ focused on the IR and backend.
 
 #### Notes
 
-* We are currently pinned to Zig version `0.14.1`.
+* We are currently pinned to Zig version `0.15.1`.
 * 32-bit architectures are not currently planned to be supported.
 * Big-endian architectures are untested.
 * ARM architectures are untested.
