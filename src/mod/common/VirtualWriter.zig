@@ -1,3 +1,5 @@
+// FIXME: this needs to be updated to align with the new std Writer api
+
 //! Byte writer for memory that requires stable addressing.
 //!
 //! Allocates a page-aligned `USABLE_ADDRESS_SPACE`-byte address space, but does not commit any pages until they are used.

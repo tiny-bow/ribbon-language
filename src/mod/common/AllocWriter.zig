@@ -1,3 +1,5 @@
+// FIXME: this needs to be updated to align with the new std Writer api
+
 //! Byte writer for memory that requires addressing.
 //!
 //! Unlike VirtualWriter, this doesn't guarantee addresses are stable throughout the write,
