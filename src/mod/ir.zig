@@ -1305,7 +1305,7 @@ pub const Context = struct {
     }
 };
 
-/// A reference to a node in an ir context; unlike `Ref`,
+/// A reference to a node in an ir context; unlike `Id`,
 /// this does not bind the context it is contained within.
 pub const Ref = packed struct(u64) {
     /// The kind of the node bound by this reference.
