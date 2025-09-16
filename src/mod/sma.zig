@@ -194,7 +194,7 @@ pub const Dehydrator = struct {
     ref_table: common.ArrayList(Ref),
 
     pub fn init(init_ir_ctx: *ir.Context, init_module_guid: ir.ModuleGUID, init_arena: std.mem.Allocator) !*Dehydrator {
-        var temp_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var temp_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator); // TODO: backing allocator should probably be passed in
         errdefer temp_arena.deinit();
 
         const self = try temp_arena.allocator().create(Dehydrator);
@@ -231,6 +231,8 @@ pub const Dehydrator = struct {
 
     /// Populates `self.public_refs` by traversing the graph from all public entry points.
     pub fn findPublicRefs(self: *Dehydrator) !void {
+        // TODO: the IR can make our lives a lot easier by simply tracking the set of public symbols,
+        //       as it already does with other special values.
         var work_queue = std.ArrayList(ir.Ref).init(self.temp_allocator.allocator());
         defer work_queue.deinit();
 
