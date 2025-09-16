@@ -16,14 +16,22 @@ The Ribbon compiler is designed from the ground up to support modern development
 The foundation of this architecture is a **Hub-and-Spoke Model** orchestrated by a central build manager. This model cleanly separates the compilation process into distinct, reusable services:
 
 *   **The Build Orchestrator:** The central brain of the build system. It manages the module dependency graph, the compilation cache, and coordinates the workflow between the other services.
-*   **The Frontend Service:** A pure analysis service. Its sole job is to take source code and produce a semantic representation of its public interface.
+*   **The Frontend Service:** A pure analysis service. Its job is to take source code and produce a semantic representation of its public interface and private implementation.
 *   **The Backend Service:** A pure code generation service. Its job is to take the semantic representation from one or more modules and produce a final, executable artifact (e.g., bytecode).
 
 This separation is the key to unlocking both parallelism and accurate incrementality, while also enabling other tools like Language Server Protocol (LSP) servers to reuse the frontend analysis without depending on the code generation backend.
 
 ### 1.2. Phase 1: The Frontend Service and the Serializable Module Artifact (SMA)
 
-The first phase of compilation is a fast analysis pass performed by the **Frontend Service**. It is responsible for producing a **Serializable Module Artifact (SMA)** for every module (`.sma` file). The SMA is a self-contained, context-free, and cacheable representation of a module's public contract and its dependencies. It is not a separate IR, but a **"dehydrated," on-disk projection of the live `ir.Node` graph's public interface**.
+The first phase of compilation is a fast analysis pass performed by the **Frontend Service**. It is responsible for producing a **Serializable Module Artifact (SMA)** for every module (`.sma` file).
+
+The SMA is a self-contained, cacheable, "dehydrated" representation of a **whole, fully-analyzed module**. It must contain enough information for two distinct purposes:
+1.  For the `BackendService` to generate code for the module itself *without re-analyzing the source*.
+2.  For *other modules* to compile against it without needing the source.
+
+To satisfy these requirements, the SMA contains two distinct sections:
+*   **A Public Interface Section:** A dehydrated representation of the module's public `ir.Node` graph. This is the "header file" part that other modules will "include" (rehydrate) when they compile.
+*   **A Private Implementation Section:** A dehydrated representation of the module's private `ir.Node` graph, including the bodies of all functions. This is what the `BackendService` uses to generate the final artifact for *this specific module*.
 
 The `sma.Ref` (Symbolic IR Reference) is the core of the SMA format, providing a stable, context-free replacement for the ephemeral, in-memory `ir.Ref`.
 
@@ -49,18 +57,16 @@ const sma.sma.Ref = union(enum) {
 
 ### 1.3. The `interface_hash`: Canonical Binary Representation and Merkle Hashing
 
-The `interface_hash` in the SMA header is the cornerstone of incremental compilation. This approach replaces earlier, more fragile ideas with a cryptographically robust method.
-
-**The hash must be an absolutely deterministic, canonical, and compact representation of a module's public ABI and API.**
+The `interface_hash` is the cornerstone of incremental compilation. Its **sole purpose** is to be a cryptographic fingerprint of the module's **public contract (API/ABI)**. The build orchestrator uses this hash for one thing only: to answer the question, "Has the public-facing part of this module changed in a way that requires reverse-dependencies to be recompiled?"
 
 *   It **must change** if a public function's signature (including its full, inferred effect row), a public struct's layout, or any other aspect of the public contract changes.
 *   It **must not change** if private implementation details, comments, or formatting are modified.
 
-To achieve this, the `FrontendService` will generate a **Canonical Binary Representation (CBR)** for every public symbol. The final `interface_hash` is a Merkle-style hash of the entire public API, making it compositional and efficient.
+To achieve this, the `FrontendService` will generate a **Canonical Binary Representation (CBR)** derived *only* from the public interface. The final `interface_hash` is a Merkle-style hash of the entire public API, making it compositional and efficient.
 
 **The `interface_hash` Algorithm:**
 
-1.  **Full Module Analysis:** The `FrontendService` performs a full analysis of the entire module, including private implementations. This is crucial to correctly infer the complete effect rows of all public functions.
+1.  **Full Module Analysis:** The `FrontendService` performs a full analysis of the entire module, including private implementations. This is crucial to correctly infer the complete types and effect rows of all public functions.
 
 2.  **Build CBRs for Public Symbols:** A CBR is a tree of normalized, ABI-relevant data. The service traverses the public-facing `ir.Node` graph for each public symbol and recursively generates its CBR.
 
@@ -85,8 +91,8 @@ To handle generics and metaprogramming, the **Backend Service** will use a **Spe
 The **Backend Service** consumes one or more SMAs to generate final artifacts in an embarrassingly parallel fashion. A `backend.Job` for a given module will:
 
 1.  Create a private `ir.Context`.
-2.  **Rehydrate** the SMAs for all its dependencies by loading them and reconstructing their public interfaces in the job's context. This is a two-pass process (shell creation -> linkage) to correctly handle graph cycles.
-3.  Compile its own private implementation against these rehydrated interfaces.
+2.  **Rehydrate dependency interfaces:** For each module dependency, load its SMA and rehydrate **only its Public Interface Section** into the job's context. This is a two-pass process (shell creation -> linkage) to correctly handle graph cycles.
+3.  **Rehydrate its own implementation:** For the module being compiled, load its own SMA and rehydrate **both its Public Interface Section and its Private Implementation Section** into the context.
 4.  Run optimizations and generate the final artifact (e.g., `core.Bytecode`).
 
 ### 1.6. The Build Orchestrator and Incremental Workflow
@@ -97,16 +103,22 @@ The **Build Orchestrator** is the central coordinator of the entire process. It 
 
 1.  **Trigger:** A file watcher reports that `module_b.ribbon` has been modified.
 2.  **Orchestration Begins:** The orchestrator is invoked for `module_b`.
-3.  **Phase 1 (Analysis):** The orchestrator calls `frontend.generateSMA("path/to/module_b.ribbon", ...)` to produce a `new_module_b_sma`.
+3.  **Phase 1 (Analysis):** The orchestrator calls `frontend.generateSMA("path/to/module_b.ribbon", ...)` to produce two things:
+    *   The `interface_hash`, generated by creating a `CBR` of the **public interface only**.
+    *   The `new_module_b.sma` file, which contains a serialized version of **both the public interface AND the private implementation**.
 4.  **The "Should I Recompile?" Check:**
-    *   The orchestrator retrieves `old_module_b_sma` from its `cache`.
-    *   It compares `old_module_b_sma.header.interface_hash` with `new_module_b_sma.header.interface_hash`.
+    *   The orchestrator retrieves `old_module_b_sma.header.interface_hash` from its `cache`.
+    *   It compares this old hash with the newly generated `interface_hash`.
 5.  **Decision & Scheduling (Phase 2):**
     *   **Case A: Hashes Match (No Public API Change).**
-        *   The orchestrator schedules a single backend job: `backend.compile(&.{new_module_b_sma})`.
+        *   The orchestrator knows that only `module_b` needs to be recompiled.
+        *   It schedules a single backend job: `backend.compile(module_b)`.
+        *   The `BackendService` loads `new_module_b.sma`, rehydrates its **Private Implementation Section** (and public section), and generates new code. Other modules are untouched.
     *   **Case B: Hashes Differ (Public API Change).**
-        *   The orchestrator consults `dep_graph` for the *reverse dependencies* of `module_b` (e.g., `module_c`, `module_d`).
-        *   It schedules a parallel backend job for each affected module (`module_b`, `module_c`, `module_d`).
+        *   The orchestrator consults the `DependencyGraph` for the *reverse dependencies* of `module_b` (e.g., `module_c`, `module_d`).
+        *   It schedules parallel backend jobs for each affected module (`module_b`, `module_c`, `module_d`).
+        *   The `module_b` job proceeds as in Case A.
+        *   The `module_c` and `module_d` jobs load `new_module_b.sma` but **only rehydrate its Public Interface Section** to compile against.
 6.  **Cache Update:** Upon success, the orchestrator updates the cache with the new SMAs and artifacts.
 
 This model allows an **LSP server** to be built as a separate consumer of the `Orchestrator` and `FrontendService`, getting all the semantic information it needs from the SMA without ever touching or depending on the `BackendService`.
@@ -211,15 +223,16 @@ Before services can be built, the data they exchange must be defined. This invol
     *   **Details:** Define the top-level `SMA` struct with the following components:
         *   `header`: Contains metadata like `ribbon_version`, `module_guid`, and the crucial `interface_hash`.
         *   `string_table`: A contiguous block of memory for all symbol names, strings, etc., referenced by index.
-        *   `public_symbols`: A list mapping public symbol names (by index into `string_table`) to their root `sma.Ref`s in the `node_table`.
-        *   `node_table`: A flattened array of `sma.Node`s, representing the dehydrated public IR graph.
+        *   `public_symbols`: A list mapping public symbol names to their root `sma.Ref`s in the `public_node_table`.
+        *   `public_node_table`: A flattened array of `sma.Node`s representing the dehydrated **public interface** IR graph.
+        *   `private_node_table`: A flattened array of `sma.Node`s representing the dehydrated **private implementation** IR graph.
 
 *   **Task 1.2: Define `sma.sma.Ref` and `ir.ModuleGUID`.**
     *   **Location:** `src/mod/sma.zig` and `src/mod/ir.zig`.
     *   **Details:**
         *   In `ir.zig`, define `ModuleGUID` as a `u128` (or similar hash result type), derived from a canonical hash of the module's source path. For maximum robustness across different machines and build environments (e.g., vendored dependencies), this should be a hash of a canonical module name (e.g., my_project/utils/collections) rather than a filesystem path.
         *   In `sma.zig`, implement the `sma.Ref` (Symbolic IR Reference) union. This is the stable, serializable replacement for the in-memory `ir.Ref`.
-            *   `internal: u32`: An index into the *current SMA's* `node_table`.
+            *   `internal: u32`: An index into one of the *current SMA's* node tables. A high bit could be used to distinguish between public/private tables.
             *   `external: struct { module_guid: ir.ModuleGUID, symbol_name_idx: u32 }`: A reference to a public symbol in another module.
             *   `builtin: ir.Builtin`: A reference to a compiler-known primitive.
             *   `nil`: A null reference.
@@ -246,7 +259,7 @@ This service is responsible for analysis and SMA generation. It is the most crit
 *   **Task 2.3: Implement CBR Generation and Hashing.**
     *   **Location:** `src/mod/frontend/cbr.zig`.
     *   **Details:** After semantic analysis produces a complete `ir.Context`, implement the logic to generate the `interface_hash`.
-        1.  Create a function `generateCbr(ir.Ref) -> CbrNode`. This function will traverse the IR graph from a public symbol's `ir.Ref` and build the corresponding `CbrNode` tree.
+        1.  Create a function `generateCbr(ir.Ref) -> CbrNode`. This function will traverse the IR graph starting from a public symbol's `ir.Ref` and build the corresponding `CbrNode` tree, staying within the public API boundary.
         2.  Implement the canonical sorting logic within `generateCbr`: sort struct fields (alphabetically or by offset) and function effect rows (alphabetically).
         3.  Implement a function `hashCbr(CbrNode) -> u128`. This performs a Merkle-style hash on the `CbrNode` tree.
         4.  Implement the final `generateInterfaceHash(*ir.Context) -> u128` function, which gets all public symbols, generates and hashes their CBRs, sorts the final hashes, and produces the single `interface_hash`.
@@ -254,10 +267,11 @@ This service is responsible for analysis and SMA generation. It is the most crit
 *   **Task 2.4: Implement SMA "Dehydration" (Serialization).**
     *   **Location:** `src/mod/sma.zig`.
     *   **Details:** Create a function `dehydrate(ctx: *ir.Context, path: []const u8) !void`.
-        1.  Traverse the public symbols in the `ctx` to build a `string_table`.
-        2.  Perform a second traversal of the public IR graph. For each `ir.Node`, create a corresponding `sma.Node`.
-        3.  During this traversal, convert every `ir.Ref` into its stable `sma.sma.Ref` equivalent. This is the core translation step.
-        4.  Write the `SMA` header (including the computed `interface_hash`), `string_table`, `public_symbols` list, and `node_table` to the output `.sma` file.
+        1.  Traverse the entire `ir.Context` graph. Partition all `ir.Node`s into two sets: those reachable from public symbols (public interface), and the rest (private implementation).
+        2.  Serialize the public interface nodes into the `public_node_table`.
+        3.  Serialize the private implementation nodes into the `private_node_table`.
+        4.  During serialization, convert all `ir.Ref`s into stable `sma.Ref`s. References between the two partitions must be handled correctly.
+        5.  Write the `SMA` header (including the pre-computed `interface_hash`), string table, public symbol table, and both node tables to the output `.sma` file.
 
 #### Phase 3: Implementing the Backend Service
 
@@ -269,13 +283,13 @@ This service consumes SMAs and produces executable artifacts.
 
 *   **Task 3.2: Implement SMA "Rehydration" (Deserialization).**
     *   **Location:** `src/mod/backend.zig`.
-    *   **Details:** Create a function `rehydrate(job: *Job, sma: SMA) !void`. This populates a job's empty `ir.Context` from an SMA file. This is a critical two-pass process:
-        1.  **Pass 1 (Shell Creation):** Iterate through the SMA's `node_table` and create empty "shell" `ir.Node`s in the `ir.Context`. Store the mapping from the SMA `internal` index to the new `ir.Ref`. This breaks dependency cycles.
-        2.  **Pass 2 (Linkage):** Iterate through the `sma.Node` table again. For each shell `ir.Node`, populate its `ref_list` by resolving its `sma.Ref`s using the map created in Pass 1. `external` references are kept as unresolved stubs for now.
+    *   **Details:** Create functions to populate a job's `ir.Context` from an SMA. This will have two modes:
+        1.  **Dependency Mode:** A function `rehydratePublic(ctx: *ir.Context, sma: SMA)` loads **only** the `public_node_table` from a dependency's SMA. It uses a two-pass process (shell creation -> linkage) to handle cycles.
+        2.  **Self-Compilation Mode:** A function `rehydrateFull(ctx: *ir.Context, sma: SMA)` loads **both** the `public_node_table` and `private_node_table` for the module being compiled, linking them together into a complete IR graph.
 
 *   **Task 3.3: Implement IR-to-Bytecode Pass.**
     *   **Action:** Implement the `backend.BytecodeTarget.runJob` function.
-    *   **Details:** This is the direct implementation of the "Missing Links: IR-to-Bytecode Compilation" section from the `README.md`. It will traverse the `ir.Graph` within a `Job` (which now contains both its own code and rehydrated dependency interfaces) and emit bytecode using the `bytecode.FunctionBuilder` API.
+    *   **Details:** This is the direct implementation of the "Missing Links: IR-to-Bytecode Compilation" section from the `README.md`. It will traverse the `ir.Graph` within a `Job` (which now contains its own fully rehydrated code and the rehydrated public interfaces of its dependencies) and emit bytecode using the `bytecode.FunctionBuilder` API.
 
 #### Phase 4: Implementing the Build Orchestrator
 

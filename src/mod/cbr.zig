@@ -8,6 +8,7 @@ const std = @import("std");
 const ir = @import("ir");
 const sma = @import("sma");
 const backend = @import("backend");
+const common = @import("common");
 
 const log = std.log.scoped(.cbr);
 
@@ -24,21 +25,23 @@ pub const Node = union(enum) {
     function_type: Function,
     enum_type: Enum,
     type_class: TypeClass,
-    // ... other public symbol kinds (e.g., primitive types, which have constant hashes)
+    // ... other public symbol kinds (e.g., primitive types, which have constant hashes; constraints, etc.)
 };
 
 pub const Struct = struct {
-    // The memory layout policy. This is part of the public contract.
+    /// The memory layout policy. This is part of the public contract.
     layout_policy: enum { @"packed", c_abi },
 
-    // A CANONICALLY SORTED list of the public fields.
-    // Sorting key: alphabetical by name for `packed`, numerical by memory offset for `c_abi`.
+    /// A CANONICALLY SORTED list of the public fields.
+    /// Sorting key: alphabetical by name for `packed`, numerical by memory offset for `c_abi`.
     fields: []const Field,
 };
 
 pub const Field = struct {
-    name_hash: Hash, // Hash of the field name string.
-    type_hash: Hash, // Hash of the field's type CBR.
+    /// Hash of the field name string.
+    name_hash: Hash,
+    /// Hash of the field's type CBR.
+    type_hash: Hash,
 };
 
 pub const Function = struct {
@@ -83,22 +86,10 @@ const Context = struct {
     allocator: std.mem.Allocator,
     /// A cache to store the hashes of already-processed `ir.Ref`s,
     /// avoiding re-computation and handling cycles/shared types.
-    hash_cache: ir.RefMap,
-
-    /// Hashes a byte slice using the canonical hashing algorithm (BLAKE3).
-    pub fn hashBytes(self: *Context, data: []const u8) Hash {
-        _ = self;
-        var hasher = std.crypto.blake3.Hasher.init();
-        hasher.update(data);
-        var result: [16]u8 = undefined;
-        hasher.final(&result);
-        return std.mem.readInt(u128, &result, .little);
-    }
+    hash_cache: common.UniqueReprMap(ir.Ref, Hash),
 
     /// Recursively generates the `cbr.Node` tree for a given public symbol `ir.Ref`.
     pub fn generate(ctx: *Context, ref: ir.Ref) !Node {
-        _ = ctx;
-        _ = ref;
         // TODO: Implement the recursive generation of the CBR tree.
         // 1. Get the `ir.Node` for the `ref`.
         // 2. Based on the `ir.NodeKind`, create the corresponding `*` struct.
@@ -108,13 +99,12 @@ const Context = struct {
         //    - Sort struct fields (by name for packed, by offset for C).
         //    - Sort enum members by name.
         //    - Sort effect rows by effect name.
-        return error.Unsupported;
+
+        common.todo(noreturn, .{ ctx, ref });
     }
 
     /// Recursively computes the Merkle-style hash for a `cbr.Node` tree.
     pub fn hashNode(ctx: *Context, node: Node) !Hash {
-        _ = ctx;
-        _ = node;
         // TODO: Implement the Merkle-style hashing.
         // 1. Switch on the `Node` variant.
         // 2. For each variant, construct a canonical byte buffer.
@@ -123,7 +113,8 @@ const Context = struct {
         // 3. Use `ctx.hashBytes` to hash the buffer.
         // 4. IMPORTANT: Use `ctx.hash_cache` to store and retrieve results for `ir.Ref`s
         //    to avoid re-computation and handle graph cycles correctly.
-        return error.Unsupported;
+
+        common.todo(noreturn, .{ ctx, node });
     }
 };
 
@@ -132,7 +123,7 @@ pub fn generateInterfaceHash(job: *backend.Job, arena: std.mem.Allocator) !Hash 
     var ctx = Context{
         .job = job,
         .allocator = arena,
-        .hash_cache = ir.RefMap.empty,
+        .hash_cache = .empty,
     };
     defer ctx.hash_cache.deinit(arena);
 
@@ -146,5 +137,17 @@ pub fn generateInterfaceHash(job: *backend.Job, arena: std.mem.Allocator) !Hash 
     // 4. CRITICAL: Sort the list of pairs alphabetically by `symbol_name`.
     // 5. Concatenate just the hashes from the sorted list into a single byte buffer.
     // 6. Hash this final buffer using `ctx.hashBytes` to produce the `interface_hash`.
-    return error.Unsupported;
+
+    common.todo(noreturn, .{ctx});
+}
+
+/// Hashes a byte slice using the canonical hashing algorithm (unkeyed BLAKE3).
+pub fn hashBytes(data: []const u8) Hash {
+    var hasher = std.crypto.hash.Blake3.init(.{ .key = null });
+    var result: u128 = undefined;
+
+    hasher.update(data);
+    hasher.final(std.mem.asBytes(&result));
+
+    return result;
 }

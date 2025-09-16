@@ -1,4 +1,4 @@
-//! The on-disk, cacheable binary format that represents a module's public interface and dependencies.
+//! The on-disk, cacheable binary format that represents a module's public interface, all definitions required to implement the interface, and dependencies.
 
 const sma = @This();
 
@@ -15,12 +15,19 @@ test {
     std.testing.refAllDecls(@This());
 }
 
+/// Version of the SMA format.
+pub const format_version_number = 1;
+
 /// A stable, serializable reference to an IR node.
 /// The `sma.Ref` is the cornerstone of the SMA format. It is a stable, serializable, context-free representation of an in-memory `ir.Ref`.
 pub const Ref = union(enum) {
-    /// A reference to another node within this SAME artifact.
-    /// The u32 is an index into this SMA's `node_table`.
-    internal: u32,
+    /// A reference to another node within this SAME artifact, that is a public symbol.
+    /// The u32 is an index into this SMA's `public_node_table`.
+    public: u32,
+
+    /// A reference to another node within this SAME artifact, that is NOT a public symbol.
+    /// The u32 is an index into this SMA's `private_node_table`.
+    private: u32,
 
     /// A stable, symbolic reference to a public item in another module.
     external: struct {
@@ -71,18 +78,25 @@ pub const Header = extern struct {
     module_guid: ir.ModuleGUID,
     interface_hash: u128,
 
-    /// Byte offset from binary base to table base.
-    string_table_offset: u32,
     /// Length in bytes.
+    /// string_table_offset is always @sizeOf(Header), so we don't store it.
     string_table_len: u32,
+
     /// Byte offset from binary base to table base.
     public_symbol_table_offset: u32,
     /// Number of entries.
     public_symbol_table_len: u32,
+
     /// Byte offset from binary base to table base.
-    node_table_offset: u32,
+    public_node_table_offset: u32,
     /// Number of entries.
-    node_table_len: u32,
+    public_node_table_len: u32,
+
+    /// Byte offset from binary base to table base.
+    private_node_table_offset: u32,
+    /// Number of entries.
+    private_node_table_len: u32,
+
     /// Byte offset from binary base to table base.
     ref_table_offset: u32,
     /// Number of entries.
@@ -103,7 +117,8 @@ pub const Artifact = struct {
     header: Header,
     string_table: []const u8,
     public_symbol_table: []const PublicSymbol,
-    node_table: []const Node,
+    public_node_table: []const Node,
+    private_node_table: []const Node,
     ref_table: []const Ref,
 
     /// Given a `sma.Node` that contains a `RefList`, this function returns a slice
@@ -114,41 +129,63 @@ pub const Artifact = struct {
             .collection => |rl| rl,
             else => return null,
         };
+
         const end = ref_list.start_idx + ref_list.len;
         if (end > self.ref_table.len) return null; // Bounds check
+
         return self.ref_table[ref_list.start_idx..end];
+    }
+
+    /// Serializes a public `ir.Context` into an Artifact representing an SMA file.
+    /// This process is called "dehydration".
+    pub fn fromIr(ir_ctx: *ir.Context, module_guid: ir.ModuleGUID, arena: std.mem.Allocator) !Artifact {
+        var header = Header{
+            .format_version = format_version_number,
+            .module_guid = module_guid,
+            .interface_hash = 0,
+            .string_table_len = 0,
+            .public_symbol_table_offset = 0,
+            .public_symbol_table_len = 0,
+            .public_node_table_offset = 0,
+            .public_node_table_len = 0,
+            .private_node_table_offset = 0,
+            .private_node_table_len = 0,
+            .ref_table_offset = 0,
+            .ref_table_len = 0,
+        };
+
+        // TODO: Implement the "dehydration" process.
+        // * Partition the ir.Context graph into a "public" set (nodes reachable from
+        //   public symbols) and a "private" set (the rest).
+        // * Create mappings from `ir.Ref` to `sma.Ref` and from strings to string_table indices.
+        // * Serialize the public set into the `public_node_table`.
+        // * Serialize the private set into the `private_node_table`.
+        // * Populate the shared `string_table` and `ref_table`.
+        // * Fill in the final table offsets and lengths in the `Header`.
+
+        common.todo(void, .{ ir_ctx, arena, &header });
+
+        return Artifact{
+            .header = header,
+            .string_table = &.{},
+            .public_symbol_table = &.{},
+            .node_table = &.{},
+            .ref_table = &.{},
+        };
     }
 };
 
-/// Serializes a public `ir.Context` into a byte buffer representing an SMA file.
-/// This process is called "dehydration".
-pub fn serialize(ctx: *ir.Context, allocator: std.mem.Allocator) ![]u8 {
-    _ = ctx;
-    _ = allocator;
-    // TODO: Implement the "dehydration" process.
-    // 1. Traverse the public IR graph to determine the size of all tables.
-    // 2. Allocate a single buffer for the entire SMA file.
-    // 3. Create a mapping from `ir.Ref` to `sma.Ref` and from strings to string_table indices.
-    // 4. Fill the `Header` with placeholder offsets.
-    // 5. Populate the `string_table`, `node_table`, and `ref_table` by traversing the graph again.
-    // 6. Fill in the final table offsets and lengths in the `Header`.
-    // 7. Return the buffer.
-    return error.Unsupported;
+/// Rehydrates only the PUBLIC INTERFACE from an SMA buffer into a live `ir.Context`.
+/// Used for compiling a dependency.
+pub fn rehydratePublic(job: *backend.Job, artifact: Artifact) !void {
+    // ... implement 2-pass rehydration using ONLY the public_node_table
+    common.todo(void, .{ job, artifact });
 }
 
-/// Deserializes an SMA byte buffer into a live `ir.Context`.
-/// This process is called "rehydration".
-pub fn deserialize(job: *backend.Job, buffer: []const u8) !void {
-    _ = job;
-    _ = buffer;
-    // TODO: Implement the "rehydration" process.
-    // 1. Validate the SMA header (magic number, version).
-    // 2. Create a two-pass process to handle cyclic dependencies.
-    // 3. Pass 1 (Shell Creation): Iterate the `sma.Node` table and create empty "shell"
-    //    `ir.Node`s in the job's `ir.Context`. Store the mapping from the SMA `internal`
-    //    index to the new `ir.Ref`.
-    // 4. Pass 2 (Linkage): Iterate the `sma.Node` table again. For each shell `ir.Node`,
-    //    populate its `ref_list` by resolving its `sma.Ref`s using the map from Pass 1
-    //    and the SMA's ref_table. `external` references are kept as unresolved stubs for now.
-    return error.Unsupported;
+/// Rehydrates the ENTIRE MODULE (public + private) from an SMA buffer.
+/// Used when compiling the module itself.
+pub fn rehydrateFull(job: *backend.Job, artifact: Artifact) !void {
+    // ... implement 2-pass rehydration using BOTH public_node_table and private_node_table,
+    // correctly linking refs between them.
+    common.todo(void, .{ job, artifact });
 }

@@ -4,11 +4,10 @@
 
 This document specifies two critical components of the Ribbon compiler architecture:
 
-1.  The **Serializable Module Artifact (SMA)**: The on-disk, cacheable binary format that represents a module's public
-    interface and dependencies.
-2.  The **Canonical Binary Representation (CBR)**: An in-memory, deterministic data structure derived from a module's
-    public interface, used exclusively for generating a cryptographic hash (`interface_hash`) that uniquely and
-    verifiably identifies that interface.
+1.  The **Serializable Module Artifact (SMA)**: The on-disk, cacheable binary format that represents a **whole, fully analyzed module**, including both its public interface and private implementation.
+2.  The **Canonical Binary Representation (CBR)**: An in-memory, deterministic data structure derived *only* from a module's
+    **public interface**, used exclusively for generating a cryptographic hash (`interface_hash`) that uniquely and
+    verifiably identifies that interface for incremental compilation checks.
 
 These components are the foundation for the compiler's primary goals of **parallel compilation**, **deeply incremental
 builds**, and the **safe, type-aware hot-reloading system**.
@@ -17,54 +16,56 @@ builds**, and the **safe, type-aware hot-reloading system**.
 
 ### 2. Serializable Module Artifact (SMA) Specification
 
-The SMA is a binary file (e.g., `.sma`) produced by the `FrontendService`. It contains all information necessary for
-another module to compile against it without needing access to its source code.
+The SMA is a binary file (e.g., `.sma`) produced by the `FrontendService`. It is a self-contained representation of an entire module. It must contain enough information for the `BackendService` to generate code for the module itself *without re-analyzing the source*, and enough information for *other modules* to compile against it without needing the source.
 
 #### 2.1. File Format
 
 An SMA file is a contiguous binary blob with the following top-level structure:
 
-| Offset | Field                | Type          | Description                                                    |
-| :----- | :------------------- | :------------ | :------------------------------------------------------------- |
-| 0x00   | `magic_number`       | `[6]u8`       | The bytes `RIBSMA`.                                            |
-| 0x06   | `format_version`     | `u16`         | The version of the SMA format itself (e.g., `1`).              |
-| 0x08   | `header`             | `SMA.Header`  | Metadata about the module and offsets to other tables.         |
-| ...    | `string_table`       | `[]u8`        | Contiguous block of null-terminated UTF-8 strings.             |
-| ...    | `public_symbol_table`| `[]SMASymbol` | Table mapping public symbol names to IR nodes.                 |
-| ...    | `node_table`         | `[]SMANode`   | Flattened, serializable representation of the public IR graph. |
+| Offset | Field                 | Type           | Description                                                              |
+| :----- | :-------------------- | :------------- | :----------------------------------------------------------------------- |
+| 0x00   | `magic_number`        | `[6]u8`        | The bytes `RIBSMA`.                                                      |
+| 0x06   | `format_version`      | `u16`          | The version of the SMA format itself (e.g., `1`).                        |
+| 0x08   | `header`              | `SMA.Header`   | Metadata about the module and offsets to other tables.                   |
+| ...    | `string_table`        | `[]u8`         | Contiguous block of null-terminated UTF-8 strings.                       |
+| ...    | `public_symbol_table` | `[]SMASymbol`  | Table mapping public symbol names to nodes in the public node table.     |
+| ...    | `public_node_table`   | `[]SMANode`    | Dehydrated IR graph for the module's **public interface**.               |
+| ...    | `private_node_table`  | `[]SMANode`    | Dehydrated IR graph for the module's **private implementation**.         |
 
 #### 2.2. Detailed Structures
 
 ##### `SMA.Header`
 
-| Field                 | Type           | Description                                                                                                   |
-| :-------------------- | :------------- | :------------------------------------------------------------------------------------------------------------ |
-| `ribbon_version`      | `u64`          | The `major.minor.patch` of the Ribbon compiler that generated this artifact, packed into a `u64`.             |
-| `module_guid`         | `ir.ModuleGUID`| A `u128` cryptographic hash of the canonical module path/name (e.g., `hash("my_project/utils/collections")`). |
-| `interface_hash`      | `u128`         | A cryptographic hash of the module's public interface, derived from its CBR. See Section 3.                   |
-| `string_table_offset` | `u32`          | Byte offset from the start of the file to the `string_table`.                                                 |
-| `string_table_len`    | `u32`          | Length of the `string_table` in bytes.                                                                        |
-| `symbol_table_offset` | `u32`          | Byte offset to the `public_symbol_table`.                                                                     |
-| `symbol_table_len`    | `u32`          | Number of entries in the `public_symbol_table`.                                                               |
-| `node_table_offset`   | `u32`          | Byte offset to the `node_table`.                                                                              |
-| `node_table_len`      | `u32`          | Number of entries in the `node_table`.                                                                        |
+| Field                       | Type            | Description                                                                                                   |
+| :-------------------------- | :-------------- | :------------------------------------------------------------------------------------------------------------ |
+| `ribbon_version`            | `u64`           | The `major.minor.patch` of the Ribbon compiler that generated this artifact, packed into a `u64`.             |
+| `module_guid`               | `ir.ModuleGUID` | A `u128` cryptographic hash of the canonical module path/name (e.g., `hash("my_project/utils/collections")`). |
+| `interface_hash`            | `u128`          | A cryptographic hash of the module's public interface, derived from its CBR. See Section 3.                   |
+| `string_table_offset`       | `u32`           | Byte offset from the start of the file to the `string_table`.                                                 |
+| `string_table_len`          | `u32`           | Length of the `string_table` in bytes.                                                                        |
+| `symbol_table_offset`       | `u32`           | Byte offset to the `public_symbol_table`.                                                                     |
+| `symbol_table_len`          | `u32`           | Number of entries in the `public_symbol_table`.                                                               |
+| `public_node_table_offset`  | `u32`           | Byte offset to the `public_node_table`.                                                                       |
+| `public_node_table_len`     | `u32`           | Number of entries in the `public_node_table`.                                                                 |
+| `private_node_table_offset` | `u32`           | Byte offset to the `private_node_table`.                                                                      |
+| `private_node_table_len`    | `u32`           | Number of entries in the `private_node_table`.                                                                |
 
 ##### `Public Symbol Table Entry (`SMASymbol`)`
 
-A simple mapping used to find the entry point for a public symbol in the `node_table`.
+A simple mapping used to find the entry point for a public symbol in the `public_node_table`.
 
-| Field             | Type  | Description                                                |
-| :---------------- | :---- | :--------------------------------------------------------- |
-| `name_idx`        | `u32` | Index into the `string_table` for the symbol's name.       |
-| `root_node_idx`   | `u32` | Index into the `node_table` for the symbol's root IR node. |
+| Field             | Type  | Description                                                         |
+| :---------------- | :---- | :------------------------------------------------------------------ |
+| `name_idx`        | `u32` | Index into the `string_table` for the symbol's name.                |
+| `root_node_idx`   | `u32` | Index into the `public_node_table` for the symbol's root IR node.   |
 
 ---
 
 ### 3. Canonical Binary Representation (CBR) Specification
 
-The CBR is an **in-memory-only** data structure created by the `FrontendService`. Its sole purpose is to serve as a
-deterministic, canonical input to a cryptographic hash function to produce the `interface_hash`. It represents the
-**public contract** of a symbol, stripped of all implementation details.
+The CBR is an **in-memory-only** data structure created by the `FrontendService`. Its sole purpose is to serve as a deterministic, canonical input to a cryptographic hash function to produce the `interface_hash`. It represents the **public contract** of a symbol, stripped of all implementation details.
+
+It is derived from the public-facing portion of a module's IR graph *after* a full semantic analysis has been performed on the entire module (including its private implementation), ensuring that types and effects in public signatures are fully and correctly inferred.
 
 #### 3.1. Core Principle: Canonicalization
 
