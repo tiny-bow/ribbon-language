@@ -51,6 +51,7 @@ earnest and enable the community to create the first experimental applications.
 * [Building from Source](#building-from-source)
 * [Source Overview](#source-overview)
 * [Status](#status)
+    * [Plan](./plan.md)
 * [Contributing](#contributing)
     * [Discussion](#discussion)
     * [Design](#design)
@@ -478,8 +479,8 @@ toolchain.
 ;; game-settings.ro (Ribbon Object)
 {
   window_title = "My Awesome Game",
-  resolution = (width: 1920, height: 1080),
-  graphics = (vsync: true, quality: 'ultra),
+  resolution = (width = 1920, height = 1080),
+  graphics = (vsync = true, quality = 'ultra),
 }
 ```
 
@@ -609,27 +610,23 @@ These files are generated and cached by the build system and are not under sourc
 
 #### Missing Links
 
-* **RML-to-IR Compilation (`meta_language.compileExpr`)**
-    * **Current State:** This is the most significant piece of unfinished work on the frontend. The `compileExpr`
-        function in `src/mod/meta_language.zig` is a skeleton. It correctly handles the simplest literals (`int`,
-        `char`) but almost every other `Expr` type immediately calls `common.todo()`.
-    * **Next Step:** Implement the `switch` statement in `compileExpr` to traverse an RML `Expr` tree and generate the
-        corresponding `ir.Graph` using the `ir.Context.builder` API. You'd start by mapping RML operators to IR
-        instructions, RML identifiers to IR locals/globals, etc.
+We have created an in-depth implementation plan for the remaining components and phases of the runtime and compiler,
+available at [./plan.md](./plan.md).
 
-* **IR-to-Bytecode Compilation (`backend.BytecodeTarget.runJob`)**
-    * **Current State:** The high-level structure for a compiler pipeline exists in `backend.zig` (`Compiler`, `Job`,
-        `Target`). A `BytecodeTarget` is defined, but its central `runJob` function is just a `common.todo()`.
-    * **Next Step:** Implement this function. This pass will need to traverse the `ir.Graph` of a `Job`. For each
-        `ir.Function`, it will create a `bytecode.FunctionBuilder`. It will walk the `ir.Block`s and `ir.Instruction`s,
-        emitting the equivalent bytecode instructions using the builder API. This is the final step to produce an
-        executable `core.Bytecode` artifact.
+This plan details a unified architecture for the Ribbon compiler and runtime, focusing on parallel and incremental
+compilation, robust caching, and a cryptographically-sound model for interface identity. It outlines the separation of
+the compiler into distinct services—frontend analysis, backend code generation, and a central build
+orchestrator; enabling rapid builds, accurate dependency tracking, and seamless integration with tools like LSP servers.
+The document also describes the Serializable Module Artifact (SMA) format and the canonical binary representation (CBR)
+system, which together provide deterministic hashing for module interfaces and efficient incremental rebuilds.
 
-* **Advanced Builtin/Effect Interoperability**
-    * The `// TODO` sections at the end of `src/test/bc_interp.zig` highlight the final frontier of the runtime/FFI.
-        Features like builtins prompting effects, or a builtin handler accessing bytecode upvalues, require new runtime API functions within the interpreter.
-    * This is a lower priority than the main compiler pipeline but represents the final layer of integration between
-        native code and the Ribbon VM.
+Beyond compilation, the plan introduces a two-phase hot-reloading system. The initial version supports fast restart on
+code changes, while the advanced version enables live state migration with type-safe, user-defined migration logic. This
+is achieved through a combination of runtime state tracking, effect handling, and atomic migration transactions,
+allowing applications to update code and preserve state without interruption.
+
+The implementation plan breaks down these systems into concrete development tasks and recommended order, serving as a
+roadmap for contributors to build out the next stages of Ribbon's toolchain.
 
 ### Contributing
 
