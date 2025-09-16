@@ -314,12 +314,12 @@ This is the foundational, simpler version of hot-reloading.
     *   **Details:** When a change is detected, the watcher should invoke `orchestrator.buildModule`.
 
 *   **Task 5.2: Implement Orchestrator-to-Runtime Signaling.**
-    *   **Action:** Implement a simple inter-process communication (IPC) mechanism.
-    *   **Details:** A local socket or named pipe is a good choice. After a successful build, the orchestrator writes a message to the pipe.
+    *   **Action:** Implement a simple compiler<->runtime communication mechanism.
+    *   **Details:** A basic queue a good choice. After a successful build, the orchestrator writes a message to the queue.
 
 *   **Task 5.3: Implement Host Application Restart Logic.**
-    *   **Action:** The host application (e.g., the game engine) will run a background thread to listen on the IPC channel.
-    *   **Details:** Upon receiving a signal, the host triggers its own shutdown and re-initialization sequence, loading the newly compiled artifacts.
+    *   **Action:** The runtime will run a background thread to listen for messages from the compiler.
+    *   **Details:** Upon receiving a signal, runtime triggers host shutdown and re-initialization sequence, loading the newly compiled artifacts.
 
 #### Phase 6: V1 - Live State Migration
 
