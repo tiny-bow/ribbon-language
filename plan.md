@@ -328,8 +328,8 @@ This is the advanced, state-preserving version of hot-reloading.
 *   **Task 6.1: Compiler and Language Support.**
     *   **Action:** Implement the `Migratable` type class and `Unsafe` effect.
     *   **Details:**
-        1.  In the `frontend` service, add the `Migratable` class to the prelude as a known built-in. Its definition is `class From, To. migrate: (From) -> To | { RemapAddress, Unsafe }`.
-        2.  During semantic analysis, implicitly add the `{ Unsafe }` effect to any function that performs an FFI call.
+        1.  In the `frontend` service, add the `Migratable` class to the prelude as a known built-in. Its definition is `class From, To. migrate: (From) -> To | { RemapAddress, Error String }`.
+        2.  During semantic analysis, implicitly add the `Unsafe` effect to any function that performs an FFI call.
         3.  Add logic for `derive(Migratable)`. For a struct change that only adds new fields with default values, the compiler can generate a `migrate` function automatically.
 
 *   **Task 6.2: Runtime State Tracking.**
