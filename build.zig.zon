@@ -1,7 +1,7 @@
 .{
     .name = .ribbon,
     .fingerprint = 0xf11903a43ca0fa41,
-    .version = "0.1.3-draft",
+    .version = "0.1.0-draft+3",
     // FIXME: use lazy dependencies
     .dependencies = .{
         .rg = .{

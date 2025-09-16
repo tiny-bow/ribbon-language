@@ -30,6 +30,30 @@ test {
 /// The exact semantic version of the Ribbon language this module was built for.
 pub const VERSION = build_info.version;
 
+/// The semantic version reduced to a single integer for binary formats.
+pub const VERSION_NUMBER: u64 = @bitCast(packed struct(u64) {
+    major: u16,
+    minor: u16,
+    patch: u16,
+    pre_build: u16,
+}{
+    .major = @intCast(VERSION.major),
+    .minor = @intCast(VERSION.minor),
+    .patch = @intCast(VERSION.patch),
+    // These are names like "alpha", "beta", "rc", "draft", etc, combined with a build number.
+    .pre_build = make_pre_build: {
+        var hasher = std.hash.Fnv1a_32.init();
+
+        if (VERSION.pre) |p| hasher.update(p);
+        if (VERSION.build) |b| hasher.update(b);
+
+        // need to reduce to u16, take the first and last byte
+        const hash = hasher.final();
+
+        break :make_pre_build @truncate((hash & 0xFF) | ((hash >> 24) & 0xFF00));
+    },
+});
+
 /// The size of a virtual opcode, in bytes.
 pub const OPCODE_SIZE = 2;
 

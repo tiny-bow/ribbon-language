@@ -25,11 +25,11 @@ This separation is the key to unlocking both parallelism and accurate incrementa
 
 The first phase of compilation is a fast analysis pass performed by the **Frontend Service**. It is responsible for producing a **Serializable Module Artifact (SMA)** for every module (`.sma` file). The SMA is a self-contained, context-free, and cacheable representation of a module's public contract and its dependencies. It is not a separate IR, but a **"dehydrated," on-disk projection of the live `ir.Node` graph's public interface**.
 
-The `SIRef` (Symbolic IR Reference) is the core of the SMA format, providing a stable, context-free replacement for the ephemeral, in-memory `ir.Ref`.
+The `sma.Ref` (Symbolic IR Reference) is the core of the SMA format, providing a stable, context-free replacement for the ephemeral, in-memory `ir.Ref`.
 
 ```zig
-// sma.SIRef: A stable, serializable reference to an IR node.
-const sma.SIRef = union(enum) {
+// sma.sma.Ref: A stable, serializable reference to an IR node.
+const sma.sma.Ref = union(enum) {
     /// A reference to another node within this SAME artifact.
     /// The u32 is an index into this SMA's flattened node array.
     internal: u32,
@@ -207,25 +207,25 @@ The goal of this part is to build a high-performance compiler that minimizes reb
 Before services can be built, the data they exchange must be defined. This involves creating the on-disk format for the Serializable Module Artifact (SMA).
 
 *   **Task 1.1: Define Serializable Module Artifact (`.sma`) Structure.**
-    *   **Location:** A new file, e.g., `src/mod/sma.zig`.
+    *   **Location:** A new file, `src/mod/sma.zig`.
     *   **Details:** Define the top-level `SMA` struct with the following components:
         *   `header`: Contains metadata like `ribbon_version`, `module_guid`, and the crucial `interface_hash`.
         *   `string_table`: A contiguous block of memory for all symbol names, strings, etc., referenced by index.
-        *   `public_symbols`: A list mapping public symbol names (by index into `string_table`) to their root `SIRef`s in the `node_table`.
+        *   `public_symbols`: A list mapping public symbol names (by index into `string_table`) to their root `sma.Ref`s in the `node_table`.
         *   `node_table`: A flattened array of `sma.Node`s, representing the dehydrated public IR graph.
 
-*   **Task 1.2: Define `sma.SIRef` and `ir.ModuleGUID`.**
+*   **Task 1.2: Define `sma.sma.Ref` and `ir.ModuleGUID`.**
     *   **Location:** `src/mod/sma.zig` and `src/mod/ir.zig`.
     *   **Details:**
         *   In `ir.zig`, define `ModuleGUID` as a `u128` (or similar hash result type), derived from a canonical hash of the module's source path. For maximum robustness across different machines and build environments (e.g., vendored dependencies), this should be a hash of a canonical module name (e.g., my_project/utils/collections) rather than a filesystem path.
-        *   In `sma.zig`, implement the `SIRef` (Symbolic IR Reference) union. This is the stable, serializable replacement for the in-memory `ir.Ref`.
+        *   In `sma.zig`, implement the `sma.Ref` (Symbolic IR Reference) union. This is the stable, serializable replacement for the in-memory `ir.Ref`.
             *   `internal: u32`: An index into the *current SMA's* `node_table`.
             *   `external: struct { module_guid: ir.ModuleGUID, symbol_name_idx: u32 }`: A reference to a public symbol in another module.
             *   `builtin: ir.Builtin`: A reference to a compiler-known primitive.
             *   `nil`: A null reference.
 
 *   **Task 1.3: Define Canonical Binary Representation (CBR) In-Memory Structures.**
-    *   **Location:** `src/mod/frontend/sma.zig`.
+    *   **Location:** A new file, `src/mod/frontend/cbr.zig`.
     *   **Details:** Define the in-memory tree structures that represent the canonical form of public symbols before they are hashed. This is not for serialization, but for deterministic hashing.
         *   `CbrNode`: A union for different symbol kinds (function, struct, etc.).
         *   `CbrStruct`: Contains `layout_policy` and a *sorted* list of `CbrField`s (name hash, type hash).
@@ -256,7 +256,7 @@ This service is responsible for analysis and SMA generation. It is the most crit
     *   **Details:** Create a function `dehydrate(ctx: *ir.Context, path: []const u8) !void`.
         1.  Traverse the public symbols in the `ctx` to build a `string_table`.
         2.  Perform a second traversal of the public IR graph. For each `ir.Node`, create a corresponding `sma.Node`.
-        3.  During this traversal, convert every `ir.Ref` into its stable `sma.SIRef` equivalent. This is the core translation step.
+        3.  During this traversal, convert every `ir.Ref` into its stable `sma.sma.Ref` equivalent. This is the core translation step.
         4.  Write the `SMA` header (including the computed `interface_hash`), `string_table`, `public_symbols` list, and `node_table` to the output `.sma` file.
 
 #### Phase 3: Implementing the Backend Service
@@ -271,7 +271,7 @@ This service consumes SMAs and produces executable artifacts.
     *   **Location:** `src/mod/backend.zig`.
     *   **Details:** Create a function `rehydrate(job: *Job, sma: SMA) !void`. This populates a job's empty `ir.Context` from an SMA file. This is a critical two-pass process:
         1.  **Pass 1 (Shell Creation):** Iterate through the SMA's `node_table` and create empty "shell" `ir.Node`s in the `ir.Context`. Store the mapping from the SMA `internal` index to the new `ir.Ref`. This breaks dependency cycles.
-        2.  **Pass 2 (Linkage):** Iterate through the `sma.Node` table again. For each shell `ir.Node`, populate its `ref_list` by resolving its `SIRef`s using the map created in Pass 1. `external` references are kept as unresolved stubs for now.
+        2.  **Pass 2 (Linkage):** Iterate through the `sma.Node` table again. For each shell `ir.Node`, populate its `ref_list` by resolving its `sma.Ref`s using the map created in Pass 1. `external` references are kept as unresolved stubs for now.
 
 *   **Task 3.3: Implement IR-to-Bytecode Pass.**
     *   **Action:** Implement the `backend.BytecodeTarget.runJob` function.

@@ -23,6 +23,9 @@ test {
     std.testing.refAllDecls(@This());
 }
 
+/// A unique identifier for a ribbon module.
+pub const ModuleGUID = enum(u128) { _ };
+
 /// VTable and arbitrary data map for user defined data on nodes.
 pub const UserData = struct {
     /// The context this user data is bound to.
