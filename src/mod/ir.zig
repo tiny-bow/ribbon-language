@@ -476,6 +476,8 @@ pub const Context = struct {
     userdata: common.UniqueReprMap(Ref, *UserData) = .empty,
     /// Maps builtin structures to their definition references.
     builtin: common.UniqueReprMap(Builtin, Ref) = .empty,
+    /// The set of all global symbols defined in this context.
+    global_symbols: common.StringMap(Ref) = .empty,
     /// Maps constant value nodes to references.
     interner: common.HashMap(Node, Ref, NodeHasher) = .empty,
     /// Flags whether a node is interned or not.
@@ -524,6 +526,7 @@ pub const Context = struct {
 
         self.nodes.clearRetainingCapacity();
         self.users.clearRetainingCapacity();
+        self.global_symbols.clearRetainingCapacity();
         self.interner.clearRetainingCapacity();
         self.interned_refs.clearRetainingCapacity();
         self.immutable_refs.clearRetainingCapacity();
@@ -548,6 +551,7 @@ pub const Context = struct {
 
         self.nodes.deinit(self.gpa);
         self.users.deinit(self.gpa);
+        self.global_symbols.deinit(self.gpa);
         self.interner.deinit(self.gpa);
         self.interned_refs.deinit(self.gpa);
         self.immutable_refs.deinit(self.gpa);
@@ -1161,6 +1165,36 @@ pub const Context = struct {
         return &(self._getNodeMut(ref) orelse return null).content;
     }
 
+    /// Bind a symbol to an id.
+    /// This exports the symbol as part of the public interface.
+    /// * Returns the global_symbol ref created
+    pub fn bindGlobal(self: *Context, name: []const u8, ref: Ref) !Ref {
+        const gop = try self.global_symbols.getOrPut(self.gpa, name);
+
+        if (gop.found_existing) {
+            // rebind the symbol
+            const existing_ref = gop.value_ptr.*;
+
+            if (existing_ref == ref) return error.InvalidReference; // a symbol cannot refer to itself
+
+            try self.setField(existing_ref, .node, ref);
+
+            return existing_ref;
+        }
+
+        const name_ref, const owned_buf = try self.internNameWithBuf(name);
+
+        const symbol = try self.addStructure(.mutable, .global_symbol, .{
+            .name = name_ref,
+            .node = ref,
+        });
+
+        gop.key_ptr.* = owned_buf;
+        gop.value_ptr.* = symbol;
+
+        return symbol;
+    }
+
     /// Create a new primitive node in the context, given a primitive kind and value.
     /// * The value must be a primitive type, such as an integer, index, or opcode. See `ir.primitives`.
     pub fn addPrimitive(self: *Context, mutability: core.Mutability, value: anytype) !Ref {
@@ -1218,7 +1252,7 @@ pub const Context = struct {
     /// Intern a name value in the context.
     /// * If the node already exists in this context, it will return the existing reference.
     /// * Modifying nodes added this way is unsafe.
-    pub fn internName(self: *Context, value: []const u8) !Ref {
+    pub fn internNameWithBuf(self: *Context, value: []const u8) !struct { Ref, []const u8 } {
         const gop = try self.interner.getOrPutAdapted(self.gpa, value, NameHasher);
 
         if (!gop.found_existing) {
@@ -1231,9 +1265,18 @@ pub const Context = struct {
             gop.value_ptr.* = try self._addNode(.constant, node);
 
             try self.interned_refs.put(self.gpa, gop.value_ptr.*, {});
-        }
 
-        return gop.value_ptr.*;
+            return .{ gop.value_ptr.*, arr };
+        } else {
+            return .{ gop.value_ptr.*, (self.getNodeData(gop.value_ptr.*) orelse return error.InvalidReference).name };
+        }
+    }
+
+    /// Intern a name value in the context.
+    /// * If the node already exists in this context, it will return the existing reference.
+    /// * Modifying nodes added this way is unsafe.
+    pub fn internName(self: *Context, value: []const u8) !Ref {
+        return (try self.internNameWithBuf(value))[0];
     }
 
     /// Intern a `Source` value in the context.
@@ -2864,4 +2907,63 @@ test "ir integration - immutable nodes cannot reference mutable nodes" {
     try testing.expect(mutable_add_result != error.ImmutableNodeReferencesMutable);
     const success_ref = try mutable_add_result;
     try testing.expect(success_ref != ir.Ref.nil);
+}
+
+test "ir integration - global symbol binding" {
+    const gpa = testing.allocator;
+
+    const ctx = try ir.Context.init(gpa);
+    defer ctx.deinit();
+
+    // --- Test 1: internName functionality ---
+    const name_ref_a = try ctx.internName("my_symbol");
+    const name_ref_b = try ctx.internName("my_symbol");
+    const different_name_ref = try ctx.internName("another_symbol");
+
+    // Interning the same string should yield the exact same reference.
+    try testing.expectEqual(name_ref_a, name_ref_b);
+    // Different strings should yield different references.
+    try testing.expect(name_ref_a != different_name_ref);
+
+    // --- Test 2: Initial binding of a global symbol ---
+    const value1_ref = try ctx.internPrimitive(@as(u64, 123));
+    const global_symbol_ref = try ctx.bindGlobal("my_global", value1_ref);
+
+    // Verify that a valid, non-nil ref was returned.
+    try testing.expect(global_symbol_ref != ir.Ref.nil);
+
+    // Verify the created node is of the correct kind.
+    try testing.expectEqual(ir.Tag.structure, global_symbol_ref.node_kind.getTag());
+    try testing.expectEqual(
+        ir.StructureKind.global_symbol,
+        ir.discriminants.force(ir.StructureKind, global_symbol_ref.node_kind.getDiscriminator()),
+    );
+
+    // Inspect the created global_symbol node to ensure it's correct.
+    const bound_name_ref = try ctx.getField(global_symbol_ref, .name) orelse return error.TestFailed;
+    const bound_node_ref = try ctx.getField(global_symbol_ref, .node) orelse return error.TestFailed;
+
+    // Check that the .node field points to our original value.
+    try testing.expectEqual(value1_ref, bound_node_ref);
+
+    // Check that the .name field points to an interned name node with the correct string.
+    const name_node_data = ctx.getNodeData(bound_name_ref) orelse return error.TestFailed;
+    try testing.expectEqualStrings("my_global", name_node_data.name);
+
+    // --- Test 3: Rebinding an existing global symbol ---
+    const value2_ref = try ctx.internPrimitive(@as(u64, 456));
+    const rebound_global_symbol_ref = try ctx.bindGlobal("my_global", value2_ref);
+
+    // Test that rebinding UPDATES the existing global_symbol node, not creates a new one.
+    // The reference to the global_symbol node itself should be stable.
+    try testing.expectEqual(global_symbol_ref, rebound_global_symbol_ref);
+
+    // Now, inspect the SAME global_symbol node again and check that its .node field points to the NEW value.
+    const rebound_node_ref = try ctx.getField(global_symbol_ref, .node) orelse return error.TestFailed;
+    try testing.expectEqual(value2_ref, rebound_node_ref);
+    try testing.expect(rebound_node_ref != value1_ref); // Sanity check it's not the old value.
+
+    // --- Test 4: Check self-reference protection ---
+    // Attempting to bind a symbol to its own global_symbol node should fail.
+    try testing.expectError(error.InvalidReference, ctx.bindGlobal("my_global", global_symbol_ref));
 }

@@ -184,7 +184,7 @@ pub const Dehydrator = struct {
     ref_map: common.UniqueReprMap(ir.Ref, struct { is_public: bool, index: u32 }),
 
     /// Interns strings and maps them to their index in the final `string_table`.
-    string_interner: common.StringHashMap(u32),
+    string_interner: common.StringMap(u32),
     string_table_builder: common.ArrayList(u8),
 
     /// Builders for the final artifact tables.
@@ -230,32 +230,73 @@ pub const Dehydrator = struct {
     }
 
     /// Populates `self.public_refs` by traversing the graph from all public entry points.
+    /// This traversal is "API-aware": it explores the full definition of exposed types
+    /// but deliberately does not traverse into the implementation (bodies) of functions,
+    /// correctly separating the public contract from private details.
     pub fn findPublicRefs(self: *Dehydrator) !void {
-        // TODO: the IR can make our lives a lot easier by simply tracking the set of public symbols,
-        //       as it already does with other special values.
         var work_queue = std.ArrayList(ir.Ref).init(self.temp_allocator.allocator());
         defer work_queue.deinit();
 
-        // Seed the traversal with all `global_symbol` nodes.
-        var node_it = self.ir_ctx.nodes.iterator();
-        while (node_it.next()) |entry| {
-            const ref = entry.key_ptr.*;
-            if (ref.node_kind == .structure and ref.node_kind.getDiscriminator() == .global_symbol) {
-                try work_queue.append(ref);
-                try self.public_refs.put(self.temp_allocator.allocator(), ref, {});
-            }
+        // 1. Seed the traversal with all public `global_symbol` nodes and their direct targets.
+        //    This is more efficient than scanning the entire node table.
+        var global_it = self.ir_ctx.global_symbols.valueIterator();
+        while (global_it.next()) |global_symbol_ref_ptr| {
+            const global_symbol_ref = global_symbol_ref_ptr.*;
+
+            // The global_symbol node itself is part of the public interface, as it defines the export name.
+            try self.addRefToPublic(global_symbol_ref, &work_queue);
+
+            // The node the symbol points to is the actual public item.
+            const target_ref = try self.ir_ctx.getField(global_symbol_ref, .node) orelse {
+                log.err("SMA Dehydration: public symbol {f} has no target node.", .{global_symbol_ref});
+                return error.InvalidGraphState;
+            };
+            try self.addRefToPublic(target_ref, &work_queue);
         }
 
-        // Perform a graph traversal (BFS) to find all reachable nodes.
+        // 2. Perform the API-aware graph traversal.
         while (work_queue.popOrNull()) |current_ref| {
             const node = self.ir_ctx.getNode(current_ref) orelse continue;
-            if (!node.kind.getTag().containsReferences()) continue;
 
-            for (node.content.ref_list.items) |child_ref| {
-                if (self.public_refs.contains(child_ref)) continue;
-                try self.public_refs.put(self.temp_allocator.allocator(), child_ref, {});
-                try work_queue.append(child_ref);
+            // Stop traversal at leaves or nodes outside the current module.
+            if (!node.kind.getTag().containsReferences() or current_ref.id.context != self.ir_ctx.id) {
+                continue;
             }
+
+            // --- This is the critical boundary logic ---
+            if (node.kind == .structure and node.kind.getDiscriminator() == .function) {
+                // For a function node, ONLY traverse its type signature, NOT its body.
+                // The body is the implementation.
+                const function_type_ref = try self.ir_ctx.getField(current_ref, .type) orelse continue;
+                try self.addRefToPublic(function_type_ref, &work_queue);
+
+                // We could also traverse other ABI-relevant fields here if they existed,
+                // e.g., `.parent_handler`, `.linkage_name`, etc.
+            } else {
+                // For ALL OTHER node types (structs, enums, function_types, constants, etc.),
+                // their entire definition is part of the contract if they are public.
+                // Therefore, we traverse all of their children.
+                for (node.content.ref_list.items) |child_ref| {
+                    try self.addRefToPublic(child_ref, &work_queue);
+                }
+            }
+        }
+    }
+
+    /// Helper to add a ref to the public set and the work queue if it hasn't been seen before.
+    /// This prevents redundant work and infinite loops in cyclic graphs.
+    fn addRefToPublic(self: *Dehydrator, ref: ir.Ref, work_queue: *std.ArrayList(ir.Ref)) !void {
+        // We only traverse nodes that are part of the current compilation unit.
+        // External (dependency) and builtin refs are treated as opaque leaves from
+        // the perspective of this module's public interface definition.
+        if (ref == ir.Ref.nil or ref.id.context != self.ir_ctx.id) {
+            return;
+        }
+
+        // `put` returns true if the item was newly inserted.
+        if (try self.public_refs.put(self.temp_allocator.allocator(), ref, {})) {
+            // If it's a new public ref, add it to the queue to traverse its children.
+            try work_queue.append(ref);
         }
     }
 
