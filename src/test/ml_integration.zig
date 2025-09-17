@@ -1,7 +1,7 @@
 const std = @import("std");
 const log = std.log.scoped(.ml_integration);
 const ribbon = @import("ribbon_language");
-const source = ribbon.source;
+const SyntaxTree = ribbon.analysis.SyntaxTree;
 const common = ribbon.common;
 const ml = ribbon.meta_language;
 
@@ -13,13 +13,13 @@ test "expr_parse" {
     try common.snapshotTest(.use_log("expr"), struct {
         pub fn testExpr(input: []const u8, expect: []const u8) !void {
             _ = .{ input, expect };
-            var syn = try ml.getCst(std.testing.allocator, .{}, "test", input) orelse {
+            var syn = try ml.Cst.parseSource(std.testing.allocator, .{}, "test", input) orelse {
                 log.err("Failed to parse source", .{});
                 return error.NullCst;
             };
             defer syn.deinit(std.testing.allocator);
 
-            var expr = try ml.parseCst(std.testing.allocator, input, syn);
+            var expr = try ml.Expr.parseCst(std.testing.allocator, input, syn);
             defer expr.deinit(std.testing.allocator);
 
             log.info("input: {s}\nresult: {f}", .{ input, expr });
@@ -49,19 +49,19 @@ test "cst_parse" {
     try common.snapshotTest(.use_log("cst"), struct {
         pub fn testCst(input: []const u8, expect: []const u8) !void {
             _ = .{ input, expect };
-            var syn = try ml.getCst(std.testing.allocator, .{}, "test", input) orelse {
+            var syn = try ml.Cst.parseSource(std.testing.allocator, .{}, "test", input) orelse {
                 log.err("Failed to parse source", .{});
                 return error.BadEncoding;
             };
             defer syn.deinit(std.testing.allocator);
 
-            const Data = struct { input: []const u8, syn: source.SyntaxTree };
+            const Data = struct { input: []const u8, syn: SyntaxTree };
             log.info("input: {s}\nresult: {f}", .{ input, std.fmt.Formatter(Data, struct {
                 pub fn formatter(
                     data: Data,
                     writer: *std.io.Writer,
                 ) error{WriteFailed}!void {
-                    ml.dumpCstSExprs(data.input, data.syn, writer) catch |err| {
+                    ml.Cst.dumpSExprs(data.input, writer, &data.syn) catch |err| {
                         log.err("Failed to dump CST S-expr: {s}", .{@errorName(err)});
                         return error.WriteFailed;
                     };
@@ -71,7 +71,7 @@ test "cst_parse" {
             var buf = std.io.Writer.Allocating.init(std.testing.allocator);
             defer buf.deinit();
 
-            try ml.dumpCstSExprs(input, syn, &buf.writer);
+            try ml.Cst.dumpSExprs(input, &buf.writer, &syn);
 
             try std.testing.expectEqualStrings(expect, buf.written());
         }

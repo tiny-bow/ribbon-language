@@ -853,14 +853,41 @@ pub fn ExtrapolateErrorUnion(comptime E: type, comptime T: type) type {
     };
 }
 
-/// Extrapolates an error union type.
-pub fn ExtrapolatePointer(comptime P: type, comptime C: type) type {
-    var P_info = @typeInfo(P);
-
-    P_info.pointer.child = C;
-    P_info.pointer.size = .one;
-
-    return @Type(P_info);
+/// Copy and optionally overwrite pointer type attributes.
+/// * e.g. `MyPtr = ExtrapolatePtr([*]align(64) const u8, .{ .is_const = false, .child = MyStruct })` == `[*]MyStruct`
+/// * alignment is the only attribute overridden by default; it will be the new child type's alignment if not specified.
+/// * otherwise, specify null to copy the original alignment, or .override to set a specific alignment.
+pub fn ExtrapolatePtr(comptime source: type, comptime overrides: struct {
+    size: ?std.builtin.Type.Pointer.Size = null,
+    is_const: ?bool = null,
+    is_volatile: ?bool = null,
+    is_allowzero: ?bool = null,
+    alignment: ?union(enum) { override: comptime_int, child } = .child,
+    address_space: ?std.builtin.AddressSpace = null,
+    child: ?type = null,
+    sentinel_ptr: union(enum) { override: *const anyopaque, copy, none } = .copy,
+}) type {
+    const info = @typeInfo(source).pointer;
+    const child = overrides.child orelse info.child;
+    return @Type(.{
+        .pointer = .{
+            .size = overrides.size orelse info.size,
+            .is_const = overrides.is_const orelse info.is_const,
+            .is_volatile = overrides.is_volatile orelse info.is_volatile,
+            .is_allowzero = overrides.is_allowzero orelse info.is_allowzero,
+            .alignment = if (overrides.alignment) |aln| switch (aln) {
+                .override => |amt| amt,
+                .child => @alignOf(child),
+            } else info.alignment,
+            .address_space = overrides.address_space orelse info.address_space,
+            .child = child,
+            .sentinel_ptr = switch (overrides.sentinel_ptr) {
+                .override => |ov| ov,
+                .copy => info.sentinel_ptr,
+                .none => null,
+            },
+        },
+    });
 }
 
 /// Determines whether a function returns errors.

@@ -177,7 +177,7 @@ pub fn deinit(self: *AllocWriter) void {
 }
 
 /// Get the current length of the written region of the writer.
-pub fn getWrittenSize(self: *AllocWriter) u64 {
+pub fn getWrittenSize(self: *const AllocWriter) u64 {
     return self.cursor;
 }
 

@@ -532,7 +532,7 @@ focused on the IR and backend.
   with bytecodes.
 * [SoN/SSA Hybrid Intermediate Representation](./src/mod/ir.zig) - Ribbon's backend IR; a graph-based representation of
   source code already semantically analyzed by frontends.
-* [Lexical & Syntactic Utilities](./src/mod/source.zig) - Source tracking structures, abstract lexer and parser.
+* [Lexical & Syntactic Utilities](./src/mod/analysis.zig) - Source tracking structures, abstract lexer and parser.
 * [Reference Bytecode Interpreter](./src/mod/interpreter.zig) - The Zig-language reference implementation of the
   bytecode interpretation logic and minimal host interface for execution on a Fiber.
 * [Backend & Bytecode Target](./src/mod/backend.zig) - Handles the conversion from the IR to bytecode and other backend

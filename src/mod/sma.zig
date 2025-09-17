@@ -16,6 +16,8 @@ test {
     std.testing.refAllDecls(@This());
 }
 
+/// Fixed magic number to identify the file type easily.
+pub const format_magic_number: [6]u8 = "RIBSMA".*;
 /// Version of the SMA format.
 pub const format_version_number = 1;
 
@@ -73,10 +75,15 @@ pub const Node = extern struct {
 
 /// The header of a Serializable Module Artifact file.
 pub const Header = extern struct {
-    magic_number: [6]u8 = "RIBSMA".*,
+    /// Fixed magic number to identify the file type easily.
+    magic_number: [6]u8 = format_magic_number,
+    /// Version of the SMA format.
     format_version: u16 = format_version_number,
+    /// Version of the Ribbon compiler that produced this file.
     ribbon_version: u64 = core.VERSION_NUMBER,
+    /// Unique hash identifying the module this SMA represents.
     module_guid: ir.ModuleGUID,
+    /// Hash of the module's public interface CBR.
     interface_hash: u128,
 
     /// Length in bytes.
@@ -115,12 +122,20 @@ pub const PublicSymbol = extern struct {
 /// The top-level structure representing a parsed SMA file. This struct provides
 /// views into a single contiguous memory buffer.
 pub const Artifact = struct {
+    arena: std.heap.ArenaAllocator,
     header: Header,
     string_table: []const u8,
     public_symbol_table: []const PublicSymbol,
     public_node_table: []const Node,
     private_node_table: []const Node,
     ref_table: []const Ref,
+
+    /// Deinitializes the Artifact and frees its associated memory.
+    pub fn deinit(self: *Artifact) void {
+        const arena = self.arena;
+        self.* = undefined;
+        arena.deinit();
+    }
 
     /// Given a `sma.Node` that contains a `RefList`, this function returns a slice
     /// of the corresponding `sma.Ref`s from the flat `ref_table`.
@@ -139,8 +154,18 @@ pub const Artifact = struct {
 
     /// Serializes a public `ir.Context` into an Artifact representing an SMA file.
     /// This process is called "dehydration".
-    pub fn fromIr(ir_ctx: *ir.Context, module_guid: ir.ModuleGUID, arena: std.mem.Allocator) !Artifact {
-        var dehydrator = try Dehydrator.init(ir_ctx, module_guid, arena);
+    pub fn fromIr(ir_ctx: *ir.Context, module_guid: ir.ModuleGUID, allocator: std.mem.Allocator) !*Artifact {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+
+        const self = arena.allocator().create(Artifact) catch {
+            arena.deinit();
+            return error.OutOfMemory;
+        };
+
+        self.arena = arena;
+        errdefer self.deinit();
+
+        var dehydrator = try Dehydrator.init(ir_ctx, module_guid, allocator, self.arena.allocator());
         defer dehydrator.deinit();
 
         try dehydrator.findPublicRefs();
@@ -152,7 +177,9 @@ pub const Artifact = struct {
 
         try dehydrator.buildPublicSymbolTable();
 
-        return dehydrator.buildArtifact();
+        try dehydrator.buildArtifact(self);
+
+        return self;
     }
 };
 
@@ -175,7 +202,7 @@ pub fn rehydrateFull(job: *backend.Job, artifact: Artifact) !void {
 pub const Dehydrator = struct {
     ir_ctx: *ir.Context,
     module_guid: ir.ModuleGUID,
-    arena: std.mem.Allocator,
+    output_arena: std.mem.Allocator,
     temp_allocator: std.heap.ArenaAllocator,
 
     /// Set of all refs reachable from public symbols.
@@ -194,17 +221,12 @@ pub const Dehydrator = struct {
     private_node_table: common.ArrayList(Node),
     ref_table: common.ArrayList(Ref),
 
-    pub fn init(init_ir_ctx: *ir.Context, init_module_guid: ir.ModuleGUID, init_arena: std.mem.Allocator) !*Dehydrator {
-        var temp_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator); // TODO: backing allocator should probably be passed in
-        errdefer temp_arena.deinit();
-
-        const self = try temp_arena.allocator().create(Dehydrator);
-
-        self.* = .{
+    pub fn init(init_ir_ctx: *ir.Context, init_module_guid: ir.ModuleGUID, temp_allocator: std.mem.Allocator, output_arena: std.mem.Allocator) !Dehydrator {
+        return Dehydrator{
             .ir_ctx = init_ir_ctx,
             .module_guid = init_module_guid,
-            .arena = init_arena,
-            .temp_allocator = temp_arena,
+            .output_arena = output_arena,
+            .temp_allocator = temp_allocator,
             .public_refs = .{},
             .ref_map = .{},
             .string_interner = .{},
@@ -214,20 +236,17 @@ pub const Dehydrator = struct {
             .private_node_table = .{},
             .ref_table = .{},
         };
-
-        return self;
     }
 
     pub fn deinit(self: *Dehydrator) void {
-        self.public_refs.deinit(self.temp_allocator.allocator());
-        self.ref_map.deinit(self.temp_allocator.allocator());
-        self.string_interner.deinit(self.temp_allocator.allocator());
-        self.string_table_builder.deinit(self.temp_allocator.allocator());
-        self.public_symbol_table.deinit(self.temp_allocator.allocator());
-        self.public_node_table.deinit(self.temp_allocator.allocator());
-        self.private_node_table.deinit(self.temp_allocator.allocator());
-        self.ref_table.deinit(self.temp_allocator.allocator());
-        self.temp_allocator.deinit();
+        self.public_refs.deinit(self.temp_allocator);
+        self.ref_map.deinit(self.temp_allocator);
+        self.string_interner.deinit(self.temp_allocator);
+        self.string_table_builder.deinit(self.temp_allocator);
+        self.public_symbol_table.deinit(self.temp_allocator);
+        self.public_node_table.deinit(self.temp_allocator);
+        self.private_node_table.deinit(self.temp_allocator);
+        self.ref_table.deinit(self.temp_allocator);
     }
 
     /// Populates `self.public_refs` by traversing the graph from all public entry points.
@@ -235,7 +254,7 @@ pub const Dehydrator = struct {
     /// but deliberately does not traverse into the implementation (bodies) of functions,
     /// correctly separating the public contract from private details.
     pub fn findPublicRefs(self: *Dehydrator) !void {
-        var work_queue = std.ArrayList(ir.Ref).init(self.temp_allocator.allocator());
+        var work_queue = std.ArrayList(ir.Ref).init(self.temp_allocator);
         defer work_queue.deinit();
 
         // 1. Seed the traversal with all public `global_symbol` nodes and their direct targets.
@@ -265,7 +284,7 @@ pub const Dehydrator = struct {
             }
 
             // --- This is the critical boundary logic ---
-            if (node.kind == .structure and node.kind.getDiscriminator() == .function) {
+            if (node.isFunction()) {
                 // For a function node, ONLY traverse its type signature, NOT its body.
                 // The body is the implementation.
                 const function_type_ref = try self.ir_ctx.getField(current_ref, .type) orelse continue;
@@ -295,7 +314,7 @@ pub const Dehydrator = struct {
         }
 
         // `put` returns true if the item was newly inserted.
-        if (try self.public_refs.put(self.temp_allocator.allocator(), ref, {})) {
+        if (try self.public_refs.put(self.temp_allocator, ref, {})) {
             // If it's a new public ref, add it to the queue to traverse its children.
             try work_queue.append(ref);
         }
@@ -336,7 +355,7 @@ pub const Dehydrator = struct {
                 const start_idx = self.ref_table.items.len;
                 for (node.content.ref_list.items) |child_ref| {
                     const sma_ref = try self.dehydrateChildRef(child_ref);
-                    try self.ref_table.append(self.temp_allocator.allocator(), sma_ref);
+                    try self.ref_table.append(self.temp_allocator, sma_ref);
                 }
                 sma_node.content.structure = .{
                     .start_idx = @intCast(start_idx),
@@ -349,8 +368,8 @@ pub const Dehydrator = struct {
         const is_public = self.public_refs.contains(ref);
         const table = if (is_public) &self.public_node_table else &self.private_node_table;
         const index = table.items.len;
-        try table.append(self.temp_allocator.allocator(), sma_node);
-        try self.ref_map.put(self.temp_allocator.allocator(), ref, .{ .is_public = is_public, .index = @intCast(index) });
+        try table.append(self.temp_allocator, sma_node);
+        try self.ref_map.put(self.temp_allocator, ref, .{ .is_public = is_public, .index = @intCast(index) });
     }
 
     /// Converts an `ir.Ref` to a `sma.Ref`, assuming dependencies have been processed.
@@ -379,12 +398,12 @@ pub const Dehydrator = struct {
     }
 
     pub fn internString(self: *Dehydrator, str: []const u8) !u32 {
-        const gop = try self.string_interner.getOrPut(self.temp_allocator.allocator(), str);
+        const gop = try self.string_interner.getOrPut(self.temp_allocator, str);
         if (!gop.found_existing) {
-            gop.key_ptr.* = try self.arena.dupe(u8, str);
+            gop.key_ptr.* = try self.output_arena.dupe(u8, str);
             gop.value_ptr.* = @intCast(self.string_table_builder.items.len);
-            try self.string_table_builder.appendSlice(self.temp_allocator.allocator(), str);
-            try self.string_table_builder.append(self.temp_allocator.allocator(), 0); // Null terminator
+            try self.string_table_builder.appendSlice(self.temp_allocator, str);
+            try self.string_table_builder.append(self.temp_allocator, 0); // Null terminator
         }
         return gop.value_ptr.*;
     }
@@ -403,7 +422,7 @@ pub const Dehydrator = struct {
 
                 std.debug.assert(target_mapping.is_public);
 
-                try self.public_symbol_table.append(self.temp_allocator.allocator(), .{
+                try self.public_symbol_table.append(self.temp_allocator, .{
                     .name_idx = name_idx,
                     .root_node_idx = target_mapping.index,
                 });
@@ -411,23 +430,23 @@ pub const Dehydrator = struct {
         }
     }
 
-    pub fn buildArtifact(self: *Dehydrator) !Artifact {
-        const string_table = try self.arena.dupe(u8, self.string_table_builder.items);
-        errdefer self.arena.free(string_table);
+    pub fn buildArtifact(self: *Dehydrator, out: *Artifact) !void {
+        const string_table = try self.output_arena.dupe(u8, self.string_table_builder.items);
+        errdefer self.output_arena.free(string_table);
 
-        const public_symbol_table = try self.arena.dupe(PublicSymbol, self.public_symbol_table.items);
-        errdefer self.arena.free(public_symbol_table);
+        const public_symbol_table = try self.output_arena.dupe(PublicSymbol, self.public_symbol_table.items);
+        errdefer self.output_arena.free(public_symbol_table);
 
-        const public_node_table = try self.arena.dupe(Node, self.public_node_table.items);
-        errdefer self.arena.free(public_node_table);
+        const public_node_table = try self.output_arena.dupe(Node, self.public_node_table.items);
+        errdefer self.output_arena.free(public_node_table);
 
-        const private_node_table = try self.arena.dupe(Node, self.private_node_table.items);
-        errdefer self.arena.free(private_node_table);
+        const private_node_table = try self.output_arena.dupe(Node, self.private_node_table.items);
+        errdefer self.output_arena.free(private_node_table);
 
-        const ref_table = try self.arena.dupe(Ref, self.ref_table.items);
-        errdefer self.arena.free(ref_table);
+        const ref_table = try self.output_arena.dupe(Ref, self.ref_table.items);
+        errdefer self.output_arena.free(ref_table);
 
-        return Artifact{
+        out.* = Artifact{
             .header = .{
                 .module_guid = self.module_guid,
                 .interface_hash = 0, // Computed later by CBR pass

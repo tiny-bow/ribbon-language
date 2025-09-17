@@ -36,8 +36,8 @@ To satisfy these requirements, the SMA contains two distinct sections:
 The `sma.Ref` (Symbolic IR Reference) is the core of the SMA format, providing a stable, context-free replacement for the ephemeral, in-memory `ir.Ref`.
 
 ```zig
-// sma.sma.Ref: A stable, serializable reference to an IR node.
-const sma.sma.Ref = union(enum) {
+// sma.Ref: A stable, serializable reference to an IR node.
+const sma.Ref = union(enum) {
     /// A reference to another node within this SAME artifact.
     /// The u32 is an index into this SMA's flattened node array.
     internal: u32,
@@ -227,7 +227,7 @@ Before services can be built, the data they exchange must be defined. This invol
         *   `public_node_table`: A flattened array of `sma.Node`s representing the dehydrated **public interface** IR graph.
         *   `private_node_table`: A flattened array of `sma.Node`s representing the dehydrated **private implementation** IR graph.
 
-*   **Task 1.2: Define `sma.sma.Ref` and `ir.ModuleGUID`.**
+*   **Task 1.2: Define `sma.Ref` and `ir.ModuleGUID`.**
     *   **Location:** `src/mod/sma.zig` and `src/mod/ir.zig`.
     *   **Details:**
         *   In `ir.zig`, define `ModuleGUID` as a `u128` (or similar hash result type), derived from a canonical hash of the module's source path. For maximum robustness across different machines and build environments (e.g., vendored dependencies), this should be a hash of a canonical module name (e.g., my_project/utils/collections) rather than a filesystem path.

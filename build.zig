@@ -45,18 +45,18 @@ const modules = [_]ModuleDef{
     },
     .{
         .name = "ir",
-        .imports = &.{ "core", "common", "source", "bytecode" },
+        .imports = &.{ "core", "common", "analysis", "bytecode" },
     },
     .{
         .name = "meta_language",
-        .imports = &.{ "rg", "common", "source", "core", "ir", "backend" },
+        .imports = &.{ "rg", "common", "analysis", "core", "ir", "backend" },
     },
     .{
         .name = "sma",
-        .imports = &.{ "source", "ir", "core", "common", "backend" },
+        .imports = &.{ "ir", "core", "common", "backend" },
     },
     .{
-        .name = "source",
+        .name = "analysis",
         .imports = &.{ "rg", "common" },
     },
 };

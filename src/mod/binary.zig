@@ -24,8 +24,8 @@ const core = @import("core");
 const common = @import("common");
 const Id = common.Id;
 const AllocWriter = common.AllocWriter;
-const RelativeAddress = AllocWriter.RelativeAddress;
-const RelativeBuffer = AllocWriter.RelativeBuffer;
+pub const RelativeAddress = AllocWriter.RelativeAddress;
+pub const RelativeBuffer = AllocWriter.RelativeBuffer;
 
 test {
     // std.debug.print("semantic analysis for binary\n", .{});
@@ -330,14 +330,18 @@ pub const LocationMap = struct {
     fixups: common.ArrayList(Fixup) = .empty,
     /// State variable indicating the region the location map currently operates in.
     region: Region,
+    /// The base Region this LocationMap was initialized with.
+    base_region: Region,
 
     /// Initialize a new location map with the provided general purpose allocator.
     /// * `id` should be of a type constructed by `common.Id`
     /// * Identity types larger than `core.STATIC_ID_BITS` bits may cause integer overflow
     pub fn init(gpa: std.mem.Allocator, id: anytype) LocationMap {
+        const region = Region.from(id);
         return LocationMap{
             .gpa = gpa,
-            .region = .from(id),
+            .region = region,
+            .base_region = region,
         };
     }
 
@@ -345,7 +349,7 @@ pub const LocationMap = struct {
     pub fn clear(self: *LocationMap) void {
         self.addresses.clearRetainingCapacity();
         self.fixups.clearRetainingCapacity();
-        self.region = .fromInt(0);
+        self.region = self.base_region;
     }
 
     /// Deinitialize the location map, freeing all memory it owns.

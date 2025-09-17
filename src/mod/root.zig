@@ -18,6 +18,6 @@ pub const ir = @import("ir");
 pub const backend = @import("backend");
 pub const machine = @import("machine");
 pub const meta_language = @import("meta_language");
-pub const source = @import("source");
 pub const sma = @import("sma");
 pub const cbr = @import("cbr");
+pub const analysis = @import("analysis");
