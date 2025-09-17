@@ -74,7 +74,7 @@ pub const Node = extern struct {
 /// The header of a Serializable Module Artifact file.
 pub const Header = extern struct {
     magic_number: [6]u8 = "RIBSMA".*,
-    format_version: u16 = 1,
+    format_version: u16 = format_version_number,
     ribbon_version: u64 = core.VERSION_NUMBER,
     module_guid: ir.ModuleGUID,
     interface_hash: u128,
