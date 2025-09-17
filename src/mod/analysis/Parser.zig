@@ -1,12 +1,12 @@
+//! Language agnostic pratt parser implementation.
+const Parser = @This();
+
 const std = @import("std");
 const log = std.log.scoped(.parser);
 
 const common = @import("common");
 
 const analysis = @import("../analysis.zig");
-const Token = analysis.Token;
-const SyntaxTree = analysis.SyntaxTree;
-const Lexer = analysis.Lexer;
 
 test {
     // std.debug.print("semantic analysis for Parser\n", .{});
@@ -17,7 +17,7 @@ test {
 pub const Error = error{
     /// The parser encountered an unexpected token.
     UnexpectedToken,
-} || Lexer.Error;
+} || analysis.Lexer.Error;
 
 /// Extern signal for parser callbacks.
 pub const ParserSignal = enum(i8) {
@@ -112,7 +112,7 @@ pub fn PatternModifier(comptime P: type) type {
                 },
                 TokenPattern => struct {
                     pub fn callback(a: P, b: Q) bool {
-                        if (@as(Token.Type, a) != b.tag) return false;
+                        if (@as(analysis.Token.Type, a) != b.tag) return false;
 
                         return switch (a) {
                             .sequence => |p| p.process(b.data.sequence),
@@ -152,16 +152,16 @@ pub fn PatternModifier(comptime P: type) type {
     };
 }
 
-pub const TokenPattern = union(Token.Type) {
-    pub const QueryType = *const Token;
+pub const TokenPattern = union(analysis.Token.Type) {
+    pub const QueryType = *const analysis.Token;
     sequence: PatternModifier(common.Buffer.short(u8, .constant)),
     linebreak,
-    indentation: PatternModifier(Token.IndentationDelta),
+    indentation: PatternModifier(analysis.Token.IndentationDelta),
     special: PatternModifier(struct {
         const Self = @This();
-        pub const QueryType = @FieldType(Token.Data, "special");
+        pub const QueryType = @FieldType(analysis.Token.Data, "special");
         escaped: PatternModifier(bool),
-        punctuation: PatternModifier(Token.Punctuation),
+        punctuation: PatternModifier(analysis.Token.Punctuation),
 
         pub fn format(self: *const Self, writer: *std.io.Writer) !void {
             try writer.print("{f}, {f}", .{ self.escaped, self.punctuation });
@@ -239,7 +239,7 @@ pub fn PatternSet(comptime T: type) type {
             self: *const PatternSet(T),
             allocator: std.mem.Allocator,
             binding_power: i16,
-            token: *const Token,
+            token: *const analysis.Token,
         ) error{OutOfMemory}![]const QueryResult {
             const patterns = self.entries.items(.token);
             const bps = self.entries.items(.binding_power);
@@ -313,12 +313,12 @@ pub const Syntax = struct {
     }
 
     /// Find the nuds matching a given token, if any.
-    pub fn findNuds(self: *const Syntax, bp: i16, token: *const Token) error{OutOfMemory}![]const PatternSet(NudCallbackMarker).QueryResult {
+    pub fn findNuds(self: *const Syntax, bp: i16, token: *const analysis.Token) error{OutOfMemory}![]const PatternSet(NudCallbackMarker).QueryResult {
         return self.nuds.findPatterns(self.allocator, bp, token);
     }
 
     /// Find the leds matching a given token, if any.
-    pub fn findLeds(self: *const Syntax, bp: i16, token: *const Token) error{OutOfMemory}![]const PatternSet(LedCallbackMarker).QueryResult {
+    pub fn findLeds(self: *const Syntax, bp: i16, token: *const analysis.Token) error{OutOfMemory}![]const PatternSet(LedCallbackMarker).QueryResult {
         return self.leds.findPatterns(self.allocator, bp, token);
     }
 
@@ -326,11 +326,11 @@ pub const Syntax = struct {
     pub fn createParser(
         self: *const Syntax,
         allocator: std.mem.Allocator,
-        lexer_settings: Lexer.Settings,
+        lexer_settings: analysis.Lexer.Settings,
         src: []const u8,
         parser_settings: Parser.Settings,
     ) Error!Parser {
-        const lexer = try Lexer.lexWithPeek(lexer_settings, src);
+        const lexer = try analysis.Lexer.lexWithPeek(lexer_settings, src);
         return Parser.init(allocator, self, lexer, parser_settings);
     }
 };
@@ -363,8 +363,8 @@ pub const Nud = Pattern(NudCallbackMarker);
 pub const Led = Pattern(LedCallbackMarker);
 
 /// Expected inputs:
-/// * `..., null, fn (*Parser, i16, Token) Error!?Expr`
-/// * `..., *T, fn (*T, *Parser, i16, Token) Error!?Expr`
+/// * `..., null, fn (*Parser, i16, analysis.Token) Error!?Expr`
+/// * `..., *T, fn (*T, *Parser, i16, analysis.Token) Error!?Expr`
 /// * `..., _, *const fn ..`
 pub fn createNud(name: []const u8, binding_power: i16, token: PatternModifier(TokenPattern), userdata: anytype, callback: anytype) Nud {
     const Userdata = comptime @TypeOf(userdata);
@@ -379,8 +379,8 @@ pub fn createNud(name: []const u8, binding_power: i16, token: PatternModifier(To
 }
 
 /// Expected inputs:
-/// * `..., null, fn (*Parser, Expr, i16, Token) Error!?Expr`
-/// * `..., *T, fn (*T, *Parser, Expr, i16, Token) Error!?Expr`
+/// * `..., null, fn (*Parser, Expr, i16, analysis.Token) Error!?Expr`
+/// * `..., *T, fn (*T, *Parser, Expr, i16, analysis.Token) Error!?Expr`
 /// * `..., _, *const fn ..`
 pub fn createLed(name: []const u8, binding_power: i16, token: PatternModifier(TokenPattern), userdata: anytype, callback: anytype) Led {
     const Userdata = comptime @TypeOf(userdata);
@@ -395,8 +395,8 @@ pub fn createLed(name: []const u8, binding_power: i16, token: PatternModifier(To
 }
 
 /// Expected inputs:
-/// * `void, fn (*Parser, i16, Token) Error!?Expr`
-/// * `T, fn (*T, *Parser, i16, Token) Error!?Expr`
+/// * `void, fn (*Parser, i16, analysis.Token) Error!?Expr`
+/// * `T, fn (*T, *Parser, i16, analysis.Token) Error!?Expr`
 /// * `_, *const fn ..`
 pub fn wrapNudCallback(comptime Userdata: type, callback: anytype) *const NudCallbackMarker {
     return @ptrCast(&struct {
@@ -404,8 +404,8 @@ pub fn wrapNudCallback(comptime Userdata: type, callback: anytype) *const NudCal
             userdata: ?*anyopaque,
             parser: *Parser,
             bp: i16,
-            token: *Token,
-            out: *SyntaxTree,
+            token: *analysis.Token,
+            out: *analysis.SyntaxTree,
             err: *Error,
         ) callconv(.c) ParserSignal {
             const result =
@@ -429,18 +429,18 @@ pub fn wrapNudCallback(comptime Userdata: type, callback: anytype) *const NudCal
 }
 
 /// Expected inputs:
-/// * `void, fn (*Parser, Expr, i16, Token) Error!?Expr`
-/// * `T, fn (*T, *Parser, Expr, i16, Token) Error!?Expr`
+/// * `void, fn (*Parser, Expr, i16, analysis.Token) Error!?Expr`
+/// * `T, fn (*T, *Parser, Expr, i16, analysis.Token) Error!?Expr`
 /// * `_, *const fn ..`
 pub fn wrapLedCallback(comptime Userdata: type, callback: anytype) *const LedCallbackMarker {
     return @ptrCast(&struct {
         pub fn led_callback_wrapper(
             userdata: ?*anyopaque,
             parser: *Parser,
-            lhs: *SyntaxTree,
+            lhs: *analysis.SyntaxTree,
             bp: i16,
-            token: *Token,
-            out: *SyntaxTree,
+            token: *analysis.Token,
+            out: *analysis.SyntaxTree,
             err: *Error,
         ) callconv(.c) ParserSignal {
             const result =
@@ -463,18 +463,12 @@ pub fn wrapLedCallback(comptime Userdata: type, callback: anytype) *const LedCal
     }.led_callback_wrapper);
 }
 
-// TODO: it would be better if the parser was generic over both lexer and result types.
-// this is not really fun to do in zig; probably after bootstrap.
-
-/// Pratt parser.
-const Parser = @This();
-
 /// The allocator to store parsed expressions in.
 allocator: std.mem.Allocator,
 /// The syntax used by this parser.
 syntax: *const Syntax,
-/// Token stream being parsed.
-lexer: Lexer.Peekable,
+/// analysis.Token stream being parsed.
+lexer: analysis.Lexer.Peekable,
 /// Settings for this parser.
 settings: Settings,
 
@@ -489,7 +483,7 @@ pub const Settings = struct {
 pub fn init(
     allocator: std.mem.Allocator,
     syntax: *const Syntax,
-    lexer: Lexer.Peekable,
+    lexer: analysis.Lexer.Peekable,
     settings: Settings,
 ) Parser {
     return Parser{
@@ -504,7 +498,7 @@ pub fn isEof(self: *Parser) bool {
     return self.lexer.isEof();
 }
 
-pub fn parseNud(self: *Parser, binding_power: i16, token: Token) Error!?SyntaxTree {
+pub fn parseNud(self: *Parser, binding_power: i16, token: analysis.Token) Error!?analysis.SyntaxTree {
     const nuds = try self.syntax.findNuds(binding_power, &token);
 
     log.debug("pratt: found {} nuds", .{nuds.len});
@@ -514,7 +508,7 @@ pub fn parseNud(self: *Parser, binding_power: i16, token: Token) Error!?SyntaxTr
         return null;
     }
 
-    var out: SyntaxTree = undefined;
+    var out: analysis.SyntaxTree = undefined;
     var err: Error = undefined;
     const save_state = self.lexer;
 
@@ -541,7 +535,7 @@ pub fn parseNud(self: *Parser, binding_power: i16, token: Token) Error!?SyntaxTr
     }
 }
 
-pub fn parseLed(self: *Parser, binding_power: i16, token: Token, lhs: SyntaxTree) Error!?SyntaxTree {
+pub fn parseLed(self: *Parser, binding_power: i16, token: analysis.Token, lhs: analysis.SyntaxTree) Error!?analysis.SyntaxTree {
     const leds = try self.syntax.findLeds(binding_power, &token);
 
     log.debug("pratt: found {} leds", .{leds.len});
@@ -551,7 +545,7 @@ pub fn parseLed(self: *Parser, binding_power: i16, token: Token, lhs: SyntaxTree
         return null;
     }
 
-    var out: SyntaxTree = undefined;
+    var out: analysis.SyntaxTree = undefined;
     var err: Error = undefined;
 
     const save_state = self.lexer;
@@ -583,7 +577,7 @@ pub fn parseLed(self: *Parser, binding_power: i16, token: Token, lhs: SyntaxTree
 pub fn pratt(
     self: *Parser,
     binding_power: i16,
-) Error!?SyntaxTree {
+) Error!?analysis.SyntaxTree {
     var save_state = self.lexer;
     const first_token = try self.lexer.peek() orelse return null;
 

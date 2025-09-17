@@ -9,14 +9,6 @@ const common = @import("common");
 const binary = @import("binary");
 
 const bytecode = @import("../bytecode.zig");
-const BlockBuilder = bytecode.BlockBuilder;
-const BlockMap = bytecode.BlockMap;
-const LocalMap = bytecode.LocalMap;
-const HandlerSetMap = bytecode.HandlerSetMap;
-const HandlerSetBuilder = bytecode.HandlerSetBuilder;
-const LocalFixupMap = bytecode.LocalFixupMap;
-const UpvalueFixupMap = bytecode.UpvalueFixupMap;
-const BlockVisitorQueue = bytecode.BlockVisitorQueue;
 
 test {
     // std.debug.print("semantic analysis for bytecode FunctionBuilder\n", .{});
@@ -32,11 +24,11 @@ id: core.FunctionId = .fromInt(0),
 /// The function's parent, if it is an effect handler.
 parent: ?core.FunctionId = null,
 /// The function's basic blocks, unordered.
-blocks: BlockMap = .empty,
+blocks: bytecode.BlockMap = .empty,
 /// The function's local variables, unordered.
-locals: LocalMap = .empty,
+locals: bytecode.LocalMap = .empty,
 /// The function's local handler set definitions.
-handler_sets: HandlerSetMap = .empty,
+handler_sets: bytecode.HandlerSetMap = .empty,
 
 /// Initialize a new builder for a bytecode function.
 pub fn init(gpa: std.mem.Allocator, arena: std.mem.Allocator) FunctionBuilder {
@@ -102,7 +94,7 @@ pub fn getLocal(self: *const FunctionBuilder, id: core.LocalId) ?core.Layout {
 ///   which is accessible as a field of the builder.
 /// * The function builder does not own the handler set builder, so it must be deinitialized separately.
 ///   Recommended usage pattern is to use `TableBuilder` to manage statics.
-pub fn bindHandlerSet(self: *FunctionBuilder, builder: *HandlerSetBuilder) error{OutOfMemory}!void {
+pub fn bindHandlerSet(self: *FunctionBuilder, builder: *bytecode.HandlerSetBuilder) error{OutOfMemory}!void {
     if (builder.function) |old_function| {
         log.debug("FunctionBuilder.bindHandlerSet: Handler set builder already bound to function {f}", .{old_function});
         return error.OutOfMemory;
@@ -114,14 +106,14 @@ pub fn bindHandlerSet(self: *FunctionBuilder, builder: *HandlerSetBuilder) error
 }
 
 /// Get a pointer to a handler set builder by its handler set id.
-pub fn getHandlerSet(self: *const FunctionBuilder, id: core.HandlerSetId) ?*HandlerSetBuilder {
+pub fn getHandlerSet(self: *const FunctionBuilder, id: core.HandlerSetId) ?*bytecode.HandlerSetBuilder {
     return self.handler_sets.get(id);
 }
 
 /// Create a new basic block within this function, returning a pointer to it.
 /// * Note that the returned pointer is owned by the function builder and should not be deinitialized manually.
 /// * Use `getBlock` to retrieve the pointer to the block builder by its id (available as a field of the builder).
-pub fn createBlock(self: *FunctionBuilder) error{OutOfMemory}!*BlockBuilder {
+pub fn createBlock(self: *FunctionBuilder) error{OutOfMemory}!*bytecode.BlockBuilder {
     const index = self.blocks.count();
 
     if (index > core.StaticId.MAX_INT) {
@@ -130,14 +122,14 @@ pub fn createBlock(self: *FunctionBuilder) error{OutOfMemory}!*BlockBuilder {
     }
 
     const block_id = core.BlockId.fromInt(index);
-    const addr = try self.arena.create(BlockBuilder);
+    const addr = try self.arena.create(bytecode.BlockBuilder);
 
     const gop = try self.blocks.getOrPut(self.gpa, block_id);
 
     // sanity check: block_id should be fresh if the map has been mutated in append-only fashion
     std.debug.assert(!gop.found_existing);
 
-    addr.* = BlockBuilder.init(self.gpa, self.arena);
+    addr.* = bytecode.BlockBuilder.init(self.gpa, self.arena);
     addr.id = block_id;
     addr.body.function = self.id;
 
@@ -147,12 +139,12 @@ pub fn createBlock(self: *FunctionBuilder) error{OutOfMemory}!*BlockBuilder {
 }
 
 /// Get a pointer to a block builder by its block id.
-pub fn getBlock(self: *const FunctionBuilder, id: core.BlockId) ?*BlockBuilder {
+pub fn getBlock(self: *const FunctionBuilder, id: core.BlockId) ?*bytecode.BlockBuilder {
     return self.blocks.get(id);
 }
 
 /// Encode the function and all blocks into the provided encoder, inserting a binary.Fixup location for the function itself into the current region.
-pub fn encode(self: *const FunctionBuilder, maybe_upvalue_fixups: ?*const UpvalueFixupMap, encoder: *binary.Encoder) binary.Encoder.Error!void {
+pub fn encode(self: *const FunctionBuilder, maybe_upvalue_fixups: ?*const bytecode.UpvalueFixupMap, encoder: *binary.Encoder) binary.Encoder.Error!void {
     const location = encoder.localLocationId(self.id);
 
     if (maybe_upvalue_fixups == null and self.parent != null) {
@@ -176,7 +168,7 @@ pub fn encode(self: *const FunctionBuilder, maybe_upvalue_fixups: ?*const Upvalu
 
     const stack_layout = core.Layout.computeOptimalCommonLayout(layouts, indices, offsets);
 
-    var local_fixups = try LocalFixupMap.init(encoder.temp_allocator, self.locals.keys(), offsets);
+    var local_fixups = try bytecode.LocalFixupMap.init(encoder.temp_allocator, self.locals.keys(), offsets);
     defer local_fixups.deinit(encoder.temp_allocator);
 
     // create our header entry
@@ -189,7 +181,7 @@ pub fn encode(self: *const FunctionBuilder, maybe_upvalue_fixups: ?*const Upvalu
         const region_token = encoder.enterRegion(self.id);
         defer encoder.leaveRegion(region_token);
 
-        var queue: BlockVisitorQueue = .init(encoder.temp_allocator);
+        var queue: bytecode.BlockVisitorQueue = .init(encoder.temp_allocator);
         defer queue.deinit();
 
         // write the function body
@@ -199,7 +191,7 @@ pub fn encode(self: *const FunctionBuilder, maybe_upvalue_fixups: ?*const Upvalu
 
         const base_rel = encoder.getRelativeAddress();
 
-        try queue.add(BlockBuilder.entry_point_id);
+        try queue.add(bytecode.BlockBuilder.entry_point_id);
 
         while (queue.visit()) |block_id| {
             const block = self.blocks.get(block_id).?;
@@ -260,7 +252,7 @@ pub fn encode(self: *const FunctionBuilder, maybe_upvalue_fixups: ?*const Upvalu
 
         // we need to create a map from UpvalueId to our local fixups;
         // we can do this by using the handler set builder's upvalues map to create a buffer of UpvalueIds matched with our existing local fixups.
-        var new_upvalue_fixups: UpvalueFixupMap = .{};
+        var new_upvalue_fixups: bytecode.UpvalueFixupMap = .{};
         defer new_upvalue_fixups.deinit(encoder.temp_allocator);
 
         var handler_it = handler_set.upvalues.iterator();

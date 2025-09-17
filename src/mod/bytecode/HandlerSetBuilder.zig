@@ -9,8 +9,6 @@ const common = @import("common");
 const binary = @import("binary");
 
 const bytecode = @import("../bytecode.zig");
-const UpvalueFixupMap = bytecode.UpvalueFixupMap;
-const FunctionBuilder = bytecode.FunctionBuilder;
 
 /// The general allocator used by this handler set for collections.
 gpa: std.mem.Allocator,
@@ -39,7 +37,7 @@ pub const Entry = struct {
     /// The id of the effect that this handler can process.
     effect: core.EffectId = .fromInt(0),
     /// The function that implements the handler.
-    function: *FunctionBuilder,
+    function: *bytecode.FunctionBuilder,
 };
 
 /// Initialize a new handler set builder.
@@ -74,7 +72,7 @@ pub fn deinit(self: *HandlerSetBuilder) void {
 /// * The handler id can be used with `getHandlerFunction` to retrieve the bound function builder address later.
 /// * The handler set builder does not own the function builder, so it must be deinitialized separately.
 ///   Recommended usage pattern is to use `TableBuilder` to manage statics.
-pub fn bindHandler(self: *HandlerSetBuilder, effect: core.EffectId, function: *FunctionBuilder) error{ BadEncoding, OutOfMemory }!core.HandlerId {
+pub fn bindHandler(self: *HandlerSetBuilder, effect: core.EffectId, function: *bytecode.FunctionBuilder) error{ BadEncoding, OutOfMemory }!core.HandlerId {
     if (function.parent) |parent| {
         log.debug("HandlerSetBuilder.bindHandlerFunction: function already bound to {f}", .{parent});
         return error.BadEncoding;
@@ -103,7 +101,7 @@ pub fn bindHandler(self: *HandlerSetBuilder, effect: core.EffectId, function: *F
 }
 
 /// Get a handler function builder by its local handler id.
-pub fn getHandler(self: *const HandlerSetBuilder, id: core.HandlerId) ?*FunctionBuilder {
+pub fn getHandler(self: *const HandlerSetBuilder, id: core.HandlerId) ?*bytecode.FunctionBuilder {
     const entry = self.handlers.getPtr(id) orelse return null;
     return entry.function;
 }
@@ -144,7 +142,7 @@ pub fn cancellationLocation(self: *const HandlerSetBuilder) error{BadEncoding}!b
 }
 
 /// Encode the handler set into the provided encoder.
-pub fn encode(self: *const HandlerSetBuilder, maybe_upvalue_fixups: ?*const UpvalueFixupMap, encoder: *binary.Encoder) binary.Encoder.Error!void {
+pub fn encode(self: *const HandlerSetBuilder, maybe_upvalue_fixups: ?*const bytecode.UpvalueFixupMap, encoder: *binary.Encoder) binary.Encoder.Error!void {
     const location = encoder.localLocationId(self.id);
 
     const upvalue_fixups = if (maybe_upvalue_fixups) |x| x else {

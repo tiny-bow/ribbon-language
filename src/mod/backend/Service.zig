@@ -3,12 +3,13 @@
 const Service = @This();
 
 const std = @import("std");
-
-const backend = @import("../backend.zig");
+const log = std.log.scoped(.backend_service);
 
 const core = @import("core");
 const common = @import("common");
 const ir = @import("ir");
+
+const backend = @import("../backend.zig");
 
 test {
     // std.debug.print("semantic analysis for backend service\n", .{});

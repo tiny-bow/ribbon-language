@@ -15,6 +15,7 @@
 //! not defined within the current buffer, it is promoted to a `LinkerFixup` and stored in a `LinkerMap`. This allows for
 //! linking against other binary artifacts later in the toolchain, effectively separating intra-procedural patching from
 //! inter-module linking.
+
 const binary = @This();
 
 const std = @import("std");
@@ -22,10 +23,9 @@ const log = std.log.scoped(.binary);
 
 const core = @import("core");
 const common = @import("common");
-const Id = common.Id;
-const AllocWriter = common.AllocWriter;
-pub const RelativeAddress = AllocWriter.RelativeAddress;
-pub const RelativeBuffer = AllocWriter.RelativeBuffer;
+
+pub const RelativeAddress = common.AllocWriter.RelativeAddress;
+pub const RelativeBuffer = common.AllocWriter.RelativeBuffer;
 
 test {
     // std.debug.print("semantic analysis for binary\n", .{});
@@ -42,7 +42,7 @@ pub const Error = std.mem.Allocator.Error || error{
 };
 
 /// An identifier that is used to identify a region in the encoded memory.
-pub const RegionId = Id.of(Region, core.STATIC_ID_BITS);
+pub const RegionId = common.Id.of(Region, core.STATIC_ID_BITS);
 
 /// Regions are used to scope fixup locations, allowing for multiple functions or blocks to be encoded in the same encoder.
 pub const Region = struct {
@@ -63,7 +63,7 @@ pub const Region = struct {
 };
 
 /// An identifier that is used to identify an offset within a region in the encoded memory.
-pub const OffsetId = Id.of(Offset, core.STATIC_ID_BITS);
+pub const OffsetId = common.Id.of(Offset, core.STATIC_ID_BITS);
 
 /// Offsets are like a sub-region, attached to a location along with a region to give more specific identification.
 pub const Offset = struct {
@@ -566,12 +566,12 @@ pub const LocationMap = struct {
     }
 };
 
-/// Wrapper over `AllocWriter` that provides a location-fixup API via `LocationMap`.
+/// Wrapper over `common.AllocWriter` that provides a location-fixup API via `LocationMap`.
 pub const Encoder = struct {
     /// General purpose allocator for intermediate user operations.
     temp_allocator: std.mem.Allocator,
-    /// The encoder's `AllocWriter`
-    writer: AllocWriter,
+    /// The encoder's `common.AllocWriter`
+    writer: common.AllocWriter,
     /// Location map providing relative address identification, fixup storage, and other state for fixups.
     locations: *LocationMap,
     /// Generic location visitor state for resolving out-of-order encodes.
@@ -582,9 +582,9 @@ pub const Encoder = struct {
 
     pub const Error = binary.Error;
 
-    /// Initialize a new Encoder with a `AllocWriter`.
+    /// Initialize a new Encoder with a `common.AllocWriter`.
     pub fn init(temp_allocator: std.mem.Allocator, writer_allocator: std.mem.Allocator, locations: *LocationMap) error{OutOfMemory}!Encoder {
-        const writer = try AllocWriter.initCapacity(writer_allocator);
+        const writer = try common.AllocWriter.initCapacity(writer_allocator);
         return Encoder{
             .temp_allocator = temp_allocator,
             .writer = writer,
@@ -757,83 +757,83 @@ pub const Encoder = struct {
     }
 
     /// Ensure the total available capacity in the encoder memory.
-    pub fn ensureCapacity(self: *Encoder, cap: u64) AllocWriter.Error!void {
+    pub fn ensureCapacity(self: *Encoder, cap: u64) common.AllocWriter.Error!void {
         return self.writer.ensureCapacity(cap);
     }
 
     /// Ensure additional available capacity in the encoder memory.
-    pub fn ensureAdditionalCapacity(self: *Encoder, additional: u64) AllocWriter.Error!void {
+    pub fn ensureAdditionalCapacity(self: *Encoder, additional: u64) common.AllocWriter.Error!void {
         return self.writer.ensureAdditionalCapacity(additional);
     }
 
     /// Allocates an aligned byte buffer from the address space of the encoder.
-    pub fn alignedAlloc(self: *Encoder, alignment: core.Alignment, len: usize) AllocWriter.Error![]u8 {
+    pub fn alignedAlloc(self: *Encoder, alignment: core.Alignment, len: usize) common.AllocWriter.Error![]u8 {
         return self.writer.alignedAlloc(alignment, len);
     }
 
     /// Same as `std.mem.Allocator.alloc`, but allocates from the virtual address space of the encoder.
-    pub fn alloc(self: *Encoder, comptime T: type, len: usize) AllocWriter.Error![]T {
+    pub fn alloc(self: *Encoder, comptime T: type, len: usize) common.AllocWriter.Error![]T {
         return self.writer.alloc(T, len);
     }
 
     /// Same as `alloc`, but returns a RelativeAddress instead of a pointer.
-    pub fn allocRel(self: *Encoder, comptime T: type, len: usize) AllocWriter.Error!RelativeAddress {
+    pub fn allocRel(self: *Encoder, comptime T: type, len: usize) common.AllocWriter.Error!RelativeAddress {
         return self.writer.allocRel(T, len);
     }
 
     /// Same as `std.mem.Allocator.dupe`, but copies a slice into the virtual address space of the encoder.
-    pub fn dupe(self: *Encoder, comptime T: type, slice: []const T) AllocWriter.Error![]T {
+    pub fn dupe(self: *Encoder, comptime T: type, slice: []const T) common.AllocWriter.Error![]T {
         return self.writer.dupe(T, slice);
     }
 
     /// Same as `dupe`, but returns a RelativeAddress instead of a pointer.
-    pub fn dupeRel(self: *Encoder, comptime T: type, slice: []const T) AllocWriter.Error!RelativeAddress {
+    pub fn dupeRel(self: *Encoder, comptime T: type, slice: []const T) common.AllocWriter.Error!RelativeAddress {
         return self.writer.dupeRel(T, slice);
     }
 
     /// Same as `std.mem.Allocator.create`, but allocates from the virtual address space of the encoder.
-    pub fn create(self: *Encoder, comptime T: type) AllocWriter.Error!*T {
+    pub fn create(self: *Encoder, comptime T: type) common.AllocWriter.Error!*T {
         return self.writer.create(T);
     }
 
     /// Same as `create`, but returns a RelativeAddress instead of a pointer.
-    pub fn createRel(self: *Encoder, comptime T: type) AllocWriter.Error!RelativeAddress {
+    pub fn createRel(self: *Encoder, comptime T: type) common.AllocWriter.Error!RelativeAddress {
         return self.writer.createRel(T);
     }
 
     /// Same as `create`, but takes an initializer.
-    pub fn clone(self: *Encoder, value: anytype) AllocWriter.Error!*@TypeOf(value) {
+    pub fn clone(self: *Encoder, value: anytype) common.AllocWriter.Error!*@TypeOf(value) {
         return self.writer.clone(value);
     }
 
     /// Same as `create`, but returns a RelativeAddress instead of a pointer.
-    pub fn cloneRel(self: *Encoder, value: anytype) AllocWriter.Error!RelativeAddress {
+    pub fn cloneRel(self: *Encoder, value: anytype) common.AllocWriter.Error!RelativeAddress {
         return self.writer.cloneRel(value);
     }
 
     /// Writes as much of a slice of bytes to the encoder as will fit without an allocation.
     /// Returns the number of bytes written.
-    pub fn write(self: *Encoder, noalias bytes: []const u8) AllocWriter.Error!usize {
+    pub fn write(self: *Encoder, noalias bytes: []const u8) common.AllocWriter.Error!usize {
         return self.writer.write(bytes);
     }
 
     /// Writes all bytes from a slice to the encoder.
-    pub fn writeAll(self: *Encoder, bytes: []const u8) AllocWriter.Error!void {
+    pub fn writeAll(self: *Encoder, bytes: []const u8) common.AllocWriter.Error!void {
         return self.writer.writeAll(bytes);
     }
 
     /// Writes a single byte to the encoder.
-    pub fn writeByte(self: *Encoder, byte: u8) AllocWriter.Error!void {
+    pub fn writeByte(self: *Encoder, byte: u8) common.AllocWriter.Error!void {
         return self.writer.writeByte(byte);
     }
 
     /// Writes a byte to the encoder `n` times.
-    pub fn writeByteNTimes(self: *Encoder, byte: u8, n: usize) AllocWriter.Error!void {
+    pub fn writeByteNTimes(self: *Encoder, byte: u8, n: usize) common.AllocWriter.Error!void {
         return self.writer.writeByteNTimes(byte, n);
     }
 
     /// Writes a slice of bytes to the encoder `n` times.
-    pub fn writeBytesNTimes(self: *Encoder, bytes: []const u8, n: usize) AllocWriter.Error!void {
+    pub fn writeBytesNTimes(self: *Encoder, bytes: []const u8, n: usize) common.AllocWriter.Error!void {
         return self.writer.writeBytesNTimes(bytes, n);
     }
 
@@ -844,7 +844,7 @@ pub const Encoder = struct {
         comptime T: type,
         value: T,
         comptime _: enum { little }, // allows backward compat with zig's writer interface; but only in provably compatible use-cases
-    ) AllocWriter.Error!void {
+    ) common.AllocWriter.Error!void {
         try self.writer.writeInt(T, value, .little);
     }
 
@@ -855,7 +855,7 @@ pub const Encoder = struct {
     pub fn writeValue(
         self: *Encoder,
         value: anytype,
-    ) AllocWriter.Error!void {
+    ) common.AllocWriter.Error!void {
         const T = @TypeOf(value);
 
         if (comptime !std.meta.hasUniqueRepresentation(T)) {
@@ -867,7 +867,7 @@ pub const Encoder = struct {
     }
 
     /// Pushes zero bytes (if necessary) to align the current offset of the encoder to the provided alignment value.
-    pub fn alignTo(self: *Encoder, alignment: core.Alignment) AllocWriter.Error!void {
+    pub fn alignTo(self: *Encoder, alignment: core.Alignment) common.AllocWriter.Error!void {
         const delta = common.alignDelta(self.writer.cursor, alignment);
         try self.writer.writeByteNTimes(0, delta);
     }

@@ -1,4 +1,4 @@
-//! A token produced by lexical analysis.
+//! A language agnostic lexeme produced by lexical analysis.
 
 const Token = @This();
 
@@ -6,7 +6,6 @@ const std = @import("std");
 const common = @import("common");
 
 const analysis = @import("../analysis.zig");
-const Source = analysis.Source;
 
 test {
     // std.debug.print("semantic analysis for Token\n", .{});
@@ -14,12 +13,13 @@ test {
 }
 
 /// The original location of the token in the source code.
-location: Source.Location,
+location: analysis.Source.Location,
 /// The type of token data contained in this token.
 tag: Type,
 /// The actual value of the token.
 data: Data,
 
+/// `std.fmt` impl
 pub fn format(self: Token, writer: *std.io.Writer) !void {
     try writer.print("{f}:", .{self.location});
     switch (self.tag) {

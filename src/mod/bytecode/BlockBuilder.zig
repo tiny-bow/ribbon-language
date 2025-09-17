@@ -2,7 +2,7 @@
 //!
 //! A basic block is a straight-line sequence of instructions with no *local*
 //! control flow, terminated by a branch or similar instruction. It is built upon
-//! a `SequenceBuilder` for its body, adding support for terminators and branching.
+//! a `bc.SequenceBuilder` for its body, adding support for terminators and branching.
 
 const BlockBuilder = @This();
 
@@ -11,29 +11,20 @@ const log = std.log.scoped(.bytecode_block_builder);
 
 const core = @import("core");
 const binary = @import("binary");
-
 const common = @import("common");
-const Buffer = common.Buffer;
 
 const bytecode = @import("../bytecode.zig");
-const Instruction = bytecode.Instruction;
-const SequenceBuilder = bytecode.SequenceBuilder;
-const ProtoInstr = bytecode.ProtoInstr;
-const HandlerSetBuilder = bytecode.HandlerSetBuilder;
-const BlockVisitorQueue = bytecode.BlockVisitorQueue;
-const UpvalueFixupMap = bytecode.UpvalueFixupMap;
-const LocalFixupMap = bytecode.LocalFixupMap;
 
 /// The arena allocator used for this block's body.
 arena: std.mem.Allocator,
 /// The instructions making up the body of this block, in un-encoded form.
-body: SequenceBuilder,
+body: bytecode.SequenceBuilder,
 /// The unique(-within-`function`) identifier for this block.
 id: core.BlockId = .fromInt(0),
 /// The instruction that terminates this block.
 /// * Adding any instruction when this is non-`null` is a `BadEncoding` error
 /// * For all other purposes, `null` is semantically equivalent to `unreachable`
-terminator: ?ProtoInstr = null,
+terminator: ?bytecode.ProtoInstr = null,
 
 /// ID of all functions' entry point block.
 pub const entry_point_id = core.BlockId.fromInt(0);
@@ -69,7 +60,7 @@ pub fn count(self: *const BlockBuilder) u64 {
 /// Append a pre-composed instruction to the block.
 /// * Violating some invariants will result in a `BadEncoding` error, but this method is generally unsafe,
 ///   and should be considered an escape hatch where comptime bounds on the other instruction methods are too restrictive.
-pub fn proto(self: *BlockBuilder, pi: ProtoInstr) binary.Encoder.Error!void {
+pub fn proto(self: *BlockBuilder, pi: bytecode.ProtoInstr) binary.Encoder.Error!void {
     try self.ensureUnterminated();
 
     if (pi.instruction.code.isTerm() or pi.instruction.code.isBranch()) {
@@ -81,25 +72,25 @@ pub fn proto(self: *BlockBuilder, pi: ProtoInstr) binary.Encoder.Error!void {
 
 /// Append a pre-composed
 /// Append a non-terminating one-word instruction to the block body.
-pub fn instr(self: *BlockBuilder, comptime code: Instruction.BasicOpCode, data: Instruction.OperandSet(code.upcast())) binary.Encoder.Error!void {
+pub fn instr(self: *BlockBuilder, comptime code: bytecode.Instruction.BasicOpCode, data: bytecode.Instruction.OperandSet(code.upcast())) binary.Encoder.Error!void {
     try self.ensureUnterminated();
     try self.body.instr(code, data);
 }
 
 /// Append a two-word instruction to the block body.
-pub fn instrWide(self: *BlockBuilder, comptime code: Instruction.WideOpCode, data: Instruction.OperandSet(code.upcast()), wide_operand: Instruction.WideOperand(code.upcast())) binary.Encoder.Error!void {
+pub fn instrWide(self: *BlockBuilder, comptime code: bytecode.Instruction.WideOpCode, data: bytecode.Instruction.OperandSet(code.upcast()), wide_operand: bytecode.Instruction.WideOperand(code.upcast())) binary.Encoder.Error!void {
     try self.ensureUnterminated();
     try self.body.instrWide(code, data, wide_operand);
 }
 
 /// Append a call instruction to the block body.
-pub fn instrCall(self: *BlockBuilder, comptime code: Instruction.CallOpCode, data: Instruction.OperandSet(code.upcast()), args: Buffer.fixed(core.Register, core.MAX_REGISTERS)) binary.Encoder.Error!void {
+pub fn instrCall(self: *BlockBuilder, comptime code: bytecode.Instruction.CallOpCode, data: bytecode.Instruction.OperandSet(code.upcast()), args: common.Buffer.fixed(core.Register, core.MAX_REGISTERS)) binary.Encoder.Error!void {
     try self.ensureUnterminated();
     try self.body.instrCall(code, data, args);
 }
 
 /// Append an address-of instruction to the block body.
-pub fn instrAddrOf(self: *BlockBuilder, comptime code: Instruction.AddrOpCode, register: core.Register, id: SequenceBuilder.AddrId(code)) binary.Encoder.Error!void {
+pub fn instrAddrOf(self: *BlockBuilder, comptime code: bytecode.Instruction.AddrOpCode, register: core.Register, id: bytecode.SequenceBuilder.AddrId(code)) binary.Encoder.Error!void {
     try self.ensureUnterminated();
     try self.body.instrAddrOf(code, register, id);
 }
@@ -129,25 +120,25 @@ pub fn instrBrIf(self: *BlockBuilder, condition: core.Register, then_id: core.Bl
 }
 
 /// Set the block terminator to a non-branching instruction.
-pub fn instrTerm(self: *BlockBuilder, comptime code: Instruction.TermOpCode, data: Instruction.OperandSet(code.upcast())) binary.Encoder.Error!void {
+pub fn instrTerm(self: *BlockBuilder, comptime code: bytecode.Instruction.TermOpCode, data: bytecode.Instruction.OperandSet(code.upcast())) binary.Encoder.Error!void {
     try self.ensureUnterminated();
     self.terminator = .{
         .instruction = .{
             .code = code.upcast(),
-            .data = @unionInit(Instruction.OpData, @tagName(code), data),
+            .data = @unionInit(bytecode.Instruction.OpData, @tagName(code), data),
         },
         .additional = .none,
     };
 }
 
 /// Push an effect handler set onto the stack at the current sequence position.
-pub fn pushHandlerSet(self: *BlockBuilder, handler_set: *HandlerSetBuilder) binary.Encoder.Error!void {
+pub fn pushHandlerSet(self: *BlockBuilder, handler_set: *bytecode.HandlerSetBuilder) binary.Encoder.Error!void {
     try self.ensureUnterminated();
     try self.body.pushHandlerSet(handler_set);
 }
 
 /// Pop an effect handler set from the stack at the current sequence position.
-pub fn popHandlerSet(self: *BlockBuilder, handler_set: *HandlerSetBuilder) binary.Encoder.Error!void {
+pub fn popHandlerSet(self: *BlockBuilder, handler_set: *bytecode.HandlerSetBuilder) binary.Encoder.Error!void {
     try self.ensureUnterminated();
     try self.body.popHandlerSet(handler_set);
 }
@@ -155,14 +146,14 @@ pub fn popHandlerSet(self: *BlockBuilder, handler_set: *HandlerSetBuilder) binar
 /// Bind a handler set's cancellation location to the current offset in the sequence.
 /// * The instruction that is encoded next *after this call*, will be executed first after the handler set is cancelled
 /// * This allows cancellation to terminate a block and still use its terminator
-pub fn bindHandlerSetCancellationLocation(self: *BlockBuilder, handler_set: *HandlerSetBuilder) binary.Encoder.Error!void {
+pub fn bindHandlerSetCancellationLocation(self: *BlockBuilder, handler_set: *bytecode.HandlerSetBuilder) binary.Encoder.Error!void {
     try self.body.bindHandlerSetCancellationLocation(handler_set);
 }
 
 /// Encode the block into the provided encoder, including the body instructions and the terminator.
 /// * The block's entry point is encoded as a location in the bytecode header, using the current region id and the block's id as the offset
 /// * Other blocks' ids that are referenced by instructions are added to the provided queue in order of use
-pub fn encode(self: *BlockBuilder, queue: *BlockVisitorQueue, upvalue_fixups: ?*const UpvalueFixupMap, local_fixups: *const LocalFixupMap, encoder: *binary.Encoder) binary.Encoder.Error!void {
+pub fn encode(self: *BlockBuilder, queue: *bytecode.BlockVisitorQueue, upvalue_fixups: ?*const bytecode.UpvalueFixupMap, local_fixups: *const bytecode.LocalFixupMap, encoder: *binary.Encoder) binary.Encoder.Error!void {
     const location = encoder.localLocationId(self.id);
 
     if (!try encoder.visitLocation(location)) {
@@ -184,7 +175,7 @@ pub fn encode(self: *BlockBuilder, queue: *BlockVisitorQueue, upvalue_fixups: ?*
         try pi.encode(queue, upvalue_fixups, local_fixups, encoder);
     } else {
         // simply write the scaled opcode for `unreachable`, since it has no operands
-        try encoder.writeValue(Instruction.OpCode.@"unreachable".toBits());
+        try encoder.writeValue(bytecode.Instruction.OpCode.@"unreachable".toBits());
     }
 }
 
@@ -197,7 +188,7 @@ pub fn ensureUnterminated(self: *BlockBuilder) binary.Encoder.Error!void {
 }
 
 comptime {
-    const br_instr_names = std.meta.fieldNames(Instruction.BranchOpCode);
+    const br_instr_names = std.meta.fieldNames(bytecode.Instruction.BranchOpCode);
 
     if (br_instr_names.len != 2) {
         @compileError("BlockBuilder: out of sync with ISA, unhandled branch opcodes");

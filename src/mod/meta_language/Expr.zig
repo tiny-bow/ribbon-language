@@ -7,13 +7,7 @@ const std = @import("std");
 const log = std.log.scoped(.ml_expr);
 
 const common = @import("common");
-
 const analysis = @import("analysis");
-const Source = analysis.Source;
-const Token = analysis.Token;
-const SyntaxTree = analysis.SyntaxTree;
-const Lexer = analysis.Lexer;
-const Parser = analysis.Parser;
 
 const ml = @import("../meta_language.zig");
 
@@ -23,7 +17,7 @@ test {
 }
 
 /// The source location of the expression.
-source: Source,
+source: analysis.Source,
 /// The attributes of the expression.
 /// These are used to store metadata about the expression.
 attributes: common.StringMap(Expr) = .empty,
@@ -155,7 +149,7 @@ pub const Data = union(enum) {
 pub const Operator = struct {
     position: enum { prefix, infix, postfix },
     precedence: i16,
-    token: Token,
+    token: analysis.Token,
     operands: []Expr,
 
     pub fn format(
@@ -309,10 +303,10 @@ pub fn format(
 /// * Returns an error if we cannot parse the entire source.
 pub fn parseSource(
     allocator: std.mem.Allocator,
-    lexer_settings: Lexer.Settings,
+    lexer_settings: analysis.Lexer.Settings,
     source_name: []const u8,
     src: []const u8,
-) (Parser.Error || error{ InvalidString, InvalidEscape } || std.io.Writer.Error)!?Expr {
+) (analysis.Parser.Error || error{ InvalidString, InvalidEscape } || std.io.Writer.Error)!?Expr {
     var cst = try ml.Cst.parseSource(allocator, lexer_settings, source_name, src) orelse return null;
     defer cst.deinit(allocator);
 
@@ -322,7 +316,7 @@ pub fn parseSource(
 /// Cleans up a concrete syntax tree, producing an `Expr`.
 /// This removes comments, indentation, parens and other purely-syntactic elements,
 /// as well as finalizing literals, applying attributes etc.
-pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: SyntaxTree) !Expr {
+pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.SyntaxTree) !Expr {
     switch (cst.type) {
         ml.Cst.types.Identifier => return Expr{
             .source = cst.source,

@@ -13,13 +13,9 @@ const common = @import("common");
 const Buffer = common.Buffer;
 
 const bytecode = @import("../bytecode.zig");
-const Instruction = bytecode.Instruction;
-const BlockVisitorQueue = bytecode.BlockVisitorQueue;
-const UpvalueFixupMap = bytecode.UpvalueFixupMap;
-const LocalFixupMap = bytecode.LocalFixupMap;
 
 /// The instruction itself, containing the opcode and data.
-instruction: Instruction,
+instruction: bytecode.Instruction,
 /// Additional information for the instruction, such as wide immediate values or call arguments.
 additional: AdditionalInfo,
 
@@ -38,12 +34,12 @@ pub const AdditionalInfo = union(enum) {
 };
 
 /// Encode this instruction into the provided encoder at the current relative address.
-/// * Uses the `binary.Encoder.temp_allocator` to allocate local variable fixups in the provided `LocalFixupMap`.
+/// * Uses the `binary.Encoder.temp_allocator` to allocate local variable fixups in the provided `bytecode.LocalFixupMap`.
 /// * This method is used by the `BlockBuilder` to encode instructions into the
 /// * It is not intended to be used directly; instead, use the `BlockBuilder` methods to append instructions.
 /// * Also available are convenience methods in `binary.Encoder` for appending instructions directly.
 /// * The queue is used to track branch targets and ensure they are visited in the correct order. Pass `null` for body sequences to ensure no branches are allowed inside.
-pub fn encode(self: *const ProtoInstr, maybe_queue: ?*BlockVisitorQueue, upvalue_fixups: ?*const UpvalueFixupMap, local_fixups: *const LocalFixupMap, encoder: *binary.Encoder) binary.Encoder.Error!void {
+pub fn encode(self: *const ProtoInstr, maybe_queue: ?*bytecode.BlockVisitorQueue, upvalue_fixups: ?*const bytecode.UpvalueFixupMap, local_fixups: *const bytecode.LocalFixupMap, encoder: *binary.Encoder) binary.Encoder.Error!void {
     try encoder.ensureAligned(core.BYTECODE_ALIGNMENT);
 
     // Cancellation locations do not encode any bytes to the stream, they simply bind a binary.Fixup location
@@ -60,7 +56,7 @@ pub fn encode(self: *const ProtoInstr, maybe_queue: ?*BlockVisitorQueue, upvalue
 
     // We fix up the local and upvalue stack-relative addresses here, before encoding bytes to the stream
     if (self.instruction.code.isAddr()) is_addr: {
-        const addr_code: Instruction.AddrOpCode = @enumFromInt(@intFromEnum(self.instruction.code));
+        const addr_code: bytecode.Instruction.AddrOpCode = @enumFromInt(@intFromEnum(self.instruction.code));
 
         switch (addr_code) {
             .addr_l => {
@@ -117,7 +113,7 @@ pub fn encode(self: *const ProtoInstr, maybe_queue: ?*BlockVisitorQueue, upvalue
                         return error.BadEncoding;
                     }
 
-                    const then_bit_offset = @bitOffsetOf(Instruction.operand_sets.br, "I") + @bitSizeOf(Instruction.OpCode);
+                    const then_bit_offset = @bitOffsetOf(bytecode.Instruction.operand_sets.br, "I") + @bitSizeOf(bytecode.Instruction.OpCode);
 
                     try encoder.bindFixup(
                         .relative_words,
@@ -132,8 +128,8 @@ pub fn encode(self: *const ProtoInstr, maybe_queue: ?*BlockVisitorQueue, upvalue
                     if (maybe_else_id) |else_id| {
                         const else_dest = encoder.localLocationId(else_id);
 
-                        const then_bit_offset = @bitOffsetOf(Instruction.operand_sets.br_if, "Ix") + @bitSizeOf(Instruction.OpCode);
-                        const else_bit_offset = @bitOffsetOf(Instruction.operand_sets.br_if, "Iy") + @bitSizeOf(Instruction.OpCode);
+                        const then_bit_offset = @bitOffsetOf(bytecode.Instruction.operand_sets.br_if, "Ix") + @bitSizeOf(bytecode.Instruction.OpCode);
+                        const else_bit_offset = @bitOffsetOf(bytecode.Instruction.operand_sets.br_if, "Iy") + @bitSizeOf(bytecode.Instruction.OpCode);
 
                         try encoder.bindFixup(
                             .relative_words,

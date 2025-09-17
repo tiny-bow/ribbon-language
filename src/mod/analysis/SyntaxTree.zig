@@ -1,4 +1,5 @@
-/// A concrete syntax tree node yielded by a parser.
+//! A language-agnostic concrete syntax tree node yielded by a parser.
+
 const SyntaxTree = @This();
 
 const std = @import("std");
@@ -7,8 +8,6 @@ const log = std.log.scoped(.syntax_tree);
 const common = @import("common");
 
 const analysis = @import("../analysis.zig");
-const Source = analysis.Source;
-const Token = analysis.Token;
 
 test {
     // std.debug.print("semantic analysis for SyntaxTree\n", .{});
@@ -22,13 +21,13 @@ pub const Type = common.Id.of(SyntaxTree, 16);
 pub const Buffer = common.Buffer.of(SyntaxTree, .constant);
 
 /// The source location where the expression began.
-source: Source,
+source: analysis.Source,
 /// The source precedence of this expression.
 precedence: i16,
 /// The type of the expression.
 type: Type,
 /// The token that generated this expression.
-token: Token,
+token: analysis.Token,
 /// Subexpressions of this expression, if any.
 operands: Buffer,
 

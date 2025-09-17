@@ -1,12 +1,9 @@
 const std = @import("std");
 const common = @import("common");
 const core = @import("core");
+const analysis = @import("analysis");
 
 const ml = @import("../meta_language.zig");
-const Expr = ml.Expr;
-
-const analysis = @import("analysis");
-const SyntaxTree = analysis.SyntaxTree;
 
 /// Immutable string type used in the meta-language.
 pub const IString = struct {};
@@ -127,8 +124,8 @@ pub const Value = packed struct(u64) {
                 *align(8) core.Bytecode, *align(8) const core.Bytecode => .bytecode,
                 *align(8) core.Builtin, *align(8) const core.Builtin => .builtin,
                 *align(8) IString, *align(8) const IString => .string,
-                *align(8) SyntaxTree, *align(8) const SyntaxTree => .cst,
-                *align(8) Expr, *align(8) const Expr => .expr,
+                *align(8) analysis.SyntaxTree, *align(8) const analysis.SyntaxTree => .cst,
+                *align(8) ml.Expr, *align(8) const ml.Expr => .expr,
                 else => @compileError("Value.Obj.fromPtrType: " ++ @typeName(T) ++ " is not a valid object pointer type"),
             };
         }
@@ -312,12 +309,12 @@ pub const Value = packed struct(u64) {
     }
 
     /// Construct a value from a concrete syntax tree payload.
-    pub fn fromCst(ptr: *SyntaxTree) Value {
+    pub fn fromCst(ptr: *analysis.SyntaxTree) Value {
         return Value.fromObjectPointer(.cst, @ptrCast(ptr));
     }
 
     /// Construct a value from a meta-language expression payload.
-    pub fn fromExpr(ptr: *Expr) Value {
+    pub fn fromExpr(ptr: *ml.Expr) Value {
         return Value.fromObjectPointer(.expr, @ptrCast(ptr));
     }
 
@@ -596,14 +593,14 @@ pub const Value = packed struct(u64) {
     }
 
     /// Extract the cst payload of a value.
-    pub fn asCst(self: Value) ?*SyntaxTree {
+    pub fn asCst(self: Value) ?*analysis.SyntaxTree {
         if (!self.isCst()) return null;
 
         return @ptrCast(@alignCast(self.val_bits.forceObject()));
     }
 
     /// Extract the expr payload of a value.
-    pub fn asExpr(self: Value) ?*Expr {
+    pub fn asExpr(self: Value) ?*ml.Expr {
         if (!self.isExpr()) return null;
 
         return @ptrCast(@alignCast(self.val_bits.forceObject()));
@@ -706,7 +703,7 @@ pub const Value = packed struct(u64) {
 
     /// Extract the cst payload of a value. See also `asCst`.
     /// * only checked in safe modes
-    pub fn forceCst(self: Value) *SyntaxTree {
+    pub fn forceCst(self: Value) *analysis.SyntaxTree {
         std.debug.assert(self.isCst());
 
         return @ptrCast(@alignCast(self.val_bits.forceObject()));
@@ -714,7 +711,7 @@ pub const Value = packed struct(u64) {
 
     /// Extract the expression payload of a value. See also `asExpr`.
     /// * only checked in safe modes
-    pub fn forceExpr(self: Value) *Expr {
+    pub fn forceExpr(self: Value) *ml.Expr {
         std.debug.assert(self.isExpr());
 
         return @ptrCast(@alignCast(self.val_bits.forceObject()));

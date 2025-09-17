@@ -8,8 +8,6 @@ const core = @import("core");
 const binary = @import("binary");
 
 const common = @import("common");
-const Id = common.Id;
-const AllocWriter = common.AllocWriter;
 
 const bytecode = @import("../bytecode.zig");
 
@@ -23,7 +21,7 @@ gpa: std.mem.Allocator,
 /// Arena allocator for user data.
 arena: std.mem.Allocator,
 /// The writer for the data builder's buffer.
-writer: AllocWriter,
+writer: common.AllocWriter,
 /// The id of the data builder, used to reference it in the bytecode header.
 /// * This must either be a `core.ConstantId` or a `core.GlobalId`.
 id: core.StaticId = .fromInt(0),
@@ -46,7 +44,7 @@ symbol_kind: core.SymbolKind = .constant,
 pub const DLoc = struct {};
 
 /// Represents a location in the data builder's memory that is yet to be determined when the location is initially referenced.
-pub const DataLocation = Id.of(DLoc, core.STATIC_ID_BITS);
+pub const DataLocation = common.Id.of(DLoc, core.STATIC_ID_BITS);
 
 /// Data fixups are distinct from standard fixups in that:
 /// * `from` is always an binary.Offset into their own temporary memory, rather than an binary.Encoder's working buffer
@@ -82,7 +80,7 @@ pub fn init(gpa: std.mem.Allocator, arena: std.mem.Allocator) DataBuilder {
     return .{
         .gpa = gpa,
         .arena = arena,
-        .writer = AllocWriter.init(gpa),
+        .writer = common.AllocWriter.init(gpa),
     };
 }
 
@@ -303,83 +301,83 @@ pub fn relativeToPointer(self: *const DataBuilder, comptime T: type, relative: b
 }
 
 /// Reallocate the data builder's memory as necessary to support the given capacity.
-pub fn ensureCapacity(self: *DataBuilder, cap: u64) AllocWriter.Error!void {
+pub fn ensureCapacity(self: *DataBuilder, cap: u64) common.AllocWriter.Error!void {
     return self.writer.ensureCapacity(cap);
 }
 
 /// Reallocate the data builder's memory as necessary to support the given additional capacity.
-pub fn ensureAdditionalCapacity(self: *DataBuilder, additional: u64) AllocWriter.Error!void {
+pub fn ensureAdditionalCapacity(self: *DataBuilder, additional: u64) common.AllocWriter.Error!void {
     return self.writer.ensureAdditionalCapacity(additional);
 }
 
 /// Allocates an aligned byte buffer from the address space of the data builder.
-pub fn alignedAlloc(self: *DataBuilder, alignment: core.Alignment, len: usize) AllocWriter.Error![]u8 {
+pub fn alignedAlloc(self: *DataBuilder, alignment: core.Alignment, len: usize) common.AllocWriter.Error![]u8 {
     return self.writer.alignedAlloc(alignment, len);
 }
 
 /// Same as `std.mem.Allocator.alloc`, but allocates from the address space of the data builder.
-pub fn alloc(self: *DataBuilder, comptime T: type, len: usize) AllocWriter.Error![]T {
+pub fn alloc(self: *DataBuilder, comptime T: type, len: usize) common.AllocWriter.Error![]T {
     return self.writer.alloc(T, len);
 }
 
 /// Same as `alloc`, but returns a binary.RelativeAddress instead of a pointer.
-pub fn allocRel(self: *DataBuilder, comptime T: type, len: usize) AllocWriter.Error!binary.RelativeAddress {
+pub fn allocRel(self: *DataBuilder, comptime T: type, len: usize) common.AllocWriter.Error!binary.RelativeAddress {
     return self.writer.allocRel(T, len);
 }
 
 /// Same as `std.mem.Allocator.dupe`, but copies a slice into the address space of the data builder.
-pub fn dupe(self: *DataBuilder, comptime T: type, slice: []const T) AllocWriter.Error![]T {
+pub fn dupe(self: *DataBuilder, comptime T: type, slice: []const T) common.AllocWriter.Error![]T {
     return self.writer.dupe(T, slice);
 }
 
 /// Same as `dupe`, but returns a binary.RelativeAddress instead of a pointer.
-pub fn dupeRel(self: *DataBuilder, comptime T: type, slice: []const T) AllocWriter.Error!binary.RelativeAddress {
+pub fn dupeRel(self: *DataBuilder, comptime T: type, slice: []const T) common.AllocWriter.Error!binary.RelativeAddress {
     return self.writer.dupeRel(T, slice);
 }
 
 /// Same as `std.mem.Allocator.create`, but allocates from the address space of the data builder.
-pub fn create(self: *DataBuilder, comptime T: type) AllocWriter.Error!*T {
+pub fn create(self: *DataBuilder, comptime T: type) common.AllocWriter.Error!*T {
     return self.writer.create(T);
 }
 
 /// Same as `create`, but returns a binary.RelativeAddress instead of a pointer.
-pub fn createRel(self: *DataBuilder, comptime T: type) AllocWriter.Error!binary.RelativeAddress {
+pub fn createRel(self: *DataBuilder, comptime T: type) common.AllocWriter.Error!binary.RelativeAddress {
     return self.writer.createRel(T);
 }
 
 /// Same as `create`, but takes an initializer.
-pub fn clone(self: *DataBuilder, value: anytype) AllocWriter.Error!*@TypeOf(value) {
+pub fn clone(self: *DataBuilder, value: anytype) common.AllocWriter.Error!*@TypeOf(value) {
     return self.writer.clone(value);
 }
 
 /// Same as `create`, but returns a binary.RelativeAddress instead of a pointer.
-pub fn cloneRel(self: *DataBuilder, value: anytype) AllocWriter.Error!binary.RelativeAddress {
+pub fn cloneRel(self: *DataBuilder, value: anytype) common.AllocWriter.Error!binary.RelativeAddress {
     return self.writer.cloneRel(value);
 }
 
 /// Writes as much of a slice of bytes to the data builder as will fit without an allocation.
 /// Returns the number of bytes written.
-pub fn write(self: *DataBuilder, noalias bytes: []const u8) AllocWriter.Error!usize {
+pub fn write(self: *DataBuilder, noalias bytes: []const u8) common.AllocWriter.Error!usize {
     return self.writer.write(bytes);
 }
 
 /// Writes all bytes from a slice to the data builder.
-pub fn writeAll(self: *DataBuilder, bytes: []const u8) AllocWriter.Error!void {
+pub fn writeAll(self: *DataBuilder, bytes: []const u8) common.AllocWriter.Error!void {
     return self.writer.writeAll(bytes);
 }
 
 /// Writes a single byte to the data builder.
-pub fn writeByte(self: *DataBuilder, byte: u8) AllocWriter.Error!void {
+pub fn writeByte(self: *DataBuilder, byte: u8) common.AllocWriter.Error!void {
     return self.writer.writeByte(byte);
 }
 
 /// Writes a byte to the data builder `n` times.
-pub fn writeByteNTimes(self: *DataBuilder, byte: u8, n: usize) AllocWriter.Error!void {
+pub fn writeByteNTimes(self: *DataBuilder, byte: u8, n: usize) common.AllocWriter.Error!void {
     return self.writer.writeByteNTimes(byte, n);
 }
 
 /// Writes a slice of bytes to the data builder `n` times.
-pub fn writeBytesNTimes(self: *DataBuilder, bytes: []const u8, n: usize) AllocWriter.Error!void {
+pub fn writeBytesNTimes(self: *DataBuilder, bytes: []const u8, n: usize) common.AllocWriter.Error!void {
     return self.writer.writeBytesNTimes(bytes, n);
 }
 
@@ -390,7 +388,7 @@ pub fn writeInt(
     comptime T: type,
     value: T,
     comptime _: enum { little }, // allows backward compat with writer api; but only in provably compatible use-cases
-) AllocWriter.Error!void {
+) common.AllocWriter.Error!void {
     return self.writer.writeInt(T, value, .little);
 }
 
@@ -401,7 +399,7 @@ pub fn writeInt(
 pub fn writeValue(
     self: *DataBuilder,
     value: anytype,
-) AllocWriter.Error!void {
+) common.AllocWriter.Error!void {
     const T = @TypeOf(value);
 
     if (comptime !std.meta.hasUniqueRepresentation(T)) {
@@ -413,7 +411,7 @@ pub fn writeValue(
 }
 
 /// Pushes zero bytes (if necessary) to align the current offset of the builder to the provided alignment value.
-pub fn alignTo(self: *DataBuilder, alignment: core.Alignment) AllocWriter.Error!void {
+pub fn alignTo(self: *DataBuilder, alignment: core.Alignment) common.AllocWriter.Error!void {
     const delta = common.alignDelta(self.writer.cursor, alignment);
     try self.writer.writeByteNTimes(0, delta);
 }

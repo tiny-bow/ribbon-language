@@ -3,11 +3,8 @@
 const backend = @This();
 
 const std = @import("std");
-const ir = @import("ir");
 const core = @import("core");
-const bytecode = @import("bytecode");
 const common = @import("common");
-const Id = common.Id;
 
 pub const PeepholePass = @import("backend/PeepholePass.zig");
 pub const BytecodeTarget = @import("backend/BytecodeTarget.zig");
@@ -19,7 +16,7 @@ test {
     std.testing.refAllDecls(@This());
 }
 
-pub const ArtifactId = Id.of(core.ForeignAddressId, 64);
+pub const ArtifactId = common.Id.of(core.ForeignAddressId, 64);
 
 pub const Artifact = packed struct {
     id: ArtifactId,

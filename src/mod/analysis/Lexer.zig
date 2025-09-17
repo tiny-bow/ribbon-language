@@ -1,3 +1,5 @@
+//! Language agnostic lexer implementation.
+
 const Lexer = @This();
 
 const std = @import("std");
@@ -7,8 +9,6 @@ const rg = @import("rg");
 const common = @import("common");
 
 const analysis = @import("../analysis.zig");
-const Token = analysis.Token;
-const Source = analysis.Source;
 
 test {
     // std.debug.print("semantic analysis for Lexer\n", .{});
@@ -66,7 +66,7 @@ pub const CodepointIterator = struct {
 };
 
 /// Lexical analysis abstraction with one token lookahead.
-pub const Peekable = common.PeekableIterator(Lexer, Token, .use_try(Error));
+pub const Peekable = common.PeekableIterator(Lexer, analysis.Token, .use_try(Error));
 
 /// Create a new lexer for a given source, allowing single token lookahead.
 pub fn lexWithPeek(
@@ -116,7 +116,7 @@ levels_queued: i16 = 0,
 br_queued: bool = false,
 done: bool = false,
 /// The current location in the source code.
-location: Source.Location,
+location: analysis.Source.Location,
 
 /// Lexical analysis settings.
 pub const Settings = struct {
@@ -125,7 +125,7 @@ pub const Settings = struct {
     startingIndent: Level = 0,
     /// The offset to apply to the visual position (line and column) of the lexer,
     /// when creating token locations.
-    attrOffset: Source.VisualPosition = .{},
+    attrOffset: analysis.Source.VisualPosition = .{},
 };
 
 /// Initialize a new lexer for a given
@@ -136,7 +136,7 @@ pub fn init(settings: Settings, text: []const u8) error{BadEncoding}!Lexer {
         .source = text,
         .iterator = try .from(.from(text)),
         .indentation = [1]Level{settings.startingIndent} ++ ([1]Level{0} ** (MAX_LEVELS - 1)),
-        .location = Source.Location{
+        .location = analysis.Source.Location{
             .visual = settings.attrOffset,
         },
     };
@@ -185,10 +185,10 @@ pub fn currentIndentation(self: *const Lexer) u32 {
 }
 
 /// Get the next token from the lexer's source code.
-pub fn next(self: *Lexer) Error!?Token {
+pub fn next(self: *Lexer) Error!?analysis.Token {
     var start = self.location;
 
-    var tag: Token.Type = undefined;
+    var tag: analysis.Token.Type = undefined;
 
     if (self.levels_queued != 0) {
         log.debug("processing queued indentation level {d}", .{self.levels_queued});
@@ -197,20 +197,20 @@ pub fn next(self: *Lexer) Error!?Token {
             self.levels = self.levels + 1;
             self.levels_queued = self.levels_queued - 1;
 
-            return Token{
+            return analysis.Token{
                 .location = start,
                 .tag = .indentation,
-                .data = Token.Data{ .indentation = .indent },
+                .data = analysis.Token.Data{ .indentation = .indent },
             };
         } else {
             self.levels = self.levels - 1;
             self.levels_queued = self.levels_queued + 1;
             self.br_queued = true;
 
-            return Token{
+            return analysis.Token{
                 .location = start,
                 .tag = .indentation,
-                .data = Token.Data{ .indentation = .unindent },
+                .data = analysis.Token.Data{ .indentation = .unindent },
             };
         }
     } else if (self.br_queued) {
@@ -218,10 +218,10 @@ pub fn next(self: *Lexer) Error!?Token {
 
         self.br_queued = false;
 
-        return Token{
+        return analysis.Token{
             .location = start,
             .tag = .linebreak,
-            .data = Token.Data{ .linebreak = {} },
+            .data = analysis.Token.Data{ .linebreak = {} },
         };
     }
 
@@ -233,10 +233,10 @@ pub fn next(self: *Lexer) Error!?Token {
 
             if (self.levels_queued == 0) self.br_queued = true;
 
-            return Token{
+            return analysis.Token{
                 .location = start,
                 .tag = .indentation,
-                .data = Token.Data{ .indentation = .unindent },
+                .data = analysis.Token.Data{ .indentation = .unindent },
             };
         } else {
             log.debug("EOF with no extraneous indentation levels", .{});
@@ -275,7 +275,7 @@ pub fn next(self: *Lexer) Error!?Token {
                 self.levels += 1;
 
                 tag = .indentation;
-                break :char_switch Token.Data{ .indentation = .indent };
+                break :char_switch analysis.Token.Data{ .indentation = .indent };
             } else if (newIndent < oldIndent) {
                 // we need to traverse back down the indentation stack until we find the right level
                 var newIndentIndex = self.levels - 1;
@@ -303,29 +303,29 @@ pub fn next(self: *Lexer) Error!?Token {
                 if (self.levels_queued == 0) self.br_queued = true;
 
                 tag = .indentation;
-                break :char_switch Token.Data{ .indentation = .unindent };
+                break :char_switch analysis.Token.Data{ .indentation = .unindent };
             } else {
                 log.debug("same indentation level {d} ({d})", .{ self.levels - 1, n });
 
                 tag = .linebreak;
-                break :char_switch Token.Data{ .linebreak = {} };
+                break :char_switch analysis.Token.Data{ .linebreak = {} };
             }
         },
         '\\' => {
             tag = .special;
             if (try self.peekChar()) |pk| {
-                if (Token.Punctuation.castChar(pk)) |esc| {
+                if (analysis.Token.Punctuation.castChar(pk)) |esc| {
                     try self.advanceChar();
 
                     log.debug("escaped punctuation", .{});
 
-                    break :char_switch Token.Data{ .special = .{ .punctuation = esc, .escaped = true } };
+                    break :char_switch analysis.Token.Data{ .special = .{ .punctuation = esc, .escaped = true } };
                 }
             }
 
             log.debug("unescaped backslash character", .{});
 
-            break :char_switch Token.Data{ .special = .{ .punctuation = .fromChar('\\'), .escaped = false } };
+            break :char_switch analysis.Token.Data{ .special = .{ .punctuation = .fromChar('\\'), .escaped = false } };
         },
         else => |x| {
             if (rg.isSpace(@intCast(x))) {
@@ -342,10 +342,10 @@ pub fn next(self: *Lexer) Error!?Token {
 
                         if (self.levels_queued == 0) self.br_queued = true;
 
-                        return Token{
+                        return analysis.Token{
                             .location = start,
                             .tag = .indentation,
-                            .data = Token.Data{
+                            .data = analysis.Token.Data{
                                 .indentation = .unindent,
                             },
                         };
@@ -362,12 +362,12 @@ pub fn next(self: *Lexer) Error!?Token {
                 return error.UnexpectedInput;
             }
 
-            if (Token.Punctuation.castChar(@intCast(x))) |p| {
+            if (analysis.Token.Punctuation.castChar(@intCast(x))) |p| {
                 tag = .special;
 
                 log.debug("punctuation {u} (0x{x:0>2})", .{ p.toChar(), p.toChar() });
 
-                break :char_switch Token.Data{ .special = .{ .punctuation = p, .escaped = false } };
+                break :char_switch analysis.Token.Data{ .special = .{ .punctuation = p, .escaped = false } };
             }
 
             tag = .sequence;
@@ -375,7 +375,7 @@ pub fn next(self: *Lexer) Error!?Token {
             log.debug("processing sequence", .{});
 
             symbol_loop: while (try self.peekChar()) |pk| {
-                if (rg.isSpace(@intCast(pk)) or rg.isControl(@intCast(pk)) or Token.Punctuation.includesChar(@intCast(pk))) {
+                if (rg.isSpace(@intCast(pk)) or rg.isControl(@intCast(pk)) or analysis.Token.Punctuation.includesChar(@intCast(pk))) {
                     log.debug("ending sequence at {u} (0x{x:0>2})", .{ pk, pk });
                     break :symbol_loop;
                 }
@@ -395,11 +395,11 @@ pub fn next(self: *Lexer) Error!?Token {
 
             log.debug("sequence {s}", .{seq});
 
-            break :char_switch Token.Data{ .sequence = .fromSlice(seq) };
+            break :char_switch analysis.Token.Data{ .sequence = .fromSlice(seq) };
         },
     };
 
-    return Token{
+    return analysis.Token{
         .location = start,
         .tag = tag,
         .data = data,

@@ -10,8 +10,6 @@ const core = @import("core");
 const common = @import("common");
 
 const bytecode = @import("../bytecode.zig");
-const SymbolTableBuilder = bytecode.SymbolTableBuilder;
-const AddressTableBuilder = bytecode.AddressTableBuilder;
 
 test {
     // std.debug.print("semantic analysis for bytecode HeaderBuilder\n", .{});
@@ -19,9 +17,9 @@ test {
 }
 
 /// Binds *fully-qualified* names to AddressTable ids
-symbol_table: SymbolTableBuilder = .{},
+symbol_table: bytecode.SymbolTableBuilder = .{},
 /// Binds bytecode ids to addresses for the function being compiled
-address_table: AddressTableBuilder = .{},
+address_table: bytecode.AddressTableBuilder = .{},
 
 /// Get the id the next address table entry will be bound to.
 pub fn getNextId(self: *HeaderBuilder) core.StaticId {
@@ -47,7 +45,7 @@ pub fn bindAddress(
     self: *HeaderBuilder,
     allocator: std.mem.Allocator,
     kind: core.SymbolKind,
-    address: AddressTableBuilder.Entry,
+    address: bytecode.AddressTableBuilder.Entry,
 ) error{OutOfMemory}!core.StaticId {
     return self.address_table.bind(allocator, kind, address);
 }
@@ -68,7 +66,7 @@ pub fn bindExportAddress(
     allocator: std.mem.Allocator,
     name: []const u8,
     kind: core.SymbolKind,
-    address: AddressTableBuilder.Entry,
+    address: bytecode.AddressTableBuilder.Entry,
 ) error{ BadEncoding, OutOfMemory }!core.StaticId {
     const id = try self.bindAddress(allocator, kind, address);
     try self.exportStatic(allocator, name, id);

@@ -15,7 +15,7 @@ const log = std.log.scoped(.Rir);
 
 const core = @import("core");
 const common = @import("common");
-const Source = @import("analysis").Source;
+const analysis = @import("analysis");
 const bytecode = @import("bytecode");
 
 pub const Root = @import("ir/Root.zig");
@@ -82,7 +82,7 @@ pub const Data = union {
     /// A symbolic name, such as a variable name or a function name.
     name: []const u8,
     /// A source location.
-    source: Source,
+    source: analysis.Source,
     /// Arbitrary data, such as a string body.
     buffer: common.ArrayList(u8),
 
@@ -748,13 +748,13 @@ pub const NameHasher = struct {
 /// 64-bit context providing eql and hash functions for `Node` and `Source` types.
 /// This is used by the interner to map constant value nodes to their references.
 pub const SourceHasher = struct {
-    pub fn eql(a: Source, b: Node) bool {
+    pub fn eql(a: analysis.Source, b: Node) bool {
         if (b.kind != NodeKind.data(.source)) return false;
 
         return a.eql(&b.content.source);
     }
 
-    pub fn hash(n: Source) u64 {
+    pub fn hash(n: analysis.Source) u64 {
         var hasher = std.hash.Fnv1a_64.init();
         hasher.update(std.mem.asBytes(&ir.NodeKind.data(.source)));
         n.hash(&hasher);

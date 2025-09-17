@@ -3,13 +3,8 @@
 const bytecode = @This();
 
 const std = @import("std");
-const log = std.log.scoped(.bytecode);
-
 const common = @import("common");
 const core = @import("core");
-const Id = common.Id;
-const Buffer = common.Buffer;
-const AllocWriter = common.AllocWriter;
 const binary = @import("binary");
 
 pub const Instruction = @import("Instruction");

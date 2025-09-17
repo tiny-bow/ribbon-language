@@ -10,7 +10,6 @@ const log = std.log.scoped(.bytecode_decoder);
 const core = @import("core");
 
 const bytecode = @import("../bytecode.zig");
-const Instruction = bytecode.Instruction;
 
 test {
     // std.debug.print("semantic analysis for bytecode Decoder\n", .{});
@@ -25,7 +24,7 @@ ip: u64 = 0,
 /// A decoded instruction with its trailing operands.
 pub const Item = struct {
     /// The actual decoded instruction.
-    instruction: Instruction,
+    instruction: bytecode.Instruction,
     /// Any trailing operands that are not part of the instruction's main word.
     trailing: Trailing,
 
@@ -35,11 +34,11 @@ pub const Item = struct {
 
         try writer.print("{s}", .{@tagName(self.instruction.code)});
 
-        inline for (comptime std.meta.fieldNames(Instruction.OpCode)) |opcode_name| {
-            const code = comptime @field(Instruction.OpCode, opcode_name);
+        inline for (comptime std.meta.fieldNames(bytecode.Instruction.OpCode)) |opcode_name| {
+            const code = comptime @field(bytecode.Instruction.OpCode, opcode_name);
 
             if (code == self.instruction.code) {
-                const Set = comptime Instruction.OperandSet(code);
+                const Set = comptime bytecode.Instruction.OperandSet(code);
                 const operands = &@field(self.instruction.data, opcode_name);
 
                 inline for (comptime std.meta.fieldNames(Set)) |operand_name| {
@@ -99,7 +98,7 @@ pub const Trailing = union(enum) {
     /// Trailing operand is a wide immediate value, decoded as `Decoder.Imm`.
     wide_imm: Imm,
 
-    fn show(self: Trailing, code: Instruction.OpCode, writer: *std.io.Writer) !void {
+    fn show(self: Trailing, code: bytecode.Instruction.OpCode, writer: *std.io.Writer) !void {
         switch (self) {
             .none => {},
             .call_args => |args| {
@@ -131,7 +130,7 @@ pub const Imm = union(enum) {
     /// 64 bits of the immediate word were used by the trailing operand.
     word: u64,
 
-    fn show(self: Imm, code: Instruction.OpCode, writer: *std.io.Writer) !void {
+    fn show(self: Imm, code: bytecode.Instruction.OpCode, writer: *std.io.Writer) !void {
         const name = code.wideOperandName() orelse "UnexpectedImm";
         switch (self) {
             .byte => |operand| try writer.print(" .. {s}:{x:0>2}", .{ name, operand }),
@@ -157,7 +156,7 @@ pub fn next(self: *Decoder) error{BadEncoding}!?Item {
     if (self.ip < self.instructions.len) {
         // create the item that will be returned this iteration
         var item = Item{
-            .instruction = Instruction.fromBits(self.instructions[self.ip]),
+            .instruction = bytecode.Instruction.fromBits(self.instructions[self.ip]),
             .trailing = Trailing.none,
         };
 

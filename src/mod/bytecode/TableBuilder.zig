@@ -10,14 +10,8 @@ const binary = @import("binary");
 const core = @import("core");
 
 const common = @import("common");
-const Id = common.Id;
 
 const bytecode = @import("../bytecode.zig");
-const Table = bytecode.Table;
-const HeaderBuilder = bytecode.HeaderBuilder;
-const FunctionBuilder = bytecode.FunctionBuilder;
-const DataBuilder = bytecode.DataBuilder;
-const HandlerSetBuilder = bytecode.HandlerSetBuilder;
 
 test {
     // std.debug.print("semantic analysis for bytecode TableBuilder\n", .{});
@@ -31,14 +25,14 @@ arena: std.heap.ArenaAllocator,
 /// The location map for fixups and relative addresses.
 locations: binary.LocationMap,
 /// The header builder for the bytecode unit.
-header: HeaderBuilder = .{},
+header: bytecode.HeaderBuilder = .{},
 /// Static value builders owned by this table.
 statics: StaticMap = .empty,
 
 /// A map of static values that are referenced by the header in a `TableBuilder`.
 pub const StaticMap = common.UniqueReprMap(core.StaticId, Entry);
 
-/// An entry in the `TableBuilder.statics` map, which can either be a `DataBuilder` or a `FunctionBuilder`.
+/// An entry in the `TableBuilder.statics` map.
 pub const Entry = struct {
     /// The location of the function in the
     location: binary.Location,
@@ -50,11 +44,11 @@ pub const Entry = struct {
         /// Designates an intentional lack of an attached builder.
         external: void,
         /// A builder for a function.
-        function: *FunctionBuilder,
+        function: *bytecode.FunctionBuilder,
         /// A builder for a constant or global data value.
-        data: *DataBuilder,
+        data: *bytecode.DataBuilder,
         /// A builder for an effect handler set.
-        handler_set: *HandlerSetBuilder,
+        handler_set: *bytecode.HandlerSetBuilder,
         /// An effect identity.
         effect: core.Effect,
         /// A builtin identity.
@@ -78,7 +72,7 @@ pub const Entry = struct {
 /// * `identifier` should be any integer that is not also provided to another table builder in the same compilation environment;
 ///   `null` may be passed if there will only be one table builder in the current compilation environment
 pub fn init(allocator: std.mem.Allocator, identifier: ?u32) TableBuilder {
-    const id: Id.of(TableBuilder, 32) = if (identifier) |i| .fromInt(i) else @enumFromInt(0xAAAA_AAAA);
+    const id: common.Id.of(TableBuilder, 32) = if (identifier) |i| .fromInt(i) else @enumFromInt(0xAAAA_AAAA);
     return TableBuilder{ .gpa = allocator, .arena = .init(allocator), .locations = .init(allocator, id) };
 }
 
@@ -145,14 +139,14 @@ pub fn createHeaderEntry(self: *TableBuilder, comptime kind: core.SymbolKind, na
     return typed_id;
 }
 
-/// Bind a new `FunctionBuilder` to an id.
+/// Bind a new `bytecode.FunctionBuilder` to an id.
 /// * A fresh `id` can be created with `createHeaderEntry`.
 /// * Note that the returned pointer is owned by the `TableBuilder` and should not be deinitialized manually.
 /// * Use `getFunctionBuilder` to retrieve the pointer to the function builder by its id (available as a field of the builder).
 pub fn createFunctionBuilder(
     self: *TableBuilder,
     id: core.FunctionId,
-) error{ BadEncoding, OutOfMemory }!*FunctionBuilder {
+) error{ BadEncoding, OutOfMemory }!*bytecode.FunctionBuilder {
     // if we're not tracking this id we can't create a builder for it
     const entry = self.statics.getPtr(id.cast(anyopaque)) orelse {
         log.debug("TableBuilder.createFunctionBuilder: {f} does not exist", .{id});
@@ -171,9 +165,9 @@ pub fn createFunctionBuilder(
         old_builder.deinit();
 
         break :existing old_builder.function;
-    } else try self.arena.allocator().create(FunctionBuilder);
+    } else try self.arena.allocator().create(bytecode.FunctionBuilder);
 
-    addr.* = FunctionBuilder.init(self.gpa, self.arena.allocator());
+    addr.* = bytecode.FunctionBuilder.init(self.gpa, self.arena.allocator());
 
     addr.id = id;
 
@@ -183,7 +177,7 @@ pub fn createFunctionBuilder(
     return addr;
 }
 
-/// Bind a new `DataBuilder` to an id.
+/// Bind a new `bytecode.DataBuilder` to an id.
 /// * `id` should be a `core.ConstantId` or `core.GlobalId`.
 /// * A fresh `id` can be created with `createHeaderEntry`.
 /// * Note that the returned pointer is owned by the `TableBuilder` and should not be deinitialized manually.
@@ -191,7 +185,7 @@ pub fn createFunctionBuilder(
 pub fn createDataBuilder(
     self: *TableBuilder,
     id: anytype,
-) error{ BadEncoding, OutOfMemory }!*DataBuilder {
+) error{ BadEncoding, OutOfMemory }!*bytecode.DataBuilder {
     const static_id = id.cast(anyopaque);
 
     // if we're not tracking this id we can't create a builder for it
@@ -212,9 +206,9 @@ pub fn createDataBuilder(
         old_builder.deinit();
 
         break :existing old_builder.data;
-    } else try self.arena.allocator().create(DataBuilder);
+    } else try self.arena.allocator().create(bytecode.DataBuilder);
 
-    addr.* = DataBuilder.init(self.gpa, self.arena.allocator());
+    addr.* = bytecode.DataBuilder.init(self.gpa, self.arena.allocator());
 
     addr.id = static_id;
     addr.symbol_kind = entry.kind;
@@ -225,11 +219,11 @@ pub fn createDataBuilder(
     return addr;
 }
 
-/// Bind a new `HandlerSetBuilder` to an id.
+/// Bind a new `bytecode.HandlerSetBuilder` to an id.
 /// * A fresh `id` can be created with `createHeaderEntry`.
 /// * Note that the returned pointer is owned by the `TableBuilder` and should not be deinitialized manually.
 /// * Use `getHandlerSetBuilder` to retrieve the pointer to the function builder by its id (available as a field of the builder).
-pub fn createHandlerSet(self: *TableBuilder, id: core.HandlerSetId) error{ BadEncoding, OutOfMemory }!*HandlerSetBuilder {
+pub fn createHandlerSet(self: *TableBuilder, id: core.HandlerSetId) error{ BadEncoding, OutOfMemory }!*bytecode.HandlerSetBuilder {
     // if we're not tracking this id we can't create a builder for it
     const entry = self.statics.getPtr(id.cast(anyopaque)) orelse {
         log.debug("TableBuilder.createHandlerSetBuilder: {f} does not exist", .{id});
@@ -248,9 +242,9 @@ pub fn createHandlerSet(self: *TableBuilder, id: core.HandlerSetId) error{ BadEn
         old_builder.deinit();
 
         break :existing old_builder.handler_set;
-    } else try self.arena.allocator().create(HandlerSetBuilder);
+    } else try self.arena.allocator().create(bytecode.HandlerSetBuilder);
 
-    addr.* = HandlerSetBuilder.init(self.gpa, self.arena.allocator());
+    addr.* = bytecode.HandlerSetBuilder.init(self.gpa, self.arena.allocator());
 
     addr.id = id;
 
@@ -318,7 +312,7 @@ pub fn bindBuiltinProcedure(self: *TableBuilder, id: core.BuiltinId, func: *cons
 }
 
 /// Get a function builder by its id.
-pub fn getFunctionBuilder(self: *const TableBuilder, id: core.FunctionId) ?*FunctionBuilder {
+pub fn getFunctionBuilder(self: *const TableBuilder, id: core.FunctionId) ?*bytecode.FunctionBuilder {
     const entry = self.statics.getPtr(id.cast(anyopaque)) orelse return null;
     if (entry.kind != .function) return null;
     return if (entry.content) |*builder| builder.function else null;
@@ -326,14 +320,14 @@ pub fn getFunctionBuilder(self: *const TableBuilder, id: core.FunctionId) ?*Func
 
 /// Get a data builder by its id.
 /// * `id` should be a `core.ConstantId` or `core.GlobalId`
-pub fn getDataBuilder(self: *const TableBuilder, id: anytype) ?*DataBuilder {
+pub fn getDataBuilder(self: *const TableBuilder, id: anytype) ?*bytecode.DataBuilder {
     const entry = self.statics.getPtr(id.cast(anyopaque)) orelse return null;
     if (entry.kind != .constant and entry.kind != .global) return null;
     return if (entry.content) |*builder| builder.data else null;
 }
 
 /// Get a handler set builder by its id.
-pub fn getHandlerSetBuilder(self: *const TableBuilder, id: core.HandlerSetId) ?*HandlerSetBuilder {
+pub fn getHandlerSetBuilder(self: *const TableBuilder, id: core.HandlerSetId) ?*bytecode.HandlerSetBuilder {
     const entry = self.statics.getPtr(id.cast(anyopaque)) orelse return null;
     if (entry.kind != .handler_set) return null;
     return if (entry.content) |*builder| builder.handler_set else null;
@@ -345,9 +339,9 @@ pub fn getStaticLocation(self: *const TableBuilder, id: core.StaticId) ?binary.L
     return entry.location;
 }
 
-/// Encode the current state of the Table.
-/// * `allocator` is used for the final `Table`.
-pub fn encode(self: *TableBuilder, allocator: std.mem.Allocator) binary.Encoder.Error!Table {
+/// Encode the current state of the bytecode.Table.
+/// * `allocator` is used for the final `bytecode.Table`.
+pub fn encode(self: *TableBuilder, allocator: std.mem.Allocator) binary.Encoder.Error!bytecode.Table {
     // Create the encoder with the provided allocator
     var encoder = try binary.Encoder.init(self.gpa, allocator, &self.locations);
     defer encoder.deinit();
@@ -408,8 +402,8 @@ pub fn encode(self: *TableBuilder, allocator: std.mem.Allocator) binary.Encoder.
 
     header.size += statics_size;
 
-    // Wrap the encoded header in a `core.Bytecode` structure, and that in a `Table` with the linker
-    return Table{
+    // Wrap the encoded header in a `core.Bytecode` structure, and that in a `bytecode.Table` with the linker
+    return bytecode.Table{
         .linker_map = linker_map,
         .bytecode = header,
     };
