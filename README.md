@@ -710,5 +710,5 @@ focused lead-developer time, as well as in the creation of accessible learning r
 <br>
 <hr>
 <br>
-<div align="center">💝</div>
+<h3 align="center">💝</h3>
 <br>
