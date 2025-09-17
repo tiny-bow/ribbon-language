@@ -5,6 +5,7 @@ const std = @import("std");
 const common = @import("../common.zig");
 
 test {
+    // std.debug.print("semantic analysis for Id\n", .{});
     std.testing.refAllDeclsRecursive(@This());
 }
 

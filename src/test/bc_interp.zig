@@ -8,6 +8,10 @@ const core = ribbon.core;
 const bytecode = ribbon.bytecode;
 const interpreter = ribbon.interpreter;
 
+// test {
+//     std.debug.print("bc_interp", .{});
+// }
+
 test "interpreter unconditional branch skips code" {
     const allocator = testing.allocator;
 

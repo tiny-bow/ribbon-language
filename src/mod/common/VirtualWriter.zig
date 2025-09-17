@@ -17,6 +17,7 @@ const std = @import("std");
 const log = std.log.scoped(.@"paged-writer");
 
 test {
+    // std.debug.print("semantic analysis for VirtualWriter\n", .{});
     std.testing.refAllDeclsRecursive(@This());
 }
 

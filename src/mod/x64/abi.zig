@@ -30,6 +30,7 @@ const core = @import("core");
 const assembler = @import("assembler");
 
 test {
+    // std.debug.print("semantic analysis for x64/abi\n", .{});
     std.testing.refAllDeclsRecursive(@This());
 }
 

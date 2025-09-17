@@ -3,6 +3,11 @@ const std = @import("std");
 
 const common = @import("../common.zig");
 
+test {
+    // std.debug.print("semantic analysis for Buffer\n", .{});
+    std.testing.refAllDecls(@This());
+}
+
 /// Immutable buffer of bytes.
 pub const Bytes = of(u8, .constant);
 

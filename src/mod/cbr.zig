@@ -13,6 +13,7 @@ const common = @import("common");
 const log = std.log.scoped(.cbr);
 
 test {
+    // std.debug.print("semantic analysis for cbr\n", .{});
     std.testing.refAllDecls(@This());
 }
 

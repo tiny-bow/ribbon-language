@@ -18,5 +18,6 @@ const std = @import("std");
 const log = std.log.scoped(.Instruction);
 
 test {
+    // std.debug.print("semantic analysis for Instruction\n", .{});
     std.testing.refAllDeclsRecursive(@This());
 }

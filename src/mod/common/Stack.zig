@@ -6,6 +6,7 @@ const std = @import("std");
 const log = std.log.scoped(.stack);
 
 test {
+    // std.debug.print("semantic analysis for Stack\n", .{});
     std.testing.refAllDeclsRecursive(@This());
 }
 
@@ -47,19 +48,19 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Creates room for `n` values on the top of the stack.
-        /// * does not test if the stack has space for the values
+        /// * does not check if the stack has space for the values
         pub fn increment(self: *Self, n: usize) void {
             self.top_ptr += n;
         }
 
         /// Removes `n` values from the top of the stack.
-        /// * does not test if the stack is deep enough
+        /// * does not check if the stack is deep enough
         pub fn decrement(self: *Self, n: usize) void {
             self.top_ptr -= n;
         }
 
         /// Creates room for a new value on the stack, returning a pointer to the location.
-        /// * does not test if the stack has space for the value
+        /// * does not check if the stack has space for the value
         pub fn allocPtr(self: *Self) *T {
             self.increment(1);
             return @ptrCast(self.top_ptr);
@@ -67,7 +68,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
 
         /// Creates room for `n` values on the stack, returning a slice of their location.
         /// * slice is a view into the stack's memory, the last element of the slice is the top of the stack
-        /// * does not test if the stack has space for the values
+        /// * does not check if the stack has space for the values
         pub fn allocSlice(self: *Self, n: usize) []T {
             const out = self.top_ptr[1 .. n + 1];
             self.increment(n);
@@ -75,7 +76,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Pushes a value onto the stack.
-        /// * does not test if the stack has space for the value
+        /// * does not check if the stack has space for the value
         pub fn push(self: *Self, value: T) void {
             const ptr = self.allocPtr();
             ptr.* = value;
@@ -83,7 +84,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
 
         /// Copies a slice onto the stack.
         /// * slice is mem-copied in order; the last element of the slice will be the new top of the stack
-        /// * does not test if the stack has space for the values
+        /// * does not check if the stack has space for the values
         pub fn pushSlice(self: *Self, src: []const T) void {
             const dst = self.allocSlice(src.len);
             @memcpy(dst, src);
@@ -91,7 +92,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
 
         /// Copies a slice onto the stack and returns the new stack version of it.
         /// * slice is mem-copied in order; the last element of the slice will be the new top of the stack
-        /// * does not test if the stack has space for the values
+        /// * does not check if the stack has space for the values
         pub fn createSlice(self: *Self, src: []const T) []T {
             const newSlice = self.allocSlice(src.len);
             @memcpy(newSlice, src);
@@ -99,7 +100,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Pushes a copy of a value onto the stack and returns a pointer to the pushed value.
-        /// * does not test if the stack has space for the value
+        /// * does not check if the stack has space for the value
         pub fn create(self: *Self, value: T) *T {
             const ptr = self.allocPtr();
             ptr.* = value;
@@ -107,7 +108,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Pops a value from the stack and returns a pointer to it.
-        /// * does not test if the stack is empty
+        /// * does not check if the stack is empty
         /// * the pointer returned is a view into the stack's memory,
         /// therefore it is only valid until the next vm operation
         pub fn popMultiPtr(self: *Self, n: usize) [*]T {
@@ -117,7 +118,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Pops `n` values from the stack and returns a slice of the popped values.
-        /// * does not test if the stack is deep enough
+        /// * does not check if the stack is deep enough
         /// * slice is a view into the stack's memory,
         /// therefore it is only valid until the next vm operation;
         /// * resulting slice will be in first-in order
@@ -128,7 +129,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Pops `out.len` values from the stack and copies them into `out`.
-        /// * does not test if the stack is deep enough
+        /// * does not check if the stack is deep enough
         /// * resulting slice will be in last-in order
         /// * See `popSlice` for non-copying, first-in version.
         pub fn popInto(self: *Self, out: []T) void {
@@ -139,7 +140,7 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Pops a value from the stack and returns a pointer to it.
-        /// * does not test if the stack is empty
+        /// * does not check if the stack is empty
         /// * the pointer returned is a view into the stack's memory,
         /// therefore it is only valid until the next vm operation
         pub fn popPtr(self: *Self) *T {
@@ -149,19 +150,19 @@ pub fn new(comptime T: type, comptime STACK_SIZE: comptime_int) type {
         }
 
         /// Pops a value from the stack and returns it by value.
-        /// * does not test if the stack is empty
+        /// * does not check if the stack is empty
         pub fn popValue(self: *Self) T {
             return self.popPtr().*;
         }
 
         /// Pops a value from the stack.
-        /// * does not test if the stack is empty
+        /// * does not check if the stack is empty
         pub fn pop(self: *Self) void {
             self.top_ptr -= 1;
         }
 
         /// Returns a pointer to the value on the top of the stack.
-        /// * does not test if the stack is empty
+        /// * does not check if the stack is empty
         pub fn top(self: *Self) *T {
             return @ptrCast(self.top_ptr);
         }

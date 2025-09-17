@@ -24,6 +24,7 @@ const assembler = @import("assembler");
 const VirtualWriter = @import("common").VirtualWriter;
 
 test {
+    // std.debug.print("semantic analysis for x64/machine\n", .{});
     std.testing.refAllDeclsRecursive(@This());
 }
 

@@ -12,6 +12,7 @@ const backend = @import("backend");
 const log = std.log.scoped(.sma);
 
 test {
+    // std.debug.print("semantic analysis for sma\n", .{});
     std.testing.refAllDecls(@This());
 }
 

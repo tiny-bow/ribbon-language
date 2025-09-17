@@ -16,6 +16,7 @@ const common = @import("../common.zig");
 const log = std.log.scoped(.AllocWriter);
 
 test {
+    // std.debug.print("semantic analysis for AllocWriter\n", .{});
     std.testing.refAllDecls(@This());
 }
 

@@ -9,6 +9,7 @@ const Instruction = @import("Instruction");
 const common = @import("common");
 
 test {
+    // std.debug.print("semantic analysis for interpreter\n", .{});
     std.testing.refAllDecls(@This());
 }
 
@@ -127,7 +128,7 @@ pub fn invokeBytecode(self: *core.Fiber, fun: *const core.Function, arguments: [
     if (!self.data.hasSpace(total_u64s_to_alloc)) {
         return error.Overflow;
     }
-    const new_frame_data_ptr: [*]core.RegisterBits = @alignCast(@ptrCast(aligned_data_ptr_u8));
+    const new_frame_data_ptr: [*]core.RegisterBits = @ptrCast(@alignCast(aligned_data_ptr_u8));
     _ = self.data.allocSlice(total_u64s_to_alloc);
 
     log.debug("invoking bytecode function {x} with extents {x} to {x}", .{
@@ -338,7 +339,7 @@ fn pushBytecodeCall(
     if (!self.data.hasSpace(total_u64s_to_alloc)) return error.Overflow;
 
     _ = self.data.allocSlice(total_u64s_to_alloc);
-    const new_frame_data_ptr: [*]core.RegisterBits = @alignCast(@ptrCast(aligned_data_ptr));
+    const new_frame_data_ptr: [*]core.RegisterBits = @ptrCast(@alignCast(aligned_data_ptr));
 
     const new_registers = self.registers.allocPtr();
 

@@ -5,6 +5,83 @@ const std = @import("std");
 const SUPPORTED_ARCH = &.{.x86_64};
 const SUPPORTED_OS = &.{ .windows, .linux };
 
+const ModuleDef = struct {
+    name: []const u8,
+    imports: []const []const u8 = &.{},
+};
+
+const src_path = "src/";
+
+const module_path = src_path ++ "mod/";
+const test_path = src_path ++ "test/";
+const bin_path = src_path ++ "bin/";
+
+const x64_path = module_path ++ "x64/";
+const tool_path = bin_path ++ "tools/";
+
+const modules = [_]ModuleDef{
+    .{
+        .name = "backend",
+        .imports = &.{ "ir", "core", "bytecode", "common" },
+    },
+    .{
+        .name = "binary",
+        .imports = &.{ "core", "common" },
+    },
+    .{
+        .name = "bytecode",
+        .imports = &.{ "common", "core", "binary", "Instruction" },
+    },
+    .{
+        .name = "cbr",
+        .imports = &.{ "ir", "sma", "backend", "common" },
+    },
+    .{ .name = "common" },
+    .{
+        .name = "core",
+        .imports = &.{ "common", "build_info" },
+    },
+    .{
+        .name = "interpreter",
+        .imports = &.{ "core", "common", "Instruction" },
+    },
+    .{
+        .name = "ir",
+        .imports = &.{ "core", "common", "source", "bytecode" },
+    },
+    .{
+        .name = "meta_language",
+        .imports = &.{ "rg", "common", "source", "core", "ir", "backend" },
+    },
+    .{
+        .name = "sma",
+        .imports = &.{ "source", "ir", "core", "common", "backend" },
+    },
+    .{
+        .name = "source",
+        .imports = &.{ "rg", "common" },
+    },
+};
+
+const arch_modules = [_]ModuleDef{
+    .{
+        .name = "abi",
+        .imports = &.{ "core", "assembler" },
+    },
+    .{
+        .name = "machine",
+        .imports = &.{ "abi", "common", "core", "assembler" },
+    },
+};
+
+const tests = [_][]const u8{
+    "bc_integration",
+    "bc_interp",
+    "binary_integration",
+    "ir_integration",
+    "ml_integration",
+};
+
 pub fn build(b: *std.Build) !void {
     const zon = parseZon(b, struct { version: []const u8 });
 
@@ -18,88 +95,36 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // whitelisting doesnt really work the way we'd like here
-    validateTarget(target.result);
+    validateTarget(target.result); // whitelisting doesnt really work the way we'd like here
 
-    const rg_dep = b.dependency("rg", .{
+    // create steps //
+    const gen_step = b.step("gen", "CLI access for the isa code generator");
+    const check_step = b.step("check", "Run semantic source");
+    const test_step = b.step("unit-test", "Run all unit tests");
+    const docs_step = b.step("docs", "Generate documentation");
+    const isa_step = b.step("isa", "Generate ISA documentation");
+    const run_step = b.step("run", "Run the ribbon driver");
+    const install_step = b.default_step;
+
+    // dependency modules //
+    const rg_mod = b.dependency("rg", .{
         .target = target,
         .optimize = optimize,
-    });
+    }).module("rg");
 
-    const repl_dep = b.dependency("repl", .{
+    const repl_mod = b.dependency("repl", .{
         .target = target,
         .optimize = optimize,
-    });
+    }).module("repl");
 
-    const rg_mod = rg_dep.module("rg");
-    const repl_mod = repl_dep.module("repl");
-
-    // create all modules //
-
-    const common_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/common.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const abi_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/x64/abi.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const assembler_mod = b.dependency("r64", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("r64");
-
-    const binary_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/binary.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const bytecode_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/bytecode.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const core_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/core.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const gen_mod = b.createModule(.{
-        .root_source_file = b.path("src/bin/tools/gen.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
+    // special modules //
     const Instruction_mod = b.createModule(.{
         .root_source_file = null,
         .target = target,
         .optimize = optimize,
     });
 
-    const interpreter_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/interpreter.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const ir_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/ir.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const backend_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/backend.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    const build_info_mod = build_info_opts.createModule();
 
     const isa_mod = b.createModule(.{
         .root_source_file = b.path("src/gen-base/zig/isa.zig"),
@@ -107,53 +132,103 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const machine_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/x64/machine.zig"),
+    // binary mods //
+    const gen_mod = b.createModule(.{
+        .root_source_file = b.path(tool_path ++ "gen.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     const main_mod = b.createModule(.{
-        .root_source_file = b.path("src/bin/main.zig"),
+        .root_source_file = b.path(bin_path ++ "main.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const meta_language_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/meta_language.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const source_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/source.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
+    // the exported ribbon module //
     const ribbon_mod = b.addModule("ribbon_language", .{
-        .root_source_file = b.path("src/mod/root.zig"),
+        .root_source_file = b.path(module_path ++ "root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const bc_interp_mod = b.createModule(.{
-        .root_source_file = b.path("src/test/bc_interp.zig"),
+    var module_map = std.StringHashMap(*std.Build.Module).init(b.allocator);
+
+    module_map.put("rg", rg_mod) catch @panic("OOM");
+    module_map.put("repl", repl_mod) catch @panic("OOM");
+    module_map.put("isa", isa_mod) catch @panic("OOM");
+    module_map.put("Instruction", Instruction_mod) catch @panic("OOM");
+    module_map.put("build_info", build_info_mod) catch @panic("OOM");
+
+    // create x64-specific modules //
+
+    const assembler_mod = b.dependency("r64", .{
         .target = target,
         .optimize = optimize,
+    }).module("r64");
+    module_map.put("assembler", assembler_mod) catch @panic("OOM");
+
+    const arch_path = b.path(x64_path);
+    inline for (arch_modules) |mod_def| {
+        const mod = b.createModule(.{
+            .root_source_file = arch_path.path(b, mod_def.name ++ ".zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+
+        module_map.put(mod_def.name, mod) catch @panic("OOM");
+    }
+
+    // create all standard modules //
+    inline for (modules) |mod_def| {
+        const mod = b.createModule(.{
+            .root_source_file = b.path(module_path ++ mod_def.name ++ ".zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+
+        module_map.put(mod_def.name, mod) catch @panic("OOM");
+    }
+
+    // link all standard and arch modules //
+    inline for (arch_modules ++ modules) |mod_def| {
+        const mod = module_map.get(mod_def.name).?;
+
+        for (mod_def.imports) |import_name| {
+            const import_mod = module_map.get(import_name) orelse
+                std.debug.panic("Module `{s}` imports unknown module `{s}`", .{ mod_def.name, import_name });
+            mod.addImport(import_name, import_mod);
+        }
+    }
+
+    // link all modules into root //
+    {
+        var it = module_map.iterator();
+        while (it.next()) |entry| {
+            ribbon_mod.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+
+    // add the export module to the map for test gen //
+    module_map.put("ribbon_language", ribbon_mod) catch @panic("OOM");
+
+    // link required modules into generator //
+
+    gen_mod.addImport("isa", module_map.get("isa").?);
+    gen_mod.addImport("abi", module_map.get("abi").?);
+    gen_mod.addImport("assembler", module_map.get("assembler").?);
+    gen_mod.addImport("core", module_map.get("core").?);
+    gen_mod.addImport("common", module_map.get("common").?);
+    gen_mod.addAnonymousImport("Isa_intro.md", .{
+        .root_source_file = b.path("src/gen-base/markdown/Isa_intro.md"),
+    });
+    gen_mod.addAnonymousImport("Instruction_intro.zig", .{
+        .root_source_file = b.path("src/gen-base/zig/Instruction_intro.zig"),
     });
 
-    const sma_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/sma.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const cbr_mod = b.createModule(.{
-        .root_source_file = b.path("src/mod/cbr.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    // link required modules into generated code //
+    Instruction_mod.addImport("core", module_map.get("core").?);
+    Instruction_mod.addImport("common", module_map.get("common").?);
 
     // setup tool calls //
 
@@ -164,7 +239,6 @@ pub fn build(b: *std.Build) !void {
         .use_lld = false,
     });
 
-    const gen_step = b.step("gen", "CLI access for the isa code generator");
     const gen_app = b.addRunArtifact(gen_tool);
     if (b.args) |args| gen_app.addArgs(args);
     gen_step.dependOn(&gen_app.step);
@@ -186,136 +260,53 @@ pub fn build(b: *std.Build) !void {
 
     Instruction_mod.root_source_file = Instruction_src;
 
-    // create exports //
+    // create driver //
 
     const main_bin = b.addExecutable(.{
         .name = "ribbon",
         .root_module = main_mod,
-        .linkage = .static,
     });
 
     const main_install = b.addInstallArtifact(main_bin, .{});
-
-    // create tests //
-    const abi_test = b.addTest(.{ .root_module = abi_mod });
-    const bytecode_test = b.addTest(.{ .root_module = bytecode_mod });
-    const core_test = b.addTest(.{ .root_module = core_mod });
-    const gen_test = b.addTest(.{ .root_module = gen_mod });
-    const Instruction_test = b.addTest(.{ .root_module = Instruction_mod });
-    const interpreter_test = b.addTest(.{ .root_module = interpreter_mod });
-    const ir_test = b.addTest(.{ .root_module = ir_mod });
-    const backend_test = b.addTest(.{ .root_module = backend_mod });
-    const isa_test = b.addTest(.{ .root_module = isa_mod });
-    const machine_test = b.addTest(.{ .root_module = machine_mod });
-    const main_test = b.addTest(.{ .root_module = main_mod });
-    const meta_language_test = b.addTest(.{ .root_module = meta_language_mod });
-    const source_test = b.addTest(.{ .root_module = source_mod });
-    const common_test = b.addTest(.{ .root_module = common_mod });
-    const ribbon_test = b.addTest(.{ .root_module = ribbon_mod });
-    const bc_interp_test = b.addTest(.{ .root_module = bc_interp_mod });
-    const sma_test = b.addTest(.{ .root_module = sma_mod });
-    const cbr_test = b.addTest(.{ .root_module = cbr_mod });
-
-    // add imports //
-
-    abi_mod.addImport("assembler", assembler_mod);
-    abi_mod.addImport("core", core_mod);
-
-    binary_mod.addImport("core", core_mod);
-    binary_mod.addImport("common", common_mod);
-
-    bytecode_mod.addImport("common", common_mod);
-    bytecode_mod.addImport("core", core_mod);
-    bytecode_mod.addImport("Instruction", Instruction_mod);
-    bytecode_mod.addImport("binary", binary_mod);
-
-    core_mod.addImport("common", common_mod);
-    core_mod.addOptions("build_info", build_info_opts);
-
-    gen_mod.addImport("common", common_mod);
-    gen_mod.addImport("isa", isa_mod);
-    gen_mod.addImport("core", core_mod);
-    gen_mod.addImport("assembler", assembler_mod);
-    gen_mod.addImport("abi", abi_mod);
-
-    gen_mod.addAnonymousImport("Isa_intro.md", .{ .root_source_file = b.path("src/gen-base/markdown/Isa_intro.md") });
-    gen_mod.addAnonymousImport("Instruction_intro.zig", .{ .root_source_file = b.path("src/gen-base/zig/Instruction_intro.zig") });
-
-    Instruction_mod.addImport("common", common_mod);
-    Instruction_mod.addImport("core", core_mod);
-
-    interpreter_mod.addImport("core", core_mod);
-    interpreter_mod.addImport("Instruction", Instruction_mod);
-    interpreter_mod.addImport("bytecode", bytecode_mod);
-    interpreter_mod.addImport("common", common_mod);
-    // interpreter_mod.addObjectFile(assembly_obj);
-
-    ir_mod.addImport("core", core_mod);
-    ir_mod.addImport("common", common_mod);
-    ir_mod.addImport("bytecode", bytecode_mod);
-    ir_mod.addImport("source", source_mod);
-
-    backend_mod.addImport("common", common_mod);
-    backend_mod.addImport("core", core_mod);
-    backend_mod.addImport("bytecode", bytecode_mod);
-    backend_mod.addImport("ir", ir_mod);
-
-    machine_mod.addImport("core", core_mod);
-    machine_mod.addImport("abi", abi_mod);
-    machine_mod.addImport("assembler", assembler_mod);
-    machine_mod.addImport("common", common_mod);
-
-    main_mod.addImport("ribbon_language", ribbon_mod);
-    main_mod.addImport("repl", repl_mod);
-
-    source_mod.addImport("common", common_mod);
-    source_mod.addImport("rg", rg_mod);
-
-    meta_language_mod.addImport("rg", rg_mod);
-    meta_language_mod.addImport("common", common_mod);
-    meta_language_mod.addImport("source", source_mod);
-    meta_language_mod.addImport("core", core_mod);
-    meta_language_mod.addImport("ir", ir_mod);
-    meta_language_mod.addImport("backend", backend_mod);
-
-    ribbon_mod.addImport("core", core_mod);
-    ribbon_mod.addImport("abi", abi_mod);
-    ribbon_mod.addImport("bytecode", bytecode_mod);
-    ribbon_mod.addImport("interpreter", interpreter_mod);
-    ribbon_mod.addImport("ir", ir_mod);
-    ribbon_mod.addImport("binary", binary_mod);
-    ribbon_mod.addImport("backend", backend_mod);
-    ribbon_mod.addImport("machine", machine_mod);
-    ribbon_mod.addImport("meta_language", meta_language_mod);
-    ribbon_mod.addImport("source", source_mod);
-    ribbon_mod.addImport("common", common_mod);
-    ribbon_mod.addImport("sma", sma_mod);
-    ribbon_mod.addImport("cbr", cbr_mod);
-
-    bc_interp_mod.addImport("ribbon_language", ribbon_mod);
-    bc_interp_mod.addImport("common", common_mod);
-    bc_interp_mod.addImport("repl", repl_mod);
-
-    sma_mod.addImport("ir", ir_mod);
-    sma_mod.addImport("source", source_mod);
-    sma_mod.addImport("common", common_mod);
-    sma_mod.addImport("backend", backend_mod);
-    sma_mod.addImport("core", core_mod);
-    sma_mod.addImport("cbr", cbr_mod);
-
-    cbr_mod.addImport("ir", ir_mod);
-    cbr_mod.addImport("source", source_mod);
-    cbr_mod.addImport("common", common_mod);
-    cbr_mod.addImport("backend", backend_mod);
-    cbr_mod.addImport("core", core_mod);
-    cbr_mod.addImport("sma", sma_mod);
-
-    // setup steps //
-
-    const install_step = b.default_step;
     install_step.dependOn(&main_install.step);
 
-    const run_step = b.step("run", "Run the ribbon driver");
+    // create tests //
+    var test_bins = std.StringHashMap(*std.Build.Step.Compile).init(b.allocator);
+
+    {
+        var it = module_map.iterator();
+        it: while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const value = entry.value_ptr.*;
+
+            inline for (&.{ "rg", "repl", "build_info" }) |skip_name| {
+                if (std.mem.eql(u8, key, skip_name)) continue :it;
+            }
+
+            const test_bin = b.addTest(.{ .root_module = value });
+            test_bins.put(key, test_bin) catch @panic("OOM");
+
+            check_step.dependOn(&test_bin.step);
+            test_step.dependOn(&b.addRunArtifact(test_bin).step);
+        }
+    }
+
+    inline for (tests) |test_name| {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path(test_path ++ test_name ++ ".zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+
+        test_mod.addImport("ribbon_language", ribbon_mod);
+
+        const test_bin = b.addTest(.{ .root_module = test_mod });
+        test_bins.put(test_name, test_bin) catch @panic("OOM");
+
+        check_step.dependOn(&test_bin.step);
+        test_step.dependOn(&b.addRunArtifact(test_bin).step);
+    }
+
     const run_main = b.addRunArtifact(main_bin);
     if (b.args) |args| {
         run_main.addArgs(args);
@@ -324,74 +315,14 @@ pub fn build(b: *std.Build) !void {
 
     const dump_intermediates_step = b.step("dump-intermediates", "Dump intermediate files to zig-out");
     dump_intermediates_step.dependOn(&Instruction_src_install.step);
-    // dump_intermediates_step.dependOn(&assembly_src_install.step);
-    // dump_intermediates_step.dependOn(&assembly_obj_install.step);
-    // dump_intermediates_step.dependOn(&assembly_header_install.step);
-    // dump_intermediates_step.dependOn(&assembly_template_install.step);
     dump_intermediates_step.dependOn(&b.addInstallFile(Isa_markdown, "tmp/Isa.md").step);
 
-    if (optimize == .Debug) { // debugging assembly codegen somewhat requires this atm TODO: re-evaluate when stable
-        install_step.dependOn(dump_intermediates_step);
-        run_step.dependOn(dump_intermediates_step);
-    }
-
-    // const write_assembly_header_step = b.step("asm-header", "Output the assembly header file for nasm language features");
-    // write_assembly_header_step.dependOn(&assembly_header_install.step);
-
-    // const write_assembly_template_step = b.step("asm-template", "Output an interpreter assembly template");
-    // write_assembly_template_step.dependOn(&assembly_template_install.step);
-
-    const check_step = b.step("check", "Run semantic source");
-    check_step.dependOn(&abi_test.step);
-
-    check_step.dependOn(&bytecode_test.step);
-    check_step.dependOn(&core_test.step);
-    check_step.dependOn(&gen_test.step);
-    check_step.dependOn(&interpreter_test.step);
-    check_step.dependOn(&ir_test.step);
-    check_step.dependOn(&backend_test.step);
-    check_step.dependOn(&isa_test.step);
-    check_step.dependOn(&machine_test.step);
-    check_step.dependOn(&main_test.step);
-    check_step.dependOn(&meta_language_test.step);
-    check_step.dependOn(&source_test.step);
-    check_step.dependOn(&ribbon_test.step);
-    check_step.dependOn(&bc_interp_test.step);
-    check_step.dependOn(&common_test.step);
-    check_step.dependOn(&sma_test.step);
-    check_step.dependOn(&cbr_test.step);
-
-    const test_step = b.step("unit-test", "Run all unit tests");
-    test_step.dependOn(&b.addRunArtifact(abi_test).step);
-
-    test_step.dependOn(&b.addRunArtifact(bytecode_test).step);
-    test_step.dependOn(&b.addRunArtifact(core_test).step);
-    test_step.dependOn(&b.addRunArtifact(gen_test).step);
-    test_step.dependOn(&b.addRunArtifact(Instruction_test).step);
-    test_step.dependOn(&b.addRunArtifact(interpreter_test).step);
-    test_step.dependOn(&b.addRunArtifact(ir_test).step);
-    test_step.dependOn(&b.addRunArtifact(backend_test).step);
-    test_step.dependOn(&b.addRunArtifact(isa_test).step);
-    test_step.dependOn(&b.addRunArtifact(machine_test).step);
-    test_step.dependOn(&b.addRunArtifact(main_test).step);
-    test_step.dependOn(&b.addRunArtifact(meta_language_test).step);
-    test_step.dependOn(&b.addRunArtifact(source_test).step);
-    test_step.dependOn(&b.addRunArtifact(ribbon_test).step);
-    test_step.dependOn(&b.addRunArtifact(bc_interp_test).step);
-    test_step.dependOn(&b.addRunArtifact(common_test).step);
-    test_step.dependOn(&b.addRunArtifact(sma_test).step);
-    test_step.dependOn(&b.addRunArtifact(cbr_test).step);
-
-    const docs_step = b.step("docs", "Generate documentation");
-
     docs_step.dependOn(&b.addInstallDirectory(.{
-        .source_dir = ribbon_test.getEmittedDocs(),
+        .source_dir = test_bins.get("ribbon_language").?.getEmittedDocs(),
         .install_dir = .{ .custom = "docs" },
         .install_subdir = "api",
     }).step);
     docs_step.dependOn(&Isa_markdown_install.step);
-
-    const isa_step = b.step("isa", "Generate ISA documentation");
 
     isa_step.dependOn(&Isa_markdown_install.step);
 }

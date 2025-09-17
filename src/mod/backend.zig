@@ -10,6 +10,7 @@ const common = @import("common");
 const Id = common.Id;
 
 test {
+    // std.debug.print("semantic analysis for backend\n", .{});
     std.testing.refAllDeclsRecursive(@This());
 }
 
@@ -235,7 +236,7 @@ pub const PeepholePass = struct {
 
     /// The main execution function for the pass.
     fn run(pass: *backend.Pass, job: *backend.Job) !void {
-        const patterns: []const PeepholePattern = @as(*const []const PeepholePattern, @alignCast(@ptrCast(pass.data))).*;
+        const patterns: []const PeepholePattern = @as(*const []const PeepholePattern, @ptrCast(@alignCast(pass.data))).*;
         var changed = true;
 
         // NOTE: A real implementation would build a use-def map here for efficiency.
@@ -579,7 +580,7 @@ pub const BytecodeTarget = struct {
 
     /// Add a compiled bytecode artifact and get its ID.
     pub fn addArtifact(self: *BytecodeTarget, artifact: *anyopaque) Target.Error!ArtifactId {
-        const compiled: *core.Bytecode = @alignCast(@ptrCast(artifact));
+        const compiled: *core.Bytecode = @ptrCast(@alignCast(artifact));
         const id = self.compiler.fresh_id.next();
 
         try self.artifacts.put(self.compiler.allocator, id, compiled);

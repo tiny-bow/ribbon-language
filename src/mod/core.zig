@@ -22,6 +22,7 @@ const common = @import("common");
 const build_info = @import("build_info");
 
 test {
+    // std.debug.print("semantic analysis for core\n", .{});
     std.testing.refAllDeclsRecursive(@This());
 }
 

@@ -13,6 +13,7 @@ const std = @import("std");
 const log = std.log.scoped(.Isa);
 
 test {
+    // std.debug.print("semantic analysis for isa\n", .{});
     std.testing.refAllDeclsRecursive(@This());
 }
 

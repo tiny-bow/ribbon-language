@@ -8,6 +8,7 @@ const rg = @import("rg");
 const Id = common.Id;
 
 test {
+    // std.debug.print("semantic analysis for source\n", .{});
     std.testing.refAllDeclsRecursive(@This());
 }
 

@@ -4,6 +4,11 @@ const common = @This();
 const std = @import("std");
 const log = std.log.scoped(.common);
 
+test {
+    // std.debug.print("semantic analysis for common\n", .{});
+    std.testing.refAllDecls(@This());
+}
+
 pub const Buffer = @import("common/Buffer.zig");
 pub const Id = @import("common/Id.zig");
 pub const Stack = @import("common/Stack.zig");
