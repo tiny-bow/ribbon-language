@@ -1,7 +1,5 @@
 const std = @import("std");
 
-// const nasm = @import("nasm");
-
 const SUPPORTED_ARCH = &.{.x86_64};
 const SUPPORTED_OS = &.{ .windows, .linux };
 
@@ -83,19 +81,20 @@ const tests = [_][]const u8{
 };
 
 pub fn build(b: *std.Build) !void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    validateTarget(target.result); // whitelisting doesnt really work the way we'd like here
+
+    // parse the zon to extract version for build_info //
     const zon = parseZon(b, struct { version: []const u8 });
 
     const version = std.SemanticVersion.parse(zon.version) catch {
         std.debug.panic("Cannot parse `{s}` as a semantic version string", .{zon.version});
     };
 
+    // create build_info options //
     const build_info_opts = b.addOptions();
     build_info_opts.addOption(std.SemanticVersion, "version", version);
-
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
-
-    validateTarget(target.result); // whitelisting doesnt really work the way we'd like here
 
     // create steps //
     const gen_step = b.step("gen", "CLI access for the isa code generator");
@@ -152,6 +151,7 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    // initialize module map with special modules //
     var module_map = std.StringHashMap(*std.Build.Module).init(b.allocator);
 
     module_map.put("rg", rg_mod) catch @panic("OOM");
@@ -161,11 +161,10 @@ pub fn build(b: *std.Build) !void {
     module_map.put("build_info", build_info_mod) catch @panic("OOM");
 
     // create x64-specific modules //
-
-    const assembler_mod = b.dependency("r64", .{
+    const assembler_mod = b.lazyDependency("r64", .{
         .target = target,
         .optimize = optimize,
-    }).module("r64");
+    }).?.module("r64");
     module_map.put("assembler", assembler_mod) catch @panic("OOM");
 
     const arch_path = b.path(x64_path);
@@ -209,11 +208,11 @@ pub fn build(b: *std.Build) !void {
         }
     }
 
-    // add the export module to the map for test gen //
-    module_map.put("ribbon_language", ribbon_mod) catch @panic("OOM");
+    // link main module //
+    main_mod.addImport("ribbon_language", ribbon_mod);
+    main_mod.addImport("repl", repl_mod);
 
     // link required modules into generator //
-
     gen_mod.addImport("isa", module_map.get("isa").?);
     gen_mod.addImport("abi", module_map.get("abi").?);
     gen_mod.addImport("assembler", module_map.get("assembler").?);
@@ -230,8 +229,10 @@ pub fn build(b: *std.Build) !void {
     Instruction_mod.addImport("core", module_map.get("core").?);
     Instruction_mod.addImport("common", module_map.get("common").?);
 
-    // setup tool calls //
+    // add the export module to the map for test gen //
+    module_map.put("ribbon_language", ribbon_mod) catch @panic("OOM");
 
+    // generator tool //
     const gen_tool = b.addExecutable(.{
         .name = "gen",
         .root_module = gen_mod,
@@ -239,6 +240,7 @@ pub fn build(b: *std.Build) !void {
         .use_lld = false,
     });
 
+    // markdown generator call //
     const gen_app = b.addRunArtifact(gen_tool);
     if (b.args) |args| gen_app.addArgs(args);
     gen_step.dependOn(&gen_app.step);
@@ -248,11 +250,10 @@ pub fn build(b: *std.Build) !void {
     gen_isa.addArg("markdown");
 
     const Isa_markdown = gen_isa.addOutputFileArg("Isa.md");
-
     const Isa_markdown_install = b.addInstallFile(Isa_markdown, "docs/Isa.md");
 
+    // Instruction generator call //
     const gen_types = b.addRunArtifact(gen_tool);
-
     gen_types.addArg("types");
 
     const Instruction_src = gen_types.addOutputFileArg("Instruction.zig");
@@ -260,19 +261,10 @@ pub fn build(b: *std.Build) !void {
 
     Instruction_mod.root_source_file = Instruction_src;
 
-    // create driver //
-
-    const main_bin = b.addExecutable(.{
-        .name = "ribbon",
-        .root_module = main_mod,
-    });
-
-    const main_install = b.addInstallArtifact(main_bin, .{});
-    install_step.dependOn(&main_install.step);
-
-    // create tests //
+    // create module tests //
     var test_bins = std.StringHashMap(*std.Build.Step.Compile).init(b.allocator);
 
+    // wrap standard modules with tests //
     {
         var it = module_map.iterator();
         it: while (it.next()) |entry| {
@@ -291,6 +283,7 @@ pub fn build(b: *std.Build) !void {
         }
     }
 
+    // create integrated modules and tests //
     inline for (tests) |test_name| {
         const test_mod = b.createModule(.{
             .root_source_file = b.path(test_path ++ test_name ++ ".zig"),
@@ -307,12 +300,7 @@ pub fn build(b: *std.Build) !void {
         test_step.dependOn(&b.addRunArtifact(test_bin).step);
     }
 
-    const run_main = b.addRunArtifact(main_bin);
-    if (b.args) |args| {
-        run_main.addArgs(args);
-    }
-    run_step.dependOn(&run_main.step);
-
+    // setup generation tasks //
     const dump_intermediates_step = b.step("dump-intermediates", "Dump intermediate files to zig-out");
     dump_intermediates_step.dependOn(&Instruction_src_install.step);
     dump_intermediates_step.dependOn(&b.addInstallFile(Isa_markdown, "tmp/Isa.md").step);
@@ -325,50 +313,24 @@ pub fn build(b: *std.Build) !void {
     docs_step.dependOn(&Isa_markdown_install.step);
 
     isa_step.dependOn(&Isa_markdown_install.step);
+
+    // create driver //
+    const main_bin = b.addExecutable(.{
+        .name = "ribbon",
+        .root_module = main_mod,
+    });
+
+    // install driver //
+    const main_install = b.addInstallArtifact(main_bin, .{});
+    install_step.dependOn(&main_install.step);
+
+    // run driver //
+    const run_main = b.addRunArtifact(main_bin);
+    if (b.args) |args| {
+        run_main.addArgs(args);
+    }
+    run_step.dependOn(&run_main.step);
 }
-
-fn parseZon(b: *std.Build, comptime T: type) T {
-    const zonText = std.fs.cwd().readFileAllocOptions(b.allocator, "build.zig.zon", std.math.maxInt(usize), 2048, .@"1", 0) catch @panic("Unable to read build.zig.zon");
-
-    var parseStatus = std.zon.parse.Diagnostics{};
-
-    return std.zon.parse.fromSlice(
-        T,
-        b.allocator,
-        zonText,
-        &parseStatus,
-        .{ .ignore_unknown_fields = true },
-    ) catch |err| {
-        std.debug.print("Error {s}:\n", .{@errorName(err)});
-
-        var it = parseStatus.iterateErrors();
-
-        while (it.next()) |parseErr| {
-            const loc = parseErr.getLocation(&parseStatus);
-
-            std.debug.print("[build.zig.zon:{}]: {f}\n", .{ loc.line + 1, parseErr.fmtMessage(&parseStatus) });
-        }
-
-        std.process.exit(1);
-    };
-}
-
-// fn zigObjectFmtToNasm(zigFmt: std.Target.ObjectFormat) []const u8 {
-//     switch (zigFmt) {
-//         .coff => return "coff",
-//         .elf => return "elf64",
-
-//         else => std.debug.panic(
-//             \\
-//             \\
-//             \\Object format `{s}` is not supported by Ribbon.
-//             \\
-//             \\
-//         ,
-//             .{@tagName(zigFmt)},
-//         ),
-//     }
-// }
 
 fn validateTarget(target: std.Target) void {
     if (std.mem.indexOfScalar(std.Target.Cpu.Arch, SUPPORTED_ARCH, target.cpu.arch) == null) {
@@ -408,4 +370,30 @@ fn validateTarget(target: std.Target) void {
             .{@tagName(target.os.tag)},
         );
     }
+}
+
+fn parseZon(b: *std.Build, comptime T: type) T {
+    const zonText = std.fs.cwd().readFileAllocOptions(b.allocator, "build.zig.zon", std.math.maxInt(usize), 2048, .@"1", 0) catch @panic("Unable to read build.zig.zon");
+
+    var parseStatus = std.zon.parse.Diagnostics{};
+
+    return std.zon.parse.fromSlice(
+        T,
+        b.allocator,
+        zonText,
+        &parseStatus,
+        .{ .ignore_unknown_fields = true },
+    ) catch |err| {
+        std.debug.print("Error {s}:\n", .{@errorName(err)});
+
+        var it = parseStatus.iterateErrors();
+
+        while (it.next()) |parseErr| {
+            const loc = parseErr.getLocation(&parseStatus);
+
+            std.debug.print("[build.zig.zon:{}]: {f}\n", .{ loc.line + 1, parseErr.fmtMessage(&parseStatus) });
+        }
+
+        std.process.exit(1);
+    };
 }

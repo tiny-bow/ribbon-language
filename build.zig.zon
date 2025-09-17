@@ -2,7 +2,6 @@
     .name = .ribbon,
     .fingerprint = 0xf11903a43ca0fa41,
     .version = "0.1.0-draft+3",
-    // FIXME: use lazy dependencies
     .dependencies = .{
         .rg = .{
             .url = "git+https://github.com/tiny-bow/rg#db7a590bb184c793ee0a23e07a5ef7cc580864ae",
@@ -15,6 +14,7 @@
         .r64 = .{
             .url = "git+https://github.com/tiny-bow/r64#76fa36daa980c9b7603c541883eb32c05d9f15e9",
             .hash = "r64-0.1.0-AAAAAPrEAwCnRnNskrv_-DQx9ZuZ-BHyIjv8DoMTlzbf",
+            .lazy = true,
         },
     },
     .paths = .{
