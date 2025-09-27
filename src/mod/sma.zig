@@ -157,16 +157,9 @@ pub const Artifact = struct {
     /// This process is called "dehydration".
     pub fn fromIr(ir_ctx: *ir.Context, module_guid: ir.ModuleGUID, allocator: std.mem.Allocator) !*Artifact {
         var arena = std.heap.ArenaAllocator.init(allocator);
+        errdefer arena.deinit();
 
-        const self = arena.allocator().create(Artifact) catch {
-            arena.deinit();
-            return error.OutOfMemory;
-        };
-
-        self.arena = arena;
-        errdefer self.deinit();
-
-        var dehydrator = try Dehydrator.init(ir_ctx, module_guid, allocator, self.arena);
+        var dehydrator = try Dehydrator.init(ir_ctx, module_guid, allocator, arena);
         defer dehydrator.deinit();
 
         try dehydrator.findPublicRefs();
@@ -178,9 +171,7 @@ pub const Artifact = struct {
 
         try dehydrator.buildPublicSymbolTable();
 
-        try dehydrator.buildArtifact(self);
-
-        return self;
+        return dehydrator.buildArtifact();
     }
 };
 
@@ -487,7 +478,7 @@ pub const Dehydrator = struct {
         }
     }
 
-    pub fn buildArtifact(self: *Dehydrator, out: *Artifact) !void {
+    pub fn buildArtifact(self: *Dehydrator) !*Artifact {
         const allocator = self.output_arena.allocator();
 
         const string_table = try allocator.dupe(u8, self.string_table_builder.items);
@@ -504,6 +495,9 @@ pub const Dehydrator = struct {
 
         const ref_table = try allocator.dupe(Ref, self.ref_table.items);
         errdefer allocator.free(ref_table);
+
+        const out = try allocator.create(Artifact);
+        errdefer allocator.destroy(out);
 
         out.* = Artifact{
             .arena = self.output_arena,
@@ -527,5 +521,7 @@ pub const Dehydrator = struct {
             .private_node_table = private_node_table,
             .ref_table = ref_table,
         };
+
+        return out;
     }
 };
