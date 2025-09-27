@@ -53,26 +53,6 @@ pub fn deinit(self: *Node, allocator: std.mem.Allocator) void {
     }
 }
 
-/// Determine if the node is data.
-pub fn isData(self: *const Node, kind: ir.DataKind) bool {
-    return @as(ir.Tag, @enumFromInt(self.kind.tag)) == ir.Tag.primitive and self.kind.getDiscriminator() == @as(ir.Discriminator, @enumFromInt(@intFromEnum(kind)));
-}
-
-/// Determine if the node is a primitive.
-pub fn isPrimitive(self: *const Node, kind: ir.PrimitiveKind) bool {
-    return @as(ir.Tag, @enumFromInt(self.kind.tag)) == ir.Tag.primitive and self.kind.getDiscriminator() == @as(ir.Discriminator, @enumFromInt(@intFromEnum(kind)));
-}
-
-/// Determine if the node is a structure.
-pub fn isStructure(self: *const Node, kind: ir.StructureKind) bool {
-    return @as(ir.Tag, @enumFromInt(self.kind.tag)) == ir.Tag.structure and self.kind.getDiscriminator() == @as(ir.Discriminator, @enumFromInt(@intFromEnum(kind)));
-}
-
-/// Determine if the node is a collection.
-pub fn isCollection(self: *const Node, element_kind: ir.Discriminator) bool {
-    return @as(ir.Tag, @enumFromInt(self.kind.tag)) == ir.Tag.collection and self.kind.getDiscriminator() == @as(ir.Discriminator, @enumFromInt(@intFromEnum(element_kind)));
-}
-
 /// Create a data node outside of a context, given a data kind and data.
 pub fn data(comptime kind: ir.DataKind, value: ir.DataType(kind)) !Node {
     return Node{

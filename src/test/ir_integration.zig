@@ -461,7 +461,7 @@ test "ir integration - merging child context with cyclic nodes" {
             }
 
             if (edge_ref == null) {
-                log.debug("Could not find control edge user for instruction {}", .{inst_ref});
+                log.debug("Could not find control edge user for instruction {f}", .{inst_ref});
                 return error.TestFailed;
             }
 

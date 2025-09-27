@@ -289,6 +289,11 @@ pub const Ref = packed struct(u64) {
 
     /// The nil reference, a placeholder for an invalid or irrelevant reference.
     pub const nil = Ref{ .node_kind = .nil, .id = .nil };
+
+    /// `std.fmt` impl
+    pub fn format(self: Ref, writer: *std.io.Writer) !void {
+        try writer.print("{f}:{f}", .{ self.id, self.node_kind });
+    }
 };
 
 /// `platform.UniqueReprMap` for `Ref` to `Ref`.
@@ -312,6 +317,11 @@ pub const Id = packed struct {
         .context = .null,
         .node = .null,
     };
+
+    // `std.fmt` impl
+    pub fn format(self: Id, writer: *std.io.Writer) !void {
+        try writer.print("#{d}:{d}", .{ @intFromEnum(self.context), @intFromEnum(self.node) });
+    }
 };
 
 /// A reference to a node in the ir, which can be used to access the node's data.
@@ -364,6 +374,26 @@ pub const NodeKind = packed struct(u16) {
             @tagName(self.getTag()),
             @tagName(self.getDiscriminator()),
         });
+    }
+
+    /// Determine if the node is data.
+    pub fn isData(self: *const NodeKind, kind: ir.DataKind) bool {
+        return self.getTag() == ir.Tag.primitive and self.getDiscriminator() == @as(ir.Discriminator, @enumFromInt(@intFromEnum(kind)));
+    }
+
+    /// Determine if the node is a primitive.
+    pub fn isPrimitive(self: *const NodeKind, kind: ir.PrimitiveKind) bool {
+        return self.getTag() == ir.Tag.primitive and self.getDiscriminator() == @as(ir.Discriminator, @enumFromInt(@intFromEnum(kind)));
+    }
+
+    /// Determine if the node is a structure.
+    pub fn isStructure(self: *const NodeKind, kind: ir.StructureKind) bool {
+        return self.getTag() == ir.Tag.structure and self.getDiscriminator() == @as(ir.Discriminator, @enumFromInt(@intFromEnum(kind)));
+    }
+
+    /// Determine if the node is a collection.
+    pub fn isCollection(self: *const NodeKind, element_kind: ir.Discriminator) bool {
+        return self.getTag() == ir.Tag.collection and self.getDiscriminator() == @as(ir.Discriminator, @enumFromInt(@intFromEnum(element_kind)));
     }
 };
 

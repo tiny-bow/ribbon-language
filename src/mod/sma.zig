@@ -8,6 +8,7 @@ const ir = @import("ir");
 const core = @import("core");
 const common = @import("common");
 const backend = @import("backend");
+const orchestration = @import("orchestration");
 
 const log = std.log.scoped(.sma);
 
@@ -140,9 +141,9 @@ pub const Artifact = struct {
     /// Given a `sma.Node` that contains a `RefList`, this function returns a slice
     /// of the corresponding `sma.Ref`s from the flat `ref_table`.
     pub fn getRefs(self: *const Artifact, node: Node) ?[]const Ref {
-        const ref_list = switch (node.content) {
-            .structure => |rl| rl,
-            .collection => |rl| rl,
+        const ref_list = switch (node.kind.getTag()) {
+            .structure => node.content.structure,
+            .collection => node.content.collection,
             else => return null,
         };
 
@@ -165,7 +166,7 @@ pub const Artifact = struct {
         self.arena = arena;
         errdefer self.deinit();
 
-        var dehydrator = try Dehydrator.init(ir_ctx, module_guid, allocator, self.arena.allocator());
+        var dehydrator = try Dehydrator.init(ir_ctx, module_guid, allocator, self.arena);
         defer dehydrator.deinit();
 
         try dehydrator.findPublicRefs();
@@ -183,27 +184,83 @@ pub const Artifact = struct {
     }
 };
 
-/// Rehydrates only the PUBLIC INTERFACE from an SMA buffer into a live `ir.Context`.
-/// Used for compiling a dependency.
-pub fn rehydratePublic(job: *backend.Job, artifact: Artifact) !void {
-    // ... implement 2-pass rehydration using ONLY the public_node_table
-    common.todo(void, .{ job, artifact });
-}
+/// A helper struct to manage the state of a single rehydration pass.
+const Rehydrator = struct {
+    session: *orchestration.CompilationSession,
+    dependency_sma: *const sma.Artifact,
+    target_child_ctx: *ir.Context,
 
-/// Rehydrates the ENTIRE MODULE (public + private) from an SMA buffer.
-/// Used when compiling the module itself.
-pub fn rehydrateFull(job: *backend.Job, artifact: Artifact) !void {
-    // ... implement 2-pass rehydration using BOTH public_node_table and private_node_table,
-    // correctly linking refs between them.
-    common.todo(void, .{ job, artifact });
+    // Maps an index from the SMA's public_node_table to a newly created ir.Ref
+    // in the target_child_ctx.
+    node_map: common.HashMap(u32, ir.Ref, std.hash_map.AutoContext(u32)),
+
+    /// The main execution function for the rehydration pass.
+    fn run(r: *Rehydrator) !void {
+        const allocator = r.session.gpa;
+
+        // Pass 1: Create shell nodes.
+        // Iterate through the public nodes and create empty, placeholder nodes in the target context.
+        // This populates our node_map, which is essential for linking them correctly in the next pass.
+        for (r.dependency_sma.public_node_table, 0..) |sma_node, i| {
+            // TODO: This logic needs to create an empty ir.Node of the correct kind and mutability.
+            // For structures/collections, the ref_list will be empty for now.
+            const shell_ref = common.todo(ir.Ref, .{ r.target_child_ctx, sma_node });
+            try r.node_map.put(allocator, @intCast(i), shell_ref);
+        }
+
+        // Pass 2: Link the nodes.
+        // Now that all nodes exist, we can correctly wire up their operand references.
+        for (r.dependency_sma.public_node_table, 0..) |sma_node, i| {
+            if (!sma_node.kind.getTag().containsReferences()) continue;
+
+            const target_ref = r.node_map.get(@intCast(i)).?;
+            const sma_refs = r.dependency_sma.getRefs(sma_node) orelse continue;
+
+            for (sma_refs, 0..) |sma_child_ref, child_idx| {
+                const ir_child_ref = switch (sma_child_ref) {
+                    .public => |idx| r.node_map.get(idx).?,
+                    .private => return error.PrivateRefInPublicInterface, // This should be a validation error.
+                    .external => |ext| ext: {
+                        // TODO: This requires looking up the GUID/symbol in the session
+                        // to find its already-rehydrated ir.Ref.
+                        break :ext common.todo(ir.Ref, .{ext});
+                    },
+                    .builtin => |b| try r.session.root_context.getBuiltin(b),
+                    .nil => ir.Ref.nil,
+                };
+                try r.target_child_ctx.setOperand(target_ref, @intCast(child_idx), ir_child_ref);
+            }
+        }
+
+        // TODO: Mark rehydrated nodes as immutable where appropriate.
+    }
+};
+
+/// Populates a target `ir.Context` with the public interface defined in this SMA.
+/// This is a low-level mechanical translation. It does not create the context or
+/// update any high-level session state.
+pub fn rehydrateInto(
+    self: *const sma.Artifact,
+    session: *orchestration.CompilationSession,
+    target_child_ctx: *ir.Context,
+) !void {
+    var rehydrator = Rehydrator{
+        .session = session,
+        .dependency_sma = self,
+        .target_child_ctx = target_child_ctx,
+        .node_map = .{},
+    };
+    defer rehydrator.node_map.deinit(session.gpa);
+
+    return rehydrator.run();
 }
 
 /// Facility for serializing a public `ir.Context` into an `Artifact` representing an SMA file. Typically used via `Artifact.fromIr`.
 pub const Dehydrator = struct {
     ir_ctx: *ir.Context,
     module_guid: ir.ModuleGUID,
-    output_arena: std.mem.Allocator,
-    temp_allocator: std.heap.ArenaAllocator,
+    output_arena: std.heap.ArenaAllocator,
+    temp_allocator: std.mem.Allocator,
 
     /// Set of all refs reachable from public symbols.
     public_refs: ir.RefSet,
@@ -221,7 +278,7 @@ pub const Dehydrator = struct {
     private_node_table: common.ArrayList(Node),
     ref_table: common.ArrayList(Ref),
 
-    pub fn init(init_ir_ctx: *ir.Context, init_module_guid: ir.ModuleGUID, temp_allocator: std.mem.Allocator, output_arena: std.mem.Allocator) !Dehydrator {
+    pub fn init(init_ir_ctx: *ir.Context, init_module_guid: ir.ModuleGUID, temp_allocator: std.mem.Allocator, output_arena: std.heap.ArenaAllocator) !Dehydrator {
         return Dehydrator{
             .ir_ctx = init_ir_ctx,
             .module_guid = init_module_guid,
@@ -254,8 +311,8 @@ pub const Dehydrator = struct {
     /// but deliberately does not traverse into the implementation (bodies) of functions,
     /// correctly separating the public contract from private details.
     pub fn findPublicRefs(self: *Dehydrator) !void {
-        var work_queue = std.ArrayList(ir.Ref).init(self.temp_allocator);
-        defer work_queue.deinit();
+        var work_queue = common.ArrayList(ir.Ref).empty;
+        defer work_queue.deinit(self.temp_allocator);
 
         // 1. Seed the traversal with all public `global_symbol` nodes and their direct targets.
         //    This is more efficient than scanning the entire node table.
@@ -275,7 +332,7 @@ pub const Dehydrator = struct {
         }
 
         // 2. Perform the API-aware graph traversal.
-        while (work_queue.popOrNull()) |current_ref| {
+        while (work_queue.pop()) |current_ref| {
             const node = self.ir_ctx.getNode(current_ref) orelse continue;
 
             // Stop traversal at leaves or nodes outside the current module.
@@ -284,7 +341,7 @@ pub const Dehydrator = struct {
             }
 
             // --- This is the critical boundary logic ---
-            if (node.isFunction()) {
+            if (node.kind.isStructure(.function)) {
                 // For a function node, ONLY traverse its type signature, NOT its body.
                 // The body is the implementation.
                 const function_type_ref = try self.ir_ctx.getField(current_ref, .type) orelse continue;
@@ -305,7 +362,7 @@ pub const Dehydrator = struct {
 
     /// Helper to add a ref to the public set and the work queue if it hasn't been seen before.
     /// This prevents redundant work and infinite loops in cyclic graphs.
-    fn addRefToPublic(self: *Dehydrator, ref: ir.Ref, work_queue: *std.ArrayList(ir.Ref)) !void {
+    fn addRefToPublic(self: *Dehydrator, ref: ir.Ref, work_queue: *common.ArrayList(ir.Ref)) !void {
         // We only traverse nodes that are part of the current compilation unit.
         // External (dependency) and builtin refs are treated as opaque leaves from
         // the perspective of this module's public interface definition.
@@ -313,10 +370,10 @@ pub const Dehydrator = struct {
             return;
         }
 
-        // `put` returns true if the item was newly inserted.
-        if (try self.public_refs.put(self.temp_allocator, ref, {})) {
+        const gop = try self.public_refs.getOrPut(self.temp_allocator, ref);
+        if (!gop.found_existing) {
             // If it's a new public ref, add it to the queue to traverse its children.
-            try work_queue.append(ref);
+            try work_queue.append(self.temp_allocator, ref);
         }
     }
 
@@ -400,7 +457,7 @@ pub const Dehydrator = struct {
     pub fn internString(self: *Dehydrator, str: []const u8) !u32 {
         const gop = try self.string_interner.getOrPut(self.temp_allocator, str);
         if (!gop.found_existing) {
-            gop.key_ptr.* = try self.output_arena.dupe(u8, str);
+            gop.key_ptr.* = try self.output_arena.allocator().dupe(u8, str);
             gop.value_ptr.* = @intCast(self.string_table_builder.items.len);
             try self.string_table_builder.appendSlice(self.temp_allocator, str);
             try self.string_table_builder.append(self.temp_allocator, 0); // Null terminator
@@ -412,7 +469,7 @@ pub const Dehydrator = struct {
         var node_it = self.ir_ctx.nodes.iterator();
         while (node_it.next()) |entry| {
             const ref = entry.key_ptr.*;
-            if (ref.node_kind == .structure and ref.node_kind.getDiscriminator() == .global_symbol) {
+            if (ref.node_kind.isStructure(.global_symbol)) {
                 const node = entry.value_ptr.*;
                 const name_ref = node.content.ref_list.items[0];
                 const target_ref = node.content.ref_list.items[1];
@@ -431,22 +488,25 @@ pub const Dehydrator = struct {
     }
 
     pub fn buildArtifact(self: *Dehydrator, out: *Artifact) !void {
-        const string_table = try self.output_arena.dupe(u8, self.string_table_builder.items);
-        errdefer self.output_arena.free(string_table);
+        const allocator = self.output_arena.allocator();
 
-        const public_symbol_table = try self.output_arena.dupe(PublicSymbol, self.public_symbol_table.items);
-        errdefer self.output_arena.free(public_symbol_table);
+        const string_table = try allocator.dupe(u8, self.string_table_builder.items);
+        errdefer allocator.free(string_table);
 
-        const public_node_table = try self.output_arena.dupe(Node, self.public_node_table.items);
-        errdefer self.output_arena.free(public_node_table);
+        const public_symbol_table = try allocator.dupe(PublicSymbol, self.public_symbol_table.items);
+        errdefer allocator.free(public_symbol_table);
 
-        const private_node_table = try self.output_arena.dupe(Node, self.private_node_table.items);
-        errdefer self.output_arena.free(private_node_table);
+        const public_node_table = try allocator.dupe(Node, self.public_node_table.items);
+        errdefer allocator.free(public_node_table);
 
-        const ref_table = try self.output_arena.dupe(Ref, self.ref_table.items);
-        errdefer self.output_arena.free(ref_table);
+        const private_node_table = try allocator.dupe(Node, self.private_node_table.items);
+        errdefer allocator.free(private_node_table);
+
+        const ref_table = try allocator.dupe(Ref, self.ref_table.items);
+        errdefer allocator.free(ref_table);
 
         out.* = Artifact{
+            .arena = self.output_arena,
             .header = .{
                 .module_guid = self.module_guid,
                 .interface_hash = 0, // Computed later by CBR pass

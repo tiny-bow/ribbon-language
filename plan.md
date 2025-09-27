@@ -1,8 +1,8 @@
 # Unified Architecture for the Ribbon Compiler & Runtime
 
-This document outlines a refined, unified architectural vision for the Ribbon compiler and its hot-reloading capabilities. The central goals are to achieve best-in-class performance through **parallel and incremental compilation** while enabling a uniquely powerful and safe **live state migration** system for hot-reloading, all built upon Ribbon's core language principles.
+This document outlines a refined, unified architectural vision for the Ribbon compiler and its hot-reloading capabilities. The central goals are to achieve best-in-class performance through **parallel and incremental compilation** while enabling a uniquely powerful and safe **live state migration** system for hot-reloading.
 
-This plan implements a robust, cryptographically-sound model for interface identity, which serves as the foundation for both compiler incrementality and runtime type safety.
+This plan moves away from a strictly bottom-up implementation order towards a **vertical slice** strategy. This ensures that at each stage of development, core components have the necessary high-level context to be implemented robustly, avoiding the architectural friction of building low-level pieces in isolation.
 
 ## Part 1: A Parallel and Incremental Compiler
 
@@ -13,119 +13,99 @@ The Ribbon compiler is designed from the ground up to support modern development
 1.  **Parallel Compilation:** Drastically reduce full build times by compiling independent modules simultaneously.
 2.  **Incremental Compilation:** Recompile only the modules affected by code changes, making iterative development nearly instantaneous.
 
-The foundation of this architecture is a **Hub-and-Spoke Model** orchestrated by a central build manager. This model cleanly separates the compilation process into distinct, reusable services:
+The foundation of this architecture is a **Hub-and-Spoke Model** where distinct services operate on a shared context for a given build.
 
-*   **The Build Orchestrator:** The central brain of the build system. It manages the module dependency graph, the compilation cache, and coordinates the workflow between the other services.
-*   **The Frontend Service:** A pure analysis service. Its job is to take source code and produce a semantic representation of its public interface and private implementation.
-*   **The Backend Service:** A pure code generation service. Its job is to take the semantic representation from one or more modules and produce a final, executable artifact (e.g., bytecode).
+*   **The Build Orchestrator:** The brain of the build system. It discovers modules, builds the dependency graph, manages the compilation cache, and coordinates the entire workflow.
+*   **The Compilation Session:** A short-lived object representing the state of a single build run. It owns the root `ir.Context` and holds critical mapping data, such as which `ir.Context` corresponds to which `ModuleGUID`. This cleanly separates the persistent IR from transient, build-specific metadata.
+*   **The Frontend Service:** A pure analysis service. Its job is to take source code, rehydrate dependency interfaces from the `CompilationSession`, and produce a semantic representation of a module's public interface and private implementation.
+*   **The Backend Service:** A pure code generation service. Its job is to take the semantic representation from one or more modules and produce a final, executable artifact.
 
-This separation is the key to unlocking both parallelism and accurate incrementality, while also enabling other tools like Language Server Protocol (LSP) servers to reuse the frontend analysis without depending on the code generation backend.
+This separation is the key to unlocking parallelism and accurate incrementality, while also enabling other tools like Language Server Protocol (LSP) servers to reuse the frontend analysis without depending on the code generation backend.
 
-### 1.2. Phase 1: The Frontend Service and the Serializable Module Artifact (SMA)
+### 1.2. The `CompilationSession`: A Context for a Single Build
 
-The first phase of compilation is a fast analysis pass performed by the **Frontend Service**. It is responsible for producing a **Serializable Module Artifact (SMA)** for every module (`.sma` file).
-
-The SMA is a self-contained, cacheable, "dehydrated" representation of a **whole, fully-analyzed module**. It must contain enough information for two distinct purposes:
-1.  For the `BackendService` to generate code for the module itself *without re-analyzing the source*.
-2.  For *other modules* to compile against it without needing the source.
-
-To satisfy these requirements, the SMA contains two distinct sections:
-*   **A Public Interface Section:** A dehydrated representation of the module's public `ir.Node` graph. This is the "header file" part that other modules will "include" (rehydrate) when they compile.
-*   **A Private Implementation Section:** A dehydrated representation of the module's private `ir.Node` graph, including the bodies of all functions. This is what the `BackendService` uses to generate the final artifact for *this specific module*.
-
-The `sma.Ref` (Symbolic IR Reference) is the core of the SMA format, providing a stable, context-free replacement for the ephemeral, in-memory `ir.Ref`.
+To avoid polluting the core `ir.Context` with build-specific metadata, the `Orchestrator` creates a `CompilationSession` for each build. This object acts as the "short-term memory" for the build, providing the necessary context for services to interact.
 
 ```zig
-// sma.Ref: A stable, serializable reference to an IR node.
-const sma.Ref = union(enum) {
-    /// A reference to another node within this SAME artifact.
-    /// The u32 is an index into this SMA's flattened node array.
-    internal: u32,
+// A conceptual representation.
+const CompilationSession = struct {
+    /// The single root IR context for this build. All child contexts for
+    /// individual modules will be created under this root.
+    root_context: *ir.Context,
 
-    /// A stable, symbolic reference to an item in another module.
-    external: struct {
-        module_guid: ir.ModuleGUID, // A unique hash identifying the target module.
-        symbol_name_idx: u32,       // Index into this SMA's string_table.
-    },
+    /// Maps a child context's ID to its module's GUID and other info.
+    /// This is the key to resolving external references during dehydration.
+    context_id_to_module: std.HashMap(ir.Context.Id, ModuleInfo, ...),
 
-    /// A reference to a well-known compiler builtin.
-    builtin: ir.Builtin,
-    
-    nil,
+    /// A reverse map from an `ir.Ref` (pointing to an external symbol)
+    /// back to its original module GUID and symbol name. Populated during
+    /// dependency rehydration.
+    ref_to_external_symbol: std.HashMap(ir.Ref, ExternalSymbolInfo, ...),
+
+    // Other caches for this build run...
 };
 ```
 
-### 1.3. The `interface_hash`: Canonical Binary Representation and Merkle Hashing
+### 1.3. The Serializable Module Artifact (SMA)
 
-The `interface_hash` is the cornerstone of incremental compilation. Its **sole purpose** is to be a cryptographic fingerprint of the module's **public contract (API/ABI)**. The build orchestrator uses this hash for one thing only: to answer the question, "Has the public-facing part of this module changed in a way that requires reverse-dependencies to be recompiled?"
+The SMA is a binary file (`.sma`) produced by the `FrontendService`. It is a self-contained, cacheable representation of a **whole, fully analyzed module**.
 
-*   It **must change** if a public function's signature (including its full, inferred effect row), a public struct's layout, or any other aspect of the public contract changes.
-*   It **must not change** if private implementation details, comments, or formatting are modified.
+The SMA contains two distinct sections:
+*   **A Public Interface Section:** A dehydrated representation of the module's public API. This is what other modules compile against.
+*   **A Private Implementation Section:** A dehydrated representation of the module's private implementation, including function bodies. This is what the `BackendService` uses to generate code for this specific module.
 
-To achieve this, the `FrontendService` will generate a **Canonical Binary Representation (CBR)** derived *only* from the public interface. The final `interface_hash` is a Merkle-style hash of the entire public API, making it compositional and efficient.
+#### SMA File Format
 
-**The `interface_hash` Algorithm:**
+*(Note: [`binary_format.md`](./binary_format.md) is the canonical definition for this table)*
 
-1.  **Full Module Analysis:** The `FrontendService` performs a full analysis of the entire module, including private implementations. This is crucial to correctly infer the complete types and effect rows of all public functions.
+| Offset | Field                 | Type           | Description                                                |
+| :----- | :-------------------- | :------------- | :--------------------------------------------------------- |
+| 0x00   | `magic_number`        | `[6]u8`        | The bytes `RIBSMA`.                                        |
+| 0x06   | `format_version`      | `u16`          | The version of the SMA format.                             |
+| 0x08   | `header`              | `SMA.Header`   | Metadata and offsets to other tables.                      |
+| ...    | `string_table`        | `[]u8`         | Null-terminated UTF-8 strings.                             |
+| ...    | `public_symbol_table` | `[]SMASymbol`  | Maps public symbol names to nodes.                         |
+| ...    | `public_node_table`   | `[]SMANode`    | Dehydrated IR graph for the **public interface**.            |
+| ...    | `private_node_table`  | `[]SMANode`    | Dehydrated IR graph for the **private implementation**.      |
 
-2.  **Build CBRs for Public Symbols:** A CBR is a tree of normalized, ABI-relevant data. The service traverses the public-facing `ir.Node` graph for each public symbol and recursively generates its CBR.
+### 1.4. The `interface_hash` and Canonical Binary Representation (CBR)
 
-3.  **Canonicalize and Hash Components:**
-    *   **Structs:** The CBR includes a `layout_policy` (`packed` or `C`). Public fields are sorted before hashing: alphabetically by name for `packed` structs, and by memory offset for `C` layout structs.
-    *   **Functions:** The CBR includes the hashes of the CBRs for its return type and each parameter type. It also includes the hash of its full, inferred effect row, which is canonicalized by alphabetically sorting the effect names.
-    *   **Generics:** The CBR is built for the *unspecialized* generic form, treating type parameters as built-in symbols with their own stable hashes.
+The `interface_hash` is the cornerstone of incremental compilation. It is a cryptographic fingerprint of the module's **public contract (API/ABI)**. To generate it, the `FrontendService` creates a temporary, in-memory **Canonical Binary Representation (CBR)** of the public interface.
 
-4.  **Final Assembly:** The final CBR hashes for all public symbols are sorted alphabetically by symbol name and then hashed together to produce the final `interface_hash`.
+The final `interface_hash` is a Merkle-style hash (BLAKE3) of the entire public API, making it compositional and deterministic.
 
-### 1.4. Generics, Metaprogramming, and the Specialization Cache
+**Canonicalization Rules:**
+*   Public symbols are sorted alphabetically by name before the final hash is computed.
+*   Struct fields are sorted alphabetically for packed layouts and by memory offset for C layouts.
+*   Effect rows are sorted alphabetically by effect name.
 
-To handle generics and metaprogramming, the **Backend Service** will use a **Specialization Cache**.
+### 1.5. The Incremental Build Workflow
 
-*   **Unspecialized SMAs:** SMAs store the interfaces of generic types in their abstract form (`List T`).
-*   **Specialization on Demand:** When a module consumes a specialization (`List i32`), the `BackendService` queries the Specialization Cache with a stable key (e.g., `hash(hash("List T") + hash("i32"))`).
-*   **Cache Logic:** On a cache miss, the backend performs monomorphization and generates the concrete implementation. On a hit, the pre-compiled artifact is used.
-*   **RTTI Generation:** The **`Type Version ID`** needed for hot-reloading is the hash of a type's CBR, which is already computed by the `FrontendService`.
+The **Build Orchestrator** coordinates the entire process.
 
-### 1.5. Phase 2: The Parallel Backend Service
-
-The **Backend Service** consumes one or more SMAs to generate final artifacts in an embarrassingly parallel fashion. A `backend.Job` for a given module will:
-
-1.  Create a private `ir.Context`.
-2.  **Rehydrate dependency interfaces:** For each module dependency, load its SMA and rehydrate **only its Public Interface Section** into the job's context. This is a two-pass process (shell creation -> linkage) to correctly handle graph cycles.
-3.  **Rehydrate its own implementation:** For the module being compiled, load its own SMA and rehydrate **both its Public Interface Section and its Private Implementation Section** into the context.
-4.  Run optimizations and generate the final artifact (e.g., `core.Bytecode`).
-
-### 1.6. The Build Orchestrator and Incremental Workflow
-
-The **Build Orchestrator** is the central coordinator of the entire process. It manages the `SMACache`, the `DependencyGraph`, and invokes the services.
-
-**Workflow of an Incremental Build:**
-
-1.  **Trigger:** A file watcher reports that `module_b.ribbon` has been modified.
-2.  **Orchestration Begins:** The orchestrator is invoked for `module_b`.
-3.  **Phase 1 (Analysis):** The orchestrator calls `frontend.generateSMA("path/to/module_b.ribbon", ...)` to produce two things:
-    *   The `interface_hash`, generated by creating a `CBR` of the **public interface only**.
-    *   The `new_module_b.sma` file, which contains a serialized version of **both the public interface AND the private implementation**.
+1.  **Trigger:** A file watcher reports a change to `module_b.ribbon`.
+2.  **Orchestration Begins:**
+    *   The `Orchestrator` creates a `CompilationSession` and a `DependencyGraph`.
+    *   It performs dependency discovery (parsing only `import` statements) to build the graph.
+    *   It uses **Tarjan's algorithm to find Strongly Connected Components (SCCs)**. This produces a topologically sorted list of *groups* of modules. Modules within a group (an SCC) have cyclic dependencies on each other. (e.g., `[ [utils], [module_a, module_b], [app] ]`).
+3.  **Frontend Loop (SCC-based Analysis):**
+    *   The orchestrator iterates through the sorted list of SCCs.
+    *   For the `[utils]` SCC:
+        *   The frontend service is called for `utils.ribbon`. It has no Ribbon dependencies. `utils.sma` is generated.
+    *   For the `[module_a, module_b]` SCC:
+        *   The frontend service is invoked for the entire group. It must analyze `module_a` and `module_b` in a way that allows them to resolve types from each other.
+        *   This pass requires rehydrating the public interface of `utils` first.
+        *   It produces `new_module_a.sma` and `new_module_b.sma`.
+    *   For the `[app]` SCC:
+        *   The frontend service analyzes `app.ribbon`.
+        *   It first rehydrates the public interfaces from `module_a.sma` and `module_b.sma`.
+        *   It produces `app.sma`.
 4.  **The "Should I Recompile?" Check:**
-    *   The orchestrator retrieves `old_module_b_sma.header.interface_hash` from its `cache`.
-    *   It compares this old hash with the newly generated `interface_hash`.
-5.  **Decision & Scheduling (Phase 2):**
-    *   **Case A: Hashes Match (No Public API Change).**
-        *   The orchestrator knows that only `module_b` needs to be recompiled.
-        *   It schedules a single backend job: `backend.compile(module_b)`.
-        *   The `BackendService` loads `new_module_b.sma`, rehydrates its **Private Implementation Section** (and public section), and generates new code. Other modules are untouched.
-    *   **Case B: Hashes Differ (Public API Change).**
-        *   The orchestrator consults the `DependencyGraph` for the *reverse dependencies* of `module_b` (e.g., `module_c`, `module_d`).
-        *   It schedules parallel backend jobs for each affected module (`module_b`, `module_c`, `module_d`).
-        *   The `module_b` job proceeds as in Case A.
-        *   The `module_c` and `module_d` jobs load `new_module_b.sma` but **only rehydrate its Public Interface Section** to compile against.
-6.  **Cache Update:** Upon success, the orchestrator updates the cache with the new SMAs and artifacts.
-
-This model allows an **LSP server** to be built as a separate consumer of the `Orchestrator` and `FrontendService`, getting all the semantic information it needs from the SMA without ever touching or depending on the `BackendService`.
-
-### 1.7. Link-Time Optimization (LTO)
-
-The existing `ir.Context.merge` function will be repurposed for an optional, final **Link-Time Optimization (LTO)** stage. In an LTO build, the orchestrator can direct the backend to merge the IR for all modules into a single context, enabling powerful whole-program optimizations like cross-module inlining.
+    *   The orchestrator computes the `interface_hash` from the public part of `new_module_b.sma`.
+    *   It compares this with the `interface_hash` from the cached `old_module_b.sma`.
+5.  **Backend Scheduling (Parallel Code Generation):**
+    *   **Case A: Hashes Match (No Public API Change).** Only `module_b` needs its code regenerated. A single backend job is scheduled: `backend.compile(module_b)`.
+    *   **Case B: Hashes Differ (Public API Change).** The `DependencyGraph` is consulted for reverse dependencies (e.g., `app`). Parallel backend jobs are scheduled for `module_b` and `app`.
 
 ## Part 2: A Robust Hot-Reloading System
 
@@ -143,216 +123,159 @@ The initial implementation will provide a rapid recompile-and-relaunch cycle.
 
 #### Compiler Responsibilities: Type Evolution and Safety
 
-The runtime will perform a GC-style root-up traversal utilizing a worklist. Calls to migrate must be deferrable, for example when an allocator migrates it needs to defer its allocations' migrations to avoid out-of-order migration. Ribbon's lack of full continuations will require the addition of a "retry" system when `get_new_address` fails because of dependency chains etc. The migration orchestrator in the runtime must have access to both the old and new SMAs during the migration transaction.
-
-*   **The `Migratable` Type Class:** Users define migration logic via a standard type class. The compiler can auto-generate implementations for simple, non-breaking changes.
+*   **The `Migratable` Type Class:** Users define migration logic via a standard type class.
     ```ribbon
     Migratable := class From, To.
         migrate: From -> To | { RemapAddress, Error String }
     ```
-*   **The `RemapAddress` Effect:** This is conceptualized something like the following:
-    ```ribbon
-    RemapAddress := effect.
-        get_new_address : (*'old opaque) -> (*'new opaque) | { Error String }
-        set_new_address : (*'old opaque, *'new opaque) -> () | { Error String }
-    ```
-*   **The `Unsafe` Effect and Trust Boundary:**
-    ```ribbon
-    Unsafe := effect.
-        ;; no methods
-    ```
-    FFI calls implicitly add an `Unsafe` effect. Migrating a struct containing FFI resources will therefore be `Unsafe`. Only trusted modules can handle this effect, creating a clear safety boundary. The key implementation detail here will be defining the "trust boundary." Modules will be contractually provided with the ability to *handle* the `Unsafe` effect. This can be controlled at the location the module is imported, via annotations and other metadata. For example `trusted_guest := #trusted import "path/to/guest.bb"`, or as a flag passed to a runtime extension loader.
+*   **The `RemapAddress` Effect:** This effect is handled by the runtime during a migration transaction to safely update pointers from old memory locations to new ones.
+*   **The `Unsafe` Effect and Trust Boundary:** Migrating types that contain raw pointers or FFI resources implicitly adds an `Unsafe` effect. Only explicitly trusted modules can handle this effect, creating a clear safety boundary.
 
 #### Runtime Responsibilities: State Tracking & Migration
 
-*   **Migratable Allocators and RTTI:** Special allocators attach RTTI—specifically, the **`Type Version ID`** (from the CBR hash)—to memory blocks. This overhead is pay-for-what-you-use; production builds can use standard allocators for zero overhead.
-*   **State Discovery and Host Root Registration API:** The runtime discovers state by traversing migratable allocators and registered globals. For state held only by the host (e.g., a Ribbon object in a Zig `HashMap`), the host can use an API to register these objects as roots for the migration traversal.
-
-#### Handling Concurrency: The Safe Point Effect
-
-To avoid migrating live call stacks, Ribbon uses a cooperative approach.
-
-*   **The `hotReloadSyncPoint` Handler:** The application developer prompts this handler at safe points in their main loop.
-*   **"Stop-the-World" Handshake & Fallback:** When a hot-reload is requested, the runtime pauses threads at their next sync point. If any thread's call stack contains a frame from a module being reloaded, the migration is **aborted**, and the system safely **falls back to the V0 fast restart behavior**, guaranteeing stability.
-
-#### The Migration Transaction: An Atomic, Rollback-Safe Process
-
-If all stacks are clean, the migration proceeds atomically.
-
-1.  **Phase 1 (Allocation & Mapping):** The runtime traverses the old state, allocating new memory and building a map from old addresses to new addresses. The old state remains untouched.
-2.  **Phase 2 (Migration Loop):** The runtime iteratively calls the user's `migrate` functions. It provides a handler for the `RemapAddress` effect, which uses the address map to patch pointers.
-3.  **Completion or Abort:**
-    *   **On Abort:** If any `migrate` fails, the transaction is rolled back by freeing all new memory. The application resumes with the original code and state.
-    *   **On Success:** The runtime atomically swaps the application's root pointers to the new state, frees the old memory, and resumes execution.
-
-### Core Challenges & Considerations
-
-1.  **CBR Implementation Complexity:** Canonicalization is difficult. Every detail must be perfectly deterministic. Rigorous testing will be paramount.
-2.  **Build Orchestrator Complexity:** The orchestrator is a significant piece of engineering, responsible for caching, dependency analysis, and job scheduling. It needs to be robust and performant.
-3.  **Metaprogramming and Macros:** The `interface_hash` of a module must change if a macro it uses expands to produce a different public API. This dependency must be tracked.
-4.  **Host Root Registration API:** This FFI boundary must be carefully designed to ensure memory safety and clear ownership semantics.
-5.  **State Discovery Performance:** For applications with large state graphs, the traversal could introduce a noticeable pause. Future work could explore snapshotting to mitigate this.
+*   **Migratable Allocators and RTTI:** Special allocators attach RTTI—specifically, the **`Type Version ID`** (the CBR hash of the type)—to memory blocks. This is a pay-for-what-you-use feature.
+*   **The Migration Transaction:** Migration is an atomic, rollback-safe process.
+    1.  The runtime pauses execution at a safe point (e.g., the top of the main loop).
+    2.  It traverses the old state, allocating new memory and building an address-remapping table.
+    3.  It iteratively calls the user-defined `migrate` functions, providing a handler for the `RemapAddress` effect.
+    4.  If any migration fails, the transaction is aborted, new memory is freed, and execution resumes with the old state.
+    5.  On success, the runtime atomically swaps the application's root pointers to the new state, frees the old memory, and resumes execution.
 
 ---
 
-# Implementation Plan
+## Implementation Plan
 
-This section outlines the concrete steps required to implement the Unified Architectural Plan for Ribbon. It is designed to guide contributors through the development process, from foundational data structures to the full hot-reloading system.
+This plan is structured as a series of **vertical slices**, ensuring that a functional (though incomplete) end-to-end pipeline exists at each major stage.
 
-## Proposed Order of Implementation
+### Proposed Order of Implementation
 
-The architecture is designed to be built in logical, verifiable stages. The recommended order of implementation is as follows:
+1.  **Phase 1: Skeleton Infrastructure:** Establish the `Orchestrator` and `DependencyGraph` with the ability to determine a correct build order.
+2.  **Phase 2: The "Single Dependency" Frontend Slice:** Implement the minimum viable `FrontendService` and `SMA` serialization/deserialization to compile a module that depends on another.
+3.  **Phase 3: The Backend Slice:** Connect the `BackendService` to create a complete, albeit non-incremental, build pipeline.
+4.  **Phase 4: Full Incrementality:** Implement CBR hashing and caching in the `Orchestrator`.
+5.  **Phase 5 & 6: Hot-Reloading:** Implement the `V0` (fast restart) and `V1` (state migration) systems.
 
-1.  **Part 1: Foundational Data Structures:** Define the core SMA and CBR structures.
-2.  **Part 1: The Frontend Service:** Implement the analysis pass that produces SMAs. This is the highest priority as it unblocks all other compiler work.
-3.  **Part 1: The Backend Service:** Implement the service that consumes SMAs and produces bytecode.
-4.  **Part 1: The Build Orchestrator:** Tie the services together to achieve parallelism and incrementality.
-5.  **Part 2: Hot-Reloading V0 (Fast Restart):** Implement the simpler restart-based hot-reloading as a first milestone.
-6.  **Part 2: Hot-Reloading V1 (Live State Migration):** Implement the full state migration system.
+---
 
 ## Part 1: Implementing the Parallel and Incremental Compiler
 
-The goal of this part is to build a high-performance compiler that minimizes rebuild times through parallelism and caching.
+### Phase 1: Skeleton Infrastructure
 
-#### Phase 1: Foundational Data Structures
+**Goal:** Create an orchestrator that can scan a root module, discover its dependencies, and print a correct topological build order.
 
-Before services can be built, the data they exchange must be defined. This involves creating the on-disk format for the Serializable Module Artifact (SMA).
-
-*   **Task 1.1: Define Serializable Module Artifact (`.sma`) Structure.**
-    *   **Location:** A new file, `src/mod/sma.zig`.
-    *   **Details:** Define the top-level `SMA` struct with the following components:
-        *   `header`: Contains metadata like `ribbon_version`, `module_guid`, and the crucial `interface_hash`.
-        *   `string_table`: A contiguous block of memory for all symbol names, strings, etc., referenced by index.
-        *   `public_symbols`: A list mapping public symbol names to their root `sma.Ref`s in the `public_node_table`.
-        *   `public_node_table`: A flattened array of `sma.Node`s representing the dehydrated **public interface** IR graph.
-        *   `private_node_table`: A flattened array of `sma.Node`s representing the dehydrated **private implementation** IR graph.
-
-*   **Task 1.2: Define `sma.Ref` and `ir.ModuleGUID`.**
-    *   **Location:** `src/mod/sma.zig` and `src/mod/ir.zig`.
+*   **Task 1.1: Define Core Orchestrator Structures.**
+    *   **Location:** New files, e.g., `src/mod/orchestration.zig`, `src/mod/orchestration/graph.zig`.
     *   **Details:**
-        *   In `ir.zig`, define `ModuleGUID` as a `u128` (or similar hash result type), derived from a canonical hash of the module's source path. For maximum robustness across different machines and build environments (e.g., vendored dependencies), this should be a hash of a canonical module name (e.g., my_project/utils/collections) rather than a filesystem path.
-        *   In `sma.zig`, implement the `sma.Ref` (Symbolic IR Reference) union. This is the stable, serializable replacement for the in-memory `ir.Ref`.
-            *   `internal: u32`: An index into one of the *current SMA's* node tables. A high bit could be used to distinguish between public/private tables.
-            *   `external: struct { module_guid: ir.ModuleGUID, symbol_name_idx: u32 }`: A reference to a public symbol in another module.
-            *   `builtin: ir.Builtin`: A reference to a compiler-known primitive.
-            *   `nil`: A null reference.
+        *   Define the `CompilationSession` struct. It will initially be simple, containing just the `root_context: *ir.Context`.
+        *   Define a `DependencyGraph` that can store module paths and their direct dependencies.
+        *   Define the main `BuildOrchestrator` struct.
 
-*   **Task 1.3: Define Canonical Binary Representation (CBR) In-Memory Structures.**
-    *   **Location:** A new file, `src/mod/frontend/cbr.zig`.
-    *   **Details:** Define the in-memory tree structures that represent the canonical form of public symbols before they are hashed. This is not for serialization, but for deterministic hashing.
-        *   `CbrNode`: A union for different symbol kinds (function, struct, etc.).
-        *   `CbrStruct`: Contains `layout_policy` and a *sorted* list of `CbrField`s (name hash, type hash).
-        *   `CbrFunction`: Contains hashes for return type, parameters, and the canonicalized (sorted) effect row.
+*   **Task 1.2: Implement Dependency Discovery.**
+    *   **Action:** Create a lightweight function in the `frontend` service, `discoverImports(path) -> ![]const []const u8`, that performs a minimal parse of a source file to extract only its `import` statements.
+    *   **Action:** Implement the `BuildOrchestrator.buildDependencyGraph(root_module_path)` method. It will recursively call `discoverImports` to populate the `DependencyGraph`.
 
-#### Phase 2: Implementing the Frontend Service
+*   **Task 1.3: Implement Tarjan's Algorithm for SCCs.**
+    *   **Action:** Implement a function that uses **Tarjan's algorithm** to find the strongly connected components (SCCs) of the `DependencyGraph`.
+    *   **Details:** The function should produce an `ArrayList(ArrayList(ModuleGUID))`. Each inner list is an SCC, and the outer list is topologically sorted. This correctly handles module import cycles.
 
-This service is responsible for analysis and SMA generation. It is the most critical first step.
+*   **Task 1.4: Implement the `main` Driver.**
+    *   **Action:** In `src/bin/main.zig`, instantiate the `BuildOrchestrator`, call it on a test file, and print the resulting build order.
+    *   **Verification:** This phase is complete when the driver correctly prints the build order in SCC groups, e.g., `[ ["path/to/dependency.ribbon"], ["path/to/main.ribbon", "path/to/utils.ribbon"] ]` for a project where `main` and `utils` import each other.
 
-*   **Task 2.1: Refactor Frontend Logic into a `frontend` Service.**
-    *   **Action:** Create a new `src/mod/frontend.zig` module.
-    *   **Details:** Move the parsing and semantic analysis logic currently in `src/mod/meta_language.zig` into this new, dedicated service. The `meta_language` module will become a consumer of this service.
+### Phase 2: The "Single Dependency" Frontend Slice
 
-*   **Task 2.2: Implement Full Semantic Analysis (RML-to-IR).**
-    *   **Action:** Flesh out the `meta_language.compileExpr` function.
-    *   **Details:** This is a major task that involves implementing the full semantic analysis of Ribbon code. It is the direct implementation of the "Missing Links: RML-to-IR Compilation" section in the `README.md`. The eventual outcome must be the correct and complete inference of types and effect rows for all functions, as this is critical for the `interface_hash`. However, the target for this task is simply compiling the object-typed ML; thus types will all be relatively simple, and relatively little inference is required for this task's purposes. The typed language's frontend facilities will then be implemented *in* RML, communicating with the runtime via builtin/FFI bindings.
+**Goal:** Compile a module (`app.ribbon`) that depends on another (`utils.ribbon`) by generating `utils.sma`, loading its public interface, and then generating `app.sma`.
 
-*   **Task 2.3: Implement CBR Generation and Hashing.**
-    *   **Location:** `src/mod/frontend/cbr.zig`.
-    *   **Details:** After semantic analysis produces a complete `ir.Context`, implement the logic to generate the `interface_hash`.
-        1.  Create a function `generateCbr(ir.Ref) -> CbrNode`. This function will traverse the IR graph starting from a public symbol's `ir.Ref` and build the corresponding `CbrNode` tree, staying within the public API boundary.
-        2.  Implement the canonical sorting logic within `generateCbr`: sort struct fields (alphabetically or by offset) and function effect rows (alphabetically).
-        3.  Implement a function `hashCbr(CbrNode) -> u128`. This performs a Merkle-style hash on the `CbrNode` tree.
-        4.  Implement the final `generateInterfaceHash(*ir.Context) -> u128` function, which gets all public symbols, generates and hashes their CBRs, sorts the final hashes, and produces the single `interface_hash`.
-
-*   **Task 2.4: Implement SMA "Dehydration" (Serialization).**
+*   **Task 2.1: Implement SMA Serialization ("Dehydration").**
     *   **Location:** `src/mod/sma.zig`.
-    *   **Details:** Create a function `dehydrate(ctx: *ir.Context, path: []const u8) !void`.
-        1.  Traverse the entire `ir.Context` graph. Partition all `ir.Node`s into two sets: those reachable from public symbols (public interface), and the rest (private implementation).
-        2.  Serialize the public interface nodes into the `public_node_table`.
-        3.  Serialize the private implementation nodes into the `private_node_table`.
-        4.  During serialization, convert all `ir.Ref`s into stable `sma.Ref`s. References between the two partitions must be handled correctly.
-        5.  Write the `SMA` header (including the pre-computed `interface_hash`), string table, public symbol table, and both node tables to the output `.sma` file.
+    *   **Action:** Implement the `Dehydrator` logic as described in the architectural plan. Crucially, its `dehydrateChildRef` function will now expect to be passed a `*CompilationSession` to resolve external and builtin references.
 
-#### Phase 3: Implementing the Backend Service
+*   **Task 2.2: Implement SMA Deserialization ("Rehydration").**
+    *   **Location:** `src/mod/orchestration/rehydrator.zig` (new file).
+    *   **Action:** Implement `rehydratePublicInterface(session: *CompilationSession, sma: *const sma.Artifact) !void`. This function will:
+        1.  Create a new child `ir.Context` for the dependency module.
+        2.  Populate it with `ir.Node`s by reading the SMA's public sections.
+        3.  Update the `session`'s `context_id_to_module` and `ref_to_external_symbol` maps.
 
-This service consumes SMAs and produces executable artifacts.
+*   **Task 2.3: Integrate into `FrontendService` and `Orchestrator`.**
+    *   **Action:** Modify the `FrontendService`'s main entry point to accept a `*CompilationSession`.
+    *   **Action:** In the `BuildOrchestrator`'s build loop, for each module:
+        1.  Load the SMAs of its direct dependencies (which have already been generated in previous loop iterations).
+        2.  Call the `FrontendService`, passing the session and the loaded dependency SMAs.
+        3.  The `FrontendService` will rehydrate the dependencies before analyzing the current module's source.
+        4.  Save the generated SMA to a cache directory.
 
-*   **Task 3.1: Refactor Backend Logic into a `backend` Service.**
-    *   **Action:** Solidify the `src/mod/backend.zig` file as the home for this service.
-    *   **Details:** Ensure the `Compiler` and `Target` concepts align with the service model, where a `Job` is the primary unit of work.
+*   **Verification:** This phase is complete when the orchestrator can successfully generate valid `.sma` files for a project with at least one inter-module dependency.
 
-*   **Task 3.2: Implement SMA "Rehydration" (Deserialization).**
+### Phase 3: The Backend Slice
+
+**Goal:** Create a complete, single-threaded build pipeline that can take a root module and produce a final, executable bytecode artifact.
+
+*   **Task 3.1: Implement Full Module Rehydration.**
     *   **Location:** `src/mod/backend.zig`.
-    *   **Details:** Create functions to populate a job's `ir.Context` from an SMA. This will have two modes:
-        1.  **Dependency Mode:** A function `rehydratePublic(ctx: *ir.Context, sma: SMA)` loads **only** the `public_node_table` from a dependency's SMA. It uses a two-pass process (shell creation -> linkage) to handle cycles.
-        2.  **Self-Compilation Mode:** A function `rehydrateFull(ctx: *ir.Context, sma: SMA)` loads **both** the `public_node_table` and `private_node_table` for the module being compiled, linking them together into a complete IR graph.
+    *   **Action:** Implement `rehydrateFull(ctx: *ir.Context, sma: *const sma.Artifact)` which deserializes **both** the public and private sections of an SMA into an `ir.Context` for compilation.
 
-*   **Task 3.3: Implement IR-to-Bytecode Pass.**
-    *   **Action:** Implement the `backend.BytecodeTarget.runJob` function.
-    *   **Details:** This is the direct implementation of the "Missing Links: IR-to-Bytecode Compilation" section from the `README.md`. It will traverse the `ir.Graph` within a `Job` (which now contains its own fully rehydrated code and the rehydrated public interfaces of its dependencies) and emit bytecode using the `bytecode.FunctionBuilder` API.
+*   **Task 3.2: Implement the `BackendService`.**
+    *   **Action:** The `BackendService`'s main function will take a list of SMAs to link.
+    *   **Details:** It will create a new `ir.Context`, rehydrate the public interfaces of all dependencies, then rehydrate the full content of the primary module, and finally run the IR-to-Bytecode lowering pass.
 
-#### Phase 4: Implementing the Build Orchestrator
+*   **Task 3.3: Connect `Orchestrator` to `BackendService`.**
+    *   **Action:** After the frontend loop completes, the `Orchestrator` will schedule a backend job for the root module, passing it all necessary dependency SMAs.
 
-This is the top-level controller that makes the system incremental and parallel.
+*   **Verification:** This phase is complete when running the build driver on `app.ribbon` produces a single, valid, and executable bytecode file.
 
-*   **Task 4.1: Implement Core Orchestrator Data Structures.**
-    *   **Location:** A new file, e.g., `src/mod/orchestrator.zig`.
-    *   **Details:**
-        *   `SMACache`: A persistent map (e.g., on-disk key-value store or in-memory map for the lifetime of the tool) from `ModuleGUID` to a cached `SMA.Header`.
-        *   `DependencyGraph`: A graph data structure mapping `ModuleGUID`s to their forward and reverse dependencies.
+### Phase 4: Full Incrementality and Parallelism
 
-*   **Task 4.2: Implement the Main Build Loop.**
-    *   **Action:** Create the main `orchestrator.buildModule(path)` function.
-    *   **Details:** Implement the workflow described in the architectural plan:
-        1.  Take a module path as input.
-        2.  Invoke the `FrontendService` to generate a new SMA.
-        3.  Load the old SMA header from the `SMACache`.
-        4.  Compare the `interface_hash`.
-        5.  If hashes differ, query the `DependencyGraph` for reverse dependencies.
-        6.  Schedule a list of modules that need a backend compile pass.
+**Goal:** Evolve the single-threaded pipeline into a fast, parallel, and truly incremental compiler.
+
+*   **Task 4.1: Implement CBR Generation and Hashing.**
+    *   **Location:** `src/mod/cbr.zig`.
+    *   **Action:** Implement the `generateInterfaceHash` logic. This is a significant task requiring careful attention to canonicalization rules.
+
+*   **Task 4.2: Implement Caching in the Orchestrator.**
+    *   **Action:** The `Orchestrator` will now use the `interface_hash` to decide whether a module and its reverse dependencies need to be recompiled by the backend, as described in the architectural plan.
 
 *   **Task 4.3: Implement Parallel Job Execution.**
-    *   **Action:** Integrate a thread pool into the orchestrator.
-    *   **Details:** Take the list of modules generated in Task 4.2 and submit a `BackendService` compilation job for each one to the thread pool. Wait for all jobs to complete.
+    *   **Action:** Integrate a thread pool into the orchestrator. The backend scheduling logic will submit compilation jobs for all dirty modules to the pool and wait for them to complete.
 
 ## Part 2: Implementing the Robust Hot-Reloading System
 
 This part builds upon the incremental compiler to provide live code updates.
 
-#### Phase 5: V0 - Fast Restart
+### Phase 4: V0 - Fast Restart
 
 This is the foundational, simpler version of hot-reloading.
 
-*   **Task 5.1: Integrate a File Watcher.**
+*   **Task 4.1: Integrate a File Watcher.**
     *   **Action:** Use a cross-platform file watching library or Zig's standard library to monitor source files for changes.
     *   **Details:** When a change is detected, the watcher should invoke `orchestrator.buildModule`.
 
-*   **Task 5.2: Implement Orchestrator-to-Runtime Signaling.**
+*   **Task 4.2: Implement Orchestrator-to-Runtime Signaling.**
     *   **Action:** Implement a simple compiler<->runtime communication mechanism.
     *   **Details:** A basic queue a good choice. After a successful build, the orchestrator writes a message to the queue.
 
-*   **Task 5.3: Implement Host Application Restart Logic.**
+*   **Task 4.3: Implement Host Application Restart Logic.**
     *   **Action:** The runtime will run a background thread to listen for messages from the compiler.
     *   **Details:** Upon receiving a signal, runtime triggers host shutdown and re-initialization sequence, loading the newly compiled artifacts.
 
-#### Phase 6: V1 - Live State Migration
+### Phase 5: V1 - Live State Migration
 
 This is the advanced, state-preserving version of hot-reloading.
 
-*   **Task 6.1: Compiler and Language Support.**
+*   **Task 5.1: Compiler and Language Support.**
     *   **Action:** Implement the `Migratable` type class and `Unsafe` effect.
     *   **Details:**
         1.  In the `frontend` service, add the `Migratable` class to the prelude as a known built-in. Its definition is `class From, To. migrate: (From) -> To | { RemapAddress, Error String }`.
         2.  During semantic analysis, implicitly add the `Unsafe` effect to any function that performs an FFI call.
         3.  Add logic for `derive(Migratable)`. For a struct change that only adds new fields with default values, the compiler can generate a `migrate` function automatically.
 
-*   **Task 6.2: Runtime State Tracking.**
+*   **Task 5.2: Runtime State Tracking.**
     *   **Action:** Implement the `MigratableAllocator` and the host registration API.
     *   **Details:**
         1.  Create a new allocator in `core.zig` that wraps a standard allocator. `alloc` will prepend a small header to each allocation containing the `Type Version ID` (the CBR hash of the type).
         2.  Expose an FFI-safe API from the runtime, e.g., `ribbon_register_root(*core.Fiber, core.Value)` and `ribbon_unregister_root(*core.Fiber, core.Value)`. This allows the host to inform the Ribbon runtime about Ribbon objects it owns.
 
-*   **Task 6.3: Implement the Migration Transaction.**
+*   **Task 5.3: Implement the Migration Transaction.**
     *   **Action:** Implement the core migration logic in the runtime/interpreter.
     *   **Details:** This is the most complex part.
         1.  **Sync Point:** Implement the `hotReloadSyncPoint` effect. The application's main loop will handle this. When a reload is pending, this handler will not return immediately.

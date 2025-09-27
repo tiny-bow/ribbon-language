@@ -53,7 +53,29 @@ const modules = [_]ModuleDef{
     },
     .{
         .name = "sma",
-        .imports = &.{ "ir", "core", "common", "backend" },
+        .imports = &.{ "ir", "core", "common", "backend", "orchestration" },
+    },
+    .{
+        .name = "orchestration",
+        .imports = &.{
+            "core",
+            "common",
+            "ir",
+            // "frontend", // TODO: Uncomment when frontend service exists
+            "sma",
+        },
+    },
+    .{
+        .name = "frontend",
+        .imports = &.{
+            "common",
+            "core",
+            "ir",
+            "sma",
+            "analysis",
+            "orchestration",
+            "meta_language",
+        },
     },
     .{
         .name = "analysis",

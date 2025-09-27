@@ -21,3 +21,5 @@ pub const ir = @import("ir");
 pub const machine = @import("machine");
 pub const meta_language = @import("meta_language");
 pub const sma = @import("sma");
+pub const orchestration = @import("orchestration");
+pub const frontend = @import("frontend");

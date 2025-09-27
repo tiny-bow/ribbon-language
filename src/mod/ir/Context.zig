@@ -228,7 +228,7 @@ pub fn getUserData(self: *Context, ref: ir.Ref) !*ir.UserData {
 /// Delete a userdata for a specific reference.
 pub fn delLocalUserData(self: *Context, ref: ir.Ref) void {
     const userdata = self.userdata.get(ref) orelse {
-        log.debug("Tried to delete non-existing local userdata: {}", .{ref});
+        log.debug("Tried to delete non-existing local userdata: {f}", .{ref});
         return;
     };
 
@@ -478,26 +478,6 @@ pub fn isImmutableNode(self: *Context, ref: ir.Ref) bool {
     }
 }
 
-/// Determine if the node is data.
-pub fn isData(self: *Context, ref: ir.Ref, kind: ir.DataKind) bool {
-    return (self.getNode(ref) orelse return false).isData(kind);
-}
-
-/// Determine if the node is a primitive.
-pub fn isPrimitive(self: *Context, ref: ir.Ref, kind: ir.PrimitiveKind) bool {
-    return (self.getNode(ref) orelse return false).isPrimitive(kind);
-}
-
-/// Determine if the node is a structure.
-pub fn isStructure(self: *Context, ref: ir.Ref, kind: ir.StructureKind) bool {
-    return (self.getNode(ref) orelse return false).isStructure(kind);
-}
-
-/// Determine if the node is a collection.
-pub fn isCollection(self: *Context, ref: ir.Ref, element_kind: ir.Discriminator) bool {
-    return (self.getNode(ref) orelse return false).isCollection(element_kind);
-}
-
 /// Compute the layout of a type node by reference.
 pub fn computeLayout(self: *Context, ref: ir.Ref) !struct { u64, core.Alignment } {
     if (ref.node_kind.getTag() != .structure or ref.node_kind.getDiscriminator() != .type) {
@@ -535,7 +515,7 @@ pub fn _ensureConstantRefs(self: *Context, node: ir.Node) !void {
     if (tag.containsReferences()) {
         for (node.content.ref_list.items) |content_ref| {
             if (content_ref != ir.Ref.nil and !self.isImmutableNode(content_ref)) {
-                log.debug("Attempted to create an immutable node that references a mutable node {}", .{content_ref});
+                log.debug("Attempted to create an immutable node that references a mutable node {f}", .{content_ref});
                 return error.ImmutableNodeReferencesMutable;
             }
         }
@@ -587,7 +567,7 @@ pub fn _addNodeUnchecked(self: *Context, mutability: core.Mutability, node: ir.N
 /// * If the node is interned, this is a no-op.
 pub fn delLocalNode(self: *Context, ref: ir.Ref) void {
     if (self.isLocalImmutableNode(ref)) {
-        log.debug("Tried to delete an immutable node: {}", .{ref});
+        log.debug("Tried to delete an immutable node: {f}", .{ref});
         return;
     }
 
@@ -636,7 +616,7 @@ pub fn _getLocalNodeMut(self: *Context, ref: ir.Ref) ?*ir.Node {
     const node = self.nodes.getPtr(ref) orelse return null;
 
     if (self.isLocalImmutableNode(ref)) {
-        log.debug("Tried to get mutable pointer to an immutable node: {}", .{ref});
+        log.debug("Tried to get mutable pointer to an immutable node: {f}", .{ref});
         return null;
     }
 
