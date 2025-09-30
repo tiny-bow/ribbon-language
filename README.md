@@ -649,8 +649,7 @@ Before contributing, it can definitely be helpful to check out the
 [Design Documentation](https://design.ribbon-lang.com/). It's currently a work in progress as well, but the high-level
 overview it provides is a good tool to have.
 
-The source is also on GitHub at [/tiny-bow/language-design](https://github.com/tiny-bow/language-design) and in the
-[mono-repo](https://github.com/tiny-bow/mono-repo). As mentioned above, the design document is another big vector for
+The source is also on GitHub at [/tiny-bow/language-design](https://github.com/tiny-bow/language-design). As mentioned above, the design document is another big vector for
 contributors right now. Any design-related proposals (language features, syntax changes etc) should be filed at the
 [language-design](https://github.com/tiny-bow/language-design) repo as well.
 
