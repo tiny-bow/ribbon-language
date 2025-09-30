@@ -9,11 +9,54 @@ const ml = ribbon.meta_language;
 //     std.debug.print("ml_integration", .{});
 // }
 
+test "module_parse" {
+    const input =
+        \\module graphics.
+        \\    sources =
+        \\        "renderer.rib",
+        \\        "shaders/",
+        \\        "mesh/",
+        \\    
+        \\    dependencies =
+        \\        std = package "core@0.1.0"
+        \\        gpu = github "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
+        \\        linalg = path "../linear-algebra"
+        \\   
+        \\    extensions =
+        \\        std/macros,
+        \\        std/dsl/operator-precedence,
+        \\        gpu/descriptors,
+        \\        linalg/vector-ops,
+        \\    
+    ;
+
+    const expect =
+        \\⟨𝓶𝓸𝓭 graphics ⌊⟨𝓼𝓮𝓺 ⟨𝓼𝓮𝓽 sources ⌊⟨𝓵𝓲𝓼𝓽 "renderer.rib" "shaders/" "mesh/"⟩⌋⟩ ⟨𝓼𝓮𝓽 dependencies ⌊⟨𝓼𝓮𝓺 ⟨𝓼𝓮𝓽 std ⟨𝓪𝓹𝓹 package "core@0.1.0"⟩⟩ ⟨𝓼𝓮𝓽 gpu ⟨𝓪𝓹𝓹 github "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"⟩⟩ ⟨𝓼𝓮𝓽 linalg ⟨𝓪𝓹𝓹 path "../linear-algebra"⟩⟩⟩⌋⟩ ⟨𝓼𝓮𝓽 extensions ⌊⟨𝓵𝓲𝓼𝓽 std/macros std/dsl/operator-precedence gpu/descriptors linalg/vector-ops⟩⌋⟩⟩⌋⟩
+    ;
+
+    var parser = try ml.Cst.getRModParser(std.testing.allocator, .{}, "test", input);
+    var syn = try parser.parse() orelse {
+        log.err("Failed to parse source", .{});
+        return error.NullCst;
+    };
+    defer syn.deinit(std.testing.allocator);
+
+    var writer_buf = [1]u8{0} ** (1024 * 16);
+    var writer = std.io.Writer.fixed(&writer_buf);
+
+    try ml.Cst.dumpSExprs(input, &writer, &syn);
+
+    log.debug("CST: {f}\nSExprs:\n{s}\n", .{ syn, writer.buffered() });
+
+    try std.testing.expectEqualStrings(expect, writer.buffered());
+}
+
 test "expr_parse" {
     try common.snapshotTest(.use_log("expr"), struct {
         pub fn testExpr(input: []const u8, expect: []const u8) !void {
             _ = .{ input, expect };
-            var syn = try ml.Cst.parseSource(std.testing.allocator, .{}, "test", input) orelse {
+            var parser = try ml.Cst.getRmlParser(std.testing.allocator, .{}, "test", input);
+            var syn = try parser.parse() orelse {
                 log.err("Failed to parse source", .{});
                 return error.NullCst;
             };
@@ -49,7 +92,8 @@ test "cst_parse" {
     try common.snapshotTest(.use_log("cst"), struct {
         pub fn testCst(input: []const u8, expect: []const u8) !void {
             _ = .{ input, expect };
-            var syn = try ml.Cst.parseSource(std.testing.allocator, .{}, "test", input) orelse {
+            var parser = try ml.Cst.getRmlParser(std.testing.allocator, .{}, "test", input);
+            var syn = try parser.parse() orelse {
                 log.err("Failed to parse source", .{});
                 return error.BadEncoding;
             };

@@ -53,30 +53,30 @@ module graphics.
   ;; The list of source files that constitute this module's implementation.
   ;; Paths are relative to the .rmod file and can include directories,
   ;; which will be scanned recursively for `.rib` files.
-  sources = [
+  sources =
     "renderer.rib",
     "shaders/",          ;; Includes all .rib files in this directory
     "mesh/",
-  ]
+
 
   ;; A map of modules this module depends on.
   ;; The keys ('std', 'gpu') are the local aliases used in `import` statements.
   ;; The values are dependency specifiers (e.g., version strings, paths).
-  dependencies = {
-    std = package "core@0.1.0",
-    gpu = github "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD",
-    linalg = path "../linear-algebra",
-  }
+  dependencies =
+    std = package "core@0.1.0"
+    gpu = github "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
+    linalg = path "../linear-algebra"
+  
 
   ;; A list of language extension modules to activate for this module.
   ;; The compiler will load the public interfaces of these extensions
   ;; to configure the parser with their custom syntax rules and macros.
-  extensions = [
+  extensions =
     std/macros,
     std/dsl/operator-precedence,
     gpu/descriptors,
     linalg/vector-ops,
-  ]
+
 ```
 
 This manifest enables a robust **Two-Phase Parsing Model**:

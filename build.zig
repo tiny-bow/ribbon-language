@@ -61,7 +61,7 @@ const modules = [_]ModuleDef{
             "core",
             "common",
             "ir",
-            // "frontend", // TODO: Uncomment when frontend service exists
+            "frontend",
             "sma",
         },
     },

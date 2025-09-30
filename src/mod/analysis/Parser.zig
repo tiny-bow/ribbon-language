@@ -573,6 +573,40 @@ pub fn parseLed(self: *Parser, binding_power: i16, token: analysis.Token, lhs: a
     }
 }
 
+/// Run the pratt algorithm and attempt to parse the entire source bound in the lexer.
+///
+/// * Returns null if the source is empty.
+/// * Returns an error if we cannot parse the entire source.
+pub fn parse(self: *Parser) Error!?analysis.SyntaxTree {
+    const out = self.pratt(std.math.minInt(i16));
+
+    if (std.debug.runtime_safety) {
+        log.debug("getCst: parser result: {!?f}", .{out});
+
+        if (std.meta.isError(out) or (try out) == null or !self.isEof()) {
+            log.debug("getCst: parser result was null or error, or did not consume input {any} {any} {any}", .{ std.meta.isError(out), if (!std.meta.isError(out)) (try out) == null else false, !self.isEof() });
+
+            if (self.lexer.peek()) |maybe_cached_token| {
+                if (maybe_cached_token) |cached_token| {
+                    log.debug("getCst: unused token in lexer cache {f}: `{f}`", .{ self.lexer.inner.location, cached_token });
+                }
+            } else |err| {
+                log.debug("syntax error: {s}", .{@errorName(err)});
+            }
+
+            const rem = self.lexer.inner.source[self.lexer.inner.location.buffer..];
+
+            if (self.lexer.inner.iterator.peek_cache) |cached_char| {
+                log.debug("getCst: unused character in lexer cache {f}: `{u}` ({x})", .{ self.lexer.inner.location, cached_char, cached_char });
+            } else if (rem.len > 0) {
+                log.debug("getCst: unexpected input after parsing {f}: `{s}` ({x})", .{ self.lexer.inner.location, rem, rem });
+            }
+        }
+    }
+
+    return try out;
+}
+
 /// Run the pratt algorithm at the current offset in the lexer stream.
 pub fn pratt(
     self: *Parser,

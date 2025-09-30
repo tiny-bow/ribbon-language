@@ -10,7 +10,7 @@
 //! separating the persistent IR from transient build metadata.
 //!
 //! ## Core Responsibilities:
-//! 1.  **Dependency Discovery:** Parse source files to find `import` statements and
+//! 1.  **Dependency Discovery:** Parse rmod files to find dependencies and
 //!     build a complete `DependencyGraph` of the project.
 //! 2.  **Build Order:** Perform a topological sort on the graph to determine the
 //!     correct, linear order of compilation.
@@ -32,7 +32,7 @@ const common = @import("common");
 const core = @import("core");
 const ir = @import("ir");
 const sma = @import("sma");
-// const frontend = @import("frontend"); // TODO: Uncomment when frontend service exists
+const frontend = @import("frontend");
 
 test {
     //std.debug.print("semantic analysis for orchestration\n", .{});

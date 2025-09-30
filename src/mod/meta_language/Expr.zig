@@ -307,7 +307,8 @@ pub fn parseSource(
     source_name: []const u8,
     src: []const u8,
 ) (analysis.Parser.Error || error{ InvalidString, InvalidEscape } || std.io.Writer.Error)!?Expr {
-    var cst = try ml.Cst.parseSource(allocator, lexer_settings, source_name, src) orelse return null;
+    var parser = try ml.Cst.getRmlParser(allocator, lexer_settings, source_name, src);
+    var cst = try parser.parse() orelse return null;
     defer cst.deinit(allocator);
 
     return try parseCst(allocator, src, cst);
