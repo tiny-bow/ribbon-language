@@ -569,7 +569,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             };
         },
 
-        ml.Cst.types.Set => {
+        ml.Cst.types.Assign => {
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 2);
 

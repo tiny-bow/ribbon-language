@@ -31,7 +31,44 @@ test "module_cst" {
     ;
 
     const expect =
-        \\⟨𝓶𝓸𝓭 graphics ⌊⟨𝓼𝓮𝓺 ⟨𝓼𝓮𝓽 sources ⌊⟨𝓵𝓲𝓼𝓽 "renderer.rib" "shaders/" "mesh/"⟩⌋⟩ ⟨𝓼𝓮𝓽 dependencies ⌊⟨𝓼𝓮𝓺 ⟨𝓼𝓮𝓽 std ⟨𝓪𝓹𝓹 package "core@0.1.0"⟩⟩ ⟨𝓼𝓮𝓽 gpu ⟨𝓪𝓹𝓹 github "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"⟩⟩ ⟨𝓼𝓮𝓽 linalg ⟨𝓪𝓹𝓹 path "../linear-algebra"⟩⟩⟩⌋⟩ ⟨𝓼𝓮𝓽 extensions ⌊⟨𝓵𝓲𝓼𝓽 std/macros std/dsl/operator-precedence gpu/descriptors linalg/vector-ops⟩⌋⟩⟩⌋⟩
+        \\𝓶𝓸𝓭
+        \\  graphics
+        \\  𝓲𝓷𝓭𝓮𝓷𝓽
+        \\    𝓼𝓮𝓺
+        \\      𝓪𝓼𝓼𝓲𝓰𝓷
+        \\        sources
+        \\        𝓲𝓷𝓭𝓮𝓷𝓽
+        \\          𝓵𝓲𝓼𝓽
+        \\            "renderer.rib"
+        \\            "shaders/"
+        \\            "mesh/"
+        \\      𝓪𝓼𝓼𝓲𝓰𝓷
+        \\        dependencies
+        \\        𝓲𝓷𝓭𝓮𝓷𝓽
+        \\          𝓼𝓮𝓺
+        \\            𝓪𝓼𝓼𝓲𝓰𝓷
+        \\              std
+        \\              𝓪𝓹𝓹
+        \\                package
+        \\                "core@0.1.0"
+        \\            𝓪𝓼𝓼𝓲𝓰𝓷
+        \\              gpu
+        \\              𝓪𝓹𝓹
+        \\                github
+        \\                "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
+        \\            𝓪𝓼𝓼𝓲𝓰𝓷
+        \\              linalg
+        \\              𝓪𝓹𝓹
+        \\                path
+        \\                "../linear-algebra"
+        \\      𝓪𝓼𝓼𝓲𝓰𝓷
+        \\        extensions
+        \\        𝓲𝓷𝓭𝓮𝓷𝓽
+        \\          𝓵𝓲𝓼𝓽
+        \\            std/macros
+        \\            std/dsl/operator-precedence
+        \\            gpu/descriptors
+        \\            linalg/vector-ops
     ;
 
     var parser = try ml.Cst.getRModParser(std.testing.allocator, .{}, "test", input);
@@ -44,7 +81,7 @@ test "module_cst" {
     var writer_buf = [1]u8{0} ** (1024 * 16);
     var writer = std.io.Writer.fixed(&writer_buf);
 
-    try ml.Cst.dumpSExprs(input, &writer, &syn);
+    try ml.Cst.dumpTree(input, &writer, &syn, 0);
 
     log.debug("CST: {f}\nSExprs:\n{s}\n", .{ syn, writer.buffered() });
 
@@ -184,7 +221,7 @@ test "cst_parse" {
         .{ .input = "1 / 2 / 3", .expect = "⟨/ ⟨/ 1 2⟩ 3⟩" }, // 11
         .{ .input = "1 + 2 * 3", .expect = "⟨+ 1 ⟨* 2 3⟩⟩" }, // 12
         .{ .input = "a b := x y", .expect = "⟨𝓭𝓮𝓬𝓵 ⟨𝓪𝓹𝓹 a b⟩ ⟨𝓪𝓹𝓹 x y⟩⟩" }, // 13
-        .{ .input = "a b = x y", .expect = "⟨𝓼𝓮𝓽 ⟨𝓪𝓹𝓹 a b⟩ ⟨𝓪𝓹𝓹 x y⟩⟩" }, // 14
+        .{ .input = "a b = x y", .expect = "⟨𝓪𝓼𝓼𝓲𝓰𝓷 ⟨𝓪𝓹𝓹 a b⟩ ⟨𝓪𝓹𝓹 x y⟩⟩" }, // 14
         .{ .input = "x y\nz w", .expect = "⟨𝓼𝓮𝓺 ⟨𝓪𝓹𝓹 x y⟩ ⟨𝓪𝓹𝓹 z w⟩⟩" }, // 15
         .{ .input = "x y\nz w\n", .expect = "⟨𝓼𝓮𝓺 ⟨𝓪𝓹𝓹 x y⟩ ⟨𝓪𝓹𝓹 z w⟩⟩" }, // 16
         .{ .input = "a b\nc d\ne f\n", .expect = "⟨𝓼𝓮𝓺 ⟨𝓪𝓹𝓹 a b⟩ ⟨𝓪𝓹𝓹 c d⟩ ⟨𝓪𝓹𝓹 e f⟩⟩" }, // 17
@@ -196,7 +233,7 @@ test "cst_parse" {
         .{ .input = "foo(1) * 3 * 2 + (1 * 2); alert \"hello world\" + 2; test 2 3;", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 23
         .{ .input = "foo(1) * 3 * 2 + (1 * 2);\nalert \"hello world\" + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 24
         .{ .input = "\n\n \nfoo(1) * 3 * 2 +\n  1 * 2;\nalert \"hello\nworld\" + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello\nworld\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 25
-        .{ .input = "incr := fun x.\n  y := x + 1\n  y = y * 2\n  3 / y\n", .expect = "⟨𝓭𝓮𝓬𝓵 incr ⟨λ x ⌊⟨𝓼𝓮𝓺 ⟨𝓭𝓮𝓬𝓵 y ⟨+ x 1⟩⟩ ⟨𝓼𝓮𝓽 y ⟨* y 2⟩⟩ ⟨/ 3 y⟩⟩⌋⟩⟩" }, // 26
+        .{ .input = "incr := fun x.\n  y := x + 1\n  y = y * 2\n  3 / y\n", .expect = "⟨𝓭𝓮𝓬𝓵 incr ⟨λ x ⌊⟨𝓼𝓮𝓺 ⟨𝓭𝓮𝓬𝓵 y ⟨+ x 1⟩⟩ ⟨𝓪𝓼𝓼𝓲𝓰𝓷 y ⟨* y 2⟩⟩ ⟨/ 3 y⟩⟩⌋⟩⟩" }, // 26
         .{ .input = "fun x y z. x * y * z", .expect = "⟨λ ⟨𝓪𝓹𝓹 x y z⟩ ⟨* ⟨* x y⟩ z⟩⟩" }, // 27
         .{ .input = "x, y, z", .expect = "⟨𝓵𝓲𝓼𝓽 x y z⟩" }, // 28
         .{ .input = "fun x, y, z. x, y, z", .expect = "⟨λ ⟨𝓵𝓲𝓼𝓽 x y z⟩ ⟨𝓵𝓲𝓼𝓽 x y z⟩⟩" }, // 29

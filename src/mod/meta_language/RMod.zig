@@ -104,7 +104,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
     if (seq_cst.type != ml.Cst.types.Seq) return error.InvalidModuleDefinition;
 
     for (seq_cst.operands.asSlice()) |*assignment_cst| {
-        if (assignment_cst.type != ml.Cst.types.Set) return error.InvalidModuleDefinition;
+        if (assignment_cst.type != ml.Cst.types.Assign) return error.InvalidModuleDefinition;
         if (assignment_cst.operands.len != 2) return error.InvalidModuleDefinition;
 
         const key_cst = &assignment_cst.operands.asSlice()[0];
@@ -162,7 +162,7 @@ fn parseDependencies(allocator: std.mem.Allocator, source: []const u8, value_cst
     if (seq_cst.type != ml.Cst.types.Seq) return error.InvalidModuleDefinition;
 
     for (seq_cst.operands.asSlice()) |item_cst| {
-        if (item_cst.type != ml.Cst.types.Set or item_cst.operands.len != 2) return error.InvalidModuleDefinition;
+        if (item_cst.type != ml.Cst.types.Assign or item_cst.operands.len != 2) return error.InvalidModuleDefinition;
 
         const alias_cst = item_cst.operands.asSlice()[0];
         const spec_cst = item_cst.operands.asSlice()[1];

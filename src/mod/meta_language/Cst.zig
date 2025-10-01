@@ -26,7 +26,7 @@ pub const types = gen: {
         .Binary = fresh.next(),
         .Prefix = fresh.next(),
         .Decl = fresh.next(),
-        .Set = fresh.next(),
+        .Assign = fresh.next(),
         .Module = fresh.next(),
         .Lambda = fresh.next(),
         .Symbol = fresh.next(),
@@ -85,7 +85,88 @@ pub fn assembleString(writer: *std.io.Writer, source: []const u8, string: *const
     }
 }
 
-/// Dumps a concrete syntax tree to a string.
+/// Dumps a concrete syntax tree to a string, using ascii table characters.
+pub fn dumpTree(source: []const u8, writer: *std.io.Writer, cst: *const analysis.SyntaxTree, level: usize) !void {
+    const open = cst.operands.len > 0 and cst.type != types.String;
+
+    for (0..level) |_| try writer.writeAll("  ");
+
+    switch (cst.type) {
+        types.Identifier, types.Int => {
+            try writer.print("{s}", .{cst.token.data.sequence.asSlice()});
+        },
+        types.String => {
+            try writer.print("{u}", .{cst.token.data.special.punctuation.toChar()});
+            try assembleString(writer, source, cst);
+            try writer.print("{u}", .{cst.token.data.special.punctuation.toChar()});
+        },
+        types.Block => switch (cst.token.tag) {
+            .indentation => {
+                try writer.writeAll("𝓲𝓷𝓭𝓮𝓷𝓽");
+            },
+            .special => {
+                try writer.print("{u}", .{cst.token.data.special.punctuation.toChar()});
+            },
+            else => unreachable,
+        },
+        types.Seq => {
+            try writer.writeAll("𝓼𝓮𝓺");
+        },
+        types.Apply => {
+            try writer.writeAll("𝓪𝓹𝓹");
+        },
+        types.Decl => {
+            try writer.writeAll("𝓭𝓮𝓬𝓵");
+        },
+        types.Assign => {
+            try writer.writeAll("𝓪𝓼𝓼𝓲𝓰𝓷");
+        },
+        types.List => {
+            try writer.writeAll("𝓵𝓲𝓼𝓽");
+        },
+
+        types.Module => {
+            try writer.writeAll("𝓶𝓸𝓭");
+        },
+        types.Lambda => {
+            try writer.writeAll("λ");
+        },
+        types.Symbol => {
+            try writer.writeAll("'");
+            switch (cst.token.tag) {
+                .special => {
+                    if (cst.token.data.special.escaped) {
+                        try writer.print("\\{u}", .{cst.token.data.special.punctuation.toChar()});
+                    } else {
+                        try writer.print("{u}", .{cst.token.data.special.punctuation.toChar()});
+                    }
+                },
+                .sequence => try writer.print("{s}", .{cst.token.data.sequence.asSlice()}),
+                else => unreachable,
+            }
+            return;
+        },
+        else => {
+            switch (cst.token.tag) {
+                .sequence => {
+                    try writer.print("{s}", .{cst.token.data.sequence.asSlice()});
+                },
+                else => try writer.print("{f}", .{cst.token}),
+            }
+        },
+    }
+
+    if (open) {
+        const operands = cst.operands.asSlice();
+
+        for (operands) |*child| {
+            try writer.writeByte('\n');
+            try dumpTree(source, writer, child, level + 1);
+        }
+    }
+}
+
+/// Dumps a concrete syntax tree to a string, as a sequence of nested s-expressions.
 pub fn dumpSExprs(source: []const u8, writer: *std.io.Writer, cst: *const analysis.SyntaxTree) !void {
     switch (cst.type) {
         types.Identifier, types.Int => try writer.print("{s}", .{cst.token.data.sequence.asSlice()}),
@@ -102,7 +183,7 @@ pub fn dumpSExprs(source: []const u8, writer: *std.io.Writer, cst: *const analys
         types.Seq => try writer.writeAll("⟨𝓼𝓮𝓺"),
         types.Apply => try writer.writeAll("⟨𝓪𝓹𝓹"),
         types.Decl => try writer.writeAll("⟨𝓭𝓮𝓬𝓵"),
-        types.Set => try writer.writeAll("⟨𝓼𝓮𝓽"),
+        types.Assign => try writer.writeAll("⟨𝓪𝓼𝓼𝓲𝓰𝓷"),
         types.List => try writer.writeAll("⟨𝓵𝓲𝓼𝓽"),
 
         types.Module => try writer.writeAll("⟨𝓶𝓸𝓭"),
@@ -861,7 +942,7 @@ pub const builtin_syntax = struct {
                         return analysis.SyntaxTree{
                             .source = lhs.source,
                             .precedence = bp,
-                            .type = types.Set,
+                            .type = types.Assign,
                             .token = token,
                             .operands = .fromSlice(buff),
                         };
