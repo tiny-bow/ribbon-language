@@ -18,15 +18,46 @@ pub const BufferPosition = u64;
 /// A position in the source code, in terms of the line and column.
 pub const VisualPosition = packed struct {
     /// 1-based line number.
-    line: u32 = 1,
+    line: u32,
     /// 1-based column number.
-    column: u32 = 1,
+    column: u32,
+
+    pub const zero = VisualPosition{ .line = 0, .column = 0 };
+    pub const start = VisualPosition{ .line = 1, .column = 1 };
+};
+
+/// A location in a specific (unnamed) source file, both buffer-wise and line and column.
+pub const Location = packed struct(u128) {
+    buffer: BufferPosition,
+    visual: VisualPosition,
+
+    pub const none = Location{ .buffer = 0, .visual = .zero };
+
+    pub fn localize(local_to: *const Location, to_localize: *const Location) Location {
+        std.debug.assert(local_to.buffer <= to_localize.buffer);
+        return .{
+            .buffer = to_localize.buffer - local_to.buffer,
+            .visual = VisualPosition{
+                .line = to_localize.visual.line -| local_to.visual.line,
+                .column = to_localize.visual.column -| local_to.visual.column,
+            },
+        };
+    }
+
+    pub fn format(self: *const Location, writer: *std.io.Writer) !void {
+        try writer.print("[{d}:{d} ({d})]", .{ self.visual.line, self.visual.column, self.buffer });
+    }
 };
 
 /// The name or path of the source file
-name: []const u8 = "anonymous",
+name: []const u8,
 /// The location within the source file
-location: Location = .{},
+location: Location,
+
+pub const anonymous = Source{
+    .name = "anonymous",
+    .location = .none,
+};
 
 /// `std.fmt` impl
 pub fn format(self: *const Source, writer: *std.io.Writer) !void {
@@ -99,26 +130,5 @@ pub const SourceContext64 = struct {
 
     pub fn eql(_: SourceContext64, src: Source, other: Source) bool {
         return std.mem.eql(u8, src.name, other.name) and src.location == other.location;
-    }
-};
-
-/// A location in a specific (unnamed) source file, both buffer-wise and line and column.
-pub const Location = packed struct(u128) {
-    buffer: BufferPosition = 0,
-    visual: VisualPosition = .{},
-
-    pub fn localize(local_to: *const Location, to_localize: *const Location) Location {
-        std.debug.assert(local_to.buffer <= to_localize.buffer);
-        return .{
-            .buffer = to_localize.buffer - local_to.buffer,
-            .visual = VisualPosition{
-                .line = to_localize.visual.line -| local_to.visual.line,
-                .column = to_localize.visual.column -| local_to.visual.column,
-            },
-        };
-    }
-
-    pub fn format(self: *const Location, writer: *std.io.Writer) !void {
-        try writer.print("[{d}:{d} ({d})]", .{ self.visual.line, self.visual.column, self.buffer });
     }
 };

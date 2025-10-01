@@ -9,7 +9,7 @@ const ml = ribbon.meta_language;
 //     std.debug.print("ml_integration", .{});
 // }
 
-test "module_parse" {
+test "module_cst" {
     const input =
         \\module graphics.
         \\    sources =
@@ -51,6 +51,56 @@ test "module_parse" {
     try std.testing.expectEqualStrings(expect, writer.buffered());
 }
 
+test "module_parse" {
+    const input =
+        \\module graphics.
+        \\    sources =
+        \\        "renderer.rib",
+        \\        "shaders/",
+        \\
+        \\    dependencies =
+        \\        std = package "core@0.1.0"
+        \\        gpu = github "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
+        \\        linalg = path "../linear-algebra"
+        \\
+        \\    extensions =
+        \\        std/macros,
+        \\        gpu/descriptors,
+        \\
+    ;
+
+    var def = try ml.RMod.parseSource(std.testing.allocator, .{}, "test.rmod", input) orelse return error.NullCst;
+    defer def.deinit(std.testing.allocator);
+
+    // Verify name
+    try std.testing.expectEqualStrings("graphics", def.name);
+
+    // Verify sources
+    try std.testing.expectEqual(@as(usize, 2), def.sources.items.len);
+    try std.testing.expectEqualStrings("renderer.rib", def.sources.items[0]);
+    try std.testing.expectEqualStrings("shaders/", def.sources.items[1]);
+
+    // Verify dependencies
+    try std.testing.expectEqual(@as(usize, 3), def.dependencies.count());
+
+    const std_dep = def.dependencies.get("std").?;
+    try std.testing.expect(std_dep == .package);
+    try std.testing.expectEqualStrings("core@0.1.0", std_dep.package);
+
+    const gpu_dep = def.dependencies.get("gpu").?;
+    try std.testing.expect(gpu_dep == .github);
+    try std.testing.expectEqualStrings("tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD", gpu_dep.github);
+
+    const linalg_dep = def.dependencies.get("linalg").?;
+    try std.testing.expect(linalg_dep == .path);
+    try std.testing.expectEqualStrings("../linear-algebra", linalg_dep.path);
+
+    // Verify extensions
+    try std.testing.expectEqual(@as(usize, 2), def.extensions.items.len);
+    try std.testing.expectEqualStrings("std/macros", def.extensions.items[0]);
+    try std.testing.expectEqualStrings("gpu/descriptors", def.extensions.items[1]);
+}
+
 test "expr_parse" {
     try common.snapshotTest(.use_log("expr"), struct {
         pub fn testExpr(input: []const u8, expect: []const u8) !void {
@@ -62,7 +112,7 @@ test "expr_parse" {
             };
             defer syn.deinit(std.testing.allocator);
 
-            var expr = try ml.Expr.parseCst(std.testing.allocator, input, syn);
+            var expr = try ml.Expr.parseCst(std.testing.allocator, input, &syn);
             defer expr.deinit(std.testing.allocator);
 
             log.info("input: {s}\nresult: {f}", .{ input, expr });

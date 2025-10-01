@@ -125,7 +125,7 @@ pub const Settings = struct {
     startingIndent: Level = 0,
     /// The offset to apply to the visual position (line and column) of the lexer,
     /// when creating token locations.
-    attrOffset: analysis.Source.VisualPosition = .{},
+    attrOffset: analysis.Source.VisualPosition = .start,
 };
 
 /// Initialize a new lexer for a given
@@ -137,6 +137,7 @@ pub fn init(settings: Settings, text: []const u8) error{BadEncoding}!Lexer {
         .iterator = try .from(.from(text)),
         .indentation = [1]Level{settings.startingIndent} ++ ([1]Level{0} ** (MAX_LEVELS - 1)),
         .location = analysis.Source.Location{
+            .buffer = 0,
             .visual = settings.attrOffset,
         },
     };

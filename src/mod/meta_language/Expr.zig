@@ -311,13 +311,13 @@ pub fn parseSource(
     var cst = try parser.parse() orelse return null;
     defer cst.deinit(allocator);
 
-    return try parseCst(allocator, src, cst);
+    return try parseCst(allocator, src, &cst);
 }
 
 /// Cleans up a concrete syntax tree, producing an `Expr`.
 /// This removes comments, indentation, parens and other purely-syntactic elements,
 /// as well as finalizing literals, applying attributes etc.
-pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.SyntaxTree) !Expr {
+pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const analysis.SyntaxTree) !Expr {
     switch (cst.type) {
         ml.Cst.types.Identifier => return Expr{
             .source = cst.source,
@@ -350,7 +350,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             var buf = std.io.Writer.Allocating.init(allocator);
             defer buf.deinit();
 
-            try ml.Cst.assembleString(&buf.writer, source, &cst);
+            try ml.Cst.assembleString(&buf.writer, source, cst);
 
             return Expr{
                 .source = cst.source,
@@ -413,14 +413,14 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
 
             if (cst.token.tag == .indentation) {
                 if (cst.operands.len != 1) return error.UnexpectedInput;
-                return try parseCst(allocator, source, cst.operands.asSlice()[0]);
+                return try parseCst(allocator, source, &cst.operands.asSlice()[0]);
             }
 
             std.debug.assert(cst.token.tag == .special);
             std.debug.assert(cst.token.data.special.escaped == false);
 
             if (cst.operands.len == 1) {
-                const inner = try parseCst(allocator, source, cst.operands.asSlice()[0]);
+                const inner = try parseCst(allocator, source, &cst.operands.asSlice()[0]);
 
                 if (inner.data == .seq) {
                     return switch (cst.token.data.special.punctuation) {
@@ -496,7 +496,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             var subs = try allocator.alloc(Expr, cst.operands.len);
             errdefer allocator.free(subs);
 
-            for (cst.operands.asSlice(), 0..) |child, i| {
+            for (cst.operands.asSlice(), 0..) |*child, i| {
                 subs[i] = try parseCst(allocator, source, child);
             }
 
@@ -519,7 +519,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             var subs = try allocator.alloc(Expr, cst.operands.len);
             errdefer allocator.free(subs);
 
-            for (cst.operands.asSlice(), 0..) |child, i| {
+            for (cst.operands.asSlice(), 0..) |*child, i| {
                 subs[i] = try parseCst(allocator, source, child);
             }
 
@@ -542,7 +542,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             var subs = try allocator.alloc(Expr, cst.operands.len);
             errdefer allocator.free(subs);
 
-            for (cst.operands.asSlice(), 0..) |child, i| {
+            for (cst.operands.asSlice(), 0..) |*child, i| {
                 subs[i] = try parseCst(allocator, source, child);
             }
 
@@ -556,8 +556,8 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 2);
 
-            const name_or_pattern = try parseCst(allocator, source, operands[0]);
-            const value = try parseCst(allocator, source, operands[1]);
+            const name_or_pattern = try parseCst(allocator, source, &operands[0]);
+            const value = try parseCst(allocator, source, &operands[1]);
 
             const buff = try allocator.alloc(Expr, 2);
             buff[0] = name_or_pattern;
@@ -573,8 +573,8 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 2);
 
-            const name_or_pattern = try parseCst(allocator, source, operands[0]);
-            const value = try parseCst(allocator, source, operands[1]);
+            const name_or_pattern = try parseCst(allocator, source, &operands[0]);
+            const value = try parseCst(allocator, source, &operands[1]);
 
             const buff = try allocator.alloc(Expr, 2);
             buff[0] = name_or_pattern;
@@ -590,8 +590,8 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 2);
 
-            const name_or_pattern = try parseCst(allocator, source, operands[0]);
-            const value = try parseCst(allocator, source, operands[1]);
+            const name_or_pattern = try parseCst(allocator, source, &operands[0]);
+            const value = try parseCst(allocator, source, &operands[1]);
 
             const buff = try allocator.alloc(Expr, 2);
             buff[0] = name_or_pattern;
@@ -607,7 +607,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 1);
 
-            const inner = try parseCst(allocator, source, operands[0]);
+            const inner = try parseCst(allocator, source, &operands[0]);
 
             const buff = try allocator.alloc(Expr, 1);
             buff[0] = inner;
@@ -627,8 +627,8 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: analysis.
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 2);
 
-            const left = try parseCst(allocator, source, operands[0]);
-            const right = try parseCst(allocator, source, operands[1]);
+            const left = try parseCst(allocator, source, &operands[0]);
+            const right = try parseCst(allocator, source, &operands[1]);
 
             const buff = try allocator.alloc(Expr, 2);
             buff[0] = left;

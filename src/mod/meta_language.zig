@@ -10,6 +10,7 @@ const std = @import("std");
 pub const Cst = @import("meta_language/Cst.zig");
 pub const Expr = @import("meta_language/Expr.zig");
 pub const Value = @import("meta_language/Value.zig").Value;
+pub const RMod = @import("meta_language/RMod.zig");
 
 test {
     // std.debug.print("semantic analysis for meta_language\n", .{});
