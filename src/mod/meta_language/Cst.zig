@@ -85,7 +85,7 @@ pub fn assembleString(writer: *std.io.Writer, source: []const u8, string: *const
     }
 }
 
-/// Dumps a concrete syntax tree to a string, using ascii table characters.
+/// Dumps a cst as a nested tree to the given writer.
 pub fn dumpTree(source: []const u8, writer: *std.io.Writer, cst: *const analysis.SyntaxTree, level: usize) !void {
     const open = cst.operands.len > 0 and cst.type != types.String;
 

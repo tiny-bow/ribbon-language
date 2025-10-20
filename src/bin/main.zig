@@ -61,7 +61,7 @@ pub fn main() !void {
 
         line_accumulator.appendSlice(allocator, input) catch @panic("OOM in line accumulator");
 
-        var expr = ribbon.meta_language.getExpr(
+        var expr = ribbon.meta_language.Expr.parseSource(
             allocator,
             .{ .attrOffset = .{ .column = 0, .line = line_count } },
             "stdin",
@@ -83,6 +83,12 @@ pub fn main() !void {
         R.history.add(line_accumulator.items) catch @panic("OOM in history");
 
         line_accumulator.clearRetainingCapacity();
+
+        const stderr = std.fs.File.stderr();
+        var out_buf: [1024]u8 = undefined;
+        var writer = stderr.writer(&out_buf);
+        try expr.dumpTree(&writer.interface, 0);
+        try writer.interface.flush();
 
         std.debug.print("{f}\n", .{expr});
     }

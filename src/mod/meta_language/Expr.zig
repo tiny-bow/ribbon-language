@@ -219,6 +219,81 @@ pub fn precedence(self: *const Expr) i16 {
     };
 }
 
+/// Dumps an expression as a nested tree to the given writer.
+pub fn dumpTree(self: *const Expr, writer: *std.io.Writer, level: usize) !void {
+    for (0..level) |_| try writer.writeAll("  ");
+
+    switch (self.data) {
+        .int => try writer.print("{d}", .{self.data.int}),
+        .char => try writer.print("'{u}'", .{self.data.char}),
+        .string => try writer.print("\"{s}\"", .{self.data.string}),
+        .identifier => try writer.print("{s}", .{self.data.identifier}),
+        .symbol => try writer.print("{s}", .{self.data.symbol}),
+        .list => {
+            try writer.writeAll("𝓵𝓲𝓼𝓽\n");
+            for (self.data.list) |*child| {
+                try child.dumpTree(writer, level + 1);
+            }
+        },
+        .tuple => {
+            try writer.writeAll("𝓽𝓾𝓹𝓵𝓮\n");
+            for (self.data.tuple) |*child| {
+                try child.dumpTree(writer, level + 1);
+            }
+        },
+        .array => {
+            try writer.writeAll("𝓪𝓻𝓻𝓪𝔂\n");
+            for (self.data.array) |*child| {
+                try child.dumpTree(writer, level + 1);
+            }
+        },
+        .compound => {
+            try writer.writeAll("𝓬𝓸𝓶𝓹𝓸𝓾𝓷𝓭\n");
+            for (self.data.compound) |child| {
+                try child.dumpTree(writer, level + 1);
+            }
+        },
+        .seq => {
+            try writer.writeAll("𝓼𝓮𝓺\n");
+            for (self.data.seq) |*child| {
+                try child.dumpTree(writer, level + 1);
+            }
+        },
+        .apply => {
+            try writer.writeAll("𝓪𝓹𝓹𝓵𝔂\n");
+            for (self.data.apply) |*child| {
+                try child.display(0, writer);
+            }
+        },
+        .operator => {
+            try writer.print("𝓸𝓹𝓮𝓻𝓪𝓽𝓸𝓻 {s} \n", .{self.data.operator.token.data.sequence.asSlice()});
+            for (self.data.operator.operands) |*child| {
+                try child.dumpTree(writer, level + 1);
+            }
+        },
+        .decl => {
+            try writer.writeAll("𝓭𝓮𝓬𝓵\n");
+            for (self.data.decl) |*child| {
+                try child.dumpTree(writer, level + 1);
+            }
+        },
+        .set => {
+            try writer.writeAll("𝓼𝓮𝓽\n");
+            for (self.data.set) |*child| {
+                try child.dumpTree(writer, level + 1);
+            }
+        },
+        .lambda => {
+            try writer.writeAll("𝓵𝓪𝓶𝓫𝓭𝓪\n");
+            for (self.data.lambda) |*child| {
+                try child.dumpTree(writer, level + 1);
+            }
+        },
+    }
+
+    try writer.writeByte('\n');
+}
+
 /// Writes a source-text representation of the expression to the given writer.
 /// * This is *not* the same as the original text parsed to produce this expression;
 ///   it is a canonical representation of the expression.
