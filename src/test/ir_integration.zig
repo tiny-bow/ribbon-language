@@ -559,6 +559,10 @@ test "ir integration - global symbol binding" {
     const name_node_data = ctx.getNodeData(bound_name_ref) orelse return error.TestFailed;
     try testing.expectEqualStrings("my_global", name_node_data.name);
 
+    // Check that the reverse mapping from node to export name is correct.
+    const export_name = ctx.exported_nodes.get(value1_ref) orelse return error.TestFailed;
+    try testing.expectEqualStrings("my_global", export_name);
+
     // --- Test 3: Rebinding an existing global symbol ---
     const value2_ref = try ctx.internPrimitive(@as(u64, 456));
     const rebound_global_symbol_ref = try ctx.bindGlobal("my_global", value2_ref);

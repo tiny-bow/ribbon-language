@@ -42,8 +42,11 @@ users: common.UniqueReprMap(ir.Ref, ir.UseDefSet) = .empty,
 userdata: common.UniqueReprMap(ir.Ref, *ir.UserData) = .empty,
 /// Maps builtin structures to their definition references.
 builtin: common.UniqueReprMap(ir.Builtin, ir.Ref) = .empty,
-/// The set of all global symbols defined in this context.
+/// The set of all global symbols defined in this context. See `bindGlobal`.
 global_symbols: common.StringMap(ir.Ref) = .empty,
+/// Reverse mapping from a public node's Ref to its export name.
+/// Only populated for nodes bound via `bindGlobal`.
+exported_nodes: common.UniqueReprMap(ir.Ref, []const u8) = .empty,
 /// Maps constant value nodes to references.
 interner: common.HashMap(ir.Node, ir.Ref, ir.NodeHasher) = .empty,
 /// Flags whether a node is interned or not.
@@ -93,6 +96,7 @@ pub fn clear(self: *Context) void {
     self.nodes.clearRetainingCapacity();
     self.users.clearRetainingCapacity();
     self.global_symbols.clearRetainingCapacity();
+    self.exported_nodes.clearRetainingCapacity();
     self.interner.clearRetainingCapacity();
     self.interned_refs.clearRetainingCapacity();
     self.immutable_refs.clearRetainingCapacity();
@@ -118,6 +122,7 @@ pub fn destroy(self: *Context) void {
     self.nodes.deinit(self.gpa);
     self.users.deinit(self.gpa);
     self.global_symbols.deinit(self.gpa);
+    self.exported_nodes.deinit(self.gpa);
     self.interner.deinit(self.gpa);
     self.interned_refs.deinit(self.gpa);
     self.immutable_refs.deinit(self.gpa);
@@ -786,6 +791,8 @@ pub fn bindGlobal(self: *Context, name: []const u8, ref: ir.Ref) !ir.Ref {
 
     gop.key_ptr.* = owned_buf;
     gop.value_ptr.* = symbol;
+
+    try self.exported_nodes.put(self.gpa, ref, owned_buf);
 
     return symbol;
 }
