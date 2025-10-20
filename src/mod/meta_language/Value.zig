@@ -29,15 +29,15 @@ pub const IString = struct {};
 pub const Value = packed struct(u64) {
     /// Value bits store the actual value when it is not an f64.
     val_bits: Data,
-    /// Tag bits are used when the value is not an f64, and serve as a second discriminant, between immediates.
+    /// Tag bits are used when the value is not an f64, and serve as a second discriminant, over immediates.
     tag_bits: Tag,
-    /// Nan bits are used by f64 as the sign and exponent, but when we encode other values,
-    /// these are all 1s, forming the first discriminant of the value.
+    /// Nan bits are used by f64 as the sign and exponent;
+    /// but when we encode other values, these are all 1s, forming the first discriminant of the value.
     nan_bits: NanBits,
 
     /// Payload of a `Value` that is not an f64.
     pub const Data = packed struct(u48) {
-        /// The lower 3 bits are used to store the third discriminant, between the pointer types.
+        /// The lower 3 bits are used to store the third discriminant over object type.
         obj_bits: Obj,
         /// All pointers must be aligned to 8 bytes, freeing up the lower 3 bits for the discriminant.
         ptr_bits: PtrBits,
@@ -118,8 +118,8 @@ pub const Value = packed struct(u64) {
         cst = 0b100,
         /// Value payload is an ml syntax tree; ml source code. `0b101`
         expr = 0b101,
-        /// Usage TBD `0b110`
-        _reserved1 = 0b110,
+        /// Usage NYI. `0b110`
+        _reserved1 = 0b110, // NOTE: this is perfect for storing embedded languages; ie. typed ribbon code)
         /// No payload, this is a nil value. `0b111`
         nil = 0b111,
 
