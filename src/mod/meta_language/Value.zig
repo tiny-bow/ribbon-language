@@ -8,17 +8,24 @@ const ml = @import("../meta_language.zig");
 /// Immutable string type used in the meta-language.
 pub const IString = struct {};
 
+// CRITICAL NOTE: This structure must be kept in sync with the `frontend.createMlValueType` definition.
 /// An efficient, bit-packed union of all value types in the meta-language semantics.
-///
 /// ```txt
-///               ┍╾on target architectures, this bit is 1 for quiet nans, 0 for signalling.
-/// ┍╾f64 sign    │   ┍╾discriminant for non-f64                        ┍╾discriminant for objects
-/// ╽             ╽ ┌─┤                                               ┌─┤
-/// 0_00000000000_0_000_000000000000000000000000000000000000000000000_000 (64 bits)
-///   ├─────────┘       ├───────────────────────────────────────────┘
-///   │                 ┕╾45 bit object pointer (8 byte aligned means 3 lsb are always 0)
-///   ┕╾f64 exponent; if not f64, these are all 1s (encoding f64 nan), forming the first discriminant of the value
+///                                                       ┍╾on target architectures,
+///                                                       │ this bit is 1 for quiet nans, 0 for signalling.
+///   ┍╾discriminant for objects (.val_bits.obj_bits)     │
+///   │                                                   │ ┍╾f64 exponent; if not f64, these are all 1s
+///   │          discriminant for non-f64 (.tag_bits)╼┑   │ │ (encoding f64 nan), forming the first discriminant of the value
+/// ┌─┤                                               ├─┐ │ ├─────────┐
+/// 000_000000000000000000000000000000000000000000000_000_0_00000000000_0─╼╾f64 sign
+///     ├───────────────────────────────────────────┘     ├─────────────┘
+///     ┕╾45 bit object pointer (.val_bits.ptr_bits)      ┕╾(.nan_bits)
+///       (8 byte aligned means 3 lsb are always 0)
+///
 /// ```
+/// * See https://en.wikipedia.org/wiki/Double-precision_floating-point_format for more information on the f64 bit layout.
+/// * Note the diagram presented here is in little-endian, despite the convention of displaying IEEE-754 diagrams in big-endian.
+///   This choice was made because Zig uses least significant bits first when bitpacking, so this diagram better matches the structure definition.
 pub const Value = packed struct(u64) {
     /// Value bits store the actual value when it is not an f64.
     val_bits: Data,
