@@ -83,6 +83,17 @@ pub fn struct_constructor(ctx: *ir.Context) !ir.Ref {
     });
 }
 
+pub fn pointer_constructor(ctx: *ir.Context) !ir.Ref {
+    const k_data = try ctx.getBuiltin(.data_kind);
+
+    return ctx.internStructure(.constructor, .{
+        .kind = try ctx.internStructure(.kind, .{
+            .output_tag = try ctx.internPrimitive(ir.KindTag.data),
+            .input_kinds = try ctx.internList(.kind, &.{k_data}),
+        }),
+    });
+}
+
 pub fn c_symbol(ctx: *ir.Context) !ir.Ref {
     return ctx.builder.symbol("c");
 }

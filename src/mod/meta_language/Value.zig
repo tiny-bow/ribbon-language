@@ -8,7 +8,7 @@ const ml = @import("../meta_language.zig");
 /// Immutable string type used in the meta-language.
 pub const IString = struct {};
 
-// CRITICAL NOTE: This structure must be kept in sync with the `frontend.createMlValueType` definition.
+// CRITICAL NOTE: This structure must be kept in sync with the `frontend.FrontendPass.mlValueType` definition.
 /// An efficient, bit-packed union of all value types in the meta-language semantics.
 /// ```txt
 ///                                                       ┍╾on target architectures,
@@ -148,6 +148,16 @@ pub const Value = packed struct(u64) {
         return @bitCast(bits);
     }
 
+    /// shortcut for `std.mem.asBytes`
+    pub fn asBytes(self: anytype) common.ExtrapolatePtr(@TypeOf(self), .{ .child = u8, .size = .slice }) {
+        return std.mem.asBytes(self);
+    }
+
+    /// shortcut for `std.mem.bytesAsValue`
+    pub fn fromBytes(bytes: anytype) common.ExtrapolatePtr(@TypeOf(bytes), .{ .child = Value, .size = .one }) {
+        return std.mem.bytesAsValue(Value, bytes);
+    }
+
     /// A value representing the absence of data.
     pub const nil = Value{
         .nan_bits = NAN_FILL,
@@ -281,7 +291,7 @@ pub const Value = packed struct(u64) {
     }
 
     /// Construct a value from an object payload.
-    pub fn fromObjectPointer(obj: Obj, ptr: *anyopaque) Value {
+    pub fn fromObjectPointer(obj: Obj, ptr: ?*anyopaque) Value {
         std.debug.assert(obj != ._reserved1);
 
         const ptr_bits: u48 = @intCast(@intFromPtr(ptr));

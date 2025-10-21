@@ -71,6 +71,15 @@ pub fn integer_type(self: *Builder, signedness: core.Signedness, bit_size: core.
     });
 }
 
+pub fn pointer_type(self: *Builder, pointee_type: ir.Ref) !ir.Ref {
+    const ctx = self.getContext();
+
+    return ctx.internStructure(.type, .{
+        .constructor = try ctx.getBuiltin(.pointer_constructor),
+        .input_types = try ctx.internList(.type, &.{pointee_type}),
+    });
+}
+
 pub fn symbol(self: *Builder, name: []const u8) !ir.Ref {
     const ctx = self.getContext();
 
@@ -123,5 +132,29 @@ pub fn struct_type(self: *Builder, layout: ir.Ref, names: []const ir.Ref, types:
                 types,
             ),
         }),
+    });
+}
+
+pub fn constant_value(self: *Builder, type_ref: ir.Ref, value: []const u8) !ir.Ref {
+    const ctx = self.getContext();
+
+    return ctx.internStructure(.constant, .{
+        .type = type_ref,
+        .value = try ctx.internBuffer(value),
+    });
+}
+
+pub fn integer_value(self: *Builder, comptime T: type, value: T) !ir.Ref {
+    const T_info = @typeInfo(T).int;
+    const ctx = self.getContext();
+
+    const int_type = try self.integer_type(
+        T_info.signedness,
+        T_info.bits,
+    );
+
+    return ctx.internStructure(.constant, .{
+        .type = int_type,
+        .value = try ctx.internBuffer(std.mem.asBytes(&value)),
     });
 }
