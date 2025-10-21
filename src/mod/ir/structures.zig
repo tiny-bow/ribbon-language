@@ -45,18 +45,7 @@ pub const structures = .{
         .parent = .{ .structure, .block }, // the block that contains this instruction
         .operation = .{ .primitive, .operation }, // the operation performed by this instruction
         .type = .{ .structure, .type }, // the type of data yielded by the instruction
-    },
-    .ctrl_edge = .{
-        .source = .{ .structure, .nil }, // either a block or an instruction
-        .destination = .{ .structure, .nil }, // either a block or an instruction
-        .source_index = .{ .primitive, .index }, // the index of the edge in the source
-        .destination_index = .{ .primitive, .index }, // the index of the edge in the destination
-    },
-    .data_edge = .{
-        .source = .{ .structure, .nil }, // either a block or an instruction
-        .destination = .{ .structure, .nil }, // either a block or an instruction
-        .source_index = .{ .primitive, .index }, // the index of the edge in the source
-        .destination_index = .{ .primitive, .index }, // the index of the edge in the destination
+        .operands = .{ .collection, .nil }, // a collection of operand nodes, each of any kind
     },
     .global_symbol = .{
         .name = .{ .data, .name },

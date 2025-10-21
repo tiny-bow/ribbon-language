@@ -350,7 +350,6 @@ test "ir integration - merging child context with cyclic nodes" {
         .input_types = ir.Ref.nil,
     });
     const op_branch = try child_ctx.internPrimitive(ir.Operation.unconditional_branch);
-    const zero = try child_ctx.internPrimitive(@as(u64, 0));
 
     // 1. Create two blocks: a loop header and a loop body.
     const loop_header = try child_ctx.addStructure(.mutable, .block, .{
@@ -373,12 +372,7 @@ test "ir integration - merging child context with cyclic nodes" {
         .parent = loop_header,
         .operation = op_branch,
         .type = type_type,
-    });
-    const branch_to_body_edge = try child_ctx.addStructure(.mutable, .ctrl_edge, .{
-        .source = branch_to_body_inst,
-        .destination = loop_body, // Header -> Body
-        .source_index = zero,
-        .destination_index = zero,
+        .operands = try child_ctx.addList(.mutable, .block, &.{loop_body}),
     });
 
     // 3. Create the instruction in the body that branches back to the header (the loop).
@@ -386,25 +380,14 @@ test "ir integration - merging child context with cyclic nodes" {
         .parent = loop_body,
         .operation = op_branch,
         .type = type_type,
+        .operands = try child_ctx.addList(.mutable, .block, &.{loop_header}),
     });
-    const branch_to_header_edge = try child_ctx.addStructure(.mutable, .ctrl_edge, .{
-        .source = branch_to_header_inst,
-        .destination = loop_header, // Body -> Header <--- The cyclic reference!
-        .source_index = zero,
-        .destination_index = zero,
-    });
-
     // To make the graph fully connected, populate the blocks' contents.
     const header_contents = try child_ctx.addList(.mutable, .instruction, &.{branch_to_body_inst});
     try child_ctx.setField(loop_header, .contents, header_contents);
 
     const body_contents = try child_ctx.addList(.mutable, .instruction, &.{branch_to_header_inst});
     try child_ctx.setField(loop_body, .contents, body_contents);
-
-    // Suppress "unused variable" warnings. Their creation and linking into the graph
-    // via other nodes is their purpose.
-    _ = branch_to_body_edge;
-    _ = branch_to_header_edge;
 
     // At this point, `child_ctx` contains a clear cyclic graph:
     // loop_header -> branch_to_body_inst -> branch_to_body_edge -> loop_body
@@ -440,48 +423,14 @@ test "ir integration - merging child context with cyclic nodes" {
     const block_A = merged_blocks.items[0];
     const block_B = merged_blocks.items[1];
 
-    const getBranchDest = struct {
-        fn getBranchDest(ctx: *ir.Context, block_ref: ir.Ref) !ir.Ref {
-            const contents_list_ref = try ctx.getField(block_ref, .contents) orelse return error.TestFailed;
-            const contents = try ctx.getChildren(contents_list_ref);
-            const inst_ref = contents[0];
-            const users = try ctx.getNodeUsers(inst_ref);
+    const instr_A = try root_ctx.getElement(try root_ctx.getField(block_A, .contents) orelse return error.InvalidGraphState, 0) orelse return error.InvalidGraphState;
+    const dest_A = try root_ctx.getElement(try root_ctx.getField(instr_A, .operands) orelse return error.InvalidGraphState, 0) orelse return error.InvalidGraphState;
 
-            // Iterate users to find the actual control edge, since the instruction
-            // is also used by the block's `contents` list.
-            var edge_ref: ?ir.Ref = null;
-            var it = users.keyIterator();
-            while (it.next()) |use| {
-                if (use.ref.node_kind.getTag() == .structure and
-                    ir.discriminants.force(ir.StructureKind, use.ref.node_kind.getDiscriminator()) == .ctrl_edge)
-                {
-                    edge_ref = use.ref;
-                    break;
-                }
-            }
+    const instr_B = try root_ctx.getElement(try root_ctx.getField(block_B, .contents) orelse return error.InvalidGraphState, 0) orelse return error.InvalidGraphState;
+    const dest_B = try root_ctx.getElement(try root_ctx.getField(instr_B, .operands) orelse return error.InvalidGraphState, 0) orelse return error.InvalidGraphState;
 
-            if (edge_ref == null) {
-                log.debug("Could not find control edge user for instruction {f}", .{inst_ref});
-                return error.TestFailed;
-            }
-
-            return try ctx.getField(edge_ref.?, .destination) orelse return error.TestFailed;
-        }
-    }.getBranchDest;
-
-    const dest_of_A = try getBranchDest(root_ctx, block_A);
-    const dest_of_B = try getBranchDest(root_ctx, block_B);
-
-    var merged_header: ir.Ref = undefined;
-    var merged_body: ir.Ref = undefined;
-
-    if (dest_of_A == block_B and dest_of_B == block_A) {
-        // This is the cycle we expect. Arbitrarily assign.
-        merged_header = block_A;
-        merged_body = block_B;
-    } else {
-        return error.TestFailed;
-    }
+    try std.testing.expectEqual(block_B, dest_A);
+    try std.testing.expectEqual(block_A, dest_B);
 }
 
 test "ir integration - immutable nodes cannot reference mutable nodes" {
