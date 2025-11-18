@@ -591,15 +591,6 @@ These files are generated and cached by the build system and are not under sourc
     * The integration with the `binary` module for handling fixups and linking is mature. It can correctly generate
         fixups for unresolved external symbols.
 
-* **Intermediate Representation (IR) (`ir.zig`)**
-    * The IR's data model is extremely well-defined and stable. It's a graph-based IR (`Context`, `Ref`, `Node`) with a
-        rich type system (`NodeKind`, `StructureKind`, etc.).
-    * The API for creating and manipulating IR nodes (`ir.Context.builder`) is robust.
-    * The concept of `Root` and child `Context`s for modular compilation is fully implemented, including a sophisticated
-        `merge` operation that can correctly handle cyclic graphs (a common source of complexity).
-    * The test suite for the IR is comprehensive, verifying that its core data structures and operations are sound.
-        **The IR is ready to be a compilation target.**
-
 * **Frontend Parser & AST (`source.zig`, `meta_language.zig`)**
     * The foundational parsing library (`source.zig`) is complete, providing a flexible lexer and a Pratt parser
         (`Parser`).
@@ -610,7 +601,10 @@ These files are generated and cached by the build system and are not under sourc
 
 #### Missing Links
 
-We have created an in-depth implementation plan for the remaining components and phases of the runtime and compiler,
+While the current IR architecture is already robust and a valid compilation target, it has been deemed overly complex
+and unnecessarily hard to work with. The IR is currently being rewritten on [another branch](https://github.com/tiny-bow/ribbon-language/tree/ir-rewrite).
+
+We have also created an in-depth implementation plan for the remaining components and phases of the runtime and compiler,
 available at [./plan.md](./plan.md).
 
 This plan details a unified architecture for the Ribbon compiler and runtime, focusing on parallel and incremental
