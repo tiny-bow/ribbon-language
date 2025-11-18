@@ -73,6 +73,7 @@ const modules = [_]ModuleDef{
             "ir",
             "sma",
             "analysis",
+            "bytecode",
             "orchestration",
             "meta_language",
         },

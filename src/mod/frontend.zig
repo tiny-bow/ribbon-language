@@ -249,7 +249,7 @@ const FrontendPass = struct {
                         .operation = try ctx.internPrimitive(bytecode.Instruction.OpCode.bit_lshift64), // TODO: this sucks, need to integrate full instruction set into ir.Operation
                         .type = try self.mlValueType(),
                         .operands = try ctx.addList(.constant, .nil, &.{
-                            try ctx.getElement(contents, 0),
+                            try ctx.getElement(contents, 0) orelse @panic("Expected instruction at index 0"),
                             try self.mlInteger(u48, @bitOffsetOf(meta_language.Value.Data, "ptr_bits")),
                         }),
                     }),
@@ -264,7 +264,7 @@ const FrontendPass = struct {
                         .type = try self.mlValueType(),
                         .operands = try ctx.addList(.constant, .nil, &.{
                             base_value_constant,
-                            try ctx.getElement(contents, 1),
+                            try ctx.getElement(contents, 1) orelse @panic("Expected instruction at index 1"),
                         }),
                     }),
                 );
