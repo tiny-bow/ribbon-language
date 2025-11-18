@@ -203,11 +203,11 @@ pub const LocalId = common.Id.of(Local, core.LOCAL_ID_BITS);
 /// relies on being placed at an address that is a multiple of that value.
 pub const Alignment: type = std.math.IntFittingRange(0, MAX_ALIGNMENT);
 
-/// Represents the size of a value type; the max size is determined by the maximum alignment's bit representation.
+/// Represents the size of a value type; the max size is determined by the maximum alignment's bit representation. (This ensures `Layout` fits in a word)
 pub const Size: type = std.meta.Int(.unsigned, 64 - @bitSizeOf(Alignment));
 
 /// Simple value layout for Ribbon's constant and global values.
-pub const Layout = packed struct {
+pub const Layout = packed struct(u64) {
     size: Size,
     alignment: Alignment,
 

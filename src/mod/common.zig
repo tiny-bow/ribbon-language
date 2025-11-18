@@ -1072,6 +1072,48 @@ pub fn snapshotTest(comptime test_name: SnapshotTestName, comptime test_func: fn
     }
 }
 
+pub fn FixedArray(comptime N: comptime_int, comptime T: type) type {
+    return struct {
+        items: [N]T = undefined,
+        len: usize = 0,
+
+        pub fn append(self: *FixedArray, item: T) error{OutOfMemory}!void {
+            if (self.len >= N) return error.OutOfMemory;
+            self.items[self.len] = item;
+            self.len += 1;
+        }
+
+        pub fn pop(self: *FixedArray) ?T {
+            if (self.len == 0) return null;
+            self.len -= 1;
+            return self.items[self.len];
+        }
+
+        pub fn remove(self: *FixedArray, index: usize) error{OutOfBounds}!void {
+            if (index >= self.len) return error.OutOfBounds;
+            for (index..self.len - 1) |i| {
+                self.items[i] = self.items[i + 1];
+            }
+            self.len -= 1;
+        }
+
+        pub fn insert(self: *FixedArray, index: usize, item: T) error{ OutOfBounds, OutOfMemory }!void {
+            if (index > self.len) return error.OutOfBounds;
+            if (self.len >= N) return error.OutOfMemory;
+            var i: usize = self.len;
+            while (i > index) : (i -= 1) {
+                self.items[i] = self.items[i - 1];
+            }
+            self.items[index] = item;
+            self.len += 1;
+        }
+
+        pub fn asSlice(self: *FixedArray) []T {
+            return self.items[0..self.len];
+        }
+    };
+}
+
 pub const MapStyle = enum {
     array,
     bucket,
