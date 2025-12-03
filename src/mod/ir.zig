@@ -11,7 +11,16 @@
 //!
 //! ### TODO
 //!
-//! #### 1. Core IR Infrastructure & Correctness
+//! #### Core IR Infrastructure & Correctness
+//! *   ** Serialization/Deserialization:**
+//!     *   Create a textual representation of the IR for debugging. This is invaluable for inspecting the output of compiler passes.
+//!     *   Implement a binary serialization format for caching IR or saving it for later stages.
+//!
+//! *   ** Create a Builder API:**
+//!     *   Design a `Builder` struct to simplify IR construction.
+//!     *   Methods like `builder.setInsertPoint(*Block)`, `builder.createAdd(lhs, rhs, ?name)`, `builder.createBr(dest_block)`.
+//!     *   The builder should handle memory allocation for instructions and operands, and automatically link instructions into the block.
+//!
 //! *   ** Implement an IR Verifier:**
 //!     *   Verify that every block ends with a `Termination` instruction.
 //!     *   Check that `phi` nodes only appear at the beginning of a block.
@@ -21,31 +30,12 @@
 //!     *   Verify that `prev` and `next` pointers in blocks are consistent.
 //!     *   Check that `predecessors` and `successors` lists are correctly maintained.
 //!
-//! *   ** Create a Builder API:**
-//!     *   Design a `Builder` struct to simplify IR construction.
-//!     *   Methods like `builder.setInsertPoint(*Block)`, `builder.createAdd(lhs, rhs, ?name)`, `builder.createBr(dest_block)`.
-//!     *   The builder should handle memory allocation for instructions and operands, and automatically link instructions into the block.
-//!
-//! *   ** SSA Construction Utilities:**
-//!     *   Implement a standard "Mem2Reg" pass that converts stack allocations (`stack_alloc`, `load`, `store`) of local variables into SSA registers (`phi` nodes). This is a cornerstone of building SSA form from an AST.
-//!     *   Develop an algorithm for computing dominance frontiers, which is required for placing `phi` nodes.
-//!
-//! *   ** Serialization/Deserialization:**
-//!     *   Create a textual representation of the IR for debugging. This is invaluable for inspecting the output of compiler passes.
-//!     *   Implement a binary serialization format (e.g., using Zig's `std.bincode` or a custom format) for caching IR or saving it for later stages.
-//!
-//! #### 2. Memory Management
-//!
-//! *   ** Address the Memory Pool `TODO`s:**
-//!     *   In the `Module` struct, replace `std.heap.MemoryPool` for `function_pool` and `block_pool` with a custom pool allocator that supports iteration.
-//!         This is critical for properly de-initializing a module and all the functions/blocks it owns. A simple approach is an `ArrayList` of allocated pointers.
-//!
-//! #### 3. Type System (`Term`s)
+//! #### Type System (`Term`s)
 //!
 //! *   ** Implement Type System `TODO`s:**
 //!     *   Add support for bit-offset pointers as mentioned in the `PointerType` `TODO`.
 //!
-//! #### 4. Instruction Set & Semantics
+//! #### Instruction Set & Semantics
 //!
 //! *   ** Define User-Defined Operation (`_`) Semantics:**
 //!     *   The `Operation._` is only the start for extensibility.
@@ -58,8 +48,11 @@
 //!     *   The purpose of `reify` (term to SSA) and `lift` (SSA to term) is clear, but their exact semantics and constraints need to be rigorously defined.
 //!         For example, what happens if we try to `reify` a type that has no runtime representation?
 //!
-//! #### 5. Analysis & Transformation Framework
+//! #### Analysis & Transformation Framework
 //!
+//! *   ** SSA Construction Utilities:**
+//!     *   Implement a standard "Mem2Reg" pass that converts stack allocations (`stack_alloc`, `load`, `store`) of local variables into SSA registers (`phi` nodes). This is a cornerstone of building SSA form from an AST.
+//!     *   Develop an algorithm for computing dominance frontiers, which is required for placing `phi` nodes.
 //! *   ** Create a Pass Manager:**
 //!     *   Design a system to schedule and run analysis and transformation passes over the IR.
 //!     *   It should handle dependencies between passes (e.g., a dominance analysis must run before Mem2Reg).
@@ -76,7 +69,7 @@
 //!     *   Instruction Combining
 //!     *   Global Value Numbering (GVN)
 //!
-//! #### 6. Tooling & Debugging
+//! #### Tooling & Debugging
 //!
 //! *   ** Source-Level Debug Information:**
 //!     *   Extend the IR to carry debug information. `Instruction`s should be able to store a source location (file, line, column).
@@ -84,7 +77,7 @@
 //! *   ** Graph Visualization:**
 //!     *   Write a utility to export the CFG of a `Function` to a format like Graphviz `.dot`. This is one of the most effective ways to debug a compiler's IR.
 //!
-//! #### 7. Documentation
+//! #### Documentation
 //!
 //! *   ** Write Comprehensive Documentation:**
 //!     *   Document the semantics of every single `Operation` and `Termination`.
