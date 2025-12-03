@@ -42,15 +42,8 @@
 //!
 //! #### 3. Type System (`Term`s)
 //!
-//! *   ** Resolve `cbr` `TODO`s:**
-//!     *   In `terms.HandlerSet`, the `cancellation_point` is `void`. This needs to be defined as a proper block reference.
-//!     *   Develop a stable `cbr` strategy for block references. Since memory addresses change, we cannot hash the pointer directly.
-//!         A common solution is to use a unique ID (`u64`) assigned to each block upon creation.
 //! *   ** Implement Type System `TODO`s:**
 //!     *   Add support for bit-offset pointers as mentioned in the `PointerType` `TODO`.
-//! *   ** Refine Term Representation:**
-//!     *   Consider if all `Term`s truly need to be arena-allocated.
-//!         Simple terms like `IntegerType` with a small, fixed number of fields could potentially be passed by value if it proves more efficient, though the current pointer-based approach is more uniform.
 //!
 //! #### 4. Instruction Set & Semantics
 //!
@@ -113,6 +106,9 @@ test {
     std.testing.refAllDecls(@This());
 }
 
+/// The number of bytes used for the Blake3 hashes produced for canonical binary representation.
+pub const cbr_size = 32;
+
 /// The "universe" for an ir compilation session.
 pub const Context = struct {
     // memory management //
@@ -143,6 +139,7 @@ pub const Context = struct {
     /// Map from Tag to TermVTable for the associated type
     vtables: common.UniqueReprMap(Tag, TermVTable) = .empty,
 
+    /// Initialize a new ir context on the given allocator.
     pub fn init(allocator: std.mem.Allocator) *Context {
         const self = try allocator.create(Context);
 
@@ -158,6 +155,7 @@ pub const Context = struct {
         return self;
     }
 
+    /// Deinitialize this context and all its contents.
     pub fn deinit(self: *Context) void {
         var module_it = self.modules.valueIterator();
         while (module_it.next()) |module_p2p| module_p2p.*.deinit();
@@ -174,10 +172,14 @@ pub const Context = struct {
         self.allocator.destroy(self);
     }
 
+    /// Get the Tag for a term type in the context. See also `registerTermType`.
     pub fn tagFromType(self: *Context, comptime T: type) ?Tag {
         return self.tags.get(@typeName(T));
     }
 
+    /// Register a term type in the context.
+    /// Generally, it is not necessary to call this function manually, as all term types in the `terms` namespace are registered automatically on context initialization.
+    /// This is provided for extensibility. See also `tagFromType`.
     pub fn registerTermType(self: *Context, comptime T: type) error{ DuplicateTermType, TooManyTermTypes, OutOfMemory }!void {
         if (self.tags.get(@typeName(T))) {
             return error.DuplicateTermType;
@@ -201,7 +203,8 @@ pub const Context = struct {
         errdefer _ = self.vtables.remove(tag);
     }
 
-    pub fn createModule(self: *Context, name: Name, guid: ModuleGUID) !*Module {
+    /// Create a new module in the context.
+    pub fn createModule(self: *Context, name: []const u8, guid: ModuleGUID) !*Module {
         if (self.modules.contains(guid)) {
             return error.DuplicateModuleGUID;
         }
@@ -210,22 +213,19 @@ pub const Context = struct {
             return error.DuplicateModuleName;
         }
 
-        const new_module = try self.arena.allocator().create(Module);
         const interned_name = try self.internName(name);
-
-        new_module.* = Module{
-            .root = self,
-            .guid = guid,
-            .name = interned_name,
-        };
+        const new_module = try Module.init(self, interned_name, guid);
 
         try self.name_to_module_guid.put(self.allocator, interned_name, guid);
         errdefer _ = self.name_to_module_guid.remove(interned_name);
 
         try self.modules.put(self.allocator, guid, new_module);
         errdefer _ = self.modules.remove(guid);
+
+        return new_module;
     }
 
+    /// Intern a symbolic name in the context. If an identical name already exists, returns a reference to the existing name.
     pub fn internName(self: *Context, name: []const u8) !Name {
         const gop = try self.interned_name_set.getOrPut(self.allocator, name);
 
@@ -237,6 +237,7 @@ pub const Context = struct {
         return Name{ .value = gop.key_ptr.* };
     }
 
+    /// Intern a constant data blob in the context. If an identical blob already exists, returns a pointer to the existing BlobHeader.
     pub fn internData(self: *Context, alignment: core.Alignment, bytes: []const u8) !*const BlobHeader {
         if (self.interned_data_set.getKeyAdapted(.{ alignment, bytes }, BlobHeader.AdaptedHashContext{})) |existing_blob| {
             return existing_blob;
@@ -254,11 +255,13 @@ pub const Context = struct {
         return blob;
     }
 
+    /// Create a new term in the context. This allocates memory for the term value and returns both a typed pointer to the value and the type-erased Term.
     pub fn createTerm(self: *Context, comptime T: type, module: ?*Module) error{ ZigTypeNotRegistered, OutOfMemory }!struct { *T, Term } {
         const ptr = try TermData(T).allocate(self, module);
         return .{ ptr, Term.fromPtr(self, ptr) };
     }
 
+    /// Add a new term to the context. This provides type erasure and memory management for the term value.
     pub fn addTerm(self: *Context, module: ?*Module, value: anytype) error{OutOfMemory}!Term {
         const T = @TypeOf(value);
         const ptr, const term = try self.createTerm(T, module);
@@ -266,6 +269,7 @@ pub const Context = struct {
         return term;
     }
 
+    /// Get or create a shared term in the context. If a name is provided, the term is also interned under that name for access with `getNamedSharedTerm`.
     pub fn getOrCreateSharedTerm(self: *Context, name: ?Name, value: anytype) error{ MismatchedNamedTermDefinitions, OutOfMemory }!Term {
         const T = @TypeOf(value);
         if (self.shared_terms.getKeyAdapted(&value, Term.AdaptedIdentityContext(T){ .ctx = self })) |existing_term| {
@@ -290,6 +294,7 @@ pub const Context = struct {
         }
     }
 
+    /// Get a shared term from the context using the name passed when it was interned. See also `getOrCreateSharedTerm`.
     pub fn getNamedSharedTerm(self: *Context, name: Name) ?Term {
         return self.named_shared_terms.get(name.value);
     }
@@ -298,18 +303,26 @@ pub const Context = struct {
 /// Identifier for a type within the IR term type registry
 pub const Tag = enum(u8) { _ };
 
+/// Description of a type erased term in the ir context.
 pub const TermHeader = struct {
+    /// The root context for this term.
     root: *Context,
+    /// The module this term belongs to, if any.
     module: ?*Module,
+    /// The tag identifying the term's type.
     tag: Tag,
+    /// The offset (forwards) from the header to the term value.
     value_offset: u8,
+    /// The cached CBR for the attached term.
     cached_cbr: ?[]const u8 = null,
 
+    /// Get the parent TermData pair containing this header.
     fn toTermData(self: *TermHeader, comptime T: type) error{ZigTypeMismatch}!*TermData(T) {
         if (self.tag != self.root.tagFromType(T)) return error.ZigTypeMismatch;
         return @fieldParentPtr("header", self);
     }
 
+    /// Get the Term for this header.
     fn toTerm(self: *TermHeader) Term {
         return .{
             .tag = self.tag,
@@ -318,23 +331,28 @@ pub const TermHeader = struct {
         };
     }
 
+    /// Get a typed pointer to the term value.
     fn toTermPtr(self: *TermHeader, comptime T: type) error{ZigTypeMismatch}!*T {
         return &(try self.toTermData(T)).value;
     }
 
+    /// Get an opaque pointer to the term value.
     fn toOpaqueTermAddress(self: *TermHeader) *anyopaque {
         return @ptrFromInt(@intFromPtr(self) + self.value_offset);
     }
 
+    /// Get a TermHeader from a term value.
     fn fromTerm(term: Term) *TermHeader {
         return term.toHeader();
     }
 
+    /// Get a TermHeader from a typed pointer to a term value.
     fn fromTermPtr(ptr: anytype) *TermHeader {
         const data: *TermData(@typeInfo(@TypeOf(ptr)).pointer.child) = @fieldParentPtr("value", ptr);
         return &data.header;
     }
 
+    /// Get the CBR for the attached term.
     fn getCbr(self: *TermHeader) error{OutOfMemory}![]const u8 {
         if (self.cached_cbr) |cached| {
             return cached;
@@ -347,12 +365,14 @@ pub const TermHeader = struct {
     }
 };
 
+/// A vtable of functions for type erased term operations.
 pub const TermVTable = struct {
     eql: *const fn (*const anyopaque, *const anyopaque) bool,
     hash: *const fn (*const anyopaque, *std.hash.Fnv1a_64) void,
     cbr: *const fn (*const anyopaque, std.mem.Allocator) error{OutOfMemory}![]const u8,
 };
 
+/// A pair of a TermHeader and a value of type T. Defines the storage layout for Term objects.
 pub fn TermData(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -373,11 +393,17 @@ pub fn TermData(comptime T: type) type {
     };
 }
 
+/// A type erased, tagged pointer to a term value in an ir context.
+/// Terms represent types and other compile time expressions in the ir.
 pub const Term = packed struct(u64) {
+    /// The tag identifying the term's type.
     tag: Tag,
+    /// The offset (backwards) from the term's value pointer to its header.
     header_offset: u8,
+    /// Address of the term's value.
     ptr: u48,
 
+    /// Create a term from a typed pointer to its value.
     fn fromPtr(context: *Context, ptr: anytype) error{ZigTypeMismatch}!Term {
         const T = @typeInfo(@TypeOf(ptr)).pointer.child;
         return .{
@@ -388,40 +414,49 @@ pub const Term = packed struct(u64) {
         };
     }
 
+    /// Get a typed pointer to the term's value.
     pub fn toMutPtr(self: Term, context: *const Context, comptime T: type) error{ZigTypeMismatch}!*T {
         if (self.tag != context.tagFromType(T)) return error.ZigTypeMismatch;
         return @ptrFromInt(self.ptr);
     }
 
+    /// Get an immutable, type checked pointer to the term's value.
     pub fn toPtr(self: Term, context: *const Context, comptime T: type) error{ZigTypeMismatch}!*const T {
         if (self.tag != context.tagFromType(T)) return error.ZigTypeMismatch;
         return @ptrFromInt(self.ptr);
     }
 
+    /// Get an opaque pointer to the term's value.
     fn toOpaquePtr(self: Term) *anyopaque {
         return @ptrFromInt(self.ptr);
     }
 
+    /// Get the TermHeader for this term.
     fn toHeader(self: Term) *TermHeader {
         return @ptrFromInt(self.ptr - self.header_offset);
     }
 
+    /// Get the root context for this term.
     pub fn toRoot(self: Term) *Context {
         return self.toHeader().root;
     }
 
+    /// Get the module this term belongs to, if any.
     pub fn toModule(self: Term) ?*Module {
         return self.toHeader().module;
     }
 
+    /// Get the TermData for this term.
     fn toTermData(self: Term, comptime T: type) error{ZigTypeMismatch}!*TermData(T) {
         return self.toHeader().toTermData();
     }
 
+    /// Get the CBR for this term.
     pub fn getCbr(self: Term) error{OutOfMemory}![]const u8 {
         return self.toHeader().getCbr();
     }
 
+    /// An adapted identity context for terms of type T before marshalling and type erasure; used when interning terms.
     pub fn AdaptedIdentityContext(comptime T: type) type {
         return struct {
             ctx: *Context,
@@ -442,6 +477,7 @@ pub const Term = packed struct(u64) {
         };
     }
 
+    /// The standard identity context for terms, used in the interned term set.
     pub const IdentityContext = struct {
         pub fn hash(_: @This(), t: Term) u64 {
             var hasher = std.hash.Fnv1a_64.init();
@@ -460,21 +496,26 @@ pub const Term = packed struct(u64) {
 /// A unique identifier for a ribbon module.
 pub const ModuleGUID = enum(u128) { _ };
 
+/// A reference to an interned symbolic name within the ir context.
 pub const Name = struct {
     value: []const u8,
 };
 
+/// Identifier for a data blob within the ir context.
 pub const BlobId = enum(u32) { _ };
 
+/// A constant data blob, stored in the ir context. Data such as string literals are stored as blobs.
 pub const BlobHeader = struct {
     id: BlobId,
     layout: core.Layout,
     cached_cbr: ?[]const u8 = null,
 
+    /// Get the (unaligned) byte value for this blob.
     pub inline fn getBytes(self: *const BlobHeader) []const u8 {
         return (@as([*]const u8, @ptrCast(self)) + @sizeOf(BlobHeader))[0..self.layout.size];
     }
 
+    /// Get the CBR for this blob.
     pub fn getCbr(self: *const BlobHeader, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
         if (self.cached_cbr) |cached| {
             return cached;
@@ -492,12 +533,13 @@ pub const BlobHeader = struct {
         hasher.update("bytes:");
         hasher.update(self.getBytes());
 
-        const buf = try allocator.alloc(u8, 32);
+        const buf = try allocator.alloc(u8, cbr_size);
         hasher.final(buf);
         @constCast(self).cached_cbr = buf;
         return buf;
     }
 
+    /// An adapted hash context for blobs, used when interning yet-unmarshalled data.
     pub const AdaptedHashContext = struct {
         pub fn hash(_: @This(), descriptor: struct { core.Alignment, []const u8 }) u64 {
             const layout = core.Layout{ .alignment = descriptor[0], .size = descriptor[1].len };
@@ -514,6 +556,7 @@ pub const BlobHeader = struct {
         }
     };
 
+    /// The standard hash context for blobs, used in the interned data set.
     pub const HashContext = struct {
         pub fn hash(_: @This(), blob: *const BlobHeader) u64 {
             var hasher = std.hash.Fnv1a_64.init();
@@ -531,18 +574,49 @@ pub const BlobHeader = struct {
 
 /// An ir module, representing a single compilation unit within a context/compilation session.
 pub const Module = struct {
+    /// The context this module belongs to.
     root: *Context,
+    /// Globally unique identifier for this module.
     guid: ModuleGUID,
+    /// Symbolic name of this module.
     name: Name,
 
+    /// Symbols exported from this module.
     exported_symbols: common.StringMap(Binding) = .empty,
-    function_pool: std.heap.MemoryPool(Function), // TODO: we need a pool-like allocator that allows us to actually iterate the allocations for memory management
-    block_pool: std.heap.MemoryPool(Block), // TODO: we need a pool-like allocator that allows us to actually iterate the allocations for memory management
+    /// Pool allocator for functions in this module.
+    function_pool: common.ManagedPool(Function),
+    /// Pool allocator for blocks in this module.
+    block_pool: common.ManagedPool(Block),
 
-    pub fn deinit(self: *Module) void {
-        self.exported_symbols.deinit(self.root.allocator);
+    /// Create a new module in the given context.
+    pub fn init(root: *Context, name: Name, guid: ModuleGUID) !*Module {
+        const self = try root.arena.allocator().create(Module);
+
+        self.* = Module{
+            .root = root,
+            .guid = guid,
+            .name = name,
+            .function_pool = try .init(root.allocator),
+            .block_pool = try .init(root.allocator),
+        };
+
+        return self;
     }
 
+    /// Deinitialize this module and all its contents.
+    pub fn deinit(self: *Module) void {
+        self.exported_symbols.deinit(self.root.allocator);
+
+        var func_it = self.function_pool.iterate();
+        while (func_it.next()) |func_p2p| func_p2p.*.deinit(self);
+        self.function_pool.deinit();
+
+        var block_it = self.block_pool.iterate();
+        while (block_it.next()) |block_p2p| block_p2p.*.deinit(self);
+        self.block_pool.deinit();
+    }
+
+    /// Export a term from this module.
     pub fn exportTerm(self: *Module, name: Name, term: Term) error{ DuplicateModuleExports, OutOfMemory }!void {
         const gop = try self.exported_symbols.getOrPut(self.root.allocator, name.value);
         if (gop.found_existing) {
@@ -551,6 +625,7 @@ pub const Module = struct {
         gop.value_ptr.* = .{ .term = term };
     }
 
+    /// Export a function from this module.
     pub fn exportFunction(self: *Module, name: Name, function: *Function) error{ DuplicateModuleExports, OutOfMemory }!void {
         const gop = try self.exported_symbols.getOrPut(self.root.allocator, name.value);
         if (gop.found_existing) {
@@ -560,13 +635,18 @@ pub const Module = struct {
     }
 };
 
+/// A binding exported from a module.
 pub const Binding = union(enum) {
+    /// A term binding.
     term: Term,
+    /// A function binding.
     function: *Function,
 };
 
+/// Identifier for an instruction within a function.
 pub const InstructionId = enum(u32) { _ };
 
+/// An instruction within a basic block.
 pub const Instruction = struct {
     /// Function-unique id for this instruction, used for hashing and debugging.
     id: InstructionId,
@@ -623,6 +703,7 @@ pub const Instruction = struct {
         return self.command == expected_command;
     }
 
+    /// Get the CBR for this instruction.
     pub fn getCbr(self: *Instruction, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
         var hasher = std.crypto.hash.Blake3.init(.{});
         hasher.update("Instruction");
@@ -653,13 +734,20 @@ pub const Instruction = struct {
     }
 };
 
+/// An operand to an instruction.
 pub const Operand = union(enum) {
+    /// A term operand.
     term: Term,
+    /// A reference to a data blob.
     blob: *const BlobHeader,
+    /// A reference to a basic block.
     block: *Block,
+    /// A reference to a function.
     function: *Function,
+    /// A reference to an instruction producing an SSA variable.
     variable: *Instruction,
 
+    /// Get the CBR for this operand.
     pub fn getCbr(self: Operand, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
         var hasher = std.crypto.hash.Blake3.init(.{});
         hasher.update("Operand");
@@ -687,12 +775,13 @@ pub const Operand = union(enum) {
             },
         }
 
-        const buf = try allocator.alloc(u8, 32);
+        const buf = try allocator.alloc(u8, cbr_size);
         hasher.final(buf);
         return buf;
     }
 };
 
+/// A use of an operand by an instruction.
 pub const Use = struct {
     /// The operand being used.
     operand: Operand,
@@ -704,8 +793,10 @@ pub const Use = struct {
 
 // Functions and handlers cannot be terms because they must manage memory while terms are arena-allocated
 
+/// Identifier for a function within a module.
 pub const FunctionId = enum(u32) { _ };
 
+/// A procedure or effect handler within a module.
 pub const Function = struct {
     /// Globally unique id for this function, used for hashing and debugging.
     id: FunctionId,
@@ -721,6 +812,9 @@ pub const Function = struct {
     /// While slightly less memory efficient than a Pool, this allows us to include operands in the same allocation as the instruction.
     arena: std.heap.ArenaAllocator,
 
+    /// Cached CBR for this function.
+    cached_cbr: ?[]const u8 = null,
+
     /// The kind of a function, either a procedure or an effect handler.
     pub const Kind = enum(u1) {
         /// The function is a normal procedure.
@@ -729,7 +823,12 @@ pub const Function = struct {
         handler,
     };
 
+    /// Get the CBR for this function.
     pub fn getCbr(self: *Function, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
+        if (self.cached_cbr) |cached| {
+            return cached;
+        }
+
         var hasher = std.crypto.hash.Blake3.init(.{});
         hasher.update("Function");
 
@@ -752,28 +851,43 @@ pub const Function = struct {
         hasher.update("body:");
         hasher.update(try self.entry.getCbr(allocator));
 
-        const buf = try allocator.alloc(u8, 32);
+        const buf = try allocator.alloc(u8, cbr_size);
         hasher.final(buf);
+
+        self.cached_cbr = buf;
+
         return buf;
     }
 };
 
+/// Identifier for a basic block within a function.
 pub const BlockId = enum(u32) { _ };
 
+/// A basic block within a function's control flow graph.
 pub const Block = struct {
+    /// The context this block belongs to.
     root: *Context,
+    /// Globally unique id for this block within its function, used for hashing and debugging.
     id: BlockId,
+    /// Optional debug name for this block.
     name: ?Name = null,
+    /// The first operation in this block, or null if the block is empty.
     first_op: ?*Instruction = null,
+    /// The last operation in this block, or null if the block is empty.
     last_op: ?*Instruction = null,
 
+    /// Predecessor blocks in the control flow graph.
     predecessors: common.ArrayList(*Block) = .empty,
+    /// Successor blocks in the control flow graph.
     successors: common.ArrayList(*Block) = .empty,
 
+    /// Cached CBR for this block.
     cached_cbr: ?[]const u8 = null,
 
+    /// An iterator over the instructions in a Block.
     pub const Iterator = struct {
         op: ?*Instruction,
+        /// Advance the linked list pointer and return the current instruction.
         pub fn next(self: *Iterator) ?*Instruction {
             const current = self.op orelse return null;
             self.op = current.next;
@@ -781,10 +895,12 @@ pub const Block = struct {
         }
     };
 
+    /// Get an iterator over the instructions in this block.
     pub fn iterate(self: *Block) Iterator {
         return Iterator{ .op = self.first_op };
     }
 
+    /// Get the CBR for this block.
     pub fn getCbr(self: *Block, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
         if (self.cached_cbr) |cached| {
             return cached;
@@ -796,12 +912,13 @@ pub const Block = struct {
         return self.getCbrRecurse(allocator, &visited);
     }
 
+    /// Recursive helper for computing the CBR of this block, tracking visited blocks to avoid cycles.
     fn getCbrRecurse(self: *Block, allocator: std.mem.Allocator, visited: *common.UniqueReprSet(*Block)) error{OutOfMemory}![]const u8 {
         if (self.cached_cbr) |cached| {
             return cached;
         }
 
-        const buf = try allocator.alloc(u8, 32);
+        const buf = try allocator.alloc(u8, cbr_size);
 
         var hasher = std.crypto.hash.Blake3.init(.{});
         hasher.update("Block");
@@ -827,6 +944,8 @@ pub const Block = struct {
         {
             var op_it = self.iterate();
             var i: usize = 0;
+
+            hasher.update("operations:");
             while (op_it.next()) |op| {
                 hasher.update("op.index:");
                 hasher.update(std.mem.asBytes(&i));
@@ -836,6 +955,16 @@ pub const Block = struct {
             }
         }
 
+        hasher.update("predecessors:");
+        for (self.predecessors.items, 0..) |pred, i| {
+            hasher.update("pred.index:");
+            hasher.update(std.mem.asBytes(&i));
+
+            hasher.update("pred.value:");
+            hasher.update(try pred.getCbrRecurse(allocator, visited));
+        }
+
+        hasher.update("successors:");
         for (self.successors.items, 0..) |succ, i| {
             hasher.update("succ.index:");
             hasher.update(std.mem.asBytes(&i));
@@ -874,8 +1003,9 @@ pub const Termination = enum(u8) {
 
 /// Defines the action performed by an Operation
 pub const Operation = enum(u8) {
+    /// The offset at which Operations start in the instruction command space.
+    /// We start the Operation enum at the end of the Termination enum so they can both be compared generically to u8
     pub const offset = calc_offset: {
-        // we start the Operation enum at the end of the Termination enum so they can both be compared generically to u8
         const tags = std.meta.tags(Termination);
         break :calc_offset @intFromEnum(tags[tags.len - 1]) + 1;
     };
@@ -950,6 +1080,7 @@ pub const Operation = enum(u8) {
     _,
 };
 
+/// A namespace for all builtin ir Term definitions.
 pub const terms = struct {
     /// Binds information about a global variable.
     pub const Global = struct {
@@ -970,13 +1101,17 @@ pub const terms = struct {
         pub fn cbr(self: *const Global, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("Global");
+
             hasher.update("name:");
             hasher.update(self.name.value);
+
             hasher.update("type:");
             hasher.update(try self.type.getCbr(allocator));
+
             hasher.update("initializer:");
             hasher.update(try self.initializer.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -984,6 +1119,7 @@ pub const terms = struct {
 
     /// Binds a set of handlers and cancellation information for a push_set instruction
     pub const HandlerSet = struct {
+        /// the set of handlers in this handler set
         handlers: []const *Function,
         /// a HandlerType that describes the unified type of the handlers in this set
         handler_type: Term,
@@ -1017,6 +1153,7 @@ pub const terms = struct {
             hasher.update("handlers.count:");
             hasher.update(std.mem.asBytes(&self.handlers.len));
 
+            hasher.update("handlers:");
             for (self.handlers) |handler| {
                 hasher.update("handler:");
                 hasher.update(try handler.getCbr(allocator));
@@ -1031,7 +1168,7 @@ pub const terms = struct {
             hasher.update("cancellation_point:");
             hasher.update(std.mem.asBytes(&self.cancellation_point.id));
 
-            const buf = try allocator.alloc(u8, 32);
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1071,17 +1208,23 @@ pub const terms = struct {
         pub fn cbr(self: *const Implementation, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("Implementation");
+
             hasher.update("class:");
             hasher.update(try self.class.getCbr(allocator));
+
             hasher.update("members.count:");
             hasher.update(std.mem.asBytes(&self.members.len));
+
+            hasher.update("members:");
             for (self.members) |field| {
                 hasher.update("field.name:");
                 hasher.update(field.name.value);
+
                 hasher.update("field.value:");
                 hasher.update(try field.value.getCbr(allocator));
             }
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1102,8 +1245,10 @@ pub const terms = struct {
         pub fn cbr(self: *const Symbol, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("Symbol");
+
             hasher.update(self.name.value);
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1145,18 +1290,23 @@ pub const terms = struct {
         pub fn cbr(self: *const Class, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("Class");
+
             hasher.update("name:");
             hasher.update(self.name.value);
+
             hasher.update("elements.count:");
             hasher.update(std.mem.asBytes(&self.elements.len));
+
             hasher.update("elements:");
             for (self.elements) |elem| {
                 hasher.update("elem.name:");
                 hasher.update(elem.name.value);
+
                 hasher.update("elem.type:");
                 hasher.update(try elem.type.getCbr(allocator));
             }
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1198,18 +1348,23 @@ pub const terms = struct {
         pub fn cbr(self: *const Effect, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("Effect");
+
             hasher.update("name:");
             hasher.update(self.name.value);
+
             hasher.update("elements.count:");
             hasher.update(std.mem.asBytes(&self.elements.len));
+
             hasher.update("elements:");
             for (self.elements) |elem| {
                 hasher.update("elem.name:");
                 hasher.update(elem.name.value);
+
                 hasher.update("elem.type:");
                 hasher.update(try elem.type.getCbr(allocator));
             }
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1234,11 +1389,14 @@ pub const terms = struct {
         pub fn cbr(self: *const Quantifier, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("Quantifier");
+
             hasher.update("id:");
             hasher.update(std.mem.asBytes(&self.id));
+
             hasher.update("kind:");
             hasher.update(try self.kind.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1267,13 +1425,15 @@ pub const terms = struct {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("LiftedDataKind");
             hasher.update(try self.unlifted_type.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
     };
     pub const ArrowKind = struct {
+        /// The kind of the input type provided to a constructor of this arrow kind.
         input: Term,
+        /// The kind of the output type produced by a constructor of this arrow kind.
         output: Term,
 
         pub fn eql(self: *const ArrowKind, other: *const ArrowKind) bool {
@@ -1288,15 +1448,27 @@ pub const terms = struct {
         pub fn cbr(self: *const ArrowKind, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("ArrowKind");
+
             hasher.update("input:");
             hasher.update(try self.input.getCbr(allocator));
+
             hasher.update("output:");
             hasher.update(try self.output.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
     };
+
+    /// Type data for a void type repr.
+    pub const VoidType = IdentityTerm("VoidType");
+    /// Type data for a boolean type repr.
+    pub const BoolType = IdentityTerm("BoolType"); // TODO: it may be better to represent this as a sum or enum; currently this was chosen because bool is a bit special in that it is representable as a single bit. Ideally, this property should be representable on the aformentioned options as well.
+    /// Type data for a unit type repr.
+    pub const UnitType = IdentityTerm("UnitType");
+    /// Type data for the top type repr representing the absence of control flow resulting from an expression.
+    pub const NoReturnType = IdentityTerm("NoReturnType");
 
     /// Type data for an integer type repr.
     pub const IntegerType = struct {
@@ -1317,11 +1489,14 @@ pub const terms = struct {
         pub fn cbr(self: *const IntegerType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("IntegerType");
+
             hasher.update("signedness:");
             hasher.update(try self.signedness.getCbr(allocator));
+
             hasher.update("bit_width:");
             hasher.update(try self.bit_width.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1344,9 +1519,10 @@ pub const terms = struct {
         pub fn cbr(self: *const FloatType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("FloatType");
-            hasher.update("bit_width:");
+
             hasher.update(try self.bit_width.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1376,13 +1552,17 @@ pub const terms = struct {
         pub fn cbr(self: *const ArrayType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("ArrayType");
+
             hasher.update("len:");
             hasher.update(try self.len.getCbr(allocator));
+
             hasher.update("sentinel_value:");
             hasher.update(try self.sentinel_value.getCbr(allocator));
+
             hasher.update("payload:");
             hasher.update(try self.payload.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1412,13 +1592,17 @@ pub const terms = struct {
         pub fn cbr(self: *const PointerType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("PointerType");
+
             hasher.update("alignment:");
             hasher.update(try self.alignment.getCbr(allocator));
+
             hasher.update("address_space:");
             hasher.update(try self.address_space.getCbr(allocator));
+
             hasher.update("payload:");
             hasher.update(try self.payload.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1451,15 +1635,20 @@ pub const terms = struct {
         pub fn cbr(self: *const BufferType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("BufferType");
+
             hasher.update("alignment:");
             hasher.update(try self.alignment.getCbr(allocator));
+
             hasher.update("address_space:");
             hasher.update(try self.address_space.getCbr(allocator));
+
             hasher.update("sentinel_value:");
             hasher.update(try self.sentinel_value.getCbr(allocator));
+
             hasher.update("payload:");
             hasher.update(try self.payload.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1492,15 +1681,20 @@ pub const terms = struct {
         pub fn cbr(self: *const SliceType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("SliceType");
+
             hasher.update("alignment:");
             hasher.update(try self.alignment.getCbr(allocator));
+
             hasher.update("address_space:");
             hasher.update(try self.address_space.getCbr(allocator));
+
             hasher.update("sentinel_value:");
             hasher.update(try self.sentinel_value.getCbr(allocator));
+
             hasher.update("payload:");
             hasher.update(try self.payload.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1523,11 +1717,14 @@ pub const terms = struct {
         pub fn cbr(self: *const RowElementType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("RowElementType");
+
             hasher.update("label:");
             hasher.update(try self.label.getCbr(allocator));
+
             hasher.update("payload:");
             hasher.update(try self.payload.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1570,6 +1767,7 @@ pub const terms = struct {
         pub fn cbr(self: *const LabelType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("LabelType");
+
             switch (self.*) {
                 .name => |n| {
                     hasher.update("name:");
@@ -1582,11 +1780,13 @@ pub const terms = struct {
                 .exact => |e| {
                     hasher.update("exact.name:");
                     hasher.update(try e.name.getCbr(allocator));
+
                     hasher.update("exact.index:");
                     hasher.update(try e.index.getCbr(allocator));
                 },
             }
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1611,11 +1811,14 @@ pub const terms = struct {
         pub fn cbr(self: *const LiftedDataType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("LiftedDataType");
+
             hasher.update("unlifted_type:");
             hasher.update(try self.unlifted_type.getCbr(allocator));
+
             hasher.update("value:");
             hasher.update(try self.value.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1672,23 +1875,32 @@ pub const terms = struct {
         pub fn cbr(self: *const StructureType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("StructureType");
+
             hasher.update("name:");
             hasher.update(self.name.value);
+
             hasher.update("layout:");
             hasher.update(try self.layout.getCbr(allocator));
+
             hasher.update("backing_integer:");
             hasher.update(try self.backing_integer.getCbr(allocator));
+
             hasher.update("elements_count:");
             hasher.update(std.mem.asBytes(&self.elements.len));
+
+            hasher.update("elements:");
             for (self.elements) |elem| {
                 hasher.update("elem.name:");
                 hasher.update(try elem.name.getCbr(allocator));
+
                 hasher.update("elem.payload:");
                 hasher.update(try elem.payload.getCbr(allocator));
+
                 hasher.update("elem.alignment_override:");
                 hasher.update(try elem.alignment_override.getCbr(allocator));
             }
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1737,19 +1949,26 @@ pub const terms = struct {
         pub fn cbr(self: *const UnionType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("UnionType");
+
             hasher.update("name:");
             hasher.update(self.name.value);
+
             hasher.update("layout:");
             hasher.update(try self.layout.getCbr(allocator));
+
             hasher.update("elements_count:");
             hasher.update(std.mem.asBytes(&self.elements.len));
+
+            hasher.update("elements:");
             for (self.elements) |elem| {
                 hasher.update("elem.name:");
                 hasher.update(elem.name.value);
+
                 hasher.update("elem.payload:");
                 hasher.update(try elem.payload.getCbr(allocator));
             }
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1804,23 +2023,32 @@ pub const terms = struct {
         pub fn cbr(self: *const SumType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("SumType");
+
             hasher.update("name:");
             hasher.update(self.name.value);
+
             hasher.update("tag_type:");
             hasher.update(try self.tag_type.getCbr(allocator));
+
             hasher.update("layout:");
             hasher.update(try self.layout.getCbr(allocator));
+
             hasher.update("elements_count:");
             hasher.update(std.mem.asBytes(&self.elements.len));
+
+            hasher.update("elements:");
             for (self.elements) |elem| {
                 hasher.update("elem.name:");
                 hasher.update(elem.name.value);
+
                 hasher.update("elem.payload:");
                 hasher.update(try elem.payload.getCbr(allocator));
+
                 hasher.update("elem.tag:");
                 hasher.update(try elem.tag.getCbr(allocator));
             }
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1848,13 +2076,17 @@ pub const terms = struct {
         pub fn cbr(self: *const FunctionType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("FunctionType");
+
             hasher.update("input:");
             hasher.update(try self.input.getCbr(allocator));
+
             hasher.update("output:");
             hasher.update(try self.output.getCbr(allocator));
+
             hasher.update("effects:");
             hasher.update(try self.effects.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1885,15 +2117,20 @@ pub const terms = struct {
         pub fn cbr(self: *const HandlerType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("HandlerType");
+
             hasher.update("input:");
             hasher.update(try self.input.getCbr(allocator));
+
             hasher.update("output:");
             hasher.update(try self.output.getCbr(allocator));
+
             hasher.update("handled_effect:");
             hasher.update(try self.handled_effect.getCbr(allocator));
+
             hasher.update("added_effects:");
             hasher.update(try self.added_effects.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1930,17 +2167,23 @@ pub const terms = struct {
         pub fn cbr(self: *const PolymorphicType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("PolymorphicType");
+
             hasher.update("quantifiers_count:");
             hasher.update(std.mem.asBytes(&self.quantifiers.len));
+
+            hasher.update("quantifiers:");
             for (self.quantifiers) |quant| {
                 hasher.update("quantifier:");
                 hasher.update(try quant.getCbr(allocator));
             }
+
             hasher.update("qualifiers:");
             hasher.update(try self.qualifiers.getCbr(allocator));
+
             hasher.update("payload:");
             hasher.update(try self.payload.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1965,11 +2208,14 @@ pub const terms = struct {
         pub fn cbr(self: *const IsSubRowConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("IsSubRowConstraint");
+
             hasher.update("primary_row:");
             hasher.update(try self.primary_row.getCbr(allocator));
+
             hasher.update("subtype_row:");
             hasher.update(try self.subtype_row.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -1997,13 +2243,17 @@ pub const terms = struct {
         pub fn cbr(self: *const RowsConcatenateConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("RowsConcatenateConstraint");
+
             hasher.update("row_a:");
             hasher.update(try self.row_a.getCbr(allocator));
+
             hasher.update("row_b:");
             hasher.update(try self.row_b.getCbr(allocator));
+
             hasher.update("row_result:");
             hasher.update(try self.row_result.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -2028,11 +2278,14 @@ pub const terms = struct {
         pub fn cbr(self: *const ImplementsClassConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("ImplementsClassConstraint");
+
             hasher.update("data:");
             hasher.update(try self.data.getCbr(allocator));
+
             hasher.update("class:");
             hasher.update(try self.class.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -2057,11 +2310,14 @@ pub const terms = struct {
         pub fn cbr(self: *const IsStructureConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("IsStructureConstraint");
+
             hasher.update("data:");
             hasher.update(try self.data.getCbr(allocator));
+
             hasher.update("row:");
             hasher.update(try self.row.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -2086,11 +2342,14 @@ pub const terms = struct {
         pub fn cbr(self: *const IsUnionConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("IsUnionConstraint");
+
             hasher.update("data:");
             hasher.update(try self.data.getCbr(allocator));
+
             hasher.update("row:");
             hasher.update(try self.row.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
@@ -2115,17 +2374,22 @@ pub const terms = struct {
         pub fn cbr(self: *const IsSumConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
             var hasher = std.crypto.hash.Blake3.init(.{});
             hasher.update("IsSumConstraint");
+
             hasher.update("data:");
             hasher.update(try self.data.getCbr(allocator));
+
             hasher.update("row:");
             hasher.update(try self.row.getCbr(allocator));
-            const buf = try allocator.alloc(u8, 32);
+
+            const buf = try allocator.alloc(u8, cbr_size);
             hasher.final(buf);
             return buf;
         }
     };
 };
 
+/// A constructor for term types that have no internal data,
+/// and are uniquely identified by a compile-time name.
 pub fn IdentityTerm(comptime name: []const u8) type {
     return struct {
         const Self = @This();
@@ -2139,7 +2403,7 @@ pub fn IdentityTerm(comptime name: []const u8) type {
         }
 
         pub fn cbr(_: *const Self, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            const buf = try allocator.alloc(u8, 32);
+            const buf = try allocator.alloc(u8, cbr_size);
             std.crypto.hash.Blake3.hash(name, buf, .{});
             return buf;
         }
