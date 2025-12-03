@@ -1400,3 +1400,62 @@ pub fn VisitorQueue(comptime T: type) type {
         }
     };
 }
+
+/// Similar to std.heap.MemoryPool, but supports iteration over live items.
+pub fn ManagedPool(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        arena: std.heap.ArenaAllocator,
+        live_list: UniqueReprSet(*T) = .empty,
+        free_list: ArrayList(*T) = .empty,
+
+        /// Create a new ManagedPool backed by the provided allocator.
+        pub fn init(allocator: std.mem.Allocator) !ManagedPool {
+            return .{
+                .arena = .init(allocator),
+            };
+        }
+
+        /// Deinitialize the ManagedPool, freeing all allocated memory.
+        pub fn deinit(self: *Self) void {
+            self.live_list.deinit(self.arena.child_allocator);
+            self.free_list.deinit(self.arena.child_allocator);
+            self.arena.deinit();
+        }
+
+        /// Clear the ManagedPool, freeing all live items and retaining capacity.
+        pub fn clear(self: *Self) !void {
+            var it = self.iterate();
+            while (it.next()) |item| {
+                try self.free_list.append(self.arena.child_allocator, item);
+            }
+            self.live_list.clearRetainingCapacity();
+        }
+
+        /// Create a new item from the pool.
+        pub fn create(self: *Self) !*T {
+            if (self.free_list.pop()) |reusable_ptr| {
+                return reusable_ptr;
+            } else {
+                const new_item = try self.arena.allocator().create(T);
+                try self.live_list.put(self.arena.child_allocator, new_item, {});
+                return new_item;
+            }
+        }
+
+        /// Destroy an item, returning it to the pool.
+        pub fn destroy(self: *Self, item: *T) error{ ItemNotFromPool, OutOfMemory }!void {
+            if (!self.live_list.remove(item)) {
+                return error.ItemNotFromPool;
+            }
+
+            try self.free_list.append(self.arena.child_allocator, item);
+        }
+
+        /// Iterate over live items in the pool.
+        pub fn iterate(self: *Self) UniqueReprSet(*T).KeyIterator {
+            return self.live_list.keyIterator();
+        }
+    };
+}
