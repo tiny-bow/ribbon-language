@@ -37,20 +37,20 @@ pub const OperandPattern = union(enum) {
     /// Matches any node and captures its `ir.Ref` under the given `CaptureId`.
     capture: CaptureId,
     /// Matches a specific, literal `ir.Ref`.
-    literal_ref: ir.Ref,
+    // literal_ref: ir.Ref,
     /// Matches a node whose value is a specific primitive integer.
     /// This is a shortcut for matching a `primitive` node with a specific value.
     literal_primitive: u64,
     /// Matches a node by recursively applying a sub-pattern.
     sub_pattern: *const PatternNode,
-    /// An escape hatch for complex checks. Matches if the provided function returns `true`.
-    predicate: *const fn (ctx: *ir.Context, ref: ir.Ref) bool,
+    // /// An escape hatch for complex checks. Matches if the provided function returns `true`.
+    // predicate: *const fn (ctx: *ir.Context, ref: ir.Ref) bool,
 };
 
 /// A declarative representation of a subgraph within the `ir.Context` to be matched.
 pub const PatternNode = struct {
     /// The specific `ir.NodeKind` to match. If null, any kind is matched.
-    kind: ?ir.NodeKind = null,
+    // kind: ?ir.NodeKind = null,
 
     /// An optional pattern to match against the *type* of the node being evaluated.
     /// This is a powerful constraint, e.g., "match an 'i_add' node *whose result type is i32*".
@@ -63,14 +63,14 @@ pub const PatternNode = struct {
     arity: MatchCommutativity = .fixed,
 };
 
-pub const CaptureMap = common.UniqueReprMap(CaptureId, ir.Ref);
+pub const CaptureMap = common.UniqueReprMap(CaptureId, void); // TODO
 
 /// Holds the results of a successful pattern match, mapping `CaptureId`s
 /// to the `ir.Ref`s they captured from the live IR graph.
 pub const MatchResult = struct {
     /// The `ir.Ref` of the root node of the matched subgraph.
     /// This is the node that the `PeepholePattern` will replace.
-    root_ref: ir.Ref = ir.Ref.nil,
+    // root_ref: ir.Ref = ir.Ref.nil,
 
     /// A map from the capture ID to the `ir.Ref` of the captured node.
     captures: CaptureMap = .{},
@@ -142,156 +142,156 @@ pub fn deinit(self: *PeepholePass, allocator: std.mem.Allocator) void {
     allocator.destroy(self);
 }
 
-/// The main execution function for a PeepholePass.
-pub fn run(self: *PeepholePass, job: *backend.Job) !void {
-    var changed = true;
+// /// The main execution function for a PeepholePass.
+// pub fn run(self: *PeepholePass, job: *backend.Job) !void {
+// var changed = true;
 
-    // Ensure we clean up any nodes marked for deletion at the end of the pass.
-    defer job.deleteMarkedSubtrees();
+// Ensure we clean up any nodes marked for deletion at the end of the pass.
+// defer job.deleteMarkedSubtrees();
 
-    while (changed) {
-        changed = false;
-        var node_it = job.context.nodes.iterator();
+// while (changed) {
+//     changed = false;
+//     var node_it = job.context.nodes.iterator();
 
-        while (node_it.next()) |entry| {
-            const current_ref = entry.key_ptr.*;
+//     while (node_it.next()) |entry| {
+//         const current_ref = entry.key_ptr.*;
 
-            for (self.patterns.items) |pattern| {
-                var match_result = MatchResult{};
-                defer match_result.deinit(job.root.allocator);
+//         for (self.patterns.items) |pattern| {
+//             var match_result = MatchResult{};
+//             defer match_result.deinit(job.root.allocator);
 
-                if (try PeepholePass.tryMatch(job, &pattern.match_root, current_ref, &match_result)) {
-                    var builder = PatternBuilder{
-                        .job = job,
-                        .match_result = &match_result,
-                    };
-                    try pattern.transformer_fn(&builder, &match_result);
-                    changed = true;
-                    break;
-                }
-            }
-            if (changed) break;
-        }
-    }
-}
+//             if (try PeepholePass.tryMatch(job, &pattern.match_root, current_ref, &match_result)) {
+//                 var builder = PatternBuilder{
+//                     .job = job,
+//                     .match_result = &match_result,
+//                 };
+//                 try pattern.transformer_fn(&builder, &match_result);
+//                 changed = true;
+//                 break;
+//             }
+//         }
+//         if (changed) break;
+//     }
+// }
+// }
 
-/// Recursively tries to match a `PatternNode` against a live `ir.Ref`.
-pub fn tryMatch(
-    job: *backend.Job,
-    pattern: *const PatternNode,
-    ref: ir.Ref,
-    result: *MatchResult,
-) !bool {
-    const ctx = job.context;
+// /// Recursively tries to match a `PatternNode` against a live `ir.Ref`.
+// pub fn tryMatch(
+//     job: *backend.Job,
+//     pattern: *const PatternNode,
+//     // ref: ir.Ref,
+//     result: *MatchResult,
+// ) !bool {
+//     const ctx = job.context;
 
-    // 1. Initial Node Validation
-    const node = ctx.getNode(ref) orelse return false;
-    const node_kind = ref.node_kind;
+//     // 1. Initial Node Validation
+//     // const node = ctx.getNode(ref) orelse return false;
+//     // const node_kind = ref.node_kind;
 
-    // 1a. Match Node Kind
-    if (pattern.kind) |pk| {
-        if (node_kind != pk) return false;
-    }
+//     // 1a. Match Node Kind
+//     // if (pattern.kind) |pk| {
+//     //     if (node_kind != pk) return false;
+//     // }
 
-    // 1b. Match Node Type (Recursive Call)
-    if (pattern.type_pattern) |type_pattern| {
-        // We need to get the type of the current node.
-        // This part of the IR design needs to be firm to make this work reliably.
-        const node_type_ref = try ctx.getField(ref, .type) orelse return false;
+//     // 1b. Match Node Type (Recursive Call)
+//     if (pattern.type_pattern) |type_pattern| {
+//         // We need to get the type of the current node.
+//         // This part of the IR design needs to be firm to make this work reliably.
+//         // const node_type_ref = try ctx.getField(ref, .type) orelse return false;
 
-        if (!try tryMatch(job, type_pattern, node_type_ref, result)) {
-            return false;
-        }
-    }
+//         // if (!try tryMatch(job, type_pattern, node_type_ref, result)) {
+//         //     return false;
+//         // }
+//     }
 
-    // 2. Operand Matching
-    if (pattern.operands.len > 0) {
-        if (node_kind.getTag() != .structure and node_kind.getTag() != .collection) {
-            // The pattern expects operands, but the node is a leaf (primitive/data).
-            return false;
-        }
+//     // 2. Operand Matching
+//     if (pattern.operands.len > 0) {
+//         if (node_kind.getTag() != .structure and node_kind.getTag() != .collection) {
+//             // The pattern expects operands, but the node is a leaf (primitive/data).
+//             return false;
+//         }
 
-        const node_operands = node.content.ref_list.items;
+//         const node_operands = node.content.ref_list.items;
 
-        switch (pattern.arity) {
-            .fixed => {
-                // 2a. Non-commutative Match
-                if (pattern.operands.len != node_operands.len) return false;
+//         switch (pattern.arity) {
+//             .fixed => {
+//                 // 2a. Non-commutative Match
+//                 if (pattern.operands.len != node_operands.len) return false;
 
-                for (pattern.operands, 0..) |op_pattern, i| {
-                    if (!try tryMatchOperand(job, op_pattern, node_operands[i], result)) {
-                        return false;
-                    }
-                }
-            },
-            .commutative => {
-                // 2b. Commutative Match
-                // This is more complex. It requires finding a permutation of `node_operands`
-                // that satisfies the `pattern.operands`.
-                if (pattern.operands.len != node_operands.len) return false;
+//                 for (pattern.operands, 0..) |op_pattern, i| {
+//                     if (!try tryMatchOperand(job, op_pattern, node_operands[i], result)) {
+//                         return false;
+//                     }
+//                 }
+//             },
+//             .commutative => {
+//                 // 2b. Commutative Match
+//                 // This is more complex. It requires finding a permutation of `node_operands`
+//                 // that satisfies the `pattern.operands`.
+//                 if (pattern.operands.len != node_operands.len) return false;
 
-                // For simplicity here, we'll sketch a basic algorithm. A real implementation
-                // might need a more optimized one (e.g., bipartite matching).
-                var used_node_operands = std.bit_set.IntegerBitSet(16).initEmpty();
+//                 // For simplicity here, we'll sketch a basic algorithm. A real implementation
+//                 // might need a more optimized one (e.g., bipartite matching).
+//                 var used_node_operands = std.bit_set.IntegerBitSet(16).initEmpty();
 
-                outer: for (pattern.operands) |op_pattern| {
-                    inner: for (node_operands, 0..) |node_op_ref, i| {
-                        // If this node operand has already been matched by another pattern operand, skip.
-                        if (used_node_operands.isSet(i)) continue :inner;
+//                 outer: for (pattern.operands) |op_pattern| {
+//                     inner: for (node_operands, 0..) |node_op_ref, i| {
+//                         // If this node operand has already been matched by another pattern operand, skip.
+//                         if (used_node_operands.isSet(i)) continue :inner;
 
-                        if (try tryMatchOperand(job, op_pattern, node_op_ref, result)) {
-                            // Found a match. Mark this operand as used and move to the next pattern operand.
-                            used_node_operands.set(i);
-                            continue :outer;
-                        }
-                    }
-                    // If we get here, it means op_pattern found no match among the unused node operands.
-                    // The entire match fails.
-                    return false;
-                }
-            },
-        }
-    }
+//                         if (try tryMatchOperand(job, op_pattern, node_op_ref, result)) {
+//                             // Found a match. Mark this operand as used and move to the next pattern operand.
+//                             used_node_operands.set(i);
+//                             continue :outer;
+//                         }
+//                     }
+//                     // If we get here, it means op_pattern found no match among the unused node operands.
+//                     // The entire match fails.
+//                     return false;
+//                 }
+//             },
+//         }
+//     }
 
-    // 3. Success
-    // If we've gotten this far, all parts of the pattern have matched.
-    return true;
-}
+//     // 3. Success
+//     // If we've gotten this far, all parts of the pattern have matched.
+//     return true;
+// }
 
-/// Matches a single `OperandPattern` against a live `ir.Ref`.
-pub fn tryMatchOperand(
-    job: *backend.Job,
-    pattern: OperandPattern,
-    ref: ir.Ref,
-    result: *MatchResult,
-) anyerror!bool {
-    const node_kind = ref.node_kind;
-    switch (pattern) {
-        .any => return true,
-        .capture => |id| {
-            // Capture the ref. If the same ID is captured twice with different refs, it's a failure.
-            // (e.g., matching `i_add(?x, ?x)` against `i_add(A, B)`).
-            if (result.captures.get(id)) |existing_ref| {
-                return existing_ref == ref;
-            } else {
-                try result.captures.put(job.root.allocator, id, ref);
-                return true;
-            }
-        },
-        .literal_ref => |lit_ref| {
-            return ref == lit_ref;
-        },
-        .literal_primitive => |lit_val| {
-            const node = job.context.getNode(ref) orelse return false;
-            if (node_kind.getTag() != .primitive) return false;
-            return node.content.primitive == lit_val;
-        },
-        .sub_pattern => |sub| {
-            // Recursive call for nested patterns.
-            return tryMatch(job, sub, ref, result);
-        },
-        .predicate => |pred_fn| {
-            return pred_fn(job.context, ref);
-        },
-    }
-}
+// /// Matches a single `OperandPattern` against a live `ir.Ref`.
+// pub fn tryMatchOperand(
+//     job: *backend.Job,
+//     pattern: OperandPattern,
+//     ref: ir.Ref,
+//     result: *MatchResult,
+// ) anyerror!bool {
+//     const node_kind = ref.node_kind;
+//     switch (pattern) {
+//         .any => return true,
+//         .capture => |id| {
+//             // Capture the ref. If the same ID is captured twice with different refs, it's a failure.
+//             // (e.g., matching `i_add(?x, ?x)` against `i_add(A, B)`).
+//             if (result.captures.get(id)) |existing_ref| {
+//                 return existing_ref == ref;
+//             } else {
+//                 try result.captures.put(job.root.allocator, id, ref);
+//                 return true;
+//             }
+//         },
+//         .literal_ref => |lit_ref| {
+//             return ref == lit_ref;
+//         },
+//         .literal_primitive => |lit_val| {
+//             const node = job.context.getNode(ref) orelse return false;
+//             if (node_kind.getTag() != .primitive) return false;
+//             return node.content.primitive == lit_val;
+//         },
+//         .sub_pattern => |sub| {
+//             // Recursive call for nested patterns.
+//             return tryMatch(job, sub, ref, result);
+//         },
+//         .predicate => |pred_fn| {
+//             return pred_fn(job.context, ref);
+//         },
+//     }
+// }

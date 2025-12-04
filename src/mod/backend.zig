@@ -53,7 +53,7 @@ pub const Pass = struct {
 
         pub fn of(comptime T: type) VTable {
             comptime return .{
-                .run = @ptrCast(&T.run),
+                .run = undefined, // TODO @ptrCast(&T.run),
                 .deinit = @ptrCast(&T.deinit),
             };
         }

@@ -30,10 +30,6 @@ const modules = [_]ModuleDef{
         .name = "bytecode",
         .imports = &.{ "common", "core", "binary", "Instruction" },
     },
-    .{
-        .name = "cbr",
-        .imports = &.{ "ir", "sma", "backend", "common" },
-    },
     .{ .name = "common" },
     .{
         .name = "core",
@@ -52,17 +48,12 @@ const modules = [_]ModuleDef{
         .imports = &.{ "rg", "common", "analysis", "core", "ir", "backend" },
     },
     .{
-        .name = "sma",
-        .imports = &.{ "ir", "core", "common", "backend", "orchestration" },
-    },
-    .{
         .name = "orchestration",
         .imports = &.{
             "core",
             "common",
             "ir",
             "frontend",
-            "sma",
         },
     },
     .{
@@ -71,7 +62,6 @@ const modules = [_]ModuleDef{
             "common",
             "core",
             "ir",
-            "sma",
             "analysis",
             "bytecode",
             "orchestration",

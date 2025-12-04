@@ -9,7 +9,6 @@ const log = std.log.scoped(.frontend);
 const common = @import("common");
 const core = @import("core");
 const ir = @import("ir");
-const sma = @import("sma");
 const analysis = @import("analysis");
 const orchestration = @import("orchestration");
 const meta_language = @import("meta_language");
@@ -30,70 +29,70 @@ const FrontendPass = struct {
 
     /// High-level function to manage the import of a single dependency.
     /// It handles creating the necessary IR context and updating the session maps.
-    fn importDependency(self: *FrontendPass, dependency_sma: *const sma.Artifact) !void {
-        const allocator = self.session.gpa;
-        const root_ctx = self.session.root_context;
+    // fn importDependency(self: *FrontendPass, dependency_sma: *const sma.Artifact) !void {
+    //     const allocator = self.session.gpa;
+    //     const root_ctx = self.session.root_context;
 
-        // 1. Create a new, dedicated context for the dependency module.
-        const child_ctx = blk: {
-            const root = root_ctx.asRoot().?;
-            root.mutex.lock();
-            defer root.mutex.unlock();
-            break :blk try root.createContext();
-        };
+    //     // 1. Create a new, dedicated context for the dependency module.
+    //     const child_ctx = blk: {
+    //         const root = root_ctx.asRoot().?;
+    //         root.mutex.lock();
+    //         defer root.mutex.unlock();
+    //         break :blk try root.createContext();
+    //     };
 
-        // 2. Associate the new context ID with the module's GUID in the session.
-        try self.session.context_id_to_module.put(allocator, child_ctx.id, dependency_sma.header.module_guid);
+    //     // 2. Associate the new context ID with the module's GUID in the session.
+    //     try self.session.context_id_to_module.put(allocator, child_ctx.id, dependency_sma.header.module_guid);
 
-        // 3. Call the low-level rehydrator in the `sma` module to do the mechanical translation.
-        try dependency_sma.rehydrateInto(self.session, child_ctx);
+    //     // 3. Call the low-level rehydrator in the `sma` module to do the mechanical translation.
+    //     try dependency_sma.rehydrateInto(self.session, child_ctx);
 
-        // 4. TODO: Populate the session's `ref_to_external_symbol` map so that other modules
-        //    can resolve symbols from this dependency. This will require iterating the
-        //    SMA's public symbol table and the node_map created during rehydration.
-    }
+    //     // 4. TODO: Populate the session's `ref_to_external_symbol` map so that other modules
+    //     //    can resolve symbols from this dependency. This will require iterating the
+    //     //    SMA's public symbol table and the node_map created during rehydration.
+    // }
 
-    /// The primary method that executes the frontend pass for the given module.
-    pub fn run(self: *FrontendPass) !*sma.Artifact {
-        const allocator = self.session.gpa;
+    // /// The primary method that executes the frontend pass for the given module.
+    // pub fn run(self: *FrontendPass) !*sma.Artifact {
+    //     const allocator = self.session.gpa;
 
-        // --- Phase 2: Rehydrate Dependencies ---
-        // TODO: The orchestrator will load dependency SMAs and pass them here.
-        // for (dependency_smas) |dep_sma| {
-        //     try pass.importDependency(dep_sma);
-        // }
+    //     // --- Phase 2: Rehydrate Dependencies ---
+    //     // TODO: The orchestrator will load dependency SMAs and pass them here.
+    //     // for (dependency_smas) |dep_sma| {
+    //     //     try pass.importDependency(dep_sma);
+    //     // }
 
-        // Create a new context for the module we are compiling.
-        const module_ctx = blk: {
-            const root = self.session.root_context.asRoot().?;
-            root.mutex.lock();
-            defer root.mutex.unlock();
-            break :blk try root.createContext();
-        };
-        try self.session.context_id_to_module.put(allocator, module_ctx.id, self.module_info.guid);
+    //     // Create a new context for the module we are compiling.
+    //     const module_ctx = blk: {
+    //         const root = self.session.root_context.asRoot().?;
+    //         root.mutex.lock();
+    //         defer root.mutex.unlock();
+    //         break :blk try root.createContext();
+    //     };
+    //     try self.session.context_id_to_module.put(allocator, module_ctx.id, self.module_info.guid);
 
-        // --- Analyze Source and Generate IR ---
-        // TODO: Read source file from `pass.module_info.path`.
-        const source_code = "// stub source code";
-        var ast = try meta_language.Expr.parseSource(allocator, .{}, self.module_info.path, source_code);
-        if (ast) |*root_expr| {
-            defer root_expr.deinit(allocator);
+    //     // --- Analyze Source and Generate IR ---
+    //     // TODO: Read source file from `pass.module_info.path`.
+    //     const source_code = "// stub source code";
+    //     var ast = try meta_language.Expr.parseSource(allocator, .{}, self.module_info.path, source_code);
+    //     if (ast) |*root_expr| {
+    //         defer root_expr.deinit(allocator);
 
-            // TODO: create an ir representation of `meta_language.Value` type
-            // TODO: create functions to instantiate above ir type at various variants
-            // TODO: need an ir builder to manage construction of compound expressions
-            _ = try self.lowerExpr(module_ctx, root_expr);
-        }
+    //         // TODO: create an ir representation of `meta_language.Value` type
+    //         // TODO: create functions to instantiate above ir type at various variants
+    //         // TODO: need an ir builder to manage construction of compound expressions
+    //         _ = try self.lowerExpr(module_ctx, root_expr);
+    //     }
 
-        // --- Dehydrate the generated IR into an SMA ---
-        log.debug("Dehydrating IR for module {s}...", .{self.module_info.path});
-        const artifact = try sma.Artifact.fromIr(module_ctx, self.module_info.guid, allocator);
+    //     // --- Dehydrate the generated IR into an SMA ---
+    //     log.debug("Dehydrating IR for module {s}...", .{self.module_info.path});
+    //     const artifact = try sma.Artifact.fromIr(module_ctx, self.module_info.guid, allocator);
 
-        // --- Phase 4: Compute Interface Hash ---
-        // TODO: Compute and set `artifact.header.interface_hash`.
+    //     // --- Phase 4: Compute Interface Hash ---
+    //     // TODO: Compute and set `artifact.header.interface_hash`.
 
-        return artifact;
-    }
+    //     return artifact;
+    // }
 
     // CRITICAL NOTE: This function must be kept in sync with the `meta_language.Value` definition.
     pub fn mlValueType(
@@ -343,14 +342,14 @@ const FrontendPass = struct {
     }
 };
 
-/// The main entry point for the frontend service.
-pub fn generateSMA(
-    session: *orchestration.CompilationSession,
-    module_info: *const orchestration.ModuleInfo,
-) !*sma.Artifact {
-    var pass = FrontendPass{
-        .session = session,
-        .module_info = module_info,
-    };
-    return pass.run();
-}
+// / The main entry point for the frontend service.
+// pub fn generateSMA(
+//     session: *orchestration.CompilationSession,
+//     module_info: *const orchestration.ModuleInfo,
+// ) !*sma.Artifact {
+//     var pass = FrontendPass{
+//         .session = session,
+//         .module_info = module_info,
+//     };
+//     return pass.run();
+// }

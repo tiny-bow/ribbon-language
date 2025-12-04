@@ -31,7 +31,6 @@ const log = std.log.scoped(.orchestration);
 const common = @import("common");
 const core = @import("core");
 const ir = @import("ir");
-const sma = @import("sma");
 const frontend = @import("frontend");
 
 test {
@@ -92,7 +91,7 @@ pub const CompilationSession = struct {
 
     /// Maps a child context's ID to its module's GUID. This is the key to
     /// resolving external references during SMA dehydration.
-    context_id_to_module: common.HashMap(ir.Context.Id, ir.ModuleGUID, common.UniqueReprHashContext64(ir.Context.Id)),
+    // context_id_to_module: common.HashMap(ir.Context.Id, ir.ModuleGUID, common.UniqueReprHashContext64(ir.Context.Id)),
 
     /// TODO: A reverse map from an `ir.Ref` (pointing to an external symbol)
     /// back to its original module GUID and symbol name. This will be populated

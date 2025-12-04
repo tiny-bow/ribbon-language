@@ -1411,7 +1411,7 @@ pub fn ManagedPool(comptime T: type) type {
         free_list: ArrayList(*T) = .empty,
 
         /// Create a new ManagedPool backed by the provided allocator.
-        pub fn init(allocator: std.mem.Allocator) !ManagedPool {
+        pub fn init(allocator: std.mem.Allocator) Self {
             return .{
                 .arena = .init(allocator),
             };

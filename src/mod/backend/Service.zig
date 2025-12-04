@@ -42,25 +42,25 @@ pub fn init(allocator: std.mem.Allocator, comptime TargetType: type) !*Service {
     return self;
 }
 
-/// Create an ir service instance from an existing IR context.
-/// * This allows using a different allocator for the service instance;
-///   if one is not provided, the IR context's allocator will be used.
-/// * To create both at once, use `init`.
-/// * Note that the allocator used by Service must be thread-safe.
-pub fn fromContext(context: *ir.Context, allocator: ?std.mem.Allocator, target: backend.Target) !*Service {
-    const gpa = allocator orelse context.gpa;
+// /// Create an ir service instance from an existing IR context.
+// /// * This allows using a different allocator for the service instance;
+// ///   if one is not provided, the IR context's allocator will be used.
+// /// * To create both at once, use `init`.
+// /// * Note that the allocator used by Service must be thread-safe.
+// pub fn fromContext(context: *ir.Context, allocator: ?std.mem.Allocator, target: backend.Target) !*Service {
+//     // const gpa = allocator orelse context.gpa;
 
-    const self = try gpa.create(Service);
-    errdefer gpa.destroy(self);
+//     // const self = try gpa.create(Service);
+//     // errdefer gpa.destroy(self);
 
-    self.* = Service{
-        .allocator = gpa,
-        .context = context,
-        .target = target,
-    };
+//     // self.* = Service{
+//     //     .allocator = gpa,
+//     //     .context = context,
+//     //     .target = target,
+//     // };
 
-    return self;
-}
+//     // return self;
+// }
 
 /// Deinitialize the service, freeing all memory it still owns.
 pub fn deinit(self: *Service) void {
@@ -72,21 +72,21 @@ pub fn deinit(self: *Service) void {
 /// Create a new compilation job for the given IR context.
 /// * Actual compilation is done when the job is returned to the service.
 pub fn createJob(self: *Service) !*backend.Job {
-    const root = self.context.getRoot();
+    // const root = self.context.getRoot();
 
-    root.mutex.lock();
-    defer root.mutex.unlock();
+    // root.mutex.lock();
+    // defer root.mutex.unlock();
 
-    const ctx = try root.createContext();
+    // const ctx = try root.createContext();
 
     const job = try self.allocator.create(backend.Job);
     errdefer self.allocator.destroy(job);
 
-    job.* = backend.Job{
-        .id = self.fresh_id.next(),
-        .root = self,
-        .context = ctx,
-    };
+    // job.* = backend.Job{
+    //     .id = self.fresh_id.next(),
+    //     .root = self,
+    //     .context = ctx,
+    // };
 
     return job;
 }
@@ -97,14 +97,14 @@ pub fn compileJob(self: *Service, job: *backend.Job) backend.Target.Error!backen
     std.debug.assert(job.root == self);
     defer job.deinit();
 
-    const root = self.context.getRoot();
+    // const root = self.context.getRoot();
 
-    root.mutex.lock();
-    defer root.mutex.unlock();
+    // root.mutex.lock();
+    // defer root.mutex.unlock();
 
     const out = try self.target.runJob(job);
 
-    try root.merge(job.context);
+    // try root.merge(job.context);
 
     return out;
 }
