@@ -1914,7 +1914,8 @@ pub const terms = struct {
 
         pub fn hash(self: *const LiftedDataType, hasher: *QuickHasher) void {
             hasher.update(self.unlifted_type);
-            hasher.update(self.value);
+            hasher.update(self.value.id);
+            hasher.update(self.value.module.guid);
         }
 
         pub fn cbr(self: *const LiftedDataType) Cbr {
