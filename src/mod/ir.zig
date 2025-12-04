@@ -99,9 +99,75 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-/// The number of bytes used for the Blake3 hashes produced for canonical binary representation.
-pub const cbr_size = 32;
-pub const CbrHasher = std.crypto.hash.Blake3;
+pub const Cbr = u128;
+
+/// A hasher for computing canonical binary representation (CBR) hashes.
+pub const CbrHasher = struct {
+    blake: std.crypto.hash.Blake3,
+
+    /// Initialize a new CbrHasher.
+    pub fn init() CbrHasher {
+        return CbrHasher{
+            .blake = std.crypto.hash.Blake3.init(.{}),
+        };
+    }
+
+    /// Update the hasher with the given value converted to bytes
+    pub fn update(self: *CbrHasher, value: anytype) void {
+        const T_info = @typeInfo(@TypeOf(value));
+        if (comptime T_info == .pointer) {
+            if (comptime T_info.pointer.child == u8) {
+                if (comptime T_info.pointer.size == .slice) {
+                    self.blake.update(value);
+                } else {
+                    self.blake.update(std.mem.span(value));
+                }
+            } else {
+                self.blake.update(std.mem.asBytes(value));
+            }
+        } else {
+            self.blake.update(std.mem.asBytes(&value));
+        }
+    }
+
+    /// Finalize the hasher and return the resulting hash bytes.
+    pub fn final(self: *CbrHasher) u128 {
+        var out: Cbr = 0;
+        self.blake.final(std.mem.asBytes(&out));
+        return out;
+    }
+};
+
+pub const QuickHasher = struct {
+    fnv: std.hash.Fnv1a_64,
+
+    pub fn init() QuickHasher {
+        return QuickHasher{
+            .fnv = std.hash.Fnv1a_64.init(),
+        };
+    }
+
+    pub fn update(self: *QuickHasher, value: anytype) void {
+        const T_info = @typeInfo(@TypeOf(value));
+        if (comptime T_info == .pointer) {
+            if (comptime T_info.pointer.child == u8) {
+                if (comptime T_info.pointer.size == .slice) {
+                    self.fnv.update(value);
+                } else {
+                    self.fnv.update(std.mem.span(value));
+                }
+            } else {
+                self.fnv.update(std.mem.asBytes(value));
+            }
+        } else {
+            self.fnv.update(std.mem.asBytes(&value));
+        }
+    }
+
+    pub fn final(self: *QuickHasher) u64 {
+        return self.fnv.final();
+    }
+};
 
 /// The "universe" for an ir compilation session.
 pub const Context = struct {
@@ -305,7 +371,7 @@ pub const TermHeader = struct {
     /// The offset (forwards) from the header to the term value.
     value_offset: u8,
     /// The cached CBR for the attached term.
-    cached_cbr: ?[]const u8 = null,
+    cached_cbr: ?Cbr = null,
 
     /// Get the parent TermData pair containing this header.
     fn toTermData(self: *TermHeader, comptime T: type) error{ZigTypeMismatch}!*TermData(T) {
@@ -344,12 +410,12 @@ pub const TermHeader = struct {
     }
 
     /// Get the CBR for the attached term.
-    fn getCbr(self: *TermHeader, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
+    fn getCbr(self: *TermHeader) Cbr {
         if (self.cached_cbr) |cached| {
             return cached;
         }
 
-        const new_hash = try self.root.vtables.get(self.tag).?.cbr(self.toOpaqueTermAddress(), allocator);
+        const new_hash = self.root.vtables.get(self.tag).?.cbr(self.toOpaqueTermAddress());
         self.cached_cbr = new_hash;
         return new_hash;
     }
@@ -358,8 +424,8 @@ pub const TermHeader = struct {
 /// A vtable of functions for type erased term operations.
 pub const TermVTable = struct {
     eql: *const fn (*const anyopaque, *const anyopaque) bool,
-    hash: *const fn (*const anyopaque, *std.hash.Fnv1a_64) void,
-    cbr: *const fn (*const anyopaque, std.mem.Allocator) error{OutOfMemory}![]const u8,
+    hash: *const fn (*const anyopaque, *QuickHasher) void,
+    cbr: *const fn (*const anyopaque) Cbr,
 };
 
 /// A pair of a TermHeader and a value of type T. Defines the storage layout for Term objects.
@@ -442,8 +508,8 @@ pub const Term = packed struct(u64) {
     }
 
     /// Get the CBR for this term.
-    pub fn getCbr(self: Term, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-        return self.toHeader().getCbr(allocator);
+    pub fn getCbr(self: Term) Cbr {
+        return self.toHeader().getCbr();
     }
 
     /// An adapted identity context for terms of type T before marshalling and type erasure; used when interning terms.
@@ -453,7 +519,7 @@ pub const Term = packed struct(u64) {
 
             pub fn hash(self: @This(), t: *const T) u64 {
                 const tag = self.ctx.tagFromType(T);
-                var hasher = std.hash.Fnv1a_64.init();
+                var hasher = QuickHasher.init();
                 hasher.hash(std.mem.asBytes(&tag));
                 self.ctx.vtables[@intFromEnum(tag)].cbr(t, &hasher);
                 return hasher.final();
@@ -470,8 +536,8 @@ pub const Term = packed struct(u64) {
     /// The standard identity context for terms, used in the interned term set.
     pub const IdentityContext = struct {
         pub fn hash(_: @This(), t: Term) u64 {
-            var hasher = std.hash.Fnv1a_64.init();
-            hasher.update(std.mem.asBytes(&t.tag));
+            var hasher = QuickHasher.init();
+            hasher.update(t.tag);
             t.toHeader().root.vtables.get(t.tag).?.hash(t.toOpaquePtr(), &hasher);
             return hasher.final();
         }
@@ -498,7 +564,7 @@ pub const BlobId = enum(u32) { _ };
 pub const BlobHeader = struct {
     id: BlobId,
     layout: core.Layout,
-    cached_cbr: ?[]const u8 = null,
+    cached_cbr: ?Cbr = null,
 
     /// Get the (unaligned) byte value for this blob.
     pub inline fn getBytes(self: *const BlobHeader) []const u8 {
@@ -506,25 +572,24 @@ pub const BlobHeader = struct {
     }
 
     /// Get the CBR for this blob.
-    pub fn getCbr(self: *const BlobHeader, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
+    pub fn getCbr(self: *const BlobHeader) error{OutOfMemory}!u128 {
         if (self.cached_cbr) |cached| {
             return cached;
         }
 
-        var hasher = CbrHasher.init(.{});
+        var hasher = CbrHasher.init();
         hasher.update("Blob");
 
         hasher.update("id:");
-        hasher.update(std.mem.asBytes(&self.id));
+        hasher.update(self.id);
 
         hasher.update("layout:");
-        hasher.update(std.mem.asBytes(&self.layout));
+        hasher.update(self.layout);
 
         hasher.update("bytes:");
         hasher.update(self.getBytes());
 
-        const buf = try allocator.alloc(u8, cbr_size);
-        hasher.final(buf);
+        const buf = hasher.final();
         @constCast(self).cached_cbr = buf;
         return buf;
     }
@@ -533,8 +598,8 @@ pub const BlobHeader = struct {
     pub const AdaptedHashContext = struct {
         pub fn hash(_: @This(), descriptor: struct { core.Alignment, []const u8 }) u64 {
             const layout = core.Layout{ .alignment = descriptor[0], .size = @intCast(descriptor[1].len) };
-            var hasher = std.hash.Fnv1a_64.init();
-            hasher.update(std.mem.asBytes(&layout));
+            var hasher = QuickHasher.init();
+            hasher.update(layout);
             hasher.update(descriptor[1]);
             return hasher.final();
         }
@@ -549,8 +614,8 @@ pub const BlobHeader = struct {
     /// The standard hash context for blobs, used in the interned data set.
     pub const HashContext = struct {
         pub fn hash(_: @This(), blob: *const BlobHeader) u64 {
-            var hasher = std.hash.Fnv1a_64.init();
-            hasher.update(std.mem.asBytes(&blob.layout));
+            var hasher = QuickHasher.init();
+            hasher.update(blob.layout);
             hasher.update(blob.getBytes());
             return hasher.final();
         }
@@ -715,12 +780,12 @@ pub const Instruction = struct {
     }
 
     /// Get the CBR for this instruction.
-    pub fn getCbr(self: *Instruction, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-        var hasher = CbrHasher.init(.{});
+    pub fn getCbr(self: *Instruction) Cbr {
+        var hasher = CbrHasher.init();
         hasher.update("Instruction");
 
         hasher.update("id:");
-        hasher.update(std.mem.asBytes(&self.id));
+        hasher.update(self.id);
 
         hasher.update("name:");
         if (self.name) |name| {
@@ -730,22 +795,20 @@ pub const Instruction = struct {
         }
 
         hasher.update("type:");
-        hasher.update(try self.type.getCbr(allocator));
+        hasher.update(self.type.getCbr());
 
         hasher.update("command:");
-        hasher.update(std.mem.asBytes(&self.command));
+        hasher.update(self.command);
 
         for (self.operands(), 0..) |use, i| {
             hasher.update("operand.index:");
-            hasher.update(std.mem.asBytes(&i));
+            hasher.update(i);
 
             hasher.update("operand.value:");
-            hasher.update(try use.operand.getCbr(allocator));
+            hasher.update(use.operand.getCbr());
         }
 
-        const buf = try allocator.alloc(u8, cbr_size);
-        hasher.final(buf);
-        return buf;
+        return hasher.final();
     }
 };
 
@@ -763,39 +826,37 @@ pub const Operand = union(enum) {
     variable: *Instruction,
 
     /// Get the CBR for this operand.
-    pub fn getCbr(self: Operand, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-        var hasher = CbrHasher.init(.{});
+    pub fn getCbr(self: Operand) Cbr {
+        var hasher = CbrHasher.init();
         hasher.update("Operand");
 
         switch (self) {
             .term => |term| {
                 hasher.update("term:");
-                hasher.update(try term.getCbr(allocator));
+                hasher.update(term.getCbr());
             },
             .blob => |blob| {
                 hasher.update("blob:");
-                hasher.update(std.mem.asBytes(&blob.id));
+                hasher.update(blob.id);
             },
             .block => |block| {
                 hasher.update("block:");
-                hasher.update(std.mem.asBytes(&block.id));
+                hasher.update(block.id);
             },
             .function => |function| {
                 // We must include the module guid to differentiate between internal and external references
                 hasher.update("function.module.guid:");
-                hasher.update(std.mem.asBytes(&function.module.guid));
+                hasher.update(function.module.guid);
                 hasher.update("function.id:");
-                hasher.update(std.mem.asBytes(&function.id));
+                hasher.update(function.id);
             },
             .variable => |variable| {
                 hasher.update("variable:");
-                hasher.update(std.mem.asBytes(&variable.id));
+                hasher.update(variable.id);
             },
         }
 
-        const buf = try allocator.alloc(u8, cbr_size);
-        hasher.final(buf);
-        return buf;
+        return hasher.final();
     }
 };
 
@@ -834,7 +895,7 @@ pub const Function = struct {
     name: ?Name = null,
 
     /// Cached CBR for this function.
-    cached_cbr: ?[]const u8 = null,
+    cached_cbr: ?Cbr = null,
 
     pub fn init(module: *Module, name: ?Name, kind: Kind, ty: Term) error{OutOfMemory}!*Function {
         const self = try module.function_pool.create();
@@ -866,20 +927,20 @@ pub const Function = struct {
     };
 
     /// Get the CBR for this function.
-    pub fn getCbr(self: *Function, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
+    pub fn getCbr(self: *Function) Cbr {
         if (self.cached_cbr) |cached| {
             return cached;
         }
 
-        var hasher = CbrHasher.init(.{});
+        var hasher = CbrHasher.init();
         hasher.update("Function");
 
         // We must include the module guid to differentiate between internal and external references
         hasher.update("module.guid:");
-        hasher.update(std.mem.asBytes(&self.module.guid));
+        hasher.update(self.module.guid);
 
         hasher.update("id:");
-        hasher.update(std.mem.asBytes(&self.id));
+        hasher.update(self.id);
 
         hasher.update("name:");
         if (self.name) |name| {
@@ -889,16 +950,15 @@ pub const Function = struct {
         }
 
         hasher.update("type:");
-        hasher.update(try self.type.getCbr(allocator));
+        hasher.update(self.type.getCbr());
 
         hasher.update("kind:");
-        hasher.update(std.mem.asBytes(&self.kind));
+        hasher.update(self.kind);
 
         hasher.update("body:");
-        hasher.update(try self.entry.getCbr(allocator));
+        hasher.update(self.entry.getCbr());
 
-        const buf = try allocator.alloc(u8, cbr_size);
-        hasher.final(buf);
+        const buf = hasher.final();
 
         self.cached_cbr = buf;
 
@@ -930,7 +990,7 @@ pub const Block = struct {
     successors: common.ArrayList(*Block) = .empty,
 
     /// Cached CBR for this block.
-    cached_cbr: ?[]const u8 = null,
+    cached_cbr: ?Cbr = null,
 
     pub fn init(module: *Module, name: ?Name) error{OutOfMemory}!*Block {
         const self = try module.block_pool.create();
@@ -964,7 +1024,7 @@ pub const Block = struct {
     }
 
     /// Get the CBR for this block.
-    pub fn getCbr(self: *Block, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
+    pub fn getCbr(self: *Block) Cbr {
         if (self.cached_cbr) |cached| {
             return cached;
         }
@@ -972,29 +1032,29 @@ pub const Block = struct {
         var visited = common.UniqueReprSet(*Block).empty;
         defer visited.deinit(self.module.root.allocator);
 
-        return self.getCbrRecurse(allocator, &visited);
+        return self.getCbrRecurse(&visited) catch |err| {
+            std.debug.panic("Failed to compute CBR for Block: {}\n", .{err});
+        };
     }
 
     /// Recursive helper for computing the CBR of this block, tracking visited blocks to avoid cycles.
-    fn getCbrRecurse(self: *Block, allocator: std.mem.Allocator, visited: *common.UniqueReprSet(*Block)) error{OutOfMemory}![]const u8 {
+    fn getCbrRecurse(self: *Block, visited: *common.UniqueReprSet(*Block)) error{OutOfMemory}!Cbr {
         if (self.cached_cbr) |cached| {
             return cached;
         }
 
-        const buf = try allocator.alloc(u8, cbr_size);
-
-        var hasher = CbrHasher.init(.{});
+        var hasher = CbrHasher.init();
         hasher.update("Block");
 
         // We must include the module guid to differentiate between internal and external references
         hasher.update("module.guid:");
-        hasher.update(std.mem.asBytes(&self.module.guid));
+        hasher.update(self.module.guid);
 
         hasher.update("block_id:");
-        hasher.update(std.mem.asBytes(&self.id));
+        hasher.update(self.id);
 
         if (visited.contains(self)) {
-            hasher.final(buf);
+            const buf = hasher.final();
             self.cached_cbr = buf;
             return buf;
         }
@@ -1013,34 +1073,34 @@ pub const Block = struct {
             var i: usize = 0;
 
             hasher.update("operations:");
-            while (op_it.next()) |op| {
+            while (op_it.next()) |op| : (i += 1) {
                 hasher.update("op.index:");
-                hasher.update(std.mem.asBytes(&i));
+                hasher.update(i);
 
                 hasher.update("op.value:");
-                hasher.update(try op.getCbr(allocator));
+                hasher.update(op.getCbr());
             }
         }
 
         hasher.update("predecessors:");
         for (self.predecessors.items, 0..) |pred, i| {
             hasher.update("pred.index:");
-            hasher.update(std.mem.asBytes(&i));
+            hasher.update(i);
 
             hasher.update("pred.value:");
-            hasher.update(try pred.getCbrRecurse(allocator, visited));
+            hasher.update(pred.getCbrRecurse(visited));
         }
 
         hasher.update("successors:");
         for (self.successors.items, 0..) |succ, i| {
             hasher.update("succ.index:");
-            hasher.update(std.mem.asBytes(&i));
+            hasher.update(i);
 
             hasher.update("succ.value:");
-            hasher.update(try succ.getCbrRecurse(allocator, visited));
+            hasher.update(succ.getCbrRecurse(visited));
         }
 
-        hasher.final(buf);
+        const buf = hasher.final();
         self.cached_cbr = buf;
         return buf;
     }
@@ -1159,28 +1219,26 @@ pub const terms = struct {
             return self.name.value.ptr == other.name.value.ptr and self.type == other.type and self.initializer == other.initializer;
         }
 
-        pub fn hash(self: *const Global, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.name.value.ptr));
-            hasher.update(std.mem.asBytes(&self.type));
-            hasher.update(std.mem.asBytes(&self.initializer));
+        pub fn hash(self: *const Global, hasher: *QuickHasher) void {
+            hasher.update(self.name.value.ptr);
+            hasher.update(self.type);
+            hasher.update(self.initializer);
         }
 
-        pub fn cbr(self: *const Global, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const Global) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("Global");
 
             hasher.update("name:");
             hasher.update(self.name.value);
 
             hasher.update("type:");
-            hasher.update(try self.type.getCbr(allocator));
+            hasher.update(self.type.getCbr());
 
             hasher.update("initializer:");
-            hasher.update(try self.initializer.getCbr(allocator));
+            hasher.update(self.initializer.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1203,41 +1261,39 @@ pub const terms = struct {
             return true;
         }
 
-        pub fn hash(self: *const HandlerSet, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.handlers.len));
+        pub fn hash(self: *const HandlerSet, hasher: *QuickHasher) void {
+            hasher.update(self.handlers.len);
             for (self.handlers) |handler| {
-                hasher.update(std.mem.asBytes(&handler));
+                hasher.update(handler);
             }
-            hasher.update(std.mem.asBytes(&self.handler_type));
-            hasher.update(std.mem.asBytes(&self.result_type));
-            hasher.update(std.mem.asBytes(&self.cancellation_point));
+            hasher.update(self.handler_type);
+            hasher.update(self.result_type);
+            hasher.update(self.cancellation_point);
         }
 
-        pub fn cbr(self: *const HandlerSet, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const HandlerSet) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("HandlerSet");
 
             hasher.update("handlers.count:");
-            hasher.update(std.mem.asBytes(&self.handlers.len));
+            hasher.update(self.handlers.len);
 
             hasher.update("handlers:");
             for (self.handlers) |handler| {
                 hasher.update("handler:");
-                hasher.update(try handler.getCbr(allocator));
+                hasher.update(handler.getCbr());
             }
 
             hasher.update("handler_type:");
-            hasher.update(try self.handler_type.getCbr(allocator));
+            hasher.update(self.handler_type.getCbr());
 
             hasher.update("result_type:");
-            hasher.update(try self.result_type.getCbr(allocator));
+            hasher.update(self.result_type.getCbr());
 
             hasher.update("cancellation_point:");
-            hasher.update(std.mem.asBytes(&self.cancellation_point.id));
+            hasher.update(self.cancellation_point.id);
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1263,24 +1319,24 @@ pub const terms = struct {
             return true;
         }
 
-        pub fn hash(self: *const Implementation, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.class));
-            hasher.update(std.mem.asBytes(&self.members.len));
+        pub fn hash(self: *const Implementation, hasher: *QuickHasher) void {
+            hasher.update(self.class);
+            hasher.update(self.members.len);
             for (self.members) |field| {
-                hasher.update(std.mem.asBytes(&field.name.value.ptr));
-                hasher.update(std.mem.asBytes(&field.value));
+                hasher.update(field.name.value.ptr);
+                hasher.update(field.value);
             }
         }
 
-        pub fn cbr(self: *const Implementation, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const Implementation) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("Implementation");
 
             hasher.update("class:");
-            hasher.update(try self.class.getCbr(allocator));
+            hasher.update(self.class.getCbr());
 
             hasher.update("members.count:");
-            hasher.update(std.mem.asBytes(&self.members.len));
+            hasher.update(self.members.len);
 
             hasher.update("members:");
             for (self.members) |field| {
@@ -1288,12 +1344,10 @@ pub const terms = struct {
                 hasher.update(field.name.value);
 
                 hasher.update("field.value:");
-                hasher.update(try field.value.getCbr(allocator));
+                hasher.update(field.value.getCbr());
             }
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1305,19 +1359,17 @@ pub const terms = struct {
             return self.name.value.ptr == other.name.value.ptr;
         }
 
-        pub fn hash(self: *const Symbol, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.name.value.ptr));
+        pub fn hash(self: *const Symbol, hasher: *QuickHasher) void {
+            hasher.update(self.name.value.ptr);
         }
 
-        pub fn cbr(self: *const Symbol, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const Symbol) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("Symbol");
 
             hasher.update(self.name.value);
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1345,24 +1397,24 @@ pub const terms = struct {
             return true;
         }
 
-        pub fn hash(self: *const Class, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.name));
-            hasher.update(std.mem.asBytes(&self.elements.len));
+        pub fn hash(self: *const Class, hasher: *QuickHasher) void {
+            hasher.update(self.name);
+            hasher.update(self.elements.len);
             for (self.elements) |field| {
-                hasher.update(std.mem.asBytes(&field.name.value.ptr));
-                hasher.update(std.mem.asBytes(&field.type));
+                hasher.update(field.name.value.ptr);
+                hasher.update(field.type);
             }
         }
 
-        pub fn cbr(self: *const Class, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const Class) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("Class");
 
             hasher.update("name:");
             hasher.update(self.name.value);
 
             hasher.update("elements.count:");
-            hasher.update(std.mem.asBytes(&self.elements.len));
+            hasher.update(self.elements.len);
 
             hasher.update("elements:");
             for (self.elements) |elem| {
@@ -1370,12 +1422,10 @@ pub const terms = struct {
                 hasher.update(elem.name.value);
 
                 hasher.update("elem.type:");
-                hasher.update(try elem.type.getCbr(allocator));
+                hasher.update(elem.type.getCbr());
             }
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1403,24 +1453,24 @@ pub const terms = struct {
             return true;
         }
 
-        pub fn hash(self: *const Effect, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.name));
-            hasher.update(std.mem.asBytes(&self.elements.len));
+        pub fn hash(self: *const Effect, hasher: *QuickHasher) void {
+            hasher.update(self.name);
+            hasher.update(self.elements.len);
             for (self.elements) |field| {
-                hasher.update(std.mem.asBytes(&field.name.value.ptr));
-                hasher.update(std.mem.asBytes(&field.type));
+                hasher.update(field.name.value.ptr);
+                hasher.update(field.type);
             }
         }
 
-        pub fn cbr(self: *const Effect, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const Effect) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("Effect");
 
             hasher.update("name:");
             hasher.update(self.name.value);
 
             hasher.update("elements.count:");
-            hasher.update(std.mem.asBytes(&self.elements.len));
+            hasher.update(self.elements.len);
 
             hasher.update("elements:");
             for (self.elements) |elem| {
@@ -1428,12 +1478,10 @@ pub const terms = struct {
                 hasher.update(elem.name.value);
 
                 hasher.update("elem.type:");
-                hasher.update(try elem.type.getCbr(allocator));
+                hasher.update(elem.type.getCbr());
             }
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1448,24 +1496,22 @@ pub const terms = struct {
             return self.id == other.id and self.kind == other.kind;
         }
 
-        pub fn hash(self: *const Quantifier, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.id));
-            hasher.update(std.mem.asBytes(&self.kind));
+        pub fn hash(self: *const Quantifier, hasher: *QuickHasher) void {
+            hasher.update(self.id);
+            hasher.update(self.kind);
         }
 
-        pub fn cbr(self: *const Quantifier, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const Quantifier) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("Quantifier");
 
             hasher.update("id:");
-            hasher.update(std.mem.asBytes(&self.id));
+            hasher.update(self.id);
 
             hasher.update("kind:");
-            hasher.update(try self.kind.getCbr(allocator));
+            hasher.update(self.kind.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1491,17 +1537,15 @@ pub const terms = struct {
             return self.unlifted_type == other.unlifted_type;
         }
 
-        pub fn hash(self: *const LiftedDataKind, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.unlifted_type));
+        pub fn hash(self: *const LiftedDataKind, hasher: *QuickHasher) void {
+            hasher.update(self.unlifted_type);
         }
 
-        pub fn cbr(self: *const LiftedDataKind, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const LiftedDataKind) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("LiftedDataKind");
-            hasher.update(try self.unlifted_type.getCbr(allocator));
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            hasher.update(self.unlifted_type.getCbr());
+            return hasher.final();
         }
     };
     /// The kind of type constructors, functions on types.
@@ -1515,24 +1559,22 @@ pub const terms = struct {
             return self.input == other.input and self.output == other.output;
         }
 
-        pub fn hash(self: *const ArrowKind, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.input));
-            hasher.update(std.mem.asBytes(&self.output));
+        pub fn hash(self: *const ArrowKind, hasher: *QuickHasher) void {
+            hasher.update(self.input);
+            hasher.update(self.output);
         }
 
-        pub fn cbr(self: *const ArrowKind, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const ArrowKind) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("ArrowKind");
 
             hasher.update("input:");
-            hasher.update(try self.input.getCbr(allocator));
+            hasher.update(self.input.getCbr());
 
             hasher.update("output:");
-            hasher.update(try self.output.getCbr(allocator));
+            hasher.update(self.output.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1556,24 +1598,22 @@ pub const terms = struct {
             return self.signedness == other.signedness and self.bit_width == other.bit_width;
         }
 
-        pub fn hash(self: *const IntegerType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.signedness));
-            hasher.update(std.mem.asBytes(&self.bit_width));
+        pub fn hash(self: *const IntegerType, hasher: *QuickHasher) void {
+            hasher.update(self.signedness);
+            hasher.update(self.bit_width);
         }
 
-        pub fn cbr(self: *const IntegerType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const IntegerType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("IntegerType");
 
             hasher.update("signedness:");
-            hasher.update(try self.signedness.getCbr(allocator));
+            hasher.update(self.signedness.getCbr());
 
             hasher.update("bit_width:");
-            hasher.update(try self.bit_width.getCbr(allocator));
+            hasher.update(self.bit_width.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1587,19 +1627,17 @@ pub const terms = struct {
             return self.bit_width == other.bit_width;
         }
 
-        pub fn hash(self: *const FloatType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.bit_width));
+        pub fn hash(self: *const FloatType, hasher: *QuickHasher) void {
+            hasher.update(self.bit_width);
         }
 
-        pub fn cbr(self: *const FloatType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const FloatType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("FloatType");
 
-            hasher.update(try self.bit_width.getCbr(allocator));
+            hasher.update(self.bit_width.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1618,28 +1656,26 @@ pub const terms = struct {
             return self.len == other.len and self.sentinel_value == other.sentinel_value and self.payload == other.payload;
         }
 
-        pub fn hash(self: *const ArrayType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.len));
-            hasher.update(std.mem.asBytes(&self.sentinel_value));
-            hasher.update(std.mem.asBytes(&self.payload));
+        pub fn hash(self: *const ArrayType, hasher: *QuickHasher) void {
+            hasher.update(self.len);
+            hasher.update(self.sentinel_value);
+            hasher.update(self.payload);
         }
 
-        pub fn cbr(self: *const ArrayType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const ArrayType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("ArrayType");
 
             hasher.update("len:");
-            hasher.update(try self.len.getCbr(allocator));
+            hasher.update(self.len.getCbr());
 
             hasher.update("sentinel_value:");
-            hasher.update(try self.sentinel_value.getCbr(allocator));
+            hasher.update(self.sentinel_value.getCbr());
 
             hasher.update("payload:");
-            hasher.update(try self.payload.getCbr(allocator));
+            hasher.update(self.payload.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1658,28 +1694,26 @@ pub const terms = struct {
             return self.alignment == other.alignment and self.address_space == other.address_space and self.payload == other.payload;
         }
 
-        pub fn hash(self: *const PointerType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.alignment));
-            hasher.update(std.mem.asBytes(&self.address_space));
-            hasher.update(std.mem.asBytes(&self.payload));
+        pub fn hash(self: *const PointerType, hasher: *QuickHasher) void {
+            hasher.update(self.alignment);
+            hasher.update(self.address_space);
+            hasher.update(self.payload);
         }
 
-        pub fn cbr(self: *const PointerType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const PointerType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("PointerType");
 
             hasher.update("alignment:");
-            hasher.update(try self.alignment.getCbr(allocator));
+            hasher.update(self.alignment.getCbr());
 
             hasher.update("address_space:");
-            hasher.update(try self.address_space.getCbr(allocator));
+            hasher.update(self.address_space.getCbr());
 
             hasher.update("payload:");
-            hasher.update(try self.payload.getCbr(allocator));
+            hasher.update(self.payload.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1700,32 +1734,30 @@ pub const terms = struct {
             return self.alignment == other.alignment and self.address_space == other.address_space and self.sentinel_value == other.sentinel_value and self.payload == other.payload;
         }
 
-        pub fn hash(self: *const BufferType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.alignment));
-            hasher.update(std.mem.asBytes(&self.address_space));
-            hasher.update(std.mem.asBytes(&self.sentinel_value));
-            hasher.update(std.mem.asBytes(&self.payload));
+        pub fn hash(self: *const BufferType, hasher: *QuickHasher) void {
+            hasher.update(self.alignment);
+            hasher.update(self.address_space);
+            hasher.update(self.sentinel_value);
+            hasher.update(self.payload);
         }
 
-        pub fn cbr(self: *const BufferType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const BufferType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("BufferType");
 
             hasher.update("alignment:");
-            hasher.update(try self.alignment.getCbr(allocator));
+            hasher.update(self.alignment.getCbr());
 
             hasher.update("address_space:");
-            hasher.update(try self.address_space.getCbr(allocator));
+            hasher.update(self.address_space.getCbr());
 
             hasher.update("sentinel_value:");
-            hasher.update(try self.sentinel_value.getCbr(allocator));
+            hasher.update(self.sentinel_value.getCbr());
 
             hasher.update("payload:");
-            hasher.update(try self.payload.getCbr(allocator));
+            hasher.update(self.payload.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1746,32 +1778,30 @@ pub const terms = struct {
             return self.alignment == other.alignment and self.address_space == other.address_space and self.sentinel_value == other.sentinel_value and self.payload == other.payload;
         }
 
-        pub fn hash(self: *const SliceType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.alignment));
-            hasher.update(std.mem.asBytes(&self.address_space));
-            hasher.update(std.mem.asBytes(&self.sentinel_value));
-            hasher.update(std.mem.asBytes(&self.payload));
+        pub fn hash(self: *const SliceType, hasher: *QuickHasher) void {
+            hasher.update(self.alignment);
+            hasher.update(self.address_space);
+            hasher.update(self.sentinel_value);
+            hasher.update(self.payload);
         }
 
-        pub fn cbr(self: *const SliceType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const SliceType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("SliceType");
 
             hasher.update("alignment:");
-            hasher.update(try self.alignment.getCbr(allocator));
+            hasher.update(self.alignment.getCbr());
 
             hasher.update("address_space:");
-            hasher.update(try self.address_space.getCbr(allocator));
+            hasher.update(self.address_space.getCbr());
 
             hasher.update("sentinel_value:");
-            hasher.update(try self.sentinel_value.getCbr(allocator));
+            hasher.update(self.sentinel_value.getCbr());
 
             hasher.update("payload:");
-            hasher.update(try self.payload.getCbr(allocator));
+            hasher.update(self.payload.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1784,24 +1814,22 @@ pub const terms = struct {
             return self.label == other.label and self.payload == other.payload;
         }
 
-        pub fn hash(self: *const RowElementType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.label));
-            hasher.update(std.mem.asBytes(&self.payload));
+        pub fn hash(self: *const RowElementType, hasher: *QuickHasher) void {
+            hasher.update(self.label);
+            hasher.update(self.payload);
         }
 
-        pub fn cbr(self: *const RowElementType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const RowElementType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("RowElementType");
 
             hasher.update("label:");
-            hasher.update(try self.label.getCbr(allocator));
+            hasher.update(self.label.getCbr());
 
             hasher.update("payload:");
-            hasher.update(try self.payload.getCbr(allocator));
+            hasher.update(self.payload.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1823,47 +1851,45 @@ pub const terms = struct {
             };
         }
 
-        pub fn hash(self: *const LabelType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&@as(std.meta.Tag(LabelType), self.*)));
+        pub fn hash(self: *const LabelType, hasher: *QuickHasher) void {
+            hasher.update(@as(std.meta.Tag(LabelType), self.*));
             switch (self.*) {
                 .name => |n| {
-                    hasher.update(std.mem.asBytes(&n));
+                    hasher.update(n);
                 },
                 .index => |i| {
-                    hasher.update(std.mem.asBytes(&i));
+                    hasher.update(i);
                 },
                 .exact => |e| {
-                    hasher.update(std.mem.asBytes(&e.name));
-                    hasher.update(std.mem.asBytes(&e.index));
+                    hasher.update(e.name);
+                    hasher.update(e.index);
                 },
             }
         }
 
-        pub fn cbr(self: *const LabelType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const LabelType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("LabelType");
 
             switch (self.*) {
                 .name => |n| {
                     hasher.update("name:");
-                    hasher.update(try n.getCbr(allocator));
+                    hasher.update(n.getCbr());
                 },
                 .index => |i| {
                     hasher.update("index:");
-                    hasher.update(try i.getCbr(allocator));
+                    hasher.update(i.getCbr());
                 },
                 .exact => |e| {
                     hasher.update("exact.name:");
-                    hasher.update(try e.name.getCbr(allocator));
+                    hasher.update(e.name.getCbr());
 
                     hasher.update("exact.index:");
-                    hasher.update(try e.index.getCbr(allocator));
+                    hasher.update(e.index.getCbr());
                 },
             }
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1878,24 +1904,22 @@ pub const terms = struct {
             return self.unlifted_type == other.unlifted_type and self.value.id == other.value.id and self.value.module.guid == other.value.module.guid;
         }
 
-        pub fn hash(self: *const LiftedDataType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.unlifted_type));
-            hasher.update(std.mem.asBytes(&self.value));
+        pub fn hash(self: *const LiftedDataType, hasher: *QuickHasher) void {
+            hasher.update(self.unlifted_type);
+            hasher.update(self.value);
         }
 
-        pub fn cbr(self: *const LiftedDataType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const LiftedDataType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("LiftedDataType");
 
             hasher.update("unlifted_type:");
-            hasher.update(try self.unlifted_type.getCbr(allocator));
+            hasher.update(self.unlifted_type.getCbr());
 
             hasher.update("value:");
-            hasher.update(try self.value.getCbr(allocator));
+            hasher.update(self.value.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -1935,49 +1959,47 @@ pub const terms = struct {
             return true;
         }
 
-        pub fn hash(self: *const StructureType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.name));
-            hasher.update(std.mem.asBytes(&self.layout));
-            hasher.update(std.mem.asBytes(&self.backing_integer));
-            hasher.update(std.mem.asBytes(&self.elements.len));
+        pub fn hash(self: *const StructureType, hasher: *QuickHasher) void {
+            hasher.update(self.name);
+            hasher.update(self.layout);
+            hasher.update(self.backing_integer);
+            hasher.update(self.elements.len);
             for (self.elements) |elem| {
-                hasher.update(std.mem.asBytes(&elem.name));
-                hasher.update(std.mem.asBytes(&elem.payload));
-                hasher.update(std.mem.asBytes(&elem.alignment_override));
+                hasher.update(elem.name);
+                hasher.update(elem.payload);
+                hasher.update(elem.alignment_override);
             }
         }
 
-        pub fn cbr(self: *const StructureType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const StructureType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("StructureType");
 
             hasher.update("name:");
             hasher.update(self.name.value);
 
             hasher.update("layout:");
-            hasher.update(try self.layout.getCbr(allocator));
+            hasher.update(self.layout.getCbr());
 
             hasher.update("backing_integer:");
-            hasher.update(try self.backing_integer.getCbr(allocator));
+            hasher.update(self.backing_integer.getCbr());
 
             hasher.update("elements_count:");
-            hasher.update(std.mem.asBytes(&self.elements.len));
+            hasher.update(self.elements.len);
 
             hasher.update("elements:");
             for (self.elements) |elem| {
                 hasher.update("elem.name:");
-                hasher.update(try elem.name.getCbr(allocator));
+                hasher.update(elem.name.getCbr());
 
                 hasher.update("elem.payload:");
-                hasher.update(try elem.payload.getCbr(allocator));
+                hasher.update(elem.payload.getCbr());
 
                 hasher.update("elem.alignment_override:");
-                hasher.update(try elem.alignment_override.getCbr(allocator));
+                hasher.update(elem.alignment_override.getCbr());
             }
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -2011,28 +2033,28 @@ pub const terms = struct {
             return true;
         }
 
-        pub fn hash(self: *const UnionType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.name));
-            hasher.update(std.mem.asBytes(&self.layout));
-            hasher.update(std.mem.asBytes(&self.elements.len));
+        pub fn hash(self: *const UnionType, hasher: *QuickHasher) void {
+            hasher.update(self.name);
+            hasher.update(self.layout);
+            hasher.update(self.elements.len);
             for (self.elements) |elem| {
-                hasher.update(std.mem.asBytes(&elem.name.value.ptr));
-                hasher.update(std.mem.asBytes(&elem.payload));
+                hasher.update(elem.name.value.ptr);
+                hasher.update(elem.payload);
             }
         }
 
-        pub fn cbr(self: *const UnionType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const UnionType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("UnionType");
 
             hasher.update("name:");
             hasher.update(self.name.value);
 
             hasher.update("layout:");
-            hasher.update(try self.layout.getCbr(allocator));
+            hasher.update(self.layout.getCbr());
 
             hasher.update("elements_count:");
-            hasher.update(std.mem.asBytes(&self.elements.len));
+            hasher.update(self.elements.len);
 
             hasher.update("elements:");
             for (self.elements) |elem| {
@@ -2040,12 +2062,10 @@ pub const terms = struct {
                 hasher.update(elem.name.value);
 
                 hasher.update("elem.payload:");
-                hasher.update(try elem.payload.getCbr(allocator));
+                hasher.update(elem.payload.getCbr());
             }
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -2083,33 +2103,33 @@ pub const terms = struct {
             return true;
         }
 
-        pub fn hash(self: *const SumType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.name));
-            hasher.update(std.mem.asBytes(&self.tag_type));
-            hasher.update(std.mem.asBytes(&self.layout));
-            hasher.update(std.mem.asBytes(&self.elements.len));
+        pub fn hash(self: *const SumType, hasher: *QuickHasher) void {
+            hasher.update(self.name);
+            hasher.update(self.tag_type);
+            hasher.update(self.layout);
+            hasher.update(self.elements.len);
             for (self.elements) |elem| {
-                hasher.update(std.mem.asBytes(&elem.name));
-                hasher.update(std.mem.asBytes(&elem.payload));
-                hasher.update(std.mem.asBytes(&elem.tag));
+                hasher.update(elem.name);
+                hasher.update(elem.payload);
+                hasher.update(elem.tag);
             }
         }
 
-        pub fn cbr(self: *const SumType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const SumType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("SumType");
 
             hasher.update("name:");
             hasher.update(self.name.value);
 
             hasher.update("tag_type:");
-            hasher.update(try self.tag_type.getCbr(allocator));
+            hasher.update(self.tag_type.getCbr());
 
             hasher.update("layout:");
-            hasher.update(try self.layout.getCbr(allocator));
+            hasher.update(self.layout.getCbr());
 
             hasher.update("elements_count:");
-            hasher.update(std.mem.asBytes(&self.elements.len));
+            hasher.update(self.elements.len);
 
             hasher.update("elements:");
             for (self.elements) |elem| {
@@ -2117,15 +2137,13 @@ pub const terms = struct {
                 hasher.update(elem.name.value);
 
                 hasher.update("elem.payload:");
-                hasher.update(try elem.payload.getCbr(allocator));
+                hasher.update(elem.payload.getCbr());
 
                 hasher.update("elem.tag:");
-                hasher.update(try elem.tag.getCbr(allocator));
+                hasher.update(elem.tag.getCbr());
             }
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -2142,28 +2160,26 @@ pub const terms = struct {
             return self.input == other.input and self.output == other.output and self.effects == other.effects;
         }
 
-        pub fn hash(self: *const FunctionType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.input));
-            hasher.update(std.mem.asBytes(&self.output));
-            hasher.update(std.mem.asBytes(&self.effects));
+        pub fn hash(self: *const FunctionType, hasher: *QuickHasher) void {
+            hasher.update(self.input);
+            hasher.update(self.output);
+            hasher.update(self.effects);
         }
 
-        pub fn cbr(self: *const FunctionType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const FunctionType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("FunctionType");
 
             hasher.update("input:");
-            hasher.update(try self.input.getCbr(allocator));
+            hasher.update(self.input.getCbr());
 
             hasher.update("output:");
-            hasher.update(try self.output.getCbr(allocator));
+            hasher.update(self.output.getCbr());
 
             hasher.update("effects:");
-            hasher.update(try self.effects.getCbr(allocator));
+            hasher.update(self.effects.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -2182,32 +2198,30 @@ pub const terms = struct {
             return self.input == other.input and self.output == other.output and self.handled_effect == other.handled_effect and self.added_effects == other.added_effects;
         }
 
-        pub fn hash(self: *const HandlerType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.input));
-            hasher.update(std.mem.asBytes(&self.output));
-            hasher.update(std.mem.asBytes(&self.handled_effect));
-            hasher.update(std.mem.asBytes(&self.added_effects));
+        pub fn hash(self: *const HandlerType, hasher: *QuickHasher) void {
+            hasher.update(self.input);
+            hasher.update(self.output);
+            hasher.update(self.handled_effect);
+            hasher.update(self.added_effects);
         }
 
-        pub fn cbr(self: *const HandlerType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const HandlerType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("HandlerType");
 
             hasher.update("input:");
-            hasher.update(try self.input.getCbr(allocator));
+            hasher.update(self.input.getCbr());
 
             hasher.update("output:");
-            hasher.update(try self.output.getCbr(allocator));
+            hasher.update(self.output.getCbr());
 
             hasher.update("handled_effect:");
-            hasher.update(try self.handled_effect.getCbr(allocator));
+            hasher.update(self.handled_effect.getCbr());
 
             hasher.update("added_effects:");
-            hasher.update(try self.added_effects.getCbr(allocator));
+            hasher.update(self.added_effects.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -2230,37 +2244,35 @@ pub const terms = struct {
             return true;
         }
 
-        pub fn hash(self: *const PolymorphicType, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.quantifiers.len));
+        pub fn hash(self: *const PolymorphicType, hasher: *QuickHasher) void {
+            hasher.update(self.quantifiers.len);
             for (self.quantifiers) |*quant| {
                 hasher.update(std.mem.asBytes(quant));
             }
-            hasher.update(std.mem.asBytes(&self.qualifiers));
-            hasher.update(std.mem.asBytes(&self.payload));
+            hasher.update(self.qualifiers);
+            hasher.update(self.payload);
         }
 
-        pub fn cbr(self: *const PolymorphicType, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const PolymorphicType) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("PolymorphicType");
 
             hasher.update("quantifiers_count:");
-            hasher.update(std.mem.asBytes(&self.quantifiers.len));
+            hasher.update(self.quantifiers.len);
 
             hasher.update("quantifiers:");
             for (self.quantifiers) |quant| {
                 hasher.update("quantifier:");
-                hasher.update(try quant.getCbr(allocator));
+                hasher.update(quant.getCbr());
             }
 
             hasher.update("qualifiers:");
-            hasher.update(try self.qualifiers.getCbr(allocator));
+            hasher.update(self.qualifiers.getCbr());
 
             hasher.update("payload:");
-            hasher.update(try self.payload.getCbr(allocator));
+            hasher.update(self.payload.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -2275,24 +2287,22 @@ pub const terms = struct {
             return self.primary_row == other.primary_row and self.subtype_row == other.subtype_row;
         }
 
-        pub fn hash(self: *const IsSubRowConstraint, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.primary_row));
-            hasher.update(std.mem.asBytes(&self.subtype_row));
+        pub fn hash(self: *const IsSubRowConstraint, hasher: *QuickHasher) void {
+            hasher.update(self.primary_row);
+            hasher.update(self.subtype_row);
         }
 
-        pub fn cbr(self: *const IsSubRowConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const IsSubRowConstraint) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("IsSubRowConstraint");
 
             hasher.update("primary_row:");
-            hasher.update(try self.primary_row.getCbr(allocator));
+            hasher.update(self.primary_row.getCbr());
 
             hasher.update("subtype_row:");
-            hasher.update(try self.subtype_row.getCbr(allocator));
+            hasher.update(self.subtype_row.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -2309,28 +2319,26 @@ pub const terms = struct {
             return self.row_a == other.row_a and self.row_b == other.row_b and self.row_result == other.row_result;
         }
 
-        pub fn hash(self: *const RowsConcatenateConstraint, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.row_a));
-            hasher.update(std.mem.asBytes(&self.row_b));
-            hasher.update(std.mem.asBytes(&self.row_result));
+        pub fn hash(self: *const RowsConcatenateConstraint, hasher: *QuickHasher) void {
+            hasher.update(self.row_a);
+            hasher.update(self.row_b);
+            hasher.update(self.row_result);
         }
 
-        pub fn cbr(self: *const RowsConcatenateConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const RowsConcatenateConstraint) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("RowsConcatenateConstraint");
 
             hasher.update("row_a:");
-            hasher.update(try self.row_a.getCbr(allocator));
+            hasher.update(self.row_a.getCbr());
 
             hasher.update("row_b:");
-            hasher.update(try self.row_b.getCbr(allocator));
+            hasher.update(self.row_b.getCbr());
 
             hasher.update("row_result:");
-            hasher.update(try self.row_result.getCbr(allocator));
+            hasher.update(self.row_result.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -2345,24 +2353,22 @@ pub const terms = struct {
             return self.data == other.data and self.class == other.class;
         }
 
-        pub fn hash(self: *const ImplementsClassConstraint, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.data));
-            hasher.update(std.mem.asBytes(&self.class));
+        pub fn hash(self: *const ImplementsClassConstraint, hasher: *QuickHasher) void {
+            hasher.update(self.data);
+            hasher.update(self.class);
         }
 
-        pub fn cbr(self: *const ImplementsClassConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const ImplementsClassConstraint) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("ImplementsClassConstraint");
 
             hasher.update("data:");
-            hasher.update(try self.data.getCbr(allocator));
+            hasher.update(self.data.getCbr());
 
             hasher.update("class:");
-            hasher.update(try self.class.getCbr(allocator));
+            hasher.update(self.class.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -2377,24 +2383,22 @@ pub const terms = struct {
             return self.data == other.data and self.row == other.row;
         }
 
-        pub fn hash(self: *const IsStructureConstraint, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.data));
-            hasher.update(std.mem.asBytes(&self.row));
+        pub fn hash(self: *const IsStructureConstraint, hasher: *QuickHasher) void {
+            hasher.update(self.data);
+            hasher.update(self.row);
         }
 
-        pub fn cbr(self: *const IsStructureConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const IsStructureConstraint) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("IsStructureConstraint");
 
             hasher.update("data:");
-            hasher.update(try self.data.getCbr(allocator));
+            hasher.update(self.data.getCbr());
 
             hasher.update("row:");
-            hasher.update(try self.row.getCbr(allocator));
+            hasher.update(self.row.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -2409,24 +2413,22 @@ pub const terms = struct {
             return self.data == other.data and self.row == other.row;
         }
 
-        pub fn hash(self: *const IsUnionConstraint, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.data));
-            hasher.update(std.mem.asBytes(&self.row));
+        pub fn hash(self: *const IsUnionConstraint, hasher: *QuickHasher) void {
+            hasher.update(self.data);
+            hasher.update(self.row);
         }
 
-        pub fn cbr(self: *const IsUnionConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const IsUnionConstraint) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("IsUnionConstraint");
 
             hasher.update("data:");
-            hasher.update(try self.data.getCbr(allocator));
+            hasher.update(self.data.getCbr());
 
             hasher.update("row:");
-            hasher.update(try self.row.getCbr(allocator));
+            hasher.update(self.row.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 
@@ -2441,24 +2443,22 @@ pub const terms = struct {
             return self.data == other.data and self.row == other.row;
         }
 
-        pub fn hash(self: *const IsSumConstraint, hasher: *std.hash.Fnv1a_64) void {
-            hasher.update(std.mem.asBytes(&self.data));
-            hasher.update(std.mem.asBytes(&self.row));
+        pub fn hash(self: *const IsSumConstraint, hasher: *QuickHasher) void {
+            hasher.update(self.data);
+            hasher.update(self.row);
         }
 
-        pub fn cbr(self: *const IsSumConstraint, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            var hasher = CbrHasher.init(.{});
+        pub fn cbr(self: *const IsSumConstraint) Cbr {
+            var hasher = CbrHasher.init();
             hasher.update("IsSumConstraint");
 
             hasher.update("data:");
-            hasher.update(try self.data.getCbr(allocator));
+            hasher.update(self.data.getCbr());
 
             hasher.update("row:");
-            hasher.update(try self.row.getCbr(allocator));
+            hasher.update(self.row.getCbr());
 
-            const buf = try allocator.alloc(u8, cbr_size);
-            hasher.final(buf);
-            return buf;
+            return hasher.final();
         }
     };
 };
@@ -2473,14 +2473,14 @@ pub fn IdentityTerm(comptime name: []const u8) type {
             return true;
         }
 
-        pub fn hash(_: *const Self, hasher: *std.hash.Fnv1a_64) void {
+        pub fn hash(_: *const Self, hasher: *QuickHasher) void {
             hasher.update(name);
         }
 
-        pub fn cbr(_: *const Self, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-            const buf = try allocator.alloc(u8, cbr_size);
-            CbrHasher.hash(name, buf, .{});
-            return buf;
+        pub fn cbr(_: *const Self) Cbr {
+            var hasher = CbrHasher.init();
+            hasher.update(name);
+            return hasher.final();
         }
     };
 }
