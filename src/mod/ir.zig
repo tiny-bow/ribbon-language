@@ -196,6 +196,9 @@ pub const Context = struct {
     /// Map from Tag to TermVTable for the associated type
     vtables: common.UniqueReprMap(Tag, TermVTable) = .empty,
 
+    /// Source of fresh TermId values
+    fresh_term_id: std.meta.Tag(TermId) = 0,
+
     /// Initialize a new ir context on the given allocator.
     pub fn init(allocator: std.mem.Allocator) !*Context {
         const self = try allocator.create(Context);
@@ -355,10 +358,20 @@ pub const Context = struct {
     pub fn getNamedSharedTerm(self: *Context, name: Name) ?Term {
         return self.named_shared_terms.get(name.value);
     }
+
+    /// Get a fresh unique TermId for this context.
+    pub fn generateTermId(self: *Context) TermId {
+        const id = self.fresh_term_id;
+        self.fresh_term_id += 1;
+        return @enumFromInt(id);
+    }
 };
 
 /// Identifier for a type within the IR term type registry
 pub const Tag = enum(u8) { _ };
+
+/// Unique identifier for a Term within its context.
+pub const TermId = enum(u32) { _ };
 
 /// Description of a type erased term in the ir context.
 pub const TermHeader = struct {
@@ -370,6 +383,8 @@ pub const TermHeader = struct {
     tag: Tag,
     /// The offset (forwards) from the header to the term value.
     value_offset: u8,
+    /// Unique identifier for this term within its context.
+    id: TermId,
     /// The cached CBR for the attached term.
     cached_cbr: ?Cbr = null,
 
@@ -443,6 +458,7 @@ pub fn TermData(comptime T: type) type {
                 .module = module,
                 .tag = context.tagFromType(T) orelse return error.ZigTypeNotRegistered,
                 .value_offset = @offsetOf(Self, "value"),
+                .id = context.generateTermId(),
             };
             return &self.value;
         }
@@ -1525,18 +1541,25 @@ pub const terms = struct {
 
     /// The kind of a type that is a symbolic identity.
     pub const SymbolKind = IdentityTerm("SymbolKind");
+
     /// The kind of a standard type.
     pub const TypeKind = IdentityTerm("TypeKind");
+
     /// The kind of a type class type.
     pub const ClassKind = IdentityTerm("ClassKind");
+
     /// The kind of an effect type.
     pub const EffectKind = IdentityTerm("EffectKind");
+
     /// The kind of a handler type.
     pub const HandlerKind = IdentityTerm("HandlerKind");
+
     /// The kind of a raw function type.
     pub const FunctionKind = IdentityTerm("FunctionKind");
+
     /// The kind of a type constraint.
     pub const ConstraintKind = IdentityTerm("ConstraintKind");
+
     /// The kind of a data value lifted to type level.
     pub const LiftedDataKind = struct {
         unlifted_type: Term,
@@ -1556,6 +1579,7 @@ pub const terms = struct {
             return hasher.final();
         }
     };
+
     /// The kind of type constructors, functions on types.
     pub const ArrowKind = struct {
         /// The kind of the input type provided to a constructor of this arrow kind.
@@ -1588,10 +1612,13 @@ pub const terms = struct {
 
     /// Type data for a void type repr.
     pub const VoidType = IdentityTerm("VoidType");
+
     /// Type data for a boolean type repr.
     pub const BoolType = IdentityTerm("BoolType"); // TODO: it may be better to represent this as a sum or enum; currently this was chosen because bool is a bit special in that it is representable as a single bit. Ideally, this property should be representable on the aformentioned options as well.
+
     /// Type data for a unit type repr.
     pub const UnitType = IdentityTerm("UnitType");
+
     /// Type data for the top type repr representing the absence of control flow resulting from an expression.
     pub const NoReturnType = IdentityTerm("NoReturnType");
 
