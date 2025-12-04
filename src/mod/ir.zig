@@ -113,7 +113,7 @@ pub const CbrHasher = struct {
     }
 
     /// Update the hasher with the given value converted to bytes
-    pub fn update(self: *CbrHasher, value: anytype) void {
+    pub inline fn update(self: *CbrHasher, value: anytype) void {
         const T_info = @typeInfo(@TypeOf(value));
         if (comptime T_info == .pointer) {
             if (comptime T_info.pointer.child == u8) {
@@ -147,7 +147,7 @@ pub const QuickHasher = struct {
         };
     }
 
-    pub fn update(self: *QuickHasher, value: anytype) void {
+    pub inline fn update(self: *QuickHasher, value: anytype) void {
         const T_info = @typeInfo(@TypeOf(value));
         if (comptime T_info == .pointer) {
             if (comptime T_info.pointer.child == u8) {
@@ -520,7 +520,7 @@ pub const Term = packed struct(u64) {
             pub fn hash(self: @This(), t: *const T) u64 {
                 const tag = self.ctx.tagFromType(T);
                 var hasher = QuickHasher.init();
-                hasher.hash(std.mem.asBytes(&tag));
+                hasher.hash(tag);
                 self.ctx.vtables[@intFromEnum(tag)].cbr(t, &hasher);
                 return hasher.final();
             }
@@ -755,12 +755,17 @@ pub const Instruction = struct {
 
     /// Determine if this Instruction is a Termination.
     pub fn isTermination(self: *Instruction) bool {
-        return self.command < Operation.offset;
+        return self.command < Operation.start_offset;
     }
 
     /// Determine if this Instruction is an Operation.
     pub fn isOperation(self: *Instruction) bool {
-        return self.command >= Operation.offset;
+        return self.command >= Operation.start_offset;
+    }
+
+    /// Determine if this Instruction is an extension op.
+    pub fn isExtension(self: *Instruction) bool {
+        return self.command >= Operation.extension_offset;
     }
 
     /// Cast this Instruction's command to a Termination. Returns null if this Instruction is an Operation.
@@ -1132,13 +1137,16 @@ pub const Termination = enum(u8) {
 pub const Operation = enum(u8) {
     /// The offset at which Operations start in the instruction command space.
     /// We start the Operation enum at the end of the Termination enum so they can both be compared generically to u8
-    pub const offset = calc_offset: {
+    pub const start_offset = calc_offset: {
         const tags = std.meta.tags(Termination);
         break :calc_offset @intFromEnum(tags[tags.len - 1]) + 1;
     };
 
+    /// The offset at which extension Operations start in the instruction command space.
+    pub const extension_offset = @intFromEnum(Operation.breakpoint) + 1;
+
     /// allocate a value on the stack and return a pointer to it
-    stack_alloc = offset,
+    stack_alloc = start_offset,
     /// load a value from an address
     load,
     /// store a value to an address
@@ -1984,7 +1992,7 @@ pub const terms = struct {
             hasher.update("backing_integer:");
             hasher.update(self.backing_integer.getCbr());
 
-            hasher.update("elements_count:");
+            hasher.update("elements.len:");
             hasher.update(self.elements.len);
 
             hasher.update("elements:");
@@ -2053,7 +2061,7 @@ pub const terms = struct {
             hasher.update("layout:");
             hasher.update(self.layout.getCbr());
 
-            hasher.update("elements_count:");
+            hasher.update("elements.len:");
             hasher.update(self.elements.len);
 
             hasher.update("elements:");
@@ -2128,7 +2136,7 @@ pub const terms = struct {
             hasher.update("layout:");
             hasher.update(self.layout.getCbr());
 
-            hasher.update("elements_count:");
+            hasher.update("elements.len:");
             hasher.update(self.elements.len);
 
             hasher.update("elements:");
@@ -2246,8 +2254,8 @@ pub const terms = struct {
 
         pub fn hash(self: *const PolymorphicType, hasher: *QuickHasher) void {
             hasher.update(self.quantifiers.len);
-            for (self.quantifiers) |*quant| {
-                hasher.update(std.mem.asBytes(quant));
+            for (self.quantifiers) |quant| {
+                hasher.update(quant);
             }
             hasher.update(self.qualifiers);
             hasher.update(self.payload);
