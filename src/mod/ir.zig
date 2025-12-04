@@ -734,7 +734,7 @@ pub const Binding = union(enum) {
     function: *Function,
 };
 
-/// Identifier for an instruction within a function.
+/// Identifier for an instruction within a block.
 pub const InstructionId = enum(u32) { _ };
 
 /// An instruction within a basic block.
@@ -747,6 +747,8 @@ pub const Instruction = struct {
     type: Term,
     /// The command code for this operation, ie an Operation or Termination.
     command: u8,
+    /// The number of operands encoded after this Instruction in memory.
+    num_operands: usize,
 
     /// Optional debug name for the SSA variable binding the result of this operation.
     name: ?Name = null,
@@ -756,16 +758,61 @@ pub const Instruction = struct {
     /// The next operation in the block, or null if this is the last operation.
     next: ?*Instruction = null,
 
-    /// A pointer to the head of the singly-linked list of all Uses that refer to this Instruction.
+    /// The first use of the SSA variable produced by this instruction, or null if the variable is never used.
     first_user: ?*Use = null,
 
-    /// The number of operands encoded after this Instruction in memory.
-    num_operands: usize = 0,
+    /// A pointer to the head of the singly-linked list of all Uses that refer to this Instruction.
+    pub fn init(block: *Block, ty: Term, command: anytype, name: ?Name, ops: []const Operand) error{OutOfMemory}!*Instruction {
+        comptime {
+            // invariant: the Instruction struct must be aligned such that the operands can be placed directly after it
+            std.debug.assert(@alignOf(Instruction) >= @alignOf(Use));
+
+            const T = @TypeOf(command);
+            if (T != Operation and T != Termination) {
+                @compileError("Instruction command must be an Operation or Termination");
+            }
+        }
+
+        const buf = try block.arena.allocWithOptions(
+            u8,
+            @sizeOf(Instruction) + @sizeOf(Use) * ops.len,
+            .fromByteUnits(@alignOf(Instruction)),
+            null,
+        );
+
+        const self: *Instruction = @ptrCast(buf.ptr);
+        const uses = self.operands();
+        self.* = Instruction{
+            .block = block,
+            .id = block.module.generateInstructionId(),
+            .type = ty,
+            .command = @intFromEnum(command),
+            .num_operands = ops.len,
+            .name = name,
+        };
+
+        for (ops, uses) |op, *use| {
+            use.* = Use{
+                .operand = op,
+                .user = self,
+            };
+
+            if (op == .variable) {
+                const var_inst = op.variable;
+                const var_first_user = var_inst.first_user;
+                use.next = var_first_user;
+                var_inst.first_user = use;
+            }
+        }
+
+        return self;
+    }
 
     /// Get a slice of the operands encoded after this Instruction in memory.
     pub fn operands(self: *Instruction) []Use {
         // invariant: the Instruction struct must be aligned such that the operands can be placed directly after it
         comptime std.debug.assert(common.alignDelta(@sizeOf(Instruction), @alignOf(Use)) == 0);
+
         return @as([*]Use, @ptrCast(@alignCast(@as([*]u8, @ptrCast(self)) + @sizeOf(Instruction))))[0..self.num_operands];
     }
 
@@ -872,7 +919,10 @@ pub const Operand = union(enum) {
                 hasher.update(function.id);
             },
             .variable => |variable| {
-                hasher.update("variable:");
+                // We must include the block id to differentiate between variables with the same id in different blocks
+                hasher.update("variable.block.id:");
+                hasher.update(variable.block.id);
+                hasher.update("variable.id:");
                 hasher.update(variable.id);
             },
         }
@@ -927,7 +977,7 @@ pub const Function = struct {
             .kind = kind,
             .type = ty,
 
-            .entry = try Block.init(module, entry_name),
+            .entry = try Block.init(module, self, entry_name),
             .arena = .init(module.root.allocator),
 
             .name = name,
@@ -994,11 +1044,17 @@ pub const BlockId = enum(u32) { _ };
 pub const Block = struct {
     /// The module this block belongs to.
     module: *Module,
+
+    /// The arena allocator for instructions in this block.
+    arena: std.mem.Allocator,
     /// Globally unique id for this block within its function, used for hashing and debugging.
     id: BlockId,
 
     /// Optional debug name for this block.
     name: ?Name = null,
+
+    /// The function this block belongs to, if any.
+    function: ?*Function = null,
 
     /// The first operation in this block, or null if the block is empty.
     first_op: ?*Instruction = null,
@@ -1013,12 +1069,17 @@ pub const Block = struct {
     /// Cached CBR for this block.
     cached_cbr: ?Cbr = null,
 
-    pub fn init(module: *Module, name: ?Name) error{OutOfMemory}!*Block {
+    /// Source for instruction ids within this block.
+    fresh_instruction_id: std.meta.Tag(InstructionId) = 0,
+
+    pub fn init(module: *Module, function: ?*Function, name: ?Name) error{OutOfMemory}!*Block {
         const self = try module.block_pool.create();
         self.* = Block{
             .module = module,
             .id = module.generateBlockId(),
             .name = name,
+            .arena = if (function) |f| f.arena.allocator() else module.root.arena.allocator(),
+            .function = function,
         };
         return self;
     }
@@ -1124,6 +1185,12 @@ pub const Block = struct {
         const buf = hasher.final();
         self.cached_cbr = buf;
         return buf;
+    }
+
+    pub fn generateInstructionId(self: *Block) InstructionId {
+        const id = self.fresh_instruction_id;
+        self.fresh_instruction_id += 1;
+        return @enumFromInt(id);
     }
 };
 
@@ -1959,7 +2026,6 @@ pub const terms = struct {
         }
     };
 
-    /// Type data for a row type
     /// Type data for a structure type repr.
     pub const StructureType = struct {
         /// Nominative identity of this structure type.
