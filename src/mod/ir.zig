@@ -12,6 +12,13 @@
 //! ### TODO
 //!
 //! #### Core IR Infrastructure & Correctness
+//!
+//! *   ** Thread Safety:**
+//!     *   Currently, the ir context and its contents are not thread-safe.
+//!     *   Implement atomic operations for identifier generation.
+//!     *   Use mutex for modifications to shared data structures like interned name and data sets.
+//!     *   TODO: study plan.md and higher level modules to see if this is necessary.
+//!
 //! *   ** Serialization/Deserialization:**
 //!     *   Create a textual representation of the IR for debugging. This is invaluable for inspecting the output of compiler passes.
 //!     *   Implement a binary serialization format for caching IR or saving it for later stages.
@@ -100,6 +107,16 @@ test {
 }
 
 pub const Cbr = u128;
+pub const sma = struct {
+    pub const magic = "RIBBONIR";
+    pub const version_text_segment_len = 32;
+    pub const version = std.SemanticVersion{
+        .major = 0,
+        .minor = 1,
+        .patch = 0,
+        .pre = "draft",
+    };
+};
 
 /// A hasher for computing canonical binary representation (CBR) hashes.
 pub const CbrHasher = struct {
@@ -182,9 +199,14 @@ pub const Context = struct {
     name_to_module_guid: common.StringMap(ModuleGUID) = .empty,
 
     /// A set of all names in the context, de-duplicated and owned by the context itself
-    interned_name_set: common.StringSet = .empty,
+    interned_name_set: common.StringMap(NameId) = .empty,
+    /// Reverse mapping for interned names.
+    name_id_to_string: common.UniqueReprMap(NameId, []const u8) = .empty,
     /// A set of all constant data blobs in the context, de-duplicated and owned by the context itself
     interned_data_set: common.HashSet(*const BlobHeader, BlobHeader.HashContext) = .empty,
+
+    /// Contains all terms created in this context
+    all_terms: common.ArrayList(Term) = .empty,
 
     /// Contains terms that are not subject to interface association, such as ints and arrays
     shared_terms: common.HashSet(Term, Term.IdentityContext) = .empty,
@@ -221,8 +243,10 @@ pub const Context = struct {
         while (module_it.next()) |module_p2p| module_p2p.*.deinit();
         self.modules.deinit(self.allocator);
 
+        self.all_terms.deinit(self.allocator);
         self.name_to_module_guid.deinit(self.allocator);
         self.interned_name_set.deinit(self.allocator);
+        self.name_id_to_string.deinit(self.allocator);
         self.interned_data_set.deinit(self.allocator);
         self.shared_terms.deinit(self.allocator);
         self.named_shared_terms.deinit(self.allocator);
@@ -259,6 +283,7 @@ pub const Context = struct {
             .eql = @ptrCast(&T.eql),
             .hash = @ptrCast(&T.hash),
             .cbr = @ptrCast(&T.cbr),
+            .writeSma = @ptrCast(&T.writeSma),
         });
         errdefer _ = self.vtables.remove(tag);
     }
@@ -291,7 +316,10 @@ pub const Context = struct {
 
         if (!gop.found_existing) {
             const owned_buf = try self.arena.allocator().dupe(u8, name);
+            const fresh_id: NameId = @enumFromInt(self.name_id_to_string.count());
             gop.key_ptr.* = owned_buf;
+            gop.value_ptr.* = fresh_id;
+            try self.name_id_to_string.put(self.allocator, fresh_id, owned_buf);
         }
 
         return Name{ .value = gop.key_ptr.* };
@@ -318,7 +346,9 @@ pub const Context = struct {
     /// Create a new term in the context. This allocates memory for the term value and returns both a typed pointer to the value and the type-erased Term.
     pub fn createTerm(self: *Context, comptime T: type, module: ?*Module) error{ ZigTypeNotRegistered, OutOfMemory }!struct { *T, Term } {
         const ptr = try TermData(T).allocate(self, module);
-        return .{ ptr, Term.fromPtr(self, ptr) };
+        const term = Term.fromPtr(self, ptr);
+        try self.all_terms.append(self.allocator, term);
+        return .{ ptr, term };
     }
 
     /// Add a new term to the context. This provides type erasure and memory management for the term value.
@@ -364,6 +394,197 @@ pub const Context = struct {
         const id = self.fresh_term_id;
         self.fresh_term_id += 1;
         return @enumFromInt(id);
+    }
+
+    pub fn writeSmaShared(self: *Context, writer: *std.io.Writer) error{ OutOfMemory, WriteFailed }!void {
+        try writer.writeInt(u32, @intCast(self.interned_name_set.count()), .little);
+        { // Write the total size of the name section
+            var name_it = self.interned_name_set.keyIterator();
+            var total_size: usize = 0;
+            while (name_it.next()) |name_p2p| {
+                const name = name_p2p.*;
+                total_size += @sizeOf(u32) + name.len;
+            }
+            try writer.writeInt(u32, @intCast(total_size), .little);
+        }
+        { // Write the names themselves, in id-sorted order
+            const NamePair = struct { NameId, []const u8 };
+
+            var name_pairs = try self.arena.allocator().alloc(NamePair, self.interned_name_set.count());
+            defer self.arena.allocator().free(name_pairs);
+
+            var i: usize = 0;
+            var name_it = self.name_id_to_string.iterator();
+            while (name_it.next()) |kv| : (i += 1) {
+                name_pairs[i] = .{ kv.key_ptr.*, kv.value_ptr.* };
+            }
+
+            std.mem.sort(NamePair, name_pairs, {}, struct {
+                pub fn name_pair_sort(_: void, a: NamePair, b: NamePair) bool {
+                    return @intFromEnum(a[0]) < @intFromEnum(b[0]);
+                }
+            }.name_pair_sort);
+
+            for (name_pairs) |pair| {
+                try writer.writeInt(u32, @intCast(pair[1].len), .little);
+                try writer.writeAll(pair[1]);
+            }
+        }
+
+        try writer.writeInt(u32, @intCast(self.interned_data_set.count()), .little);
+        { // Write the total size of the data section
+            var data_it = self.interned_data_set.keyIterator();
+            var total_size: usize = 0;
+            while (data_it.next()) |blob_p2p| {
+                const blob = blob_p2p.*;
+                total_size += @sizeOf(u32) * 2 + blob.layout.size;
+            }
+            try writer.writeInt(u32, @intCast(total_size), .little);
+        }
+        { // Write the data blobs themselves
+            var data_it = self.interned_data_set.keyIterator();
+            while (data_it.next()) |blob_p2p| {
+                const blob = blob_p2p.*;
+                try writer.writeInt(u32, @intCast(blob.layout.alignment), .little);
+                try writer.writeInt(u32, @intCast(blob.layout.size), .little);
+                try writer.writeAll(blob.getBytes());
+            }
+        }
+
+        try writer.writeInt(u32, @intCast(self.named_shared_terms.count()), .little);
+        // Not necessary to write the total size of named term pairs, as they are fixed-size (count * @sizeOf(u32) * 2)
+        { // Write the id of each name and term
+            var named_it = self.named_shared_terms.iterator();
+            while (named_it.next()) |kv| {
+                const name = kv.key_ptr.*;
+                const term = kv.value_ptr.*;
+                const name_id = self.interned_name_set.get(name).?;
+                try writer.writeInt(u32, @intFromEnum(name_id), .little);
+                try writer.writeInt(u32, @intFromEnum(term.getId()), .little);
+            }
+        }
+
+        try writer.writeInt(u32, @intCast(self.shared_terms.count()), .little);
+        { // Write the id of each shared term
+            var shared_it = self.shared_terms.iterator();
+            while (shared_it.next()) |kv| {
+                const term = kv.key_ptr.*;
+                try writer.writeInt(u32, @intFromEnum(term.getId()), .little);
+            }
+        }
+    }
+
+    pub fn writeSmaTerms(self: *Context, writer: *std.io.Writer) error{WriteFailed}!void {
+        // this is more complex because we must recurse through the trees and flatten them into id references...
+        // perhaps the existing memory management system may need adapting to support this?
+        // this seems adjacent to the problems with LiftedDataType and memory management of blocks,
+        // terms may actually require a lifetime and a specific place to live.
+
+        // for now, i have just created an array that stores all terms. it will naturally be in id order.
+        // i think the better way to do this would be to traverse all module exports and their references and only serialize those;
+        // however, they will not be in order...
+
+        // i think the better solution here is to create an intermediate data structure for Smas;
+        // it will linearize all terms reachable from module exports, assign them new ids (indices) in that space,
+        // and then serialize that structure. this will make deserialization easier too.
+
+        try writer.writeInt(u32, @intCast(self.all_terms.items.len), .little);
+        // we must compute the total size of the term section; to simplify this we will create a temporary writer that just counts bytes written, without storing them.
+        {
+            var temp_buffer: [1024]u8 = undefined; // TODO: not sure if we really need buffering here...
+            var temp_writer = std.io.Writer.Discarding.init(&temp_buffer);
+
+            for (self.all_terms.items) |term| {
+                try term.writeSma(&temp_writer.writer);
+            }
+
+            const total_size = temp_writer.fullCount();
+            try writer.writeInt(u32, @intCast(total_size), .little);
+        }
+
+        for (self.all_terms.items) |term| {
+            try term.writeSma(writer);
+        }
+    }
+
+    pub fn writeSmaModules(self: *Context, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeInt(u32, @intCast(self.modules.count()), .little);
+        { // write the modules themselves
+            var module_it = self.modules.valueIterator();
+            while (module_it.next()) |mod_p2p| {
+                const module = mod_p2p.*;
+
+                try module.writeSma(writer);
+            }
+        }
+    }
+
+    pub fn writeSmaTypes(self: *Context, writer: *std.io.Writer) error{ OutOfMemory, WriteFailed }!void {
+        try writer.writeInt(u32, @intCast(self.vtables.count()), .little);
+        { // write the total size of the type name section
+            var type_it = self.tags.keyIterator();
+            var total_size: usize = 0;
+            while (type_it.next()) |name_p2p| {
+                const name = name_p2p.*;
+                total_size += @sizeOf(u32) + name.len;
+            }
+            try writer.writeInt(u32, @intCast(total_size), .little);
+        }
+        { // write the name entries in sorted order
+            const TypeNamePair = struct { []const u8, Tag };
+
+            var type_name_pairs = try self.arena.allocator().alloc(TypeNamePair, self.tags.count());
+            defer self.arena.allocator().free(type_name_pairs);
+
+            var i: usize = 0;
+            var type_it = self.tags.iterator();
+            while (type_it.next()) |kv| : (i += 1) {
+                type_name_pairs[i] = .{ kv.key_ptr.*, kv.value_ptr.* };
+            }
+
+            std.mem.sort(TypeNamePair, type_name_pairs, {}, struct {
+                pub fn type_name_pair_sort(_: void, a: TypeNamePair, b: TypeNamePair) bool {
+                    return @intFromEnum(a[1]) < @intFromEnum(b[1]);
+                }
+            }.type_name_pair_sort);
+
+            for (type_name_pairs) |pair| {
+                try writer.writeInt(u32, @intCast(pair[0].len), .little);
+                try writer.writeAll(pair[0]);
+            }
+        }
+    }
+
+    pub fn writeSmaCbr(self: *Context, writer: *std.io.Writer) error{WriteFailed}!void {
+        var hasher = CbrHasher.init();
+
+        var mod_it = self.modules.valueIterator();
+        while (mod_it.next()) |mod_p2p| {
+            const module = mod_p2p.*;
+            const mod_cbr = module.getCbr();
+            hasher.update(mod_cbr);
+        }
+
+        const final_cbr = hasher.final();
+        try writer.writeInt(u128, final_cbr, .little);
+    }
+
+    pub fn writeSmaHeader(writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeAll(sma.magic);
+
+        try writer.writeInt(u32, @intCast(sma.version.major), .little);
+        try writer.writeInt(u32, @intCast(sma.version.minor), .little);
+        try writer.writeInt(u32, @intCast(sma.version.patch), .little);
+
+        var out_pre = [1]u8{0} ** sma.version_text_segment_len;
+        const pre_len = @min(sma.version_text_segment_len, if (sma.version.pre) |p| p.len else 0);
+        if (sma.version.pre) |p| @memcpy(out_pre[0..pre_len], p[0..pre_len]);
+        try writer.writeAll(&out_pre);
+
+        var out_build = [1]u8{0} ** sma.version_text_segment_len;
+        const build_len = @min(sma.version_text_segment_len, if (sma.version.build) |b| b.len else 0);
+        if (sma.version.build) |b| @memcpy(out_build[0..build_len], b[0..build_len]);
+        try writer.writeAll(&out_build);
     }
 };
 
@@ -434,6 +655,12 @@ pub const TermHeader = struct {
         self.cached_cbr = new_hash;
         return new_hash;
     }
+
+    /// Write the term in SMA format to the given writer.
+    fn writeSma(self: *TermHeader, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeInt(u8, @intFromEnum(self.tag), .little);
+        try self.root.vtables.get(self.tag).?.writeSma(self.toOpaqueTermAddress(), self.root, writer);
+    }
 };
 
 /// A vtable of functions for type erased term operations.
@@ -441,6 +668,7 @@ pub const TermVTable = struct {
     eql: *const fn (*const anyopaque, *const anyopaque) bool,
     hash: *const fn (*const anyopaque, *QuickHasher) void,
     cbr: *const fn (*const anyopaque) Cbr,
+    writeSma: *const fn (*const anyopaque, *Context, *std.io.Writer) error{WriteFailed}!void,
 };
 
 /// A pair of a TermHeader and a value of type T. Defines the storage layout for Term objects.
@@ -528,6 +756,16 @@ pub const Term = packed struct(u64) {
         return self.toHeader().getCbr();
     }
 
+    /// Get the unique id for this term within its context.
+    pub fn getId(self: Term) TermId {
+        return self.toHeader().id;
+    }
+
+    /// Write the term in SMA format to the given writer.
+    fn writeSma(self: Term, writer: *std.io.Writer) error{WriteFailed}!void {
+        try self.toHeader().writeSma(writer);
+    }
+
     /// An adapted identity context for terms of type T before marshalling and type erasure; used when interning terms.
     pub fn AdaptedIdentityContext(comptime T: type) type {
         return struct {
@@ -567,6 +805,9 @@ pub const Term = packed struct(u64) {
 
 /// A unique identifier for a ribbon module.
 pub const ModuleGUID = enum(u128) { _ };
+
+/// Identifier for a symbolic name within the ir context.
+pub const NameId = enum(u32) { _ };
 
 /// A reference to an interned symbolic name within the ir context.
 pub const Name = struct {
@@ -665,6 +906,9 @@ pub const Module = struct {
         block: std.meta.Tag(BlockId) = 0,
     } = .{},
 
+    /// The cached CBR for the module.
+    cached_cbr: ?Cbr = null,
+
     /// Create a new module in the given context.
     pub fn init(root: *Context, name: Name, guid: ModuleGUID) !*Module {
         const self = try root.arena.allocator().create(Module);
@@ -723,6 +967,81 @@ pub const Module = struct {
         const id = self.fresh_ids.block;
         self.fresh_ids.block += 1;
         return @enumFromInt(id);
+    }
+
+    /// Calculate the cbr for this module.
+    pub fn getCbr(self: *Module) Cbr {
+        if (self.cached_cbr) |cached| {
+            return cached;
+        }
+
+        var hasher = CbrHasher.init();
+        hasher.update("Module");
+
+        hasher.update("guid:");
+        hasher.update(self.guid);
+
+        // hasher.update("name:"); // TODO: should this be factored in? I actually don't think so.
+        // const mod_name_id = self.root.interned_name_set.get(self.name.value).?;
+        // hasher.update(mod_name_id);
+
+        hasher.update("exports:");
+        var exp_it = self.exported_symbols.iterator();
+        while (exp_it.next()) |exp_kv| {
+            const exp_name_id = self.root.interned_name_set.get(exp_kv.key_ptr.*).?;
+            const binding = exp_kv.value_ptr.*;
+
+            hasher.update("name:");
+            hasher.update(exp_name_id);
+
+            switch (binding) {
+                .term => |t| {
+                    hasher.update("term:");
+                    hasher.update(t.getCbr());
+                },
+                .function => |f| {
+                    hasher.update("function:");
+                    hasher.update(f.getCbr());
+                },
+            }
+        }
+
+        const buf = hasher.final();
+        self.cached_cbr = buf;
+        return buf;
+    }
+
+    /// Write the module in SMA format to the given writer.
+    pub fn writeSma(self: *Module, writer: *std.io.Writer) error{WriteFailed}!void {
+        const mod_name_id = self.root.interned_name_set.get(self.name.value).?;
+
+        try writer.writeInt(u128, @intFromEnum(self.guid), .little);
+        try writer.writeInt(u128, self.getCbr(), .little);
+        try writer.writeInt(u32, @intFromEnum(mod_name_id), .little);
+
+        try writer.writeInt(u32, @intCast(self.exported_symbols.count()), .little);
+        var exp_it = self.exported_symbols.iterator();
+        while (exp_it.next()) |exp_kv| {
+            const exp_name_id = self.root.interned_name_set.get(exp_kv.key_ptr.*).?;
+            const binding = exp_kv.value_ptr.*;
+
+            try writer.writeInt(u32, @intFromEnum(exp_name_id), .little);
+            switch (binding) {
+                .term => |t| {
+                    try writer.writeInt(u8, 0, .little); // term binding
+                    try writer.writeInt(u32, @intFromEnum(t.getId()), .little);
+                },
+                .function => |f| {
+                    try writer.writeInt(u8, 1, .little); // function binding
+                    try writer.writeInt(u32, @intFromEnum(f.id), .little);
+                },
+            }
+
+            // TODO:
+            // write all the functions in the module
+            // write all the blocks in the module
+            // this also seems like it should be done via traversal of exports; but ordering is an issue here as well (see Context.writeSmaTerms)
+        }
     }
 };
 
@@ -810,7 +1129,7 @@ pub const Instruction = struct {
 
     /// Get a slice of the operands encoded after this Instruction in memory.
     pub fn operands(self: *Instruction) []Use {
-        // invariant: the Instruction struct must be aligned such that the operands can be placed directly after it
+        // invariant: the Instruction struct must be sized such that the operands can be placed directly after it
         comptime std.debug.assert(common.alignDelta(@sizeOf(Instruction), @alignOf(Use)) == 0);
 
         return @as([*]Use, @ptrCast(@alignCast(@as([*]u8, @ptrCast(self)) + @sizeOf(Instruction))))[0..self.num_operands];
@@ -940,8 +1259,6 @@ pub const Use = struct {
     /// Next use of the same operand if it is an ssa variable.
     next: ?*Use = null,
 };
-
-// Functions and handlers cannot be terms because they must manage memory while terms are arena-allocated
 
 /// Identifier for a function within a module.
 pub const FunctionId = enum(u32) { _ };
@@ -1225,9 +1542,6 @@ pub const Operation = enum(u8) {
         break :calc_offset @intFromEnum(tags[tags.len - 1]) + 1;
     };
 
-    /// The offset at which extension Operations start in the instruction command space.
-    pub const extension_offset = @intFromEnum(Operation.breakpoint) + 1;
-
     /// allocate a value on the stack and return a pointer to it
     stack_alloc = start_offset,
     /// load a value from an address
@@ -1296,6 +1610,9 @@ pub const Operation = enum(u8) {
     breakpoint,
     /// user-defined operations, which must be handled by extensions
     _,
+
+    /// The offset at which extension Operations start in the instruction command space.
+    pub const extension_offset = @intFromEnum(Operation.breakpoint) + 1;
 };
 
 /// A namespace for all builtin ir Term definitions.
@@ -1330,6 +1647,13 @@ pub const terms = struct {
             hasher.update(self.initializer.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const Global, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            const name_id = context.interned_name_set.get(self.name.value).?;
+            try writer.writeInt(u32, @intFromEnum(name_id), .little);
+            try writer.writeInt(u32, @intFromEnum(self.type.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.initializer.getId()), .little);
         }
     };
 
@@ -1386,6 +1710,18 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const HandlerSet, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intCast(self.handlers.len), .little);
+            for (self.handlers) |handler| {
+                try writer.writeInt(u128, @intFromEnum(handler.module.guid), .little);
+                try writer.writeInt(u32, @intFromEnum(handler.id), .little);
+            }
+            try writer.writeInt(u32, @intFromEnum(self.handler_type.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.result_type.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.cancellation_point.id), .little);
+        }
     };
 
     /// Binds a set of member definitions for a typeclass
@@ -1440,6 +1776,16 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const Implementation, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            try writer.writeInt(u32, @intFromEnum(self.class.getId()), .little);
+            try writer.writeInt(u32, @intCast(self.members.len), .little);
+            for (self.members) |field| {
+                const name_id = context.interned_name_set.get(field.name.value).?;
+                try writer.writeInt(u32, @intFromEnum(name_id), .little);
+                try writer.writeInt(u32, @intFromEnum(field.value.getId()), .little);
+            }
+        }
     };
 
     /// A symbol is a term that can appear in both values and types, and is simply a nominative identity in the form of a name.
@@ -1461,6 +1807,11 @@ pub const terms = struct {
             hasher.update(self.name.value);
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const Symbol, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            const name_id = context.interned_name_set.get(self.name.value).?;
+            try writer.writeInt(u32, @intFromEnum(name_id), .little);
         }
     };
 
@@ -1518,6 +1869,17 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const Class, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            const name_id = context.interned_name_set.get(self.name.value).?;
+            try writer.writeInt(u32, @intFromEnum(name_id), .little);
+            try writer.writeInt(u32, @intCast(self.elements.len), .little);
+            for (self.elements) |field| {
+                const field_name_id = context.interned_name_set.get(field.name.value).?;
+                try writer.writeInt(u32, @intFromEnum(field_name_id), .little);
+                try writer.writeInt(u32, @intFromEnum(field.type.getId()), .little);
+            }
+        }
     };
 
     /// Data for an effect repr.
@@ -1574,6 +1936,17 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const Effect, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            const name_id = context.interned_name_set.get(self.name.value).?;
+            try writer.writeInt(u32, @intFromEnum(name_id), .little);
+            try writer.writeInt(u32, @intCast(self.elements.len), .little);
+            for (self.elements) |field| {
+                const field_name_id = context.interned_name_set.get(field.name.value).?;
+                try writer.writeInt(u32, @intFromEnum(field_name_id), .little);
+                try writer.writeInt(u32, @intFromEnum(field.type.getId()), .little);
+            }
+        }
     };
 
     /// Defines a variable in a Polymorphic repr.
@@ -1603,6 +1976,12 @@ pub const terms = struct {
             hasher.update(self.kind.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const Quantifier, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, self.id, .little);
+            try writer.writeInt(u32, @intFromEnum(self.kind.getId()), .little);
         }
     };
 
@@ -1645,6 +2024,11 @@ pub const terms = struct {
             hasher.update(self.unlifted_type.getCbr());
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const LiftedDataKind, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.unlifted_type.getId()), .little);
+        }
     };
 
     /// The kind of type constructors, functions on types.
@@ -1674,6 +2058,12 @@ pub const terms = struct {
             hasher.update(self.output.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const ArrowKind, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.input.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.output.getId()), .little);
         }
     };
 
@@ -1717,6 +2107,12 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const IntegerType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.signedness.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.bit_width.getId()), .little);
+        }
     };
 
     /// Type data for a floating point type repr.
@@ -1740,6 +2136,11 @@ pub const terms = struct {
             hasher.update(self.bit_width.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const FloatType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.bit_width.getId()), .little);
         }
     };
 
@@ -1779,6 +2180,13 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const ArrayType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.len.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.sentinel_value.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
+        }
     };
 
     /// Type data for a pointer type repr.
@@ -1816,6 +2224,13 @@ pub const terms = struct {
             hasher.update(self.payload.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const PointerType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.alignment.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.address_space.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
         }
     };
 
@@ -1861,6 +2276,14 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const BufferType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.alignment.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.address_space.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.sentinel_value.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
+        }
     };
 
     /// Type data for a wide-pointer-to-many type repr.
@@ -1905,6 +2328,14 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const SliceType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.alignment.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.address_space.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.sentinel_value.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
+        }
     };
 
     /// Used for abstract data description.
@@ -1932,6 +2363,12 @@ pub const terms = struct {
             hasher.update(self.payload.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const RowElementType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.label.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
         }
     };
 
@@ -1993,6 +2430,25 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const LabelType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            switch (self.*) {
+                .name => |n| {
+                    try writer.writeInt(u8, 0, .little);
+                    try writer.writeInt(u32, @intFromEnum(n.getId()), .little);
+                },
+                .index => |i| {
+                    try writer.writeInt(u8, 1, .little);
+                    try writer.writeInt(u32, @intFromEnum(i.getId()), .little);
+                },
+                .exact => |e| {
+                    try writer.writeInt(u8, 2, .little);
+                    try writer.writeInt(u32, @intFromEnum(e.name.getId()), .little);
+                    try writer.writeInt(u32, @intFromEnum(e.index.getId()), .little);
+                },
+            }
+        }
     };
 
     /// Used for compile time constants as types, such as integer values.
@@ -2003,13 +2459,12 @@ pub const terms = struct {
         value: *Block,
 
         pub fn eql(self: *const LiftedDataType, other: *const LiftedDataType) bool {
-            return self.unlifted_type == other.unlifted_type and self.value.id == other.value.id and self.value.module.guid == other.value.module.guid;
+            return self.unlifted_type == other.unlifted_type and self.value == other.value;
         }
 
         pub fn hash(self: *const LiftedDataType, hasher: *QuickHasher) void {
             hasher.update(self.unlifted_type);
-            hasher.update(self.value.id);
-            hasher.update(self.value.module.guid);
+            hasher.update(&self.value);
         }
 
         pub fn cbr(self: *const LiftedDataType) Cbr {
@@ -2023,6 +2478,13 @@ pub const terms = struct {
             hasher.update(self.value.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const LiftedDataType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.unlifted_type.getId()), .little);
+            try writer.writeInt(u128, @intFromEnum(self.value.module.guid), .little);
+            try writer.writeInt(u32, @intFromEnum(self.value.id), .little);
         }
     };
 
@@ -2041,7 +2503,7 @@ pub const terms = struct {
         /// Descriptor for structural fields.
         pub const Field = struct {
             /// Nominative identity of this field.
-            name: Term,
+            name: Name,
             /// The type of data stored in this field.
             payload: Term,
             /// An optional custom alignment for this field, overriding the natural alignment of `payload`;
@@ -2055,7 +2517,7 @@ pub const terms = struct {
             for (0..self.elements.len) |i| {
                 const a = self.elements[i];
                 const b = other.elements[i];
-                if (!(a.name == b.name and a.payload == b.payload and a.alignment_override == b.alignment_override)) return false;
+                if (a.name.value.ptr != b.name.value.ptr or a.payload != b.payload or a.alignment_override != b.alignment_override) return false;
             }
 
             return true;
@@ -2067,7 +2529,7 @@ pub const terms = struct {
             hasher.update(self.backing_integer);
             hasher.update(self.elements.len);
             for (self.elements) |elem| {
-                hasher.update(elem.name);
+                hasher.update(elem.name.value);
                 hasher.update(elem.payload);
                 hasher.update(elem.alignment_override);
             }
@@ -2092,7 +2554,7 @@ pub const terms = struct {
             hasher.update("elements:");
             for (self.elements) |elem| {
                 hasher.update("elem.name:");
-                hasher.update(elem.name.getCbr());
+                hasher.update(elem.name.value);
 
                 hasher.update("elem.payload:");
                 hasher.update(elem.payload.getCbr());
@@ -2102,6 +2564,20 @@ pub const terms = struct {
             }
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const StructureType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            const name_id = context.interned_name_set.get(self.name.value).?;
+            try writer.writeInt(u32, @intFromEnum(name_id), .little);
+            try writer.writeInt(u32, @intFromEnum(self.layout.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.backing_integer.getId()), .little);
+            try writer.writeInt(u32, @intCast(self.elements.len), .little);
+            for (self.elements) |field| {
+                const field_name_id = context.interned_name_set.get(field.name.value).?;
+                try writer.writeInt(u32, @intFromEnum(field_name_id), .little);
+                try writer.writeInt(u32, @intFromEnum(field.payload.getId()), .little);
+                try writer.writeInt(u32, @intFromEnum(field.alignment_override.getId()), .little);
+            }
         }
     };
 
@@ -2168,6 +2644,18 @@ pub const terms = struct {
             }
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const UnionType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            const name_id = context.interned_name_set.get(self.name.value).?;
+            try writer.writeInt(u32, @intFromEnum(name_id), .little);
+            try writer.writeInt(u32, @intFromEnum(self.layout.getId()), .little);
+            try writer.writeInt(u32, @intCast(self.elements.len), .little);
+            for (self.elements) |field| {
+                const field_name_id = context.interned_name_set.get(field.name.value).?;
+                try writer.writeInt(u32, @intFromEnum(field_name_id), .little);
+                try writer.writeInt(u32, @intFromEnum(field.payload.getId()), .little);
+            }
         }
     };
 
@@ -2247,6 +2735,20 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const SumType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            const name_id = context.interned_name_set.get(self.name.value).?;
+            try writer.writeInt(u32, @intFromEnum(name_id), .little);
+            try writer.writeInt(u32, @intFromEnum(self.tag_type.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.layout.getId()), .little);
+            try writer.writeInt(u32, @intCast(self.elements.len), .little);
+            for (self.elements) |field| {
+                const field_name_id = context.interned_name_set.get(field.name.value).?;
+                try writer.writeInt(u32, @intFromEnum(field_name_id), .little);
+                try writer.writeInt(u32, @intFromEnum(field.payload.getId()), .little);
+                try writer.writeInt(u32, @intFromEnum(field.tag.getId()), .little);
+            }
+        }
     };
 
     /// Type data for a function type repr.
@@ -2282,6 +2784,13 @@ pub const terms = struct {
             hasher.update(self.effects.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const FunctionType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.input.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.output.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.effects.getId()), .little);
         }
     };
 
@@ -2324,6 +2833,14 @@ pub const terms = struct {
             hasher.update(self.added_effects.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const HandlerType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.input.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.output.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.handled_effect.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.added_effects.getId()), .little);
         }
     };
 
@@ -2376,6 +2893,16 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const PolymorphicType, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intCast(self.quantifiers.len), .little);
+            for (self.quantifiers) |quant| {
+                try writer.writeInt(u32, @intFromEnum(quant.getId()), .little);
+            }
+            try writer.writeInt(u32, @intFromEnum(self.qualifiers.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
+        }
     };
 
     /// Constraint checking that `subtype_row` is a subset of `primary_row`.
@@ -2405,6 +2932,12 @@ pub const terms = struct {
             hasher.update(self.subtype_row.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const IsSubRowConstraint, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.primary_row.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.subtype_row.getId()), .little);
         }
     };
 
@@ -2442,6 +2975,13 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const RowsConcatenateConstraint, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.row_a.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.row_b.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.row_result.getId()), .little);
+        }
     };
 
     /// Constraint checking that the `data` type implements the `class` typeclass.
@@ -2471,6 +3011,12 @@ pub const terms = struct {
             hasher.update(self.class.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const ImplementsClassConstraint, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.data.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.class.getId()), .little);
         }
     };
 
@@ -2502,6 +3048,12 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const IsStructureConstraint, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.data.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.row.getId()), .little);
+        }
     };
 
     /// Constraint checking that the `data` type is a nominative identity for a union over the `row` type.
@@ -2531,6 +3083,12 @@ pub const terms = struct {
             hasher.update(self.row.getCbr());
 
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const IsUnionConstraint, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.data.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.row.getId()), .little);
         }
     };
 
@@ -2562,6 +3120,12 @@ pub const terms = struct {
 
             return hasher.final();
         }
+
+        pub fn writeSma(self: *const IsSumConstraint, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = context;
+            try writer.writeInt(u32, @intFromEnum(self.data.getId()), .little);
+            try writer.writeInt(u32, @intFromEnum(self.row.getId()), .little);
+        }
     };
 };
 
@@ -2583,6 +3147,13 @@ pub fn IdentityTerm(comptime name: []const u8) type {
             var hasher = CbrHasher.init();
             hasher.update(name);
             return hasher.final();
+        }
+
+        pub fn writeSma(self: *const Self, context: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+            _ = self;
+            _ = context;
+            _ = writer;
+            // Identity terms have no data to write.
         }
     };
 }
