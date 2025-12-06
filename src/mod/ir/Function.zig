@@ -92,3 +92,12 @@ pub fn getFullCbr(self: *Function) ir.Cbr {
 
     return buf;
 }
+
+pub fn dehydrate(self: *const Function, dehydrator: *ir.Sma.Dehydrator) error{ BadEncoding, OutOfMemory }!ir.Sma.Function {
+    return ir.Sma.Function{
+        .name = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index,
+        .type = try dehydrator.dehydrateTerm(self.type),
+        .kind = self.kind,
+        .body = try self.entry.dehydrate(dehydrator),
+    };
+}

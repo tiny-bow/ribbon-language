@@ -15,6 +15,8 @@ name: ir.Name,
 
 /// Symbols exported from this module.
 exported_symbols: common.StringMap(Module.Binding) = .empty,
+/// Pool allocator for handler sets in this module.
+handler_set_pool: common.ManagedPool(ir.HandlerSet),
 /// Pool allocator for globals in this module.
 global_pool: common.ManagedPool(ir.Global),
 /// Pool allocator for functions in this module.
@@ -54,6 +56,7 @@ pub fn init(root: *ir.Context, name: ir.Name, guid: Module.GUID) !*Module {
         .guid = guid,
         .name = name,
         .global_pool = .init(root.allocator),
+        .handler_set_pool = .init(root.allocator),
         .function_pool = .init(root.allocator),
         .block_pool = .init(root.allocator),
     };
@@ -64,6 +67,10 @@ pub fn init(root: *ir.Context, name: ir.Name, guid: Module.GUID) !*Module {
 /// Deinitialize this module and all its contents.
 pub fn deinit(self: *Module) void {
     self.exported_symbols.deinit(self.root.allocator);
+
+    var handler_it = self.handler_set_pool.iterate();
+    while (handler_it.next()) |handler_p2p| handler_p2p.*.deinit();
+    self.handler_set_pool.deinit();
 
     var func_it = self.function_pool.iterate();
     while (func_it.next()) |func_p2p| func_p2p.*.deinit();

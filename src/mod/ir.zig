@@ -112,6 +112,7 @@ pub const Context = @import("ir/Context.zig");
 pub const Term = @import("ir/Term.zig").Term;
 pub const Blob = @import("ir/Blob.zig");
 pub const Module = @import("ir/Module.zig");
+pub const HandlerSet = @import("ir/HandlerSet.zig");
 pub const Function = @import("ir/Function.zig");
 pub const Block = @import("ir/Block.zig");
 pub const Global = @import("ir/Global.zig");

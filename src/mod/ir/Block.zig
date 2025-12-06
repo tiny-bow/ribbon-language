@@ -152,3 +152,61 @@ fn getCbrRecurse(self: *Block, visited: *common.UniqueReprSet(*Block)) error{Out
     self.cached_cbr = buf;
     return buf;
 }
+
+pub fn dehydrate(
+    self: *Block,
+    dehydrator: *ir.Sma.Dehydrator,
+) error{ BadEncoding, OutOfMemory }!ir.Sma.Expression {
+    var out = ir.Sma.Expression{};
+
+    // first we need to traverse the cfg and assign indices to all blocks and instructions in the expression
+    try self.allocateDehydratedIndices(dehydrator, &out.blocks);
+
+    // now we can encode the instructions
+    try self.dehydrateInstructions(dehydrator, &out.blocks);
+
+    return out;
+}
+
+fn allocateDehydratedIndices(
+    self: *Block,
+    dehydrator: *ir.Sma.Dehydrator,
+    out: *common.ArrayList(ir.Sma.Block),
+) error{ BadEncoding, OutOfMemory }!void {
+    if (dehydrator.block_to_index.contains(self)) return;
+
+    var instr_map = common.UniqueReprMap(*ir.Instruction, u32).empty;
+
+    var it = self.iterate();
+    while (it.next()) |instr| {
+        const instr_index: u32 = @intCast(instr_map.count());
+        try instr_map.put(dehydrator.ctx.allocator, instr, instr_index);
+    }
+
+    try dehydrator.block_to_index.put(dehydrator.ctx.allocator, self, .{ @intCast(out.items.len), instr_map });
+
+    _ = try out.addOne(dehydrator.ctx.allocator); // unstable pointer
+
+    for (self.successors.items) |succ| {
+        try succ.allocateDehydratedIndices(dehydrator, out);
+    }
+}
+
+fn dehydrateInstructions(
+    self: *Block,
+    dehydrator: *ir.Sma.Dehydrator,
+    out: *common.ArrayList(ir.Sma.Block),
+) error{ BadEncoding, OutOfMemory }!void {
+    const block_entry = dehydrator.block_to_index.getPtr(self).?;
+    const block_index = block_entry[0];
+    var out_block = &out.items[block_index];
+
+    var it = self.iterate();
+    while (it.next()) |instr| {
+        try instr.dehydrate(dehydrator, &out_block.instructions);
+    }
+
+    for (self.successors.items) |succ| {
+        try succ.dehydrateInstructions(dehydrator, out);
+    }
+}

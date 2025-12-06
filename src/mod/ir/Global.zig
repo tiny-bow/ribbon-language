@@ -63,3 +63,11 @@ pub fn getFullCbr(self: *Global) ir.Cbr {
     self.cached_cbr = out;
     return out;
 }
+
+pub fn dehydrate(self: *const Global, dehydrator: *ir.Sma.Dehydrator) error{ BadEncoding, OutOfMemory }!ir.Sma.Global {
+    return ir.Sma.Global{
+        .name = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index,
+        .type = try dehydrator.dehydrateTerm(self.type),
+        .initializer = try dehydrator.dehydrateTerm(self.initializer),
+    };
+}

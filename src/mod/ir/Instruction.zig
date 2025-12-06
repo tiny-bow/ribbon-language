@@ -321,3 +321,27 @@ pub fn getCbr(self: *Instruction) ir.Cbr {
 
     return hasher.final();
 }
+
+pub fn dehydrate(self: *Instruction, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Instruction)) error{ BadEncoding, OutOfMemory }!void {
+    const type_id = try dehydrator.dehydrateTerm(self.type);
+
+    var instr = ir.Sma.Instruction{
+        .command = self.command,
+        .type = type_id,
+    };
+    errdefer instr.deinit(dehydrator.sma.allocator);
+
+    for (self.operands()) |use| {
+        const operand: ir.Sma.Operand = switch (use.operand) {
+            .term => |x| .{ .kind = .term, .value = try dehydrator.dehydrateTerm(x) },
+            .blob => |x| .{ .kind = .blob, .value = try dehydrator.dehydrateBlob(x) },
+            .block => |x| .{ .kind = .block, .value = dehydrator.block_to_index.get(x).?[0] },
+            .global => |x| .{ .kind = .global, .value = try dehydrator.dehydrateGlobal(x) },
+            .function => |x| .{ .kind = .function, .value = try dehydrator.dehydrateFunction(x) },
+            .variable => |x| .{ .kind = .variable, .value = dehydrator.block_to_index.get(x.block).?[1].get(x).? },
+        };
+        try instr.operands.append(dehydrator.sma.allocator, operand);
+    }
+
+    try out.append(dehydrator.sma.allocator, instr);
+}

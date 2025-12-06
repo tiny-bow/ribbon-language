@@ -1,4 +1,5 @@
 const std = @import("std");
+const common = @import("common");
 
 const ir = @import("../ir.zig");
 
@@ -89,10 +90,12 @@ pub const Term = packed struct(u64) {
 
     /// A vtable of functions for type erased term operations.
     pub const VTable = struct {
+        name: []const u8,
         eql: *const fn (*const anyopaque, *const anyopaque) bool,
         hash: *const fn (*const anyopaque, *ir.QuickHasher) void,
         cbr: *const fn (*const anyopaque) ir.Cbr,
-        writeSma: *const fn (*const anyopaque, *ir.Context, *std.io.Writer) error{WriteFailed}!void,
+        dehydrate: *const fn (*const anyopaque, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{OutOfMemory}!void,
+        rehydrate: *const fn (*const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *anyopaque) error{ BadEncoding, OutOfMemory }!void,
     };
 
     /// A pair of a Term.Header and a value of type T. Defines the storage layout for Term objects.
@@ -141,7 +144,7 @@ pub const Term = packed struct(u64) {
     }
 
     /// Get an opaque pointer to the term's value.
-    fn toOpaquePtr(self: Term) *anyopaque {
+    pub fn toOpaquePtr(self: Term) *anyopaque {
         return @ptrFromInt(self.ptr);
     }
 
@@ -236,11 +239,12 @@ pub const Term = packed struct(u64) {
                 return hasher.final();
             }
 
-            pub fn writeSma(self: *const Self, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-                _ = self;
-                _ = ctx;
-                _ = writer;
-                // Identity terms have no data to write.
+            pub fn dehydrate(_: *const Self, _: *ir.Sma.Dehydrator, _: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+                // Identity types have no data to dehydrate
+            }
+
+            pub fn rehydrate(_: *const ir.Sma.Term, _: *ir.Sma.Rehydrator, _: *Self) error{ BadEncoding, OutOfMemory }!void {
+                // Identity types have no data to rehydrate
             }
         };
     }

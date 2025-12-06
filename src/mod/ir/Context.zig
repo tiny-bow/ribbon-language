@@ -80,6 +80,12 @@ pub fn tagFromType(self: *Context, comptime T: type) ?ir.Term.Tag {
     return self.tags.get(@typeName(T));
 }
 
+/// Get the typename associated with a given ir.Term.Tag in the context.
+pub fn getTagName(self: *Context, tag: ir.Term.Tag) ?[]const u8 {
+    const vtable = self.vtables.get(tag) orelse return null;
+    return vtable.name;
+}
+
 /// Register a term type in the context.
 /// Generally, it is not necessary to call this function manually, as all term types in the `terms` namespace are registered automatically on context initialization.
 /// This is provided for extensibility. See also `tagFromType`.
@@ -99,10 +105,12 @@ pub fn registerTermType(self: *Context, comptime T: type) error{ DuplicateTermTy
     errdefer _ = self.tags.remove(@typeName(T));
 
     try self.vtables.put(self.allocator, tag, ir.Term.VTable{
+        .name = @typeName(T),
         .eql = @ptrCast(&T.eql),
         .hash = @ptrCast(&T.hash),
         .cbr = @ptrCast(&T.cbr),
-        .writeSma = @ptrCast(&T.writeSma),
+        .dehydrate = @ptrCast(&T.dehydrate),
+        .rehydrate = @ptrCast(&T.rehydrate),
     });
     errdefer _ = self.vtables.remove(tag);
 }

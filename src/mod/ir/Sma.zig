@@ -22,9 +22,11 @@ terms: common.ArrayList(Sma.Term) = .empty,
 modules: common.ArrayList(Sma.Module) = .empty,
 expressions: common.ArrayList(Sma.Expression) = .empty,
 globals: common.ArrayList(Sma.Global) = .empty,
+handler_sets: common.ArrayList(Sma.HandlerSet) = .empty,
 functions: common.ArrayList(Sma.Function) = .empty,
 
 pub const magic = "RIBBONIR";
+pub const sentinel_index: u32 = std.math.maxInt(u32);
 
 pub const Dehydrator = struct {
     sma: *Sma,
@@ -37,6 +39,7 @@ pub const Dehydrator = struct {
     module_to_index: common.UniqueReprMap(*ir.Module, u32) = .empty,
     expression_to_index: common.UniqueReprMap(*ir.Block, u32) = .empty,
     global_to_index: common.UniqueReprMap(*ir.Global, u32) = .empty,
+    handler_set_to_index: common.UniqueReprMap(*ir.HandlerSet, u32) = .empty,
     function_to_index: common.UniqueReprMap(*ir.Function, u32) = .empty,
     block_to_index: common.UniqueReprMap(*ir.Block, struct { u32, common.UniqueReprMap(*ir.Instruction, u32) }) = .empty,
 
@@ -60,10 +63,132 @@ pub const Dehydrator = struct {
         self.module_to_index.deinit(self.ctx.allocator);
         self.expression_to_index.deinit(self.ctx.allocator);
         self.global_to_index.deinit(self.ctx.allocator);
+        self.handler_set_to_index.deinit(self.ctx.allocator);
         self.function_to_index.deinit(self.ctx.allocator);
         self.block_to_index.deinit(self.ctx.allocator);
         defer self.* = undefined;
         return self.sma;
+    }
+
+    pub fn dehydrateTag(self: *Dehydrator, tag: ir.Term.Tag) error{ BadEncoding, OutOfMemory }!u8 {
+        if (self.tag_to_index.get(tag)) |index| {
+            return index;
+        } else {
+            const index: u8 = @intCast(self.sma.tags.items.len);
+            const name = self.ctx.getTagName(tag) orelse return error.BadEncoding;
+
+            try self.sma.tags.append(self.sma.allocator, name);
+            try self.tag_to_index.put(self.ctx.allocator, tag, index);
+            return index;
+        }
+    }
+
+    pub fn dehydrateName(self: *Dehydrator, name: ir.Name) error{ BadEncoding, OutOfMemory }!u32 {
+        if (self.name_to_index.get(name.value)) |index| {
+            return index;
+        } else {
+            const index: u32 = @intCast(self.sma.names.items.len);
+            const owned_name = self.sma.arena.allocator().dupe(u8, name.value) catch return error.OutOfMemory;
+            try self.sma.names.append(self.sma.allocator, owned_name);
+            try self.name_to_index.put(self.ctx.allocator, name.value, index);
+            return index;
+        }
+    }
+
+    pub fn dehydrateBlob(self: *Dehydrator, blob: *const ir.Blob) error{ BadEncoding, OutOfMemory }!u32 {
+        if (self.blob_to_index.get(blob)) |index| {
+            return index;
+        } else {
+            const index: u32 = @intCast(self.sma.blobs.items.len);
+            const owned_blob = try blob.clone(self.sma.arena.allocator());
+            try self.sma.blobs.append(self.sma.allocator, owned_blob);
+            try self.blob_to_index.put(self.ctx.allocator, blob, index);
+            return index;
+        }
+    }
+
+    pub fn dehydrateTerm(self: *Dehydrator, term: ir.Term) error{ BadEncoding, OutOfMemory }!u32 {
+        if (self.term_to_index.get(term)) |index| {
+            return index;
+        } else {
+            const index: u32 = @intCast(self.sma.terms.items.len);
+            try self.term_to_index.put(self.ctx.allocator, term, index);
+
+            var sma_term = Sma.Term{
+                .tag = try self.dehydrateTag(term.tag),
+            };
+            errdefer sma_term.deinit(self.sma.allocator);
+
+            const vtable = self.ctx.vtables.get(term.tag) orelse return error.OutOfMemory;
+            try vtable.dehydrate(term.toOpaquePtr(), self, &sma_term.operands);
+            try self.sma.terms.append(self.sma.allocator, sma_term);
+
+            return index;
+        }
+    }
+
+    pub fn dehydrateExpression(self: *Dehydrator, block: *ir.Block) error{ BadEncoding, OutOfMemory }!u32 {
+        if (self.expression_to_index.get(block)) |index| {
+            return index;
+        } else {
+            const index: u32 = @intCast(self.sma.expressions.items.len);
+            try self.expression_to_index.put(self.ctx.allocator, block, index);
+
+            var sma_expr = try block.dehydrate(self);
+            errdefer sma_expr.deinit(self.sma.allocator);
+
+            try self.sma.expressions.append(self.sma.allocator, sma_expr);
+
+            return index;
+        }
+    }
+
+    pub fn dehydrateGlobal(self: *Dehydrator, global: *ir.Global) error{ BadEncoding, OutOfMemory }!u32 {
+        if (self.global_to_index.get(global)) |index| {
+            return index;
+        } else {
+            const index: u32 = @intCast(self.sma.globals.items.len);
+            try self.global_to_index.put(self.ctx.allocator, global, index);
+
+            const sma_global = try global.dehydrate(self);
+            // sma global doesn't allocate, no need for errdefer
+
+            try self.sma.globals.append(self.sma.allocator, sma_global);
+
+            return index;
+        }
+    }
+
+    pub fn dehydrateFunction(self: *Dehydrator, function: *ir.Function) error{ BadEncoding, OutOfMemory }!u32 {
+        if (self.function_to_index.get(function)) |index| {
+            return index;
+        } else {
+            const index: u32 = @intCast(self.sma.functions.items.len);
+            try self.function_to_index.put(self.ctx.allocator, function, index);
+
+            var sma_function = try function.dehydrate(self);
+            errdefer sma_function.deinit(self.sma.allocator);
+
+            try self.sma.functions.append(self.sma.allocator, sma_function);
+
+            return index;
+        }
+    }
+
+    pub fn dehydrateHandlerSet(self: *Dehydrator, handler_set: *ir.HandlerSet) error{ BadEncoding, OutOfMemory }!u32 {
+        if (self.handler_set_to_index.get(handler_set)) |index| {
+            return index;
+        } else {
+            const index: u32 = @intCast(self.sma.handler_sets.items.len);
+            try self.handler_set_to_index.put(self.ctx.allocator, handler_set, index);
+
+            var sma_handler_set = try handler_set.dehydrate(self);
+            errdefer sma_handler_set.deinit(self.sma.allocator);
+
+            try self.sma.handler_sets.append(self.sma.allocator, sma_handler_set);
+
+            return index;
+        }
     }
 };
 
@@ -218,6 +343,49 @@ pub const Global = struct {
     }
 };
 
+pub const HandlerSet = struct {
+    handler_type: u32,
+    result_type: u32,
+    cancellation_point: u32,
+    handlers: common.ArrayList(u32) = .empty,
+
+    pub fn deinit(self: *Sma.HandlerSet, allocator: std.mem.Allocator) void {
+        self.handlers.deinit(allocator);
+    }
+
+    pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.HandlerSet {
+        const handler_type = try reader.takeInt(u32, .little);
+        const result_type = try reader.takeInt(u32, .little);
+        const cancellation_point = try reader.takeInt(u32, .little);
+        const handler_count = try reader.takeInt(u32, .little);
+
+        var handlers = common.ArrayList(u32).empty;
+        errdefer handlers.deinit(allocator);
+
+        for (0..handler_count) |_| {
+            const handler = try reader.takeInt(u32, .little);
+            try handlers.append(allocator, handler);
+        }
+
+        return Sma.HandlerSet{
+            .handler_type = handler_type,
+            .result_type = result_type,
+            .cancellation_point = cancellation_point,
+            .handlers = handlers,
+        };
+    }
+
+    pub fn serialize(self: *Sma.HandlerSet, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeInt(u32, self.handler_type, .little);
+        try writer.writeInt(u32, self.result_type, .little);
+        try writer.writeInt(u32, self.cancellation_point, .little);
+        try writer.writeInt(u32, @intCast(self.handlers.items.len), .little);
+        for (self.handlers.items) |handler| {
+            try writer.writeInt(u32, handler, .little);
+        }
+    }
+};
+
 pub const Function = struct {
     name: u32,
     type: u32,
@@ -319,6 +487,10 @@ pub const Term = struct {
         self.operands.deinit(allocator);
     }
 
+    pub fn getOperand(self: *const Sma.Term, index: usize) error{BadEncoding}!Sma.Operand {
+        return if (index >= self.operands.items.len) self.operands.items[index] else error.BadEncoding;
+    }
+
     pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Term {
         const tag = try reader.takeInt(u8, .little);
         const operand_count = try reader.takeInt(u32, .little);
@@ -385,7 +557,7 @@ pub const Operand = struct {
     kind: Kind,
     value: u32,
 
-    pub const Kind = enum(u8) { name, expression, term, blob, function, block, variable };
+    pub const Kind = enum(u8) { name, expression, term, uint, blob, global, function, block, variable };
 
     pub fn deserialize(reader: *std.io.Reader) error{ EndOfStream, ReadFailed }!Sma.Operand {
         const kind = try reader.takeInt(u8, .little);
@@ -510,6 +682,12 @@ pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ 
         try sma.globals.append(allocator, global);
     }
 
+    const handler_set_count = try reader.takeInt(u32, .little);
+    for (0..handler_set_count) |_| {
+        const handler_set = try Sma.HandlerSet.deserialize(reader, allocator);
+        try sma.handler_sets.append(allocator, handler_set);
+    }
+
     const function_count = try reader.takeInt(u32, .little);
     for (0..function_count) |_| {
         const function = try Sma.Function.deserialize(reader, allocator);
@@ -555,6 +733,9 @@ pub fn serialize(self: *Sma, writer: *std.io.Writer) error{WriteFailed}!void {
 
     try writer.writeInt(u32, @intCast(self.globals.items.len), .little);
     for (self.globals.items) |*global| try global.serialize(writer);
+
+    try writer.writeInt(u32, @intCast(self.handler_sets.items.len), .little);
+    for (self.handler_sets.items) |*handler_set| try handler_set.serialize(writer);
 
     try writer.writeInt(u32, @intCast(self.functions.items.len), .little);
     for (self.functions.items) |*function| try function.serialize(writer);

@@ -2,75 +2,9 @@
 const terms = @This();
 
 const std = @import("std");
+const common = @import("common");
 
 const ir = @import("../ir.zig");
-
-/// Binds a set of handlers and cancellation information for a push_set instruction
-pub const HandlerSet = struct {
-    /// the set of handlers in this handler set
-    handlers: []const *ir.Function,
-    /// a HandlerType that describes the unified type of the handlers in this set
-    handler_type: ir.Term,
-    /// the type of value the handler set resolves to, either directly or by cancellation
-    result_type: ir.Term,
-    /// the basic block where this handler set yields its value
-    cancellation_point: *ir.Block,
-
-    pub fn eql(self: *const HandlerSet, other: *const HandlerSet) bool {
-        if (self.handlers.len != other.handlers.len or self.handler_type != other.handler_type or self.result_type != other.result_type or self.cancellation_point != other.cancellation_point) return false;
-        for (0..self.handlers.len) |i| {
-            if (self.handlers[i] != other.handlers[i]) return false;
-        }
-        return true;
-    }
-
-    pub fn hash(self: *const HandlerSet, hasher: *ir.QuickHasher) void {
-        hasher.update(self.handlers.len);
-        for (self.handlers) |handler| {
-            hasher.update(handler);
-        }
-        hasher.update(self.handler_type);
-        hasher.update(self.result_type);
-        hasher.update(self.cancellation_point);
-    }
-
-    pub fn cbr(self: *const HandlerSet) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("HandlerSet");
-
-        hasher.update("handlers.count:");
-        hasher.update(self.handlers.len);
-
-        hasher.update("handlers:");
-        for (self.handlers) |handler| {
-            hasher.update("handler:");
-            hasher.update(handler.getFullCbr());
-        }
-
-        hasher.update("handler_type:");
-        hasher.update(self.handler_type.getCbr());
-
-        hasher.update("result_type:");
-        hasher.update(self.result_type.getCbr());
-
-        hasher.update("cancellation_point:");
-        hasher.update(self.cancellation_point.id);
-
-        return hasher.final();
-    }
-
-    pub fn writeSma(self: *const HandlerSet, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intCast(self.handlers.len), .little);
-        for (self.handlers) |handler| {
-            try writer.writeInt(u128, @intFromEnum(handler.module.guid), .little);
-            try writer.writeInt(u32, @intFromEnum(handler.id), .little);
-        }
-        try writer.writeInt(u32, @intFromEnum(self.handler_type.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.result_type.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.cancellation_point.id), .little);
-    }
-};
 
 /// Binds a set of member definitions for a typeclass
 pub const Implementation = struct {
@@ -125,14 +59,23 @@ pub const Implementation = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const Implementation, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        try writer.writeInt(u32, @intFromEnum(self.class.getId()), .little);
-        try writer.writeInt(u32, @intCast(self.members.len), .little);
+    pub fn dehydrate(self: *const Implementation, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.class) },
+        });
+
         for (self.members) |field| {
-            const name_id = ctx.interned_name_set.get(field.name.value).?;
-            try writer.writeInt(u32, @intFromEnum(name_id), .little);
-            try writer.writeInt(u32, @intFromEnum(field.value.getId()), .little);
+            const field_name_id = try dehydrator.dehydrateName(field.name);
+            const field_value_id = try dehydrator.dehydrateTerm(field.value);
+            try out.appendSlice(dehydrator.sma.allocator, &.{
+                ir.Sma.Operand{ .kind = .name, .value = field_name_id },
+                ir.Sma.Operand{ .kind = .term, .value = field_value_id },
+            });
         }
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Implementation) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -157,9 +100,12 @@ pub const Symbol = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const Symbol, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        const name_id = ctx.interned_name_set.get(self.name.value).?;
-        try writer.writeInt(u32, @intFromEnum(name_id), .little);
+    pub fn dehydrate(self: *const Symbol, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.append(dehydrator.sma.allocator, .{ .kind = .name, .value = try dehydrator.dehydrateName(self.name) });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Symbol) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -218,15 +164,23 @@ pub const Class = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const Class, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        const name_id = ctx.interned_name_set.get(self.name.value).?;
-        try writer.writeInt(u32, @intFromEnum(name_id), .little);
-        try writer.writeInt(u32, @intCast(self.elements.len), .little);
-        for (self.elements) |field| {
-            const field_name_id = ctx.interned_name_set.get(field.name.value).?;
-            try writer.writeInt(u32, @intFromEnum(field_name_id), .little);
-            try writer.writeInt(u32, @intFromEnum(field.type.getId()), .little);
+    pub fn dehydrate(self: *const Class, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .name, .value = try dehydrator.dehydrateName(self.name) },
+        });
+
+        for (self.elements) |elem| {
+            const elem_name_id = try dehydrator.dehydrateName(elem.name);
+            const elem_type_id = try dehydrator.dehydrateTerm(elem.type);
+            try out.appendSlice(dehydrator.sma.allocator, &.{
+                ir.Sma.Operand{ .kind = .name, .value = elem_name_id },
+                ir.Sma.Operand{ .kind = .term, .value = elem_type_id },
+            });
         }
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Class) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -285,15 +239,23 @@ pub const Effect = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const Effect, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        const name_id = ctx.interned_name_set.get(self.name.value).?;
-        try writer.writeInt(u32, @intFromEnum(name_id), .little);
-        try writer.writeInt(u32, @intCast(self.elements.len), .little);
-        for (self.elements) |field| {
-            const field_name_id = ctx.interned_name_set.get(field.name.value).?;
-            try writer.writeInt(u32, @intFromEnum(field_name_id), .little);
-            try writer.writeInt(u32, @intFromEnum(field.type.getId()), .little);
+    pub fn dehydrate(self: *const Effect, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .name, .value = try dehydrator.dehydrateName(self.name) },
+        });
+
+        for (self.elements) |elem| {
+            const elem_name_id = try dehydrator.dehydrateName(elem.name);
+            const elem_type_id = try dehydrator.dehydrateTerm(elem.type);
+            try out.appendSlice(dehydrator.sma.allocator, &.{
+                ir.Sma.Operand{ .kind = .name, .value = elem_name_id },
+                ir.Sma.Operand{ .kind = .term, .value = elem_type_id },
+            });
         }
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Effect) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -326,10 +288,15 @@ pub const Quantifier = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const Quantifier, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, self.id, .little);
-        try writer.writeInt(u32, @intFromEnum(self.kind.getId()), .little);
+    pub fn dehydrate(self: *const Quantifier, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .uint, .value = self.id },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.kind) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Quantifier) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -373,9 +340,12 @@ pub const LiftedDataKind = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const LiftedDataKind, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.unlifted_type.getId()), .little);
+    pub fn dehydrate(self: *const LiftedDataKind, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.append(dehydrator.sma.allocator, .{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.unlifted_type) });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *LiftedDataKind) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -408,10 +378,15 @@ pub const ArrowKind = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const ArrowKind, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.input.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.output.getId()), .little);
+    pub fn dehydrate(self: *const ArrowKind, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.input) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.output) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *ArrowKind) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -456,10 +431,15 @@ pub const IntegerType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const IntegerType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.signedness.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.bit_width.getId()), .little);
+    pub fn dehydrate(self: *const IntegerType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.signedness) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.bit_width) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IntegerType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -486,9 +466,12 @@ pub const FloatType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const FloatType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.bit_width.getId()), .little);
+    pub fn dehydrate(self: *const FloatType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.append(dehydrator.sma.allocator, .{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.bit_width) });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *FloatType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -529,11 +512,16 @@ pub const ArrayType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const ArrayType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.len.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.sentinel_value.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
+    pub fn dehydrate(self: *const ArrayType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.len) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.sentinel_value) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.payload) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *ArrayType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -574,11 +562,16 @@ pub const PointerType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const PointerType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.alignment.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.address_space.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
+    pub fn dehydrate(self: *const PointerType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.alignment) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.address_space) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.payload) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *PointerType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -625,12 +618,17 @@ pub const BufferType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const BufferType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.alignment.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.address_space.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.sentinel_value.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
+    pub fn dehydrate(self: *const BufferType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.alignment) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.address_space) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.sentinel_value) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.payload) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *BufferType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -677,12 +675,17 @@ pub const SliceType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const SliceType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.alignment.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.address_space.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.sentinel_value.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
+    pub fn dehydrate(self: *const SliceType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.alignment) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.address_space) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.sentinel_value) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.payload) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *SliceType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -713,10 +716,15 @@ pub const RowElementType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const RowElementType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.label.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
+    pub fn dehydrate(self: *const RowElementType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.label) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.payload) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *RowElementType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -779,23 +787,29 @@ pub const LabelType = union(enum) {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const LabelType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
+    pub fn dehydrate(self: *const LabelType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         switch (self.*) {
             .name => |n| {
-                try writer.writeInt(u8, 0, .little);
-                try writer.writeInt(u32, @intFromEnum(n.getId()), .little);
+                try out.appendSlice(dehydrator.sma.allocator, &.{
+                    ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(n) },
+                });
             },
             .index => |i| {
-                try writer.writeInt(u8, 1, .little);
-                try writer.writeInt(u32, @intFromEnum(i.getId()), .little);
+                try out.appendSlice(dehydrator.sma.allocator, &.{
+                    ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(i) },
+                });
             },
             .exact => |e| {
-                try writer.writeInt(u8, 2, .little);
-                try writer.writeInt(u32, @intFromEnum(e.name.getId()), .little);
-                try writer.writeInt(u32, @intFromEnum(e.index.getId()), .little);
+                try out.appendSlice(dehydrator.sma.allocator, &.{
+                    ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(e.name) },
+                    ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(e.index) },
+                });
             },
         }
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *LabelType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -828,11 +842,18 @@ pub const LiftedDataType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const LiftedDataType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.unlifted_type.getId()), .little);
-        try writer.writeInt(u128, @intFromEnum(self.value.module.guid), .little);
-        try writer.writeInt(u32, @intFromEnum(self.value.id), .little);
+    pub fn dehydrate(self: *const LiftedDataType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        const unlifted_type_id = try dehydrator.dehydrateTerm(self.unlifted_type);
+        const value_id = try dehydrator.dehydrateExpression(self.value);
+
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = unlifted_type_id },
+            ir.Sma.Operand{ .kind = .expression, .value = value_id },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *LiftedDataType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -914,18 +935,31 @@ pub const StructureType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const StructureType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        const name_id = ctx.interned_name_set.get(self.name.value).?;
-        try writer.writeInt(u32, @intFromEnum(name_id), .little);
-        try writer.writeInt(u32, @intFromEnum(self.layout.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.backing_integer.getId()), .little);
-        try writer.writeInt(u32, @intCast(self.elements.len), .little);
+    pub fn dehydrate(self: *const StructureType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        const name_id = try dehydrator.dehydrateName(self.name);
+        const layout_id = try dehydrator.dehydrateTerm(self.layout);
+        const backing_integer_id = try dehydrator.dehydrateTerm(self.backing_integer);
+
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .name, .value = name_id },
+            ir.Sma.Operand{ .kind = .term, .value = layout_id },
+            ir.Sma.Operand{ .kind = .term, .value = backing_integer_id },
+        });
+
         for (self.elements) |field| {
-            const field_name_id = ctx.interned_name_set.get(field.name.value).?;
-            try writer.writeInt(u32, @intFromEnum(field_name_id), .little);
-            try writer.writeInt(u32, @intFromEnum(field.payload.getId()), .little);
-            try writer.writeInt(u32, @intFromEnum(field.alignment_override.getId()), .little);
+            const field_name_id = try dehydrator.dehydrateName(field.name);
+            const field_payload_id = try dehydrator.dehydrateTerm(field.payload);
+            const field_alignment_id = try dehydrator.dehydrateTerm(field.alignment_override);
+            try out.appendSlice(dehydrator.sma.allocator, &.{
+                ir.Sma.Operand{ .kind = .name, .value = field_name_id },
+                ir.Sma.Operand{ .kind = .term, .value = field_payload_id },
+                ir.Sma.Operand{ .kind = .term, .value = field_alignment_id },
+            });
         }
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *StructureType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -994,16 +1028,27 @@ pub const UnionType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const UnionType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        const name_id = ctx.interned_name_set.get(self.name.value).?;
-        try writer.writeInt(u32, @intFromEnum(name_id), .little);
-        try writer.writeInt(u32, @intFromEnum(self.layout.getId()), .little);
-        try writer.writeInt(u32, @intCast(self.elements.len), .little);
+    pub fn dehydrate(self: *const UnionType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        const name_id = try dehydrator.dehydrateName(self.name);
+        const layout_id = try dehydrator.dehydrateTerm(self.layout);
+
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .name, .value = name_id },
+            ir.Sma.Operand{ .kind = .term, .value = layout_id },
+        });
+
         for (self.elements) |field| {
-            const field_name_id = ctx.interned_name_set.get(field.name.value).?;
-            try writer.writeInt(u32, @intFromEnum(field_name_id), .little);
-            try writer.writeInt(u32, @intFromEnum(field.payload.getId()), .little);
+            const field_name_id = try dehydrator.dehydrateName(field.name);
+            const field_payload_id = try dehydrator.dehydrateTerm(field.payload);
+            try out.appendSlice(dehydrator.sma.allocator, &.{
+                ir.Sma.Operand{ .kind = .name, .value = field_name_id },
+                ir.Sma.Operand{ .kind = .term, .value = field_payload_id },
+            });
         }
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *UnionType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -1084,18 +1129,31 @@ pub const SumType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const SumType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        const name_id = ctx.interned_name_set.get(self.name.value).?;
-        try writer.writeInt(u32, @intFromEnum(name_id), .little);
-        try writer.writeInt(u32, @intFromEnum(self.tag_type.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.layout.getId()), .little);
-        try writer.writeInt(u32, @intCast(self.elements.len), .little);
+    pub fn dehydrate(self: *const SumType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        const name_id = try dehydrator.dehydrateName(self.name);
+        const tag_type_id = try dehydrator.dehydrateTerm(self.tag_type);
+        const layout_id = try dehydrator.dehydrateTerm(self.layout);
+
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .name, .value = name_id },
+            ir.Sma.Operand{ .kind = .term, .value = tag_type_id },
+            ir.Sma.Operand{ .kind = .term, .value = layout_id },
+        });
+
         for (self.elements) |field| {
-            const field_name_id = ctx.interned_name_set.get(field.name.value).?;
-            try writer.writeInt(u32, @intFromEnum(field_name_id), .little);
-            try writer.writeInt(u32, @intFromEnum(field.payload.getId()), .little);
-            try writer.writeInt(u32, @intFromEnum(field.tag.getId()), .little);
+            const field_name_id = try dehydrator.dehydrateName(field.name);
+            const field_payload_id = try dehydrator.dehydrateTerm(field.payload);
+            const field_tag_id = try dehydrator.dehydrateTerm(field.tag);
+            try out.appendSlice(dehydrator.sma.allocator, &.{
+                ir.Sma.Operand{ .kind = .name, .value = field_name_id },
+                ir.Sma.Operand{ .kind = .term, .value = field_payload_id },
+                ir.Sma.Operand{ .kind = .term, .value = field_tag_id },
+            });
         }
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *SumType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -1134,11 +1192,16 @@ pub const FunctionType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const FunctionType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.input.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.output.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.effects.getId()), .little);
+    pub fn dehydrate(self: *const FunctionType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.input) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.output) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.effects) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *FunctionType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -1183,12 +1246,17 @@ pub const HandlerType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const HandlerType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.input.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.output.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.handled_effect.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.added_effects.getId()), .little);
+    pub fn dehydrate(self: *const HandlerType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.input) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.output) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.handled_effect) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.added_effects) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *HandlerType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -1242,14 +1310,21 @@ pub const PolymorphicType = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const PolymorphicType, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intCast(self.quantifiers.len), .little);
+    pub fn dehydrate(self: *const PolymorphicType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         for (self.quantifiers) |quant| {
-            try writer.writeInt(u32, @intFromEnum(quant.getId()), .little);
+            try out.appendSlice(dehydrator.sma.allocator, &.{
+                ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(quant) },
+            });
         }
-        try writer.writeInt(u32, @intFromEnum(self.qualifiers.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.payload.getId()), .little);
+
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.qualifiers) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.payload) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *PolymorphicType) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -1282,10 +1357,15 @@ pub const IsSubRowConstraint = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const IsSubRowConstraint, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.primary_row.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.subtype_row.getId()), .little);
+    pub fn dehydrate(self: *const IsSubRowConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.primary_row) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.subtype_row) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IsSubRowConstraint) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -1324,11 +1404,16 @@ pub const RowsConcatenateConstraint = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const RowsConcatenateConstraint, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.row_a.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.row_b.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.row_result.getId()), .little);
+    pub fn dehydrate(self: *const RowsConcatenateConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.row_a) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.row_b) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.row_result) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *RowsConcatenateConstraint) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -1361,10 +1446,15 @@ pub const ImplementsClassConstraint = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const ImplementsClassConstraint, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.data.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.class.getId()), .little);
+    pub fn dehydrate(self: *const ImplementsClassConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.data) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.class) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *ImplementsClassConstraint) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -1397,10 +1487,15 @@ pub const IsStructureConstraint = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const IsStructureConstraint, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.data.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.row.getId()), .little);
+    pub fn dehydrate(self: *const IsStructureConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.data) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.row) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IsStructureConstraint) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -1433,10 +1528,15 @@ pub const IsUnionConstraint = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const IsUnionConstraint, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.data.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.row.getId()), .little);
+    pub fn dehydrate(self: *const IsUnionConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.data) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.row) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IsUnionConstraint) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
 
@@ -1469,9 +1569,14 @@ pub const IsSumConstraint = struct {
         return hasher.final();
     }
 
-    pub fn writeSma(self: *const IsSumConstraint, ctx: *const ir.Context, writer: *std.io.Writer) error{WriteFailed}!void {
-        _ = ctx;
-        try writer.writeInt(u32, @intFromEnum(self.data.getId()), .little);
-        try writer.writeInt(u32, @intFromEnum(self.row.getId()), .little);
+    pub fn dehydrate(self: *const IsSumConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.appendSlice(dehydrator.sma.allocator, &.{
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.data) },
+            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.row) },
+        });
+    }
+
+    pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IsSumConstraint) error{ BadEncoding, OutOfMemory }!void {
+        common.todo(noreturn, .{ dehydrated, rehydrator, out });
     }
 };
