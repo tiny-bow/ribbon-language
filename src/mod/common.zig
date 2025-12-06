@@ -1459,3 +1459,114 @@ pub fn ManagedPool(comptime T: type) type {
         }
     };
 }
+
+// Can't use std.SemanticVersion because we need static size
+pub const SemVer = struct {
+    pub const text_segment_len = 32;
+
+    major: u32 = 0,
+    minor: u32 = 0,
+    patch: u32 = 0,
+    pre: [SemVer.text_segment_len]u8 = [1]u8{0} ** SemVer.text_segment_len,
+    build: [SemVer.text_segment_len]u8 = [1]u8{0} ** SemVer.text_segment_len,
+
+    pub fn eql(self: *const SemVer, other: *const SemVer) bool {
+        return self.major == other.major and self.minor == other.minor and self.patch == other.patch and std.mem.eql(u8, &self.pre, &other.pre) and std.mem.eql(u8, &self.build, &other.build);
+    }
+
+    pub fn hash(self: *const SemVer, hasher: anytype) void {
+        hasher.update(std.mem.asBytes(&self.major));
+        hasher.update(std.mem.asBytes(&self.minor));
+        hasher.update(std.mem.asBytes(&self.patch));
+        hasher.update(self.pre);
+        hasher.update(self.build);
+    }
+
+    pub fn format(self: *const SemVer, writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("{d}.{d}.{d}", .{ self.major, self.minor, self.patch });
+        const pre_str = std.mem.trimEnd(u8, &self.pre, &.{0});
+        if (pre_str.len > 0) {
+            try writer.print("-{s}", .{pre_str});
+        }
+        const build_str = std.mem.trimEnd(u8, &self.build, &.{0});
+        if (build_str.len > 0) {
+            try writer.print("+{s}", .{build_str});
+        }
+    }
+
+    pub fn deserialize(reader: *std.io.Reader) std.io.Reader.Error!SemVer {
+        var self = SemVer{};
+        self.major = try reader.takeInt(u32, .little);
+        self.minor = try reader.takeInt(u32, .little);
+        self.patch = try reader.takeInt(u32, .little);
+
+        var writer = std.io.Writer.fixed(&self.pre);
+        reader.streamExact(&writer, SemVer.text_segment_len) catch return error.ReadFailed;
+
+        writer = std.io.Writer.fixed(&self.build);
+        reader.streamExact(&writer, SemVer.text_segment_len) catch return error.ReadFailed;
+
+        return self;
+    }
+
+    pub fn preSlice(self: *const SemVer) []const u8 {
+        return std.mem.span(@as([*:0]const u8, @ptrCast(&self.pre)));
+    }
+
+    pub fn buildSlice(self: *const SemVer) []const u8 {
+        return std.mem.span(@as([*:0]const u8, @ptrCast(&self.build)));
+    }
+
+    pub fn serialize(self: *const SemVer, writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.writeInt(u32, self.major, .little);
+        try writer.writeInt(u32, self.minor, .little);
+        try writer.writeInt(u32, self.patch, .little);
+        try writer.writeAll(self.preSlice());
+        try writer.writeAll(self.buildSlice());
+    }
+
+    pub fn fromStd(std_ver: std.SemanticVersion) SemVer {
+        var self = SemVer{
+            .major = std_ver.major,
+            .minor = std_ver.minor,
+            .patch = std_ver.patch,
+        };
+
+        if (std_ver.pre) |pre| {
+            const len = @min(pre.len, SemVer.text_segment_len - 1);
+            @memcpy(self.pre[0..len], pre[0..len]);
+        }
+
+        if (std_ver.build) |build| {
+            const len = @min(build.len, SemVer.text_segment_len - 1);
+            @memcpy(self.build[0..len], build[0..len]);
+        }
+
+        return self;
+    }
+
+    pub fn toStdBorrowed(self: *const SemVer) std.SemanticVersion {
+        const pre = self.preSlice();
+        const build = self.buildSlice();
+        return std.SemanticVersion{
+            .major = self.major,
+            .minor = self.minor,
+            .patch = self.patch,
+            .pre = if (pre.len > 0) pre else null,
+            .build = if (build.len > 0) build else null,
+        };
+    }
+
+    pub fn toStdOwned(self: *const SemVer, allocator: std.mem.Allocator) error{OutOfMemory}!std.SemanticVersion {
+        const pre = self.preSlice();
+        const build = self.buildSlice();
+
+        return std.SemanticVersion{
+            .major = self.major,
+            .minor = self.minor,
+            .patch = self.patch,
+            .pre = if (pre.len > 0) try std.mem.dupe(allocator, pre) else null,
+            .build = if (build.len > 0) try std.mem.dupe(allocator, build) else null,
+        };
+    }
+};
