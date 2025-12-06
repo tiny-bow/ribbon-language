@@ -13,9 +13,6 @@ pub const Term = packed struct(u64) {
     /// Address of the term's value.
     ptr: u48,
 
-    /// Unique identifier for a Term within its context.
-    pub const Id = enum(u32) { _ };
-
     /// Identifier for a type of term within the IR term type registry
     pub const Tag = enum(u8) { _ };
 
@@ -29,10 +26,6 @@ pub const Term = packed struct(u64) {
         tag: Term.Tag,
         /// The offset (forwards) from the header to the term value.
         value_offset: u8,
-        /// Unique identifier for this term within its context.
-        id: Term.Id,
-        /// The cached CBR for the attached term.
-        cached_cbr: ?ir.Cbr = null,
 
         /// Get the parent Data pair containing this header.
         fn toData(self: *Term.Header, comptime T: type) error{ZigTypeMismatch}!*Term.Data(T) {
@@ -70,17 +63,6 @@ pub const Term = packed struct(u64) {
             return &data.header;
         }
 
-        /// Get the CBR for the attached term.
-        fn getCbr(self: *Term.Header) ir.Cbr {
-            if (self.cached_cbr) |cached| {
-                return cached;
-            }
-
-            const new_hash = self.root.vtables.get(self.tag).?.cbr(self.toOpaqueTermAddress());
-            self.cached_cbr = new_hash;
-            return new_hash;
-        }
-
         /// Write the term in SMA format to the given writer.
         fn writeSma(self: *Term.Header, writer: *std.io.Writer) error{WriteFailed}!void {
             try writer.writeInt(u8, @intFromEnum(self.tag), .little);
@@ -93,7 +75,6 @@ pub const Term = packed struct(u64) {
         name: []const u8,
         eql: *const fn (*const anyopaque, *const anyopaque) bool,
         hash: *const fn (*const anyopaque, *ir.QuickHasher) void,
-        cbr: *const fn (*const anyopaque) ir.Cbr,
         dehydrate: *const fn (*const anyopaque, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{OutOfMemory}!void,
         rehydrate: *const fn (*const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *anyopaque) error{ BadEncoding, OutOfMemory }!void,
     };
@@ -113,7 +94,6 @@ pub const Term = packed struct(u64) {
                     .module = module,
                     .tag = context.tagFromType(T) orelse return error.ZigTypeNotRegistered,
                     .value_offset = @offsetOf(Self, "value"),
-                    .id = context.generateTermId(),
                 };
                 return &self.value;
             }
@@ -168,16 +148,6 @@ pub const Term = packed struct(u64) {
         return self.toHeader().toData();
     }
 
-    /// Get the CBR for this term.
-    pub fn getCbr(self: Term) ir.Cbr {
-        return self.toHeader().getCbr();
-    }
-
-    /// Get the unique id for this term within its context.
-    pub fn getId(self: Term) Term.Id {
-        return self.toHeader().id;
-    }
-
     /// Write the term in SMA format to the given writer.
     fn writeSma(self: Term, writer: *std.io.Writer) error{WriteFailed}!void {
         try self.toHeader().writeSma(writer);
@@ -221,7 +191,7 @@ pub const Term = packed struct(u64) {
 
     /// A constructor for term types that have no internal data,
     /// and are uniquely identified by a compile-time name.
-    pub fn IdentityType(comptime name: []const u8) type {
+    pub fn Identity(comptime name: []const u8) type {
         return struct {
             const Self = @This();
 
@@ -231,12 +201,6 @@ pub const Term = packed struct(u64) {
 
             pub fn hash(_: *const Self, hasher: *ir.QuickHasher) void {
                 hasher.update(name);
-            }
-
-            pub fn cbr(_: *const Self) ir.Cbr {
-                var hasher = ir.Cbr.Hasher.init();
-                hasher.update(name);
-                return hasher.final();
             }
 
             pub fn dehydrate(_: *const Self, _: *ir.Sma.Dehydrator, _: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {

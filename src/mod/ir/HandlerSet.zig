@@ -21,31 +21,6 @@ pub fn deinit(self: *HandlerSet) void {
     self.handlers.deinit(self.module.root.allocator);
 }
 
-pub fn cbr(self: *const HandlerSet) ir.Cbr {
-    var hasher = ir.Cbr.Hasher.init();
-    hasher.update("HandlerSet");
-
-    hasher.update("handlers.count:");
-    hasher.update(self.handlers.items.len);
-
-    hasher.update("handlers:");
-    for (self.handlers.items) |handler| {
-        hasher.update("handler:");
-        hasher.update(handler.getFullCbr());
-    }
-
-    hasher.update("handler_type:");
-    hasher.update(self.handler_type.getCbr());
-
-    hasher.update("result_type:");
-    hasher.update(self.result_type.getCbr());
-
-    hasher.update("cancellation_point:");
-    hasher.update(self.cancellation_point.id);
-
-    return hasher.final();
-}
-
 pub fn dehydrate(self: *const HandlerSet, dehydrator: *ir.Sma.Dehydrator) error{ BadEncoding, OutOfMemory }!ir.Sma.HandlerSet {
     const type_id = try dehydrator.dehydrateTerm(self.handler_type);
     const result_id = try dehydrator.dehydrateTerm(self.result_type);
@@ -66,8 +41,4 @@ pub fn dehydrate(self: *const HandlerSet, dehydrator: *ir.Sma.Dehydrator) error{
     }
 
     return out;
-}
-
-pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *HandlerSet) error{ BadEncoding, OutOfMemory }!void {
-    common.todo(noreturn, .{ dehydrated, rehydrator, out });
 }

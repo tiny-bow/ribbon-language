@@ -18,6 +18,8 @@ tags: common.ArrayList([]const u8) = .empty,
 names: common.ArrayList([]const u8) = .empty,
 blobs: common.ArrayList(*const ir.Blob) = .empty,
 shared: common.ArrayList(u32) = .empty,
+cbr: common.UniqueReprMap(Sma.Operand, ir.Cbr) = .empty,
+
 terms: common.ArrayList(Sma.Term) = .empty,
 modules: common.ArrayList(Sma.Module) = .empty,
 expressions: common.ArrayList(Sma.Expression) = .empty,
@@ -37,7 +39,7 @@ pub const Dehydrator = struct {
     blob_to_index: common.UniqueReprMap(*const ir.Blob, u32) = .empty,
     term_to_index: common.UniqueReprMap(ir.Term, u32) = .empty,
     module_to_index: common.UniqueReprMap(*ir.Module, u32) = .empty,
-    expression_to_index: common.UniqueReprMap(*ir.Block, u32) = .empty,
+    expression_to_index: common.UniqueReprMap(*ir.Expression, u32) = .empty,
     global_to_index: common.UniqueReprMap(*ir.Global, u32) = .empty,
     handler_set_to_index: common.UniqueReprMap(*ir.HandlerSet, u32) = .empty,
     function_to_index: common.UniqueReprMap(*ir.Function, u32) = .empty,
@@ -88,9 +90,15 @@ pub const Dehydrator = struct {
             return index;
         } else {
             const index: u32 = @intCast(self.sma.names.items.len);
+            try self.name_to_index.put(self.ctx.allocator, name.value, index);
+
             const owned_name = self.sma.arena.allocator().dupe(u8, name.value) catch return error.OutOfMemory;
             try self.sma.names.append(self.sma.allocator, owned_name);
-            try self.name_to_index.put(self.ctx.allocator, name.value, index);
+
+            var hasher = ir.Cbr.Hasher.init();
+            hasher.update(name.value);
+            try self.sma.cbr.put(self.sma.allocator, .{ .kind = .name, .value = index }, hasher.final());
+
             return index;
         }
     }
@@ -100,9 +108,14 @@ pub const Dehydrator = struct {
             return index;
         } else {
             const index: u32 = @intCast(self.sma.blobs.items.len);
+            try self.blob_to_index.put(self.ctx.allocator, blob, index);
+
             const owned_blob = try blob.clone(self.sma.arena.allocator());
             try self.sma.blobs.append(self.sma.allocator, owned_blob);
-            try self.blob_to_index.put(self.ctx.allocator, blob, index);
+
+            const cbr = owned_blob.getCbr();
+            try self.sma.cbr.put(self.sma.allocator, .{ .kind = .blob, .value = index }, cbr);
+
             return index;
         }
     }
@@ -123,18 +136,21 @@ pub const Dehydrator = struct {
             try vtable.dehydrate(term.toOpaquePtr(), self, &sma_term.operands);
             try self.sma.terms.append(self.sma.allocator, sma_term);
 
+            const cbr = sma_term.getCbr(self.sma);
+            try self.sma.cbr.put(self.sma.allocator, .{ .kind = .term, .value = index }, cbr);
+
             return index;
         }
     }
 
-    pub fn dehydrateExpression(self: *Dehydrator, block: *ir.Block) error{ BadEncoding, OutOfMemory }!u32 {
-        if (self.expression_to_index.get(block)) |index| {
+    pub fn dehydrateExpression(self: *Dehydrator, expr: *ir.Expression) error{ BadEncoding, OutOfMemory }!u32 {
+        if (self.expression_to_index.get(expr)) |index| {
             return index;
         } else {
             const index: u32 = @intCast(self.sma.expressions.items.len);
-            try self.expression_to_index.put(self.ctx.allocator, block, index);
+            try self.expression_to_index.put(self.ctx.allocator, expr, index);
 
-            var sma_expr = try block.dehydrate(self);
+            var sma_expr = try expr.dehydrate(self);
             errdefer sma_expr.deinit(self.sma.allocator);
 
             try self.sma.expressions.append(self.sma.allocator, sma_expr);
@@ -155,6 +171,9 @@ pub const Dehydrator = struct {
 
             try self.sma.globals.append(self.sma.allocator, sma_global);
 
+            const cbr = sma_global.getCbr(self.sma);
+            try self.sma.cbr.put(self.sma.allocator, .{ .kind = .global, .value = index }, cbr);
+
             return index;
         }
     }
@@ -171,6 +190,9 @@ pub const Dehydrator = struct {
 
             try self.sma.functions.append(self.sma.allocator, sma_function);
 
+            const cbr = sma_function.getCbr(self.sma);
+            try self.sma.cbr.put(self.sma.allocator, .{ .kind = .function, .value = index }, cbr);
+
             return index;
         }
     }
@@ -186,6 +208,28 @@ pub const Dehydrator = struct {
             errdefer sma_handler_set.deinit(self.sma.allocator);
 
             try self.sma.handler_sets.append(self.sma.allocator, sma_handler_set);
+
+            const cbr = sma_handler_set.getCbr(self.sma);
+            try self.sma.cbr.put(self.sma.allocator, .{ .kind = .handler_set, .value = index }, cbr);
+
+            return index;
+        }
+    }
+
+    pub fn dehydrateModule(self: *Dehydrator, module: *ir.Module) error{ BadEncoding, OutOfMemory }!u32 {
+        if (self.module_to_index.get(module)) |index| {
+            return index;
+        } else {
+            const index: u32 = @intCast(self.sma.modules.items.len);
+            try self.module_to_index.put(self.ctx.allocator, module, index);
+
+            var sma_module = try module.dehydrate(self);
+            errdefer sma_module.deinit(self.sma.allocator);
+
+            try self.sma.modules.append(self.sma.allocator, sma_module);
+
+            const cbr = sma_module.getCbr(self.sma);
+            try self.sma.cbr.put(self.sma.allocator, .{ .kind = .module, .value = index }, cbr);
 
             return index;
         }
@@ -232,15 +276,10 @@ pub const Rehydrator = struct {
 pub const Module = struct {
     guid: ir.Module.GUID,
     name: u32,
-    cbr: ir.Cbr,
-    exported_terms: common.ArrayList(Sma.Export) = .empty,
-    exported_globals: common.ArrayList(Sma.Export) = .empty,
-    exported_functions: common.ArrayList(Sma.Export) = .empty,
+    exports: common.ArrayList(Sma.Export) = .empty,
 
     pub fn deinit(self: *Sma.Module, allocator: std.mem.Allocator) void {
-        self.exported_terms.deinit(allocator);
-        self.exported_globals.deinit(allocator);
-        self.exported_functions.deinit(allocator);
+        self.exports.deinit(allocator);
     }
 
     pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Module {
@@ -248,39 +287,19 @@ pub const Module = struct {
         const guid: ir.Module.GUID = @enumFromInt(guid_u128);
 
         const name = try reader.takeInt(u32, .little);
-        const cbr_u128 = try reader.takeInt(u128, .little);
-        const cbr: ir.Cbr = @enumFromInt(cbr_u128);
 
-        const exported_term_count = try reader.takeInt(u32, .little);
-        var exported_terms = common.ArrayList(Sma.Export).empty;
-        errdefer exported_terms.deinit(allocator);
-        for (0..exported_term_count) |_| {
+        const export_count = try reader.takeInt(u32, .little);
+        var exports = common.ArrayList(Sma.Export).empty;
+        errdefer exports.deinit(allocator);
+        for (0..export_count) |_| {
             const ex = try Sma.Export.deserialize(reader);
-            try exported_terms.append(allocator, ex);
-        }
-
-        const exported_global_count = try reader.takeInt(u32, .little);
-        var exported_globals = common.ArrayList(Sma.Export).empty;
-        errdefer exported_globals.deinit(allocator);
-        for (0..exported_global_count) |_| {
-            const ex = try Sma.Export.deserialize(reader);
-            try exported_globals.append(allocator, ex);
-        }
-
-        const exported_function_count = try reader.takeInt(u32, .little);
-        var exported_functions = common.ArrayList(Sma.Export).empty;
-        errdefer exported_functions.deinit(allocator);
-        for (0..exported_function_count) |_| {
-            const ex = try Sma.Export.deserialize(reader);
-            try exported_functions.append(allocator, ex);
+            try exports.append(allocator, ex);
         }
 
         return Sma.Module{
             .guid = guid,
             .name = name,
-            .cbr = cbr,
-            .exported_terms = exported_terms,
-            .exported_functions = exported_functions,
+            .exports = exports,
         };
     }
 
@@ -288,26 +307,41 @@ pub const Module = struct {
         try writer.writeInt(u128, @intFromEnum(self.guid), .little);
 
         try writer.writeInt(u32, self.name, .little);
-        try writer.writeInt(u128, @intFromEnum(self.cbr), .little);
 
-        try writer.writeInt(u32, @intCast(self.exported_terms.items.len), .little);
-        for (self.exported_terms.items) |*ex| try ex.serialize(writer);
+        try writer.writeInt(u32, @intCast(self.exports.items.len), .little);
+        for (self.exports.items) |*ex| try ex.serialize(writer);
+    }
 
-        try writer.writeInt(u32, @intCast(self.exported_globals.items.len), .little);
-        for (self.exported_globals.items) |*ex| try ex.serialize(writer);
+    pub fn getCbr(self: *const Sma.Module, sma: *Sma) ir.Cbr {
+        var hasher = ir.Cbr.Hasher.init();
+        hasher.update("[Module]");
 
-        try writer.writeInt(u32, @intCast(self.exported_functions.items.len), .little);
-        for (self.exported_functions.items) |*ex| try ex.serialize(writer);
+        hasher.update("guid:");
+        hasher.update(@intFromEnum(self.guid));
+
+        hasher.update("name:"); // TODO: not sure if names should factor into cbr
+        hasher.update(sma.cbr.get(.{ .kind = .name, .value = self.name }).?);
+
+        hasher.update("exports:");
+        for (self.exports.items, 0..) |ex, i| {
+            hasher.update("export.index:");
+            hasher.update(i);
+
+            hasher.update("export.value:");
+            hasher.update(ex.getCbr(sma));
+        }
+
+        return hasher.final();
     }
 };
 
 pub const Export = struct {
     name: u32,
-    value: u32,
+    value: Operand,
 
     pub fn deserialize(reader: *std.io.Reader) error{ EndOfStream, ReadFailed }!Sma.Export {
         const name = try reader.takeInt(u32, .little);
-        const value = try reader.takeInt(u32, .little);
+        const value = try Operand.deserialize(reader);
         return Sma.Export{
             .name = name,
             .value = value,
@@ -316,7 +350,28 @@ pub const Export = struct {
 
     pub fn serialize(self: *Sma.Export, writer: *std.io.Writer) error{WriteFailed}!void {
         try writer.writeInt(u32, self.name, .little);
-        try writer.writeInt(u32, self.value, .little);
+        try self.value.serialize(writer);
+    }
+
+    pub fn sort(buf: []Sma.Export) void {
+        std.mem.sort(Sma.Export, buf, {}, struct {
+            pub fn sma_export_sorter(_: void, a: Sma.Export, b: Sma.Export) bool {
+                return a.name < b.name;
+            }
+        }.sma_export_sorter);
+    }
+
+    pub fn getCbr(self: *const Sma.Export, sma: *Sma) ir.Cbr {
+        var hasher = ir.Cbr.Hasher.init();
+        hasher.update("[Export]");
+
+        hasher.update("name:"); // TODO: not sure if names should factor into cbr
+        hasher.update(sma.cbr.get(.{ .kind = .name, .value = self.name }).?);
+
+        hasher.update("value:");
+        hasher.update(self.value.getCbr(sma));
+
+        return hasher.final();
     }
 };
 
@@ -340,6 +395,22 @@ pub const Global = struct {
         try writer.writeInt(u32, self.name, .little);
         try writer.writeInt(u32, self.type, .little);
         try writer.writeInt(u32, self.initializer, .little);
+    }
+
+    pub fn getCbr(self: *const Sma.Global, sma: *Sma) ir.Cbr {
+        var hasher = ir.Cbr.Hasher.init();
+        hasher.update("[Global]");
+
+        hasher.update("name:"); // TODO: not sure if names should factor into cbr
+        hasher.update(sma.cbr.get(.{ .kind = .name, .value = self.name }).?);
+
+        hasher.update("type:");
+        hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.type }).?);
+
+        hasher.update("initializer:");
+        hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.initializer }).?);
+
+        return hasher.final();
     }
 };
 
@@ -384,11 +455,35 @@ pub const HandlerSet = struct {
             try writer.writeInt(u32, handler, .little);
         }
     }
+
+    pub fn getCbr(self: *const Sma.HandlerSet, sma: *Sma) ir.Cbr {
+        var hasher = ir.Cbr.Hasher.init();
+        hasher.update("[HandlerSet]");
+
+        hasher.update("handler_type:");
+        hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.handler_type }).?);
+
+        hasher.update("result_type:");
+        hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.result_type }).?);
+
+        hasher.update("cancellation_point:");
+        hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.cancellation_point }).?);
+
+        hasher.update("handlers:");
+        for (self.handlers.items, 0..) |handler, i| {
+            hasher.update("handler.index:");
+            hasher.update(i);
+
+            hasher.update("handler.value:");
+            hasher.update(sma.cbr.get(.{ .kind = .function, .value = handler }).?);
+        }
+
+        return hasher.final();
+    }
 };
 
 pub const Function = struct {
     name: u32,
-    type: u32,
     kind: ir.Function.Kind,
     body: Expression,
 
@@ -398,14 +493,13 @@ pub const Function = struct {
 
     pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Function {
         const name = try reader.takeInt(u32, .little);
-        const ty = try reader.takeInt(u32, .little);
         const kind_u8 = try reader.takeInt(u8, .little);
         const kind: ir.Function.Kind = @enumFromInt(kind_u8);
+
         const body = try Sma.Expression.deserialize(reader, allocator);
 
         return Sma.Function{
             .name = name,
-            .type = ty,
             .kind = kind,
             .body = body,
         };
@@ -413,21 +507,50 @@ pub const Function = struct {
 
     pub fn serialize(self: *Sma.Function, writer: *std.io.Writer) error{WriteFailed}!void {
         try writer.writeInt(u32, self.name, .little);
-        try writer.writeInt(u32, self.type, .little);
         try writer.writeInt(u8, @intFromEnum(self.kind), .little);
+
         try self.body.serialize(writer);
+    }
+
+    pub fn getCbr(self: *const Sma.Function, sma: *Sma) ir.Cbr {
+        var hasher = ir.Cbr.Hasher.init();
+        hasher.update("[Function]");
+
+        hasher.update("name:"); // TODO: not sure if names should factor into cbr
+        hasher.update(sma.cbr.get(.{ .kind = .name, .value = self.name }).?);
+
+        hasher.update("kind:");
+        hasher.update(self.kind);
+
+        hasher.update("body:");
+        hasher.update(self.body.getCbr(sma));
+
+        return hasher.final();
     }
 };
 
 pub const Expression = struct {
+    type: u32,
+    handler_sets: common.ArrayList(u32) = .empty,
     blocks: common.ArrayList(Sma.Block) = .empty,
 
     pub fn deinit(self: *Sma.Expression, allocator: std.mem.Allocator) void {
+        self.handler_sets.deinit(allocator);
         for (self.blocks.items) |*block| block.deinit(allocator);
         self.blocks.deinit(allocator);
     }
 
     pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Expression {
+        const type_id = try reader.takeInt(u32, .little);
+
+        const handler_set_count = try reader.takeInt(u32, .little);
+        var handler_sets = common.ArrayList(u32).empty;
+        errdefer handler_sets.deinit(allocator);
+        for (0..handler_set_count) |_| {
+            const hs_id = try reader.takeInt(u32, .little);
+            try handler_sets.append(allocator, hs_id);
+        }
+
         const block_count = try reader.takeInt(u32, .little);
 
         var blocks = common.ArrayList(Sma.Block).empty;
@@ -439,13 +562,48 @@ pub const Expression = struct {
         }
 
         return Sma.Expression{
+            .type = type_id,
+            .handler_sets = handler_sets,
             .blocks = blocks,
         };
     }
 
     pub fn serialize(self: *Sma.Expression, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeInt(u32, self.type, .little);
+
+        try writer.writeInt(u32, @intCast(self.handler_sets.items.len), .little);
+        for (self.handler_sets.items) |hs_id| try writer.writeInt(u32, hs_id, .little);
+
         try writer.writeInt(u32, @intCast(self.blocks.items.len), .little);
         for (self.blocks.items) |*block| try block.serialize(writer);
+    }
+
+    pub fn getCbr(self: *const Sma.Expression, sma: *Sma) ir.Cbr {
+        var hasher = ir.Cbr.Hasher.init();
+        hasher.update("[Expression]");
+
+        hasher.update("type:");
+        hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.type }).?);
+
+        hasher.update("handler_sets:");
+        for (self.handler_sets.items, 0..) |hs_id, i| {
+            hasher.update("handler_set.index:");
+            hasher.update(i);
+
+            hasher.update("handler_set.value:");
+            hasher.update(sma.cbr.get(.{ .kind = .handler_set, .value = hs_id }).?);
+        }
+
+        hasher.update("blocks:");
+        for (self.blocks.items, 0..) |block, i| {
+            hasher.update("block.index:");
+            hasher.update(i);
+
+            hasher.update("block.value:");
+            hasher.update(block.getCbr(sma));
+        }
+
+        return hasher.final();
     }
 };
 
@@ -476,6 +634,22 @@ pub const Block = struct {
     pub fn serialize(self: *Sma.Block, writer: *std.io.Writer) error{WriteFailed}!void {
         try writer.writeInt(u32, @intCast(self.instructions.items.len), .little);
         for (self.instructions.items) |*inst| try inst.serialize(writer);
+    }
+
+    pub fn getCbr(self: *const Sma.Block, sma: *Sma) ir.Cbr {
+        var hasher = ir.Cbr.Hasher.init();
+        hasher.update("[Block]");
+
+        hasher.update("instructions:");
+        for (self.instructions.items, 0..) |inst, i| {
+            hasher.update("instruction.index:");
+            hasher.update(i);
+
+            hasher.update("instruction.value:");
+            hasher.update(inst.getCbr(sma));
+        }
+
+        return hasher.final();
     }
 };
 
@@ -514,6 +688,29 @@ pub const Term = struct {
         try writer.writeInt(u32, @intCast(self.operands.items.len), .little);
         for (self.operands.items) |*op| try op.serialize(writer);
     }
+
+    pub fn getCbr(self: *const Sma.Term, sma: *Sma) ir.Cbr {
+        var hasher = ir.Cbr.Hasher.init();
+        hasher.update("[Term]");
+
+        hasher.update("tag:");
+        hasher.update(&self.tag);
+
+        hasher.update("operands.count:");
+        hasher.update(self.operands.items.len);
+
+        for (self.operands.items, 0..) |op, i| {
+            const operand_cbr = sma.cbr.get(op).?;
+
+            hasher.update("operand.index:");
+            hasher.update(i);
+
+            hasher.update("operand.value:");
+            hasher.update(operand_cbr);
+        }
+
+        return hasher.final();
+    }
 };
 
 pub const Instruction = struct {
@@ -551,13 +748,38 @@ pub const Instruction = struct {
         try writer.writeInt(u32, @intCast(self.operands.items.len), .little);
         for (self.operands.items) |*op| try op.serialize(writer);
     }
+
+    pub fn getCbr(self: *const Sma.Instruction, sma: *Sma) ir.Cbr {
+        var hasher = ir.Cbr.Hasher.init();
+        hasher.update("[Instruction]");
+
+        hasher.update("command:");
+        hasher.update(&self.command);
+
+        hasher.update("type:");
+        hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.type }).?);
+
+        hasher.update("operands.count:");
+        hasher.update(self.operands.items.len);
+
+        for (self.operands.items, 0..) |op, i| {
+            hasher.update("operand.index:");
+            hasher.update(i);
+
+            hasher.update("operand.value:");
+            hasher.update(op.getCbr(sma));
+        }
+
+        return hasher.final();
+    }
 };
 
-pub const Operand = struct {
+pub const Operand = packed struct(u64) { // Must be packed for UniqueReprMap
     kind: Kind,
     value: u32,
+    _unused: u24 = 0,
 
-    pub const Kind = enum(u8) { name, expression, term, uint, blob, global, function, block, variable };
+    pub const Kind = enum(u8) { module, name, expression, term, uint, blob, global, handler_set, function, block, variable };
 
     pub fn deserialize(reader: *std.io.Reader) error{ EndOfStream, ReadFailed }!Sma.Operand {
         const kind = try reader.takeInt(u8, .little);
@@ -571,6 +793,27 @@ pub const Operand = struct {
     pub fn serialize(self: *Sma.Operand, writer: *std.io.Writer) error{WriteFailed}!void {
         try writer.writeInt(u8, @intFromEnum(self.kind), .little);
         try writer.writeInt(u32, self.value, .little);
+    }
+
+    pub fn getCbr(self: *const Sma.Operand, sma: *Sma) ir.Cbr {
+        var hasher = ir.Cbr.Hasher.init();
+        hasher.update("[Operand]");
+
+        hasher.update("kind:");
+        hasher.update(self.kind);
+
+        hasher.update("value:");
+        switch (self.kind) {
+            .uint, .variable, .block => {
+                hasher.update(self.value);
+            },
+            else => {
+                const operand_cbr = sma.cbr.get(self.*).?;
+                hasher.update(operand_cbr);
+            },
+        }
+
+        return hasher.final();
     }
 };
 
@@ -590,6 +833,7 @@ pub fn deinit(self: *Sma) void {
     self.names.deinit(self.allocator);
     self.shared.deinit(self.allocator);
     self.globals.deinit(self.allocator);
+    self.cbr.deinit(self.allocator);
 
     for (self.blobs.items) |blob| blob.deinit(self.allocator);
     self.blobs.deinit(self.allocator);
@@ -647,8 +891,8 @@ pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ 
     }
 
     const blob_count = try reader.takeInt(u32, .little);
-    for (0..blob_count) |i| {
-        const blob = try ir.Blob.deserialize(reader, @enumFromInt(i), sma.arena.allocator());
+    for (0..blob_count) |_| {
+        const blob = try ir.Blob.deserialize(reader, sma.arena.allocator());
         try sma.blobs.append(allocator, blob);
     }
 
@@ -656,6 +900,16 @@ pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ 
     for (0..shared_count) |_| {
         const shared_index = try reader.takeInt(u32, .little);
         try sma.shared.append(allocator, shared_index);
+    }
+
+    const cbr_count = try reader.takeInt(u32, .little);
+    for (0..cbr_count) |_| {
+        const kind_u8 = try reader.takeInt(u8, .little);
+        const kind: Sma.Operand.Kind = @enumFromInt(kind_u8);
+        const operand_index = try reader.takeInt(u32, .little);
+        const cbr_u128 = try reader.takeInt(u128, .little);
+        const cbr: ir.Cbr = @enumFromInt(cbr_u128);
+        try sma.cbr.put(allocator, Sma.Operand{ .kind = kind, .value = operand_index }, cbr);
     }
 
     const term_count = try reader.takeInt(u32, .little);
@@ -720,6 +974,14 @@ pub fn serialize(self: *Sma, writer: *std.io.Writer) error{WriteFailed}!void {
     try writer.writeInt(u32, @intCast(self.shared.items.len), .little);
     for (self.shared.items) |shared_index| {
         try writer.writeInt(u32, shared_index, .little);
+    }
+
+    try writer.writeInt(u32, @intCast(self.cbr.count()), .little);
+    var cbr_it = self.cbr.iterator();
+    while (cbr_it.next()) |kv| {
+        try writer.writeInt(u8, @intFromEnum(kv.key_ptr.kind), .little);
+        try writer.writeInt(u32, kv.key_ptr.value, .little);
+        try writer.writeInt(u128, @intFromEnum(kv.value_ptr.*), .little);
     }
 
     try writer.writeInt(u32, @intCast(self.terms.items.len), .little);

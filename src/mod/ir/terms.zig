@@ -37,28 +37,6 @@ pub const Implementation = struct {
         }
     }
 
-    pub fn cbr(self: *const Implementation) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("Implementation");
-
-        hasher.update("class:");
-        hasher.update(self.class.getCbr());
-
-        hasher.update("members.count:");
-        hasher.update(self.members.len);
-
-        hasher.update("members:");
-        for (self.members) |field| {
-            hasher.update("field.name:");
-            hasher.update(field.name.value);
-
-            hasher.update("field.value:");
-            hasher.update(field.value.getCbr());
-        }
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const Implementation, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         try out.appendSlice(dehydrator.sma.allocator, &.{
             ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.class) },
@@ -89,15 +67,6 @@ pub const Symbol = struct {
 
     pub fn hash(self: *const Symbol, hasher: *ir.QuickHasher) void {
         hasher.update(self.name.value.ptr);
-    }
-
-    pub fn cbr(self: *const Symbol) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("Symbol");
-
-        hasher.update(self.name.value);
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const Symbol, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -140,28 +109,6 @@ pub const Class = struct {
             hasher.update(field.name.value.ptr);
             hasher.update(field.type);
         }
-    }
-
-    pub fn cbr(self: *const Class) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("Class");
-
-        hasher.update("name:");
-        hasher.update(self.name.value);
-
-        hasher.update("elements.count:");
-        hasher.update(self.elements.len);
-
-        hasher.update("elements:");
-        for (self.elements) |elem| {
-            hasher.update("elem.name:");
-            hasher.update(elem.name.value);
-
-            hasher.update("elem.type:");
-            hasher.update(elem.type.getCbr());
-        }
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const Class, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -217,28 +164,6 @@ pub const Effect = struct {
         }
     }
 
-    pub fn cbr(self: *const Effect) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("Effect");
-
-        hasher.update("name:");
-        hasher.update(self.name.value);
-
-        hasher.update("elements.count:");
-        hasher.update(self.elements.len);
-
-        hasher.update("elements:");
-        for (self.elements) |elem| {
-            hasher.update("elem.name:");
-            hasher.update(elem.name.value);
-
-            hasher.update("elem.type:");
-            hasher.update(elem.type.getCbr());
-        }
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const Effect, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         try out.appendSlice(dehydrator.sma.allocator, &.{
             ir.Sma.Operand{ .kind = .name, .value = try dehydrator.dehydrateName(self.name) },
@@ -275,19 +200,6 @@ pub const Quantifier = struct {
         hasher.update(self.kind);
     }
 
-    pub fn cbr(self: *const Quantifier) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("Quantifier");
-
-        hasher.update("id:");
-        hasher.update(self.id);
-
-        hasher.update("kind:");
-        hasher.update(self.kind.getCbr());
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const Quantifier, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         try out.appendSlice(dehydrator.sma.allocator, &.{
             ir.Sma.Operand{ .kind = .uint, .value = self.id },
@@ -301,25 +213,25 @@ pub const Quantifier = struct {
 };
 
 /// The kind of a type that is a symbolic identity.
-pub const SymbolKind = ir.Term.IdentityType("SymbolKind");
+pub const SymbolKind = ir.Term.Identity("SymbolKind");
 
 /// The kind of a standard type.
-pub const TypeKind = ir.Term.IdentityType("TypeKind");
+pub const TypeKind = ir.Term.Identity("TypeKind");
 
 /// The kind of a type class type.
-pub const ClassKind = ir.Term.IdentityType("ClassKind");
+pub const ClassKind = ir.Term.Identity("ClassKind");
 
 /// The kind of an effect type.
-pub const EffectKind = ir.Term.IdentityType("EffectKind");
+pub const EffectKind = ir.Term.Identity("EffectKind");
 
 /// The kind of a handler type.
-pub const HandlerKind = ir.Term.IdentityType("HandlerKind");
+pub const HandlerKind = ir.Term.Identity("HandlerKind");
 
 /// The kind of a raw function type.
-pub const FunctionKind = ir.Term.IdentityType("FunctionKind");
+pub const FunctionKind = ir.Term.Identity("FunctionKind");
 
 /// The kind of a type constraint.
-pub const ConstraintKind = ir.Term.IdentityType("ConstraintKind");
+pub const ConstraintKind = ir.Term.Identity("ConstraintKind");
 
 /// The kind of a data value lifted to type level.
 pub const LiftedDataKind = struct {
@@ -331,13 +243,6 @@ pub const LiftedDataKind = struct {
 
     pub fn hash(self: *const LiftedDataKind, hasher: *ir.QuickHasher) void {
         hasher.update(self.unlifted_type);
-    }
-
-    pub fn cbr(self: *const LiftedDataKind) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("LiftedDataKind");
-        hasher.update(self.unlifted_type.getCbr());
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const LiftedDataKind, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -365,19 +270,6 @@ pub const ArrowKind = struct {
         hasher.update(self.output);
     }
 
-    pub fn cbr(self: *const ArrowKind) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("ArrowKind");
-
-        hasher.update("input:");
-        hasher.update(self.input.getCbr());
-
-        hasher.update("output:");
-        hasher.update(self.output.getCbr());
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const ArrowKind, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         try out.appendSlice(dehydrator.sma.allocator, &.{
             ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.input) },
@@ -391,16 +283,16 @@ pub const ArrowKind = struct {
 };
 
 /// Type data for a void type repr.
-pub const VoidType = ir.Term.IdentityType("VoidType");
+pub const VoidType = ir.Term.Identity("VoidType");
 
 /// Type data for a boolean type repr.
-pub const BoolType = ir.Term.IdentityType("BoolType"); // TODO: it may be better to represent this as a sum or enum; currently this was chosen because bool is a bit special in that it is representable as a single bit. Ideally, this property should be representable on the aformentioned options as well.
+pub const BoolType = ir.Term.Identity("BoolType"); // TODO: it may be better to represent this as a sum or enum; currently this was chosen because bool is a bit special in that it is representable as a single bit. Ideally, this property should be representable on the aformentioned options as well.
 
 /// Type data for a unit type repr.
-pub const UnitType = ir.Term.IdentityType("UnitType");
+pub const UnitType = ir.Term.Identity("UnitType");
 
 /// Type data for the top type repr representing the absence of control flow resulting from an expression.
-pub const NoReturnType = ir.Term.IdentityType("NoReturnType");
+pub const NoReturnType = ir.Term.Identity("NoReturnType");
 
 /// Type data for an integer type repr.
 pub const IntegerType = struct {
@@ -416,19 +308,6 @@ pub const IntegerType = struct {
     pub fn hash(self: *const IntegerType, hasher: *ir.QuickHasher) void {
         hasher.update(self.signedness);
         hasher.update(self.bit_width);
-    }
-
-    pub fn cbr(self: *const IntegerType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("IntegerType");
-
-        hasher.update("signedness:");
-        hasher.update(self.signedness.getCbr());
-
-        hasher.update("bit_width:");
-        hasher.update(self.bit_width.getCbr());
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const IntegerType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -455,15 +334,6 @@ pub const FloatType = struct {
 
     pub fn hash(self: *const FloatType, hasher: *ir.QuickHasher) void {
         hasher.update(self.bit_width);
-    }
-
-    pub fn cbr(self: *const FloatType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("FloatType");
-
-        hasher.update(self.bit_width.getCbr());
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const FloatType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -494,22 +364,6 @@ pub const ArrayType = struct {
         hasher.update(self.len);
         hasher.update(self.sentinel_value);
         hasher.update(self.payload);
-    }
-
-    pub fn cbr(self: *const ArrayType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("ArrayType");
-
-        hasher.update("len:");
-        hasher.update(self.len.getCbr());
-
-        hasher.update("sentinel_value:");
-        hasher.update(self.sentinel_value.getCbr());
-
-        hasher.update("payload:");
-        hasher.update(self.payload.getCbr());
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const ArrayType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -544,22 +398,6 @@ pub const PointerType = struct {
         hasher.update(self.alignment);
         hasher.update(self.address_space);
         hasher.update(self.payload);
-    }
-
-    pub fn cbr(self: *const PointerType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("PointerType");
-
-        hasher.update("alignment:");
-        hasher.update(self.alignment.getCbr());
-
-        hasher.update("address_space:");
-        hasher.update(self.address_space.getCbr());
-
-        hasher.update("payload:");
-        hasher.update(self.payload.getCbr());
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const PointerType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -597,25 +435,6 @@ pub const BufferType = struct {
         hasher.update(self.address_space);
         hasher.update(self.sentinel_value);
         hasher.update(self.payload);
-    }
-
-    pub fn cbr(self: *const BufferType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("BufferType");
-
-        hasher.update("alignment:");
-        hasher.update(self.alignment.getCbr());
-
-        hasher.update("address_space:");
-        hasher.update(self.address_space.getCbr());
-
-        hasher.update("sentinel_value:");
-        hasher.update(self.sentinel_value.getCbr());
-
-        hasher.update("payload:");
-        hasher.update(self.payload.getCbr());
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const BufferType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -656,25 +475,6 @@ pub const SliceType = struct {
         hasher.update(self.payload);
     }
 
-    pub fn cbr(self: *const SliceType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("SliceType");
-
-        hasher.update("alignment:");
-        hasher.update(self.alignment.getCbr());
-
-        hasher.update("address_space:");
-        hasher.update(self.address_space.getCbr());
-
-        hasher.update("sentinel_value:");
-        hasher.update(self.sentinel_value.getCbr());
-
-        hasher.update("payload:");
-        hasher.update(self.payload.getCbr());
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const SliceType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         try out.appendSlice(dehydrator.sma.allocator, &.{
             ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.alignment) },
@@ -701,19 +501,6 @@ pub const RowElementType = struct {
     pub fn hash(self: *const RowElementType, hasher: *ir.QuickHasher) void {
         hasher.update(self.label);
         hasher.update(self.payload);
-    }
-
-    pub fn cbr(self: *const RowElementType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("RowElementType");
-
-        hasher.update("label:");
-        hasher.update(self.label.getCbr());
-
-        hasher.update("payload:");
-        hasher.update(self.payload.getCbr());
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const RowElementType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -762,31 +549,6 @@ pub const LabelType = union(enum) {
         }
     }
 
-    pub fn cbr(self: *const LabelType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("LabelType");
-
-        switch (self.*) {
-            .name => |n| {
-                hasher.update("name:");
-                hasher.update(n.getCbr());
-            },
-            .index => |i| {
-                hasher.update("index:");
-                hasher.update(i.getCbr());
-            },
-            .exact => |e| {
-                hasher.update("exact.name:");
-                hasher.update(e.name.getCbr());
-
-                hasher.update("exact.index:");
-                hasher.update(e.index.getCbr());
-            },
-        }
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const LabelType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         switch (self.*) {
             .name => |n| {
@@ -818,7 +580,7 @@ pub const LiftedDataType = struct {
     /// The type of the data before it was lifted to a type value.
     unlifted_type: ir.Term,
     /// The actual value of the data.
-    value: *ir.Block,
+    value: *ir.Expression,
 
     pub fn eql(self: *const LiftedDataType, other: *const LiftedDataType) bool {
         return self.unlifted_type == other.unlifted_type and self.value == other.value;
@@ -827,19 +589,6 @@ pub const LiftedDataType = struct {
     pub fn hash(self: *const LiftedDataType, hasher: *ir.QuickHasher) void {
         hasher.update(self.unlifted_type);
         hasher.update(&self.value);
-    }
-
-    pub fn cbr(self: *const LiftedDataType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("LiftedDataType");
-
-        hasher.update("unlifted_type:");
-        hasher.update(self.unlifted_type.getCbr());
-
-        hasher.update("value:");
-        hasher.update(self.value.getCbr());
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const LiftedDataType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -902,37 +651,6 @@ pub const StructureType = struct {
             hasher.update(elem.payload);
             hasher.update(elem.alignment_override);
         }
-    }
-
-    pub fn cbr(self: *const StructureType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("StructureType");
-
-        hasher.update("name:");
-        hasher.update(self.name.value);
-
-        hasher.update("layout:");
-        hasher.update(self.layout.getCbr());
-
-        hasher.update("backing_integer:");
-        hasher.update(self.backing_integer.getCbr());
-
-        hasher.update("elements.len:");
-        hasher.update(self.elements.len);
-
-        hasher.update("elements:");
-        for (self.elements) |elem| {
-            hasher.update("elem.name:");
-            hasher.update(elem.name.value);
-
-            hasher.update("elem.payload:");
-            hasher.update(elem.payload.getCbr());
-
-            hasher.update("elem.alignment_override:");
-            hasher.update(elem.alignment_override.getCbr());
-        }
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const StructureType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -1001,31 +719,6 @@ pub const UnionType = struct {
             hasher.update(elem.name.value.ptr);
             hasher.update(elem.payload);
         }
-    }
-
-    pub fn cbr(self: *const UnionType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("UnionType");
-
-        hasher.update("name:");
-        hasher.update(self.name.value);
-
-        hasher.update("layout:");
-        hasher.update(self.layout.getCbr());
-
-        hasher.update("elements.len:");
-        hasher.update(self.elements.len);
-
-        hasher.update("elements:");
-        for (self.elements) |elem| {
-            hasher.update("elem.name:");
-            hasher.update(elem.name.value);
-
-            hasher.update("elem.payload:");
-            hasher.update(elem.payload.getCbr());
-        }
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const UnionType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -1098,37 +791,6 @@ pub const SumType = struct {
         }
     }
 
-    pub fn cbr(self: *const SumType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("SumType");
-
-        hasher.update("name:");
-        hasher.update(self.name.value);
-
-        hasher.update("tag_type:");
-        hasher.update(self.tag_type.getCbr());
-
-        hasher.update("layout:");
-        hasher.update(self.layout.getCbr());
-
-        hasher.update("elements.len:");
-        hasher.update(self.elements.len);
-
-        hasher.update("elements:");
-        for (self.elements) |elem| {
-            hasher.update("elem.name:");
-            hasher.update(elem.name.value);
-
-            hasher.update("elem.payload:");
-            hasher.update(elem.payload.getCbr());
-
-            hasher.update("elem.tag:");
-            hasher.update(elem.tag.getCbr());
-        }
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const SumType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         const name_id = try dehydrator.dehydrateName(self.name);
         const tag_type_id = try dehydrator.dehydrateTerm(self.tag_type);
@@ -1176,22 +838,6 @@ pub const FunctionType = struct {
         hasher.update(self.effects);
     }
 
-    pub fn cbr(self: *const FunctionType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("FunctionType");
-
-        hasher.update("input:");
-        hasher.update(self.input.getCbr());
-
-        hasher.update("output:");
-        hasher.update(self.output.getCbr());
-
-        hasher.update("effects:");
-        hasher.update(self.effects.getCbr());
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const FunctionType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         try out.appendSlice(dehydrator.sma.allocator, &.{
             ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.input) },
@@ -1225,25 +871,6 @@ pub const HandlerType = struct {
         hasher.update(self.output);
         hasher.update(self.handled_effect);
         hasher.update(self.added_effects);
-    }
-
-    pub fn cbr(self: *const HandlerType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("HandlerType");
-
-        hasher.update("input:");
-        hasher.update(self.input.getCbr());
-
-        hasher.update("output:");
-        hasher.update(self.output.getCbr());
-
-        hasher.update("handled_effect:");
-        hasher.update(self.handled_effect.getCbr());
-
-        hasher.update("added_effects:");
-        hasher.update(self.added_effects.getCbr());
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const HandlerType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -1288,28 +915,6 @@ pub const PolymorphicType = struct {
         hasher.update(self.payload);
     }
 
-    pub fn cbr(self: *const PolymorphicType) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("PolymorphicType");
-
-        hasher.update("quantifiers_count:");
-        hasher.update(self.quantifiers.len);
-
-        hasher.update("quantifiers:");
-        for (self.quantifiers) |quant| {
-            hasher.update("quantifier:");
-            hasher.update(quant.getCbr());
-        }
-
-        hasher.update("qualifiers:");
-        hasher.update(self.qualifiers.getCbr());
-
-        hasher.update("payload:");
-        hasher.update(self.payload.getCbr());
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const PolymorphicType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         for (self.quantifiers) |quant| {
             try out.appendSlice(dehydrator.sma.allocator, &.{
@@ -1344,19 +949,6 @@ pub const IsSubRowConstraint = struct {
         hasher.update(self.subtype_row);
     }
 
-    pub fn cbr(self: *const IsSubRowConstraint) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("IsSubRowConstraint");
-
-        hasher.update("primary_row:");
-        hasher.update(self.primary_row.getCbr());
-
-        hasher.update("subtype_row:");
-        hasher.update(self.subtype_row.getCbr());
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const IsSubRowConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         try out.appendSlice(dehydrator.sma.allocator, &.{
             ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.primary_row) },
@@ -1388,22 +980,6 @@ pub const RowsConcatenateConstraint = struct {
         hasher.update(self.row_result);
     }
 
-    pub fn cbr(self: *const RowsConcatenateConstraint) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("RowsConcatenateConstraint");
-
-        hasher.update("row_a:");
-        hasher.update(self.row_a.getCbr());
-
-        hasher.update("row_b:");
-        hasher.update(self.row_b.getCbr());
-
-        hasher.update("row_result:");
-        hasher.update(self.row_result.getCbr());
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const RowsConcatenateConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         try out.appendSlice(dehydrator.sma.allocator, &.{
             ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.row_a) },
@@ -1431,19 +1007,6 @@ pub const ImplementsClassConstraint = struct {
     pub fn hash(self: *const ImplementsClassConstraint, hasher: *ir.QuickHasher) void {
         hasher.update(self.data);
         hasher.update(self.class);
-    }
-
-    pub fn cbr(self: *const ImplementsClassConstraint) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("ImplementsClassConstraint");
-
-        hasher.update("data:");
-        hasher.update(self.data.getCbr());
-
-        hasher.update("class:");
-        hasher.update(self.class.getCbr());
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const ImplementsClassConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -1474,19 +1037,6 @@ pub const IsStructureConstraint = struct {
         hasher.update(self.row);
     }
 
-    pub fn cbr(self: *const IsStructureConstraint) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("IsStructureConstraint");
-
-        hasher.update("data:");
-        hasher.update(self.data.getCbr());
-
-        hasher.update("row:");
-        hasher.update(self.row.getCbr());
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const IsStructureConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         try out.appendSlice(dehydrator.sma.allocator, &.{
             ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.data) },
@@ -1515,19 +1065,6 @@ pub const IsUnionConstraint = struct {
         hasher.update(self.row);
     }
 
-    pub fn cbr(self: *const IsUnionConstraint) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("IsUnionConstraint");
-
-        hasher.update("data:");
-        hasher.update(self.data.getCbr());
-
-        hasher.update("row:");
-        hasher.update(self.row.getCbr());
-
-        return hasher.final();
-    }
-
     pub fn dehydrate(self: *const IsUnionConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
         try out.appendSlice(dehydrator.sma.allocator, &.{
             ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.data) },
@@ -1554,19 +1091,6 @@ pub const IsSumConstraint = struct {
     pub fn hash(self: *const IsSumConstraint, hasher: *ir.QuickHasher) void {
         hasher.update(self.data);
         hasher.update(self.row);
-    }
-
-    pub fn cbr(self: *const IsSumConstraint) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("IsSumConstraint");
-
-        hasher.update("data:");
-        hasher.update(self.data.getCbr());
-
-        hasher.update("row:");
-        hasher.update(self.row.getCbr());
-
-        return hasher.final();
     }
 
     pub fn dehydrate(self: *const IsSumConstraint, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {

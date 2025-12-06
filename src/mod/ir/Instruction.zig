@@ -8,8 +8,6 @@ const ir = @import("../ir.zig");
 
 /// The block that contains this operation.
 block: *ir.Block,
-/// Function-unique id for this instruction, used for hashing and debugging.
-id: Instruction.Id,
 /// The type of value produced by this operation, if any.
 type: ir.Term,
 /// The command code for this operation, ie an Operation or Termination.
@@ -27,9 +25,6 @@ next: ?*Instruction = null,
 
 /// The first use of the SSA variable produced by this instruction, or null if the variable is never used.
 first_user: ?*Use = null,
-
-/// Identifier for an instruction within a block.
-pub const Id = enum(u32) { _ };
 
 /// A use of an operand by an instruction.
 pub const Use = struct {
@@ -51,54 +46,12 @@ pub const Operand = union(enum) {
     block: *ir.Block,
     /// A reference to a global.
     global: *ir.Global,
+    /// A reference to a handler set.
+    handler_set: *ir.HandlerSet,
     /// A reference to a function.
     function: *ir.Function,
     /// A reference to an instruction producing an SSA variable.
     variable: *ir.Instruction,
-
-    /// Get the CBR for this operand.
-    pub fn getCbr(self: Operand) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("Operand");
-
-        switch (self) {
-            .term => |term| {
-                hasher.update("term:");
-                hasher.update(term.getCbr());
-            },
-            .blob => |blob| {
-                hasher.update("blob:");
-                hasher.update(blob.id);
-            },
-            .block => |block| {
-                hasher.update("block:");
-                hasher.update(block.id);
-            },
-            .global => |global| {
-                // We must include the module guid to differentiate between internal and external references
-                hasher.update("global.module.guid:");
-                hasher.update(global.module.guid);
-                hasher.update("global.id:");
-                hasher.update(global.id);
-            },
-            .function => |function| {
-                // We must include the module guid to differentiate between internal and external references
-                hasher.update("function.module.guid:");
-                hasher.update(function.module.guid);
-                hasher.update("function.id:");
-                hasher.update(function.id);
-            },
-            .variable => |variable| {
-                // We must include the block id to differentiate between variables with the same id in different blocks
-                hasher.update("variable.block.id:");
-                hasher.update(variable.block.id);
-                hasher.update("variable.id:");
-                hasher.update(variable.id);
-            },
-        }
-
-        return hasher.final();
-    }
 };
 
 /// Defines the action performed by a Termination
@@ -227,7 +180,6 @@ pub fn init(block: *ir.Block, ty: ir.Term, command: anytype, name: ?ir.Name, ops
     const uses = self.operands();
     self.* = Instruction{
         .block = block,
-        .id = block.module.generateInstruction.Id(),
         .type = ty,
         .command = @intFromEnum(command),
         .num_operands = ops.len,
@@ -290,38 +242,6 @@ pub fn isCommand(self: *Instruction, command: anytype) bool {
     return self.command == expected_command;
 }
 
-/// Get the CBR for this instruction.
-pub fn getCbr(self: *Instruction) ir.Cbr {
-    var hasher = ir.Cbr.Hasher.init();
-    hasher.update("Instruction");
-
-    hasher.update("id:");
-    hasher.update(self.id);
-
-    hasher.update("name:");
-    if (self.name) |name| {
-        hasher.update(name.value);
-    } else {
-        hasher.update("[null]");
-    }
-
-    hasher.update("type:");
-    hasher.update(self.type.getCbr());
-
-    hasher.update("command:");
-    hasher.update(self.command);
-
-    for (self.operands(), 0..) |use, i| {
-        hasher.update("operand.index:");
-        hasher.update(i);
-
-        hasher.update("operand.value:");
-        hasher.update(use.operand.getCbr());
-    }
-
-    return hasher.final();
-}
-
 pub fn dehydrate(self: *Instruction, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Instruction)) error{ BadEncoding, OutOfMemory }!void {
     const type_id = try dehydrator.dehydrateTerm(self.type);
 
@@ -337,6 +257,7 @@ pub fn dehydrate(self: *Instruction, dehydrator: *ir.Sma.Dehydrator, out: *commo
             .blob => |x| .{ .kind = .blob, .value = try dehydrator.dehydrateBlob(x) },
             .block => |x| .{ .kind = .block, .value = dehydrator.block_to_index.get(x).?[0] },
             .global => |x| .{ .kind = .global, .value = try dehydrator.dehydrateGlobal(x) },
+            .handler_set => |x| .{ .kind = .handler_set, .value = dehydrator.handler_set_to_index.get(x).? },
             .function => |x| .{ .kind = .function, .value = try dehydrator.dehydrateFunction(x) },
             .variable => |x| .{ .kind = .variable, .value = dehydrator.block_to_index.get(x.block).?[1].get(x).? },
         };

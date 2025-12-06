@@ -18,9 +18,7 @@ modules: common.UniqueReprMap(ir.Module.GUID, *ir.Module) = .empty,
 name_to_module_guid: common.StringMap(ir.Module.GUID) = .empty,
 
 /// A set of all names in the context, de-duplicated and owned by the context itself
-interned_name_set: common.StringMap(ir.Name.Id) = .empty,
-/// Reverse mapping for interned names.
-name_id_to_string: common.UniqueReprMap(ir.Name.Id, []const u8) = .empty,
+interned_name_set: common.StringSet = .empty,
 /// A set of all constant data blobs in the context, de-duplicated and owned by the context itself
 interned_data_set: common.HashSet(*const ir.Blob, ir.Blob.HashContext) = .empty,
 
@@ -36,9 +34,6 @@ named_shared_terms: common.StringMap(ir.Term) = .empty,
 tags: common.StringMap(ir.Term.Tag) = .empty,
 /// Map from ir.Term.Tag to ir.Term.VTable for the associated type
 vtables: common.UniqueReprMap(ir.Term.Tag, ir.Term.VTable) = .empty,
-
-/// Source of fresh ir.Term.Id values
-fresh_term_id: std.meta.Tag(ir.Term.Id) = 0,
 
 /// Initialize a new ir context on the given allocator.
 pub fn init(allocator: std.mem.Allocator) !*Context {
@@ -65,7 +60,6 @@ pub fn deinit(self: *Context) void {
     self.all_terms.deinit(self.allocator);
     self.name_to_module_guid.deinit(self.allocator);
     self.interned_name_set.deinit(self.allocator);
-    self.name_id_to_string.deinit(self.allocator);
     self.interned_data_set.deinit(self.allocator);
     self.shared_terms.deinit(self.allocator);
     self.named_shared_terms.deinit(self.allocator);
@@ -108,7 +102,6 @@ pub fn registerTermType(self: *Context, comptime T: type) error{ DuplicateTermTy
         .name = @typeName(T),
         .eql = @ptrCast(&T.eql),
         .hash = @ptrCast(&T.hash),
-        .cbr = @ptrCast(&T.cbr),
         .dehydrate = @ptrCast(&T.dehydrate),
         .rehydrate = @ptrCast(&T.rehydrate),
     });
@@ -143,10 +136,7 @@ pub fn internName(self: *Context, name: []const u8) error{OutOfMemory}!ir.Name {
 
     if (!gop.found_existing) {
         const owned_buf = try self.arena.allocator().dupe(u8, name);
-        const fresh_id: ir.Name.Id = @enumFromInt(self.name_id_to_string.count());
         gop.key_ptr.* = owned_buf;
-        gop.value_ptr.* = fresh_id;
-        try self.name_id_to_string.put(self.allocator, fresh_id, owned_buf);
     }
 
     return ir.Name{ .value = gop.key_ptr.* };
@@ -161,7 +151,6 @@ pub fn internData(self: *Context, alignment: core.Alignment, bytes: []const u8) 
     const new_buf = try self.arena.allocator().alignedAlloc(u8, .fromByteUnits(@alignOf(ir.Blob)), @sizeOf(ir.Blob) + bytes.len);
     const blob: *ir.Blob = @ptrCast(new_buf.ptr);
     blob.* = .{
-        .id = @enumFromInt(self.interned_data_set.count()),
         .layout = core.Layout{ .alignment = alignment, .size = @intCast(bytes.len) },
     };
     @memcpy(new_buf.ptr + @sizeOf(ir.Blob), bytes);
@@ -216,9 +205,30 @@ pub fn getNamedSharedTerm(self: *Context, name: ir.Name) ?ir.Term {
     return self.named_shared_terms.get(name.value);
 }
 
-/// Get a fresh unique ir.Term.Id for this context.
-pub fn generateTermId(self: *Context) ir.Term.Id {
-    const id = self.fresh_term_id;
-    self.fresh_term_id += 1;
-    return @enumFromInt(id);
+pub fn dehydrate(self: *Context, allocator: std.mem.Allocator) error{ BadEncoding, OutOfMemory }!*ir.Sma {
+    var dehydrator = try ir.Sma.Dehydrator.init(self, allocator);
+    defer dehydrator.deinit();
+
+    // we must dehydrate modules in order for cbr purposes
+    const sorted_guids = try self.allocator.alloc(ir.Module.GUID, self.modules.count());
+    defer self.allocator.free(sorted_guids);
+
+    var module_it = self.modules.keyIterator();
+    var module_index: usize = 0;
+    while (module_it.next()) |guid| : (module_index += 1) {
+        sorted_guids[module_index] = guid.*;
+    }
+
+    std.mem.sort(ir.Module.GUID, sorted_guids, {}, struct {
+        pub fn guid_sorter(_: void, a: ir.Module.GUID, b: ir.Module.GUID) bool {
+            return @intFromEnum(a) < @intFromEnum(b);
+        }
+    }.guid_sorter);
+
+    for (sorted_guids) |guid| {
+        const module = self.modules.get(guid).?;
+        _ = try dehydrator.dehydrateModule(module);
+    }
+
+    return dehydrator.finalize();
 }

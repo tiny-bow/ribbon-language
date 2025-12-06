@@ -1,4 +1,5 @@
-/// A constant data blob, stored in the ir context. Data such as string literals are stored as blobs.
+//! A constant data blob, stored in the ir context. Data such as string literals are stored as blobs.
+//! This type is also used directly in the SMA, thus it has serialize, deserialize, and cbr methods.
 const Blob = @This();
 
 const std = @import("std");
@@ -6,12 +7,7 @@ const core = @import("core");
 
 const ir = @import("../ir.zig");
 
-id: Blob.Id,
 layout: core.Layout,
-cached_cbr: ?ir.Cbr = null,
-
-/// Identifier for a data blob within the ir context.
-pub const Id = enum(u32) { _ };
 
 pub fn deinit(self: *const Blob, allocator: std.mem.Allocator) void {
     const base: [*]const u8 = @ptrCast(self);
@@ -26,14 +22,13 @@ pub fn clone(self: *const Blob, allocator: std.mem.Allocator) error{OutOfMemory}
     return new_blob;
 }
 
-pub fn deserialize(reader: *std.io.Reader, id: Blob.Id, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!*const Blob {
+pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!*const Blob {
     const alignment = try reader.takeInt(u32, .little);
     const size = try reader.takeInt(u32, .little);
 
     const new_buf = try allocator.alignedAlloc(u8, .fromByteUnits(@alignOf(Blob)), @sizeOf(Blob) + size);
     const blob: *Blob = @ptrCast(new_buf.ptr);
     blob.* = .{
-        .id = id, // id will be assigned when interned
         .layout = core.Layout{ .alignment = @intCast(alignment), .size = @intCast(size) },
     };
 
@@ -58,11 +53,7 @@ pub inline fn getBytes(self: *const Blob) []const u8 {
 }
 
 /// Get the CBR for this blob.
-pub fn getCbr(self: *const Blob) error{OutOfMemory}!ir.Cbr {
-    if (self.cached_cbr) |cached| {
-        return cached;
-    }
-
+pub fn getCbr(self: *const Blob) ir.Cbr {
     var hasher = ir.Cbr.Hasher.init();
     hasher.update("Blob");
 
@@ -72,9 +63,7 @@ pub fn getCbr(self: *const Blob) error{OutOfMemory}!ir.Cbr {
     hasher.update("bytes:");
     hasher.update(self.getBytes());
 
-    const buf = hasher.final();
-    @constCast(self).cached_cbr = buf;
-    return buf;
+    return hasher.final();
 }
 
 /// An adapted hash context for blobs, used when interning yet-unmarshalled data.
