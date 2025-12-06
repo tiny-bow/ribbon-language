@@ -45,10 +45,10 @@ pub const ModuleInfo = struct {
 
     /// A cryptographic hash of the canonical module path, serving as a stable,
     /// unique identifier for this module across all builds and machines.
-    guid: ir.ModuleGUID,
+    guid: ir.Module.GUID,
 
     /// A list of the GUIDs of modules that this module directly imports.
-    dependencies: common.ArrayList(ir.ModuleGUID),
+    dependencies: common.ArrayList(ir.Module.GUID),
 
     /// The cryptographic hash of this module's public interface (API/ABI).
     /// This is populated after the frontend pass and is the key to incremental builds.
@@ -68,7 +68,7 @@ pub const ModuleInfo = struct {
 /// The graph is a map from a module's stable GUID to its metadata.
 pub const DependencyGraph = struct {
     allocator: std.mem.Allocator,
-    modules: common.HashMap(ir.ModuleGUID, ModuleInfo, common.UniqueReprHashContext64(ir.ModuleGUID)),
+    modules: common.HashMap(ir.Module.GUID, ModuleInfo, common.UniqueReprHashContext64(ir.Module.GUID)),
 
     pub fn deinit(self: *DependencyGraph) void {
         var it = self.modules.valueIterator();
@@ -91,7 +91,7 @@ pub const CompilationSession = struct {
 
     /// Maps a child context's ID to its module's GUID. This is the key to
     /// resolving external references during SMA dehydration.
-    // context_id_to_module: common.HashMap(ir.Context.Id, ir.ModuleGUID, common.UniqueReprHashContext64(ir.Context.Id)),
+    // context_id_to_module: common.HashMap(ir.Context.Id, ir.Module.GUID, common.UniqueReprHashContext64(ir.Context.Id)),
 
     /// TODO: A reverse map from an `ir.Ref` (pointing to an external symbol)
     /// back to its original module GUID and symbol name. This will be populated
@@ -198,7 +198,7 @@ pub const BuildOrchestrator = struct {
             try visited.put(self.gpa, current_path, {});
 
             const canonical_path = try self.canonicalizePath(current_path);
-            const guid = ir.ModuleGUID.fromInt(common.hash128(canonical_path));
+            const guid = ir.Module.GUID.fromInt(common.hash128(canonical_path));
 
             // TODO: Replace this stub with a real call to a lightweight frontend parser.
             // const dependency_paths = try frontend.discoverImports(self.build_root, current_path);
@@ -214,7 +214,7 @@ pub const BuildOrchestrator = struct {
                 const dep_canonical_path = try self.canonicalizePath(dep_path);
                 defer self.gpa.free(dep_canonical_path);
 
-                const dep_guid = ir.ModuleGUID.fromInt(common.hash128(dep_canonical_path));
+                const dep_guid = ir.Module.GUID.fromInt(common.hash128(dep_canonical_path));
                 try module_info.dependencies.append(self.gpa, dep_guid);
                 try work_queue.append(self.gpa, try self.gpa.dupe(u8, dep_path));
             }
@@ -228,7 +228,7 @@ pub const BuildOrchestrator = struct {
     ///
     /// Returns a list of SCCs, where each SCC is a list of module GUIDs. The outer
     /// list is topologically sorted.
-    fn findBuildOrder(self: *BuildOrchestrator, graph: *const DependencyGraph) !common.ArrayList(common.ArrayList(ir.ModuleGUID)) {
+    fn findBuildOrder(self: *BuildOrchestrator, graph: *const DependencyGraph) !common.ArrayList(common.ArrayList(ir.Module.GUID)) {
         return Tarjan.run(self, graph);
     }
 
@@ -251,7 +251,7 @@ pub const BuildOrchestrator = struct {
         self: *BuildOrchestrator,
         session: *CompilationSession,
         graph: *const DependencyGraph,
-        build_order: []const common.ArrayList(ir.ModuleGUID),
+        build_order: []const common.ArrayList(ir.Module.GUID),
     ) !void {
         log.info("Backend pass...", .{});
 
@@ -286,9 +286,9 @@ const Tarjan = struct {
     graph: *const DependencyGraph,
 
     index: u32 = 0,
-    stack: common.ArrayList(ir.ModuleGUID),
-    node_info: common.HashMap(ir.ModuleGUID, NodeInfo, common.UniqueReprHashContext64(ir.ModuleGUID)),
-    sccs: common.ArrayList(common.ArrayList(ir.ModuleGUID)),
+    stack: common.ArrayList(ir.Module.GUID),
+    node_info: common.HashMap(ir.Module.GUID, NodeInfo, common.UniqueReprHashContext64(ir.Module.GUID)),
+    sccs: common.ArrayList(common.ArrayList(ir.Module.GUID)),
 
     const NodeInfo = struct {
         index: u32,
@@ -296,7 +296,7 @@ const Tarjan = struct {
         on_stack: bool = false,
     };
 
-    fn run(o: *BuildOrchestrator, g: *const DependencyGraph) !common.ArrayList(common.ArrayList(ir.ModuleGUID)) {
+    fn run(o: *BuildOrchestrator, g: *const DependencyGraph) !common.ArrayList(common.ArrayList(ir.Module.GUID)) {
         var self = Tarjan{
             .orchestrator = o,
             .graph = g,
@@ -318,12 +318,12 @@ const Tarjan = struct {
 
         // Tarjan's algorithm finds SCCs in reverse topological order.
         // We reverse the list to get the correct build order.
-        std.mem.reverse(common.ArrayList(ir.ModuleGUID), self.sccs.items);
+        std.mem.reverse(common.ArrayList(ir.Module.GUID), self.sccs.items);
 
         return self.sccs;
     }
 
-    fn strongconnect(self: *Tarjan, v_guid: ir.ModuleGUID) !void {
+    fn strongconnect(self: *Tarjan, v_guid: ir.Module.GUID) !void {
         // Set the depth index for v to the smallest unused index
         _ = try self.node_info.put(self.orchestrator.gpa, v_guid, .{
             .index = self.index,
@@ -353,7 +353,7 @@ const Tarjan = struct {
 
         // If v is a root node, pop the stack and generate an SCC
         if (self.node_info.get(v_guid).?.low_link == self.node_info.get(v_guid).?.index) {
-            var new_scc = common.ArrayList(ir.ModuleGUID).init(self.orchestrator.gpa);
+            var new_scc = common.ArrayList(ir.Module.GUID).init(self.orchestrator.gpa);
             errdefer new_scc.deinit(self.orchestrator.gpa);
 
             while (true) {
