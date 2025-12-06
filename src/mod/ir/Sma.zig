@@ -11,6 +11,7 @@ const ir = @import("../ir.zig");
 
 allocator: std.mem.Allocator,
 arena: std.heap.ArenaAllocator,
+
 version: common.SemVer = core.VERSION,
 
 tags: common.ArrayList([]const u8) = .empty,
@@ -20,6 +21,7 @@ shared: common.ArrayList(u32) = .empty,
 terms: common.ArrayList(Sma.Term) = .empty,
 modules: common.ArrayList(Sma.Module) = .empty,
 expressions: common.ArrayList(Sma.Expression) = .empty,
+globals: common.ArrayList(Sma.Global) = .empty,
 functions: common.ArrayList(Sma.Function) = .empty,
 
 pub const magic = "RIBBONIR";
@@ -34,6 +36,7 @@ pub const Dehydrator = struct {
     term_to_index: common.UniqueReprMap(ir.Term, u32) = .empty,
     module_to_index: common.UniqueReprMap(*ir.Module, u32) = .empty,
     expression_to_index: common.UniqueReprMap(*ir.Block, u32) = .empty,
+    global_to_index: common.UniqueReprMap(*ir.Global, u32) = .empty,
     function_to_index: common.UniqueReprMap(*ir.Function, u32) = .empty,
     block_to_index: common.UniqueReprMap(*ir.Block, struct { u32, common.UniqueReprMap(*ir.Instruction, u32) }) = .empty,
 
@@ -56,6 +59,7 @@ pub const Dehydrator = struct {
         self.term_to_index.deinit(self.ctx.allocator);
         self.module_to_index.deinit(self.ctx.allocator);
         self.expression_to_index.deinit(self.ctx.allocator);
+        self.global_to_index.deinit(self.ctx.allocator);
         self.function_to_index.deinit(self.ctx.allocator);
         self.block_to_index.deinit(self.ctx.allocator);
         defer self.* = undefined;
@@ -73,6 +77,7 @@ pub const Rehydrator = struct {
     index_to_term: common.UniqueReprMap(u32, ir.Term) = .empty,
     index_to_module: common.UniqueReprMap(u32, *ir.Module) = .empty,
     index_to_expression: common.UniqueReprMap(u32, *ir.Block) = .empty,
+    index_to_global: common.UniqueReprMap(u32, *ir.Global) = .empty,
     index_to_function: common.UniqueReprMap(u32, *ir.Function) = .empty,
     index_to_block: common.UniqueReprMap(u32, struct { *ir.Block, common.UniqueReprMap(u32, *ir.Instruction) }) = .empty,
 
@@ -92,6 +97,7 @@ pub const Rehydrator = struct {
         self.index_to_term.deinit(self.ctx.allocator);
         self.index_to_module.deinit(self.ctx.allocator);
         self.index_to_expression.deinit(self.ctx.allocator);
+        self.index_to_global.deinit(self.ctx.allocator);
         self.index_to_function.deinit(self.ctx.allocator);
         self.index_to_block.deinit(self.ctx.allocator);
         self.* = undefined;
@@ -103,10 +109,12 @@ pub const Module = struct {
     name: u32,
     cbr: ir.Cbr,
     exported_terms: common.ArrayList(Sma.Export) = .empty,
+    exported_globals: common.ArrayList(Sma.Export) = .empty,
     exported_functions: common.ArrayList(Sma.Export) = .empty,
 
     pub fn deinit(self: *Sma.Module, allocator: std.mem.Allocator) void {
         self.exported_terms.deinit(allocator);
+        self.exported_globals.deinit(allocator);
         self.exported_functions.deinit(allocator);
     }
 
@@ -124,6 +132,14 @@ pub const Module = struct {
         for (0..exported_term_count) |_| {
             const ex = try Sma.Export.deserialize(reader);
             try exported_terms.append(allocator, ex);
+        }
+
+        const exported_global_count = try reader.takeInt(u32, .little);
+        var exported_globals = common.ArrayList(Sma.Export).empty;
+        errdefer exported_globals.deinit(allocator);
+        for (0..exported_global_count) |_| {
+            const ex = try Sma.Export.deserialize(reader);
+            try exported_globals.append(allocator, ex);
         }
 
         const exported_function_count = try reader.takeInt(u32, .little);
@@ -152,6 +168,9 @@ pub const Module = struct {
         try writer.writeInt(u32, @intCast(self.exported_terms.items.len), .little);
         for (self.exported_terms.items) |*ex| try ex.serialize(writer);
 
+        try writer.writeInt(u32, @intCast(self.exported_globals.items.len), .little);
+        for (self.exported_globals.items) |*ex| try ex.serialize(writer);
+
         try writer.writeInt(u32, @intCast(self.exported_functions.items.len), .little);
         for (self.exported_functions.items) |*ex| try ex.serialize(writer);
     }
@@ -173,6 +192,29 @@ pub const Export = struct {
     pub fn serialize(self: *Sma.Export, writer: *std.io.Writer) error{WriteFailed}!void {
         try writer.writeInt(u32, self.name, .little);
         try writer.writeInt(u32, self.value, .little);
+    }
+};
+
+pub const Global = struct {
+    name: u32,
+    type: u32,
+    initializer: u32,
+
+    pub fn deserialize(reader: *std.io.Reader) error{ EndOfStream, ReadFailed }!Sma.Global {
+        const name = try reader.takeInt(u32, .little);
+        const ty = try reader.takeInt(u32, .little);
+        const initializer = try reader.takeInt(u32, .little);
+        return Sma.Global{
+            .name = name,
+            .type = ty,
+            .initializer = initializer,
+        };
+    }
+
+    pub fn serialize(self: *Sma.Global, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeInt(u32, self.name, .little);
+        try writer.writeInt(u32, self.type, .little);
+        try writer.writeInt(u32, self.initializer, .little);
     }
 };
 
@@ -375,6 +417,7 @@ pub fn deinit(self: *Sma) void {
     self.tags.deinit(self.allocator);
     self.names.deinit(self.allocator);
     self.shared.deinit(self.allocator);
+    self.globals.deinit(self.allocator);
 
     for (self.blobs.items) |blob| blob.deinit(self.allocator);
     self.blobs.deinit(self.allocator);
@@ -461,6 +504,12 @@ pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ 
         try sma.expressions.append(allocator, expression);
     }
 
+    const global_count = try reader.takeInt(u32, .little);
+    for (0..global_count) |_| {
+        const global = try Sma.Global.deserialize(reader);
+        try sma.globals.append(allocator, global);
+    }
+
     const function_count = try reader.takeInt(u32, .little);
     for (0..function_count) |_| {
         const function = try Sma.Function.deserialize(reader, allocator);
@@ -503,6 +552,9 @@ pub fn serialize(self: *Sma, writer: *std.io.Writer) error{WriteFailed}!void {
 
     try writer.writeInt(u32, @intCast(self.expressions.items.len), .little);
     for (self.expressions.items) |*expression| try expression.serialize(writer);
+
+    try writer.writeInt(u32, @intCast(self.globals.items.len), .little);
+    for (self.globals.items) |*global| try global.serialize(writer);
 
     try writer.writeInt(u32, @intCast(self.functions.items.len), .little);
     for (self.functions.items) |*function| try function.serialize(writer);

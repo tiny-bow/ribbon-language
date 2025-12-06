@@ -39,6 +39,17 @@ fresh_instruction_id: std.meta.Tag(ir.Instruction.Id) = 0,
 /// Identifier for a basic block within a function.
 pub const Id = enum(u32) { _ };
 
+/// An iterator over the instructions in a Block.
+pub const Iterator = struct {
+    op: ?*ir.Instruction,
+    /// Advance the linked list pointer and return the current instruction.
+    pub fn next(self: *Iterator) ?*ir.Instruction {
+        const current = self.op orelse return null;
+        self.op = current.next;
+        return current;
+    }
+};
+
 pub fn init(module: *ir.Module, function: ?*ir.Function, name: ?ir.Name) error{OutOfMemory}!*Block {
     const self = try module.block_pool.create();
     self.* = Block{
@@ -56,20 +67,15 @@ pub fn deinit(self: *Block) void {
     self.successors.deinit(self.module.root.allocator);
 }
 
-/// An iterator over the instructions in a Block.
-pub const Iterator = struct {
-    op: ?*ir.Instruction,
-    /// Advance the linked list pointer and return the current instruction.
-    pub fn next(self: *Iterator) ?*ir.Instruction {
-        const current = self.op orelse return null;
-        self.op = current.next;
-        return current;
-    }
-};
-
 /// Get an iterator over the instructions in this block.
 pub fn iterate(self: *Block) Iterator {
     return Iterator{ .op = self.first_op };
+}
+
+pub fn generateInstructionId(self: *Block) ir.Instruction.Id {
+    const id = self.fresh_instruction_id;
+    self.fresh_instruction_id += 1;
+    return @enumFromInt(id);
 }
 
 /// Get the CBR for this block.
@@ -99,23 +105,16 @@ fn getCbrRecurse(self: *Block, visited: *common.UniqueReprSet(*Block)) error{Out
     hasher.update("module.guid:");
     hasher.update(self.module.guid);
 
-    hasher.update("block_id:");
+    hasher.update("id:");
     hasher.update(self.id);
 
     if (visited.contains(self)) {
-        const buf = hasher.final();
-        self.cached_cbr = buf;
-        return buf;
+        return hasher.final();
     }
 
     try visited.put(self.module.root.allocator, self, {});
 
-    hasher.update("name:");
-    if (self.name) |name| {
-        hasher.update(name.value);
-    } else {
-        hasher.update("[null]");
-    }
+    // name has no effect on canonical identity
 
     {
         var op_it = self.iterate();
@@ -152,10 +151,4 @@ fn getCbrRecurse(self: *Block, visited: *common.UniqueReprSet(*Block)) error{Out
     const buf = hasher.final();
     self.cached_cbr = buf;
     return buf;
-}
-
-pub fn generateInstructionId(self: *Block) ir.Instruction.Id {
-    const id = self.fresh_instruction_id;
-    self.fresh_instruction_id += 1;
-    return @enumFromInt(id);
 }

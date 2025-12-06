@@ -15,6 +15,8 @@ name: ir.Name,
 
 /// Symbols exported from this module.
 exported_symbols: common.StringMap(Module.Binding) = .empty,
+/// Pool allocator for globals in this module.
+global_pool: common.ManagedPool(ir.Global),
 /// Pool allocator for functions in this module.
 function_pool: common.ManagedPool(ir.Function),
 /// Pool allocator for blocks in this module.
@@ -22,6 +24,7 @@ block_pool: common.ManagedPool(ir.Block),
 
 /// Id generation state for this module.
 fresh_ids: struct {
+    global: std.meta.Tag(ir.Global.Id) = 0,
     function: std.meta.Tag(ir.Function.Id) = 0,
     block: std.meta.Tag(ir.Block.Id) = 0,
 } = .{},
@@ -50,6 +53,7 @@ pub fn init(root: *ir.Context, name: ir.Name, guid: Module.GUID) !*Module {
         .root = root,
         .guid = guid,
         .name = name,
+        .global_pool = .init(root.allocator),
         .function_pool = .init(root.allocator),
         .block_pool = .init(root.allocator),
     };
@@ -79,6 +83,15 @@ pub fn exportTerm(self: *Module, name: ir.Name, term: ir.Term) error{ DuplicateM
     gop.value_ptr.* = .{ .term = term };
 }
 
+/// Export a global from this module.
+pub fn exportGlobal(self: *Module, name: ir.Name, global: *ir.Global) error{ DuplicateModuleExports, OutOfMemory }!void {
+    const gop = try self.exported_symbols.getOrPut(self.root.allocator, name.value);
+    if (gop.found_existing) {
+        return error.DuplicateModuleExports;
+    }
+    gop.value_ptr.* = .{ .global = global };
+}
+
 /// Export a function from this module.
 pub fn exportFunction(self: *Module, name: ir.Name, function: *ir.Function) error{ DuplicateModuleExports, OutOfMemory }!void {
     const gop = try self.exported_symbols.getOrPut(self.root.allocator, name.value);
@@ -86,6 +99,13 @@ pub fn exportFunction(self: *Module, name: ir.Name, function: *ir.Function) erro
         return error.DuplicateModuleExports;
     }
     gop.value_ptr.* = .{ .function = function };
+}
+
+/// Generate a fresh unique ir.Global.Id for this module.
+pub fn generateGlobalId(self: *Module) ir.Global.Id {
+    const id = self.fresh_ids.global;
+    self.fresh_ids.global += 1;
+    return @enumFromInt(id);
 }
 
 /// Generate a fresh unique ir.Function.Id for this module.

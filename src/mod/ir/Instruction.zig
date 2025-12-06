@@ -49,6 +49,8 @@ pub const Operand = union(enum) {
     blob: *const ir.Blob,
     /// A reference to a basic block.
     block: *ir.Block,
+    /// A reference to a global.
+    global: *ir.Global,
     /// A reference to a function.
     function: *ir.Function,
     /// A reference to an instruction producing an SSA variable.
@@ -71,6 +73,13 @@ pub const Operand = union(enum) {
             .block => |block| {
                 hasher.update("block:");
                 hasher.update(block.id);
+            },
+            .global => |global| {
+                // We must include the module guid to differentiate between internal and external references
+                hasher.update("global.module.guid:");
+                hasher.update(global.module.guid);
+                hasher.update("global.id:");
+                hasher.update(global.id);
             },
             .function => |function| {
                 // We must include the module guid to differentiate between internal and external references

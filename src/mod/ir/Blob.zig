@@ -66,9 +66,6 @@ pub fn getCbr(self: *const Blob) error{OutOfMemory}!ir.Cbr {
     var hasher = ir.Cbr.Hasher.init();
     hasher.update("Blob");
 
-    hasher.update("id:");
-    hasher.update(self.id);
-
     hasher.update("layout:");
     hasher.update(self.layout);
 

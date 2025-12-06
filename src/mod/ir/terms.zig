@@ -44,7 +44,7 @@ pub const HandlerSet = struct {
         hasher.update("handlers:");
         for (self.handlers) |handler| {
             hasher.update("handler:");
-            hasher.update(handler.getCbr());
+            hasher.update(handler.getFullCbr());
         }
 
         hasher.update("handler_type:");

@@ -29,6 +29,7 @@ cached_cbr: ?ir.Cbr = null,
 /// Identifier for a function within a module.
 pub const Id = enum(u32) { _ };
 
+/// Create a new function in the given module, pulling memory from the pool and assigning it a fresh identity.
 pub fn init(module: *ir.Module, name: ?ir.Name, kind: Kind, ty: ir.Term) error{OutOfMemory}!*Function {
     const self = try module.function_pool.create();
     const entry_name = try module.root.internName("entry");
@@ -46,6 +47,8 @@ pub fn init(module: *ir.Module, name: ?ir.Name, kind: Kind, ty: ir.Term) error{O
     return self;
 }
 
+/// Deinitialize this function, freeing its resources.
+/// * Does not return the function to its module's pool.
 pub fn deinit(self: *Function) void {
     self.arena.deinit();
 }
@@ -58,21 +61,14 @@ pub const Kind = enum(u1) {
     handler,
 };
 
-/// Get the CBR for this function.
-pub fn getCbr(self: *Function) ir.Cbr {
+/// Get the full CBR for this function.
+pub fn getFullCbr(self: *Function) ir.Cbr {
     if (self.cached_cbr) |cached| {
         return cached;
     }
 
     var hasher = ir.Cbr.Hasher.init();
     hasher.update("Function");
-
-    // We must include the module guid to differentiate between internal and external references
-    hasher.update("module.guid:");
-    hasher.update(self.module.guid);
-
-    hasher.update("id:");
-    hasher.update(self.id);
 
     hasher.update("name:");
     if (self.name) |name| {
