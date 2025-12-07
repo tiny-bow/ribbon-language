@@ -71,7 +71,7 @@ pub fn rehydrate(
 
     func.* = Function{
         .kind = sma_func.kind,
-        .name = try rehydrator.rehydrateName(sma_func.name),
+        .name = try rehydrator.tryRehydrateName(sma_func.name),
         .body = try ir.Expression.rehydrate(&sma_func.body, rehydrator, func),
     };
 

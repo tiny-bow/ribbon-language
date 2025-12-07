@@ -315,7 +315,7 @@ pub fn rehydrate(
     index_to_instr: []const *ir.Instruction,
 ) error{ BadEncoding, OutOfMemory }!void {
     const ty = try rehydrator.rehydrateTerm(sma_instr.type);
-    const name = try rehydrator.rehydrateName(sma_instr.name);
+    const name = try rehydrator.tryRehydrateName(sma_instr.name);
 
     var ops = common.ArrayList(Operand).empty;
     defer ops.deinit(rehydrator.ctx.allocator);

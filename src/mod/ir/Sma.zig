@@ -315,6 +315,14 @@ pub const Rehydrator = struct {
         }
     }
 
+    pub fn tryRehydrateName(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!?ir.Name {
+        if (index == Sma.sentinel_index) {
+            return null;
+        } else {
+            return try self.rehydrateName(index);
+        }
+    }
+
     pub fn rehydrateBlob(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!*const ir.Blob {
         if (self.index_to_blob.get(index)) |blob| {
             return blob;
@@ -484,8 +492,7 @@ pub const Module = struct {
         hasher.update("guid:");
         hasher.update(@intFromEnum(self.guid));
 
-        hasher.update("name:"); // TODO: not sure if names should factor into cbr
-        hasher.update(sma.cbr.get(.{ .kind = .name, .value = self.name }).?);
+        // module names do not factor into cbr
 
         hasher.update("exports:");
         for (self.exports.items, 0..) |ex, i| {
@@ -530,7 +537,7 @@ pub const Export = struct {
         var hasher = ir.Cbr.Hasher.init();
         hasher.update("[Export]");
 
-        hasher.update("name:"); // TODO: not sure if names should factor into cbr
+        hasher.update("name:");
         hasher.update(sma.cbr.get(.{ .kind = .name, .value = self.name }).?);
 
         hasher.update("value:");
@@ -572,7 +579,7 @@ pub const Global = struct {
         var hasher = ir.Cbr.Hasher.init();
         hasher.update("[Global]");
 
-        hasher.update("name:"); // TODO: not sure if names should factor into cbr
+        hasher.update("name:"); // TODO: not sure if abi names should factor into cbr
         hasher.update(sma.cbr.get(.{ .kind = .name, .value = self.name }).?);
 
         hasher.update("type:");
@@ -692,7 +699,7 @@ pub const Function = struct {
         var hasher = ir.Cbr.Hasher.init();
         hasher.update("[Function]");
 
-        hasher.update("name:"); // TODO: not sure if names should factor into cbr
+        hasher.update("name:"); // TODO: not sure if abi names should factor into cbr
         hasher.update(sma.cbr.get(.{ .kind = .name, .value = self.name }).?);
 
         hasher.update("kind:");

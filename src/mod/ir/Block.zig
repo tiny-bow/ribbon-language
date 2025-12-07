@@ -52,6 +52,17 @@ pub fn iterate(self: *Block) Iterator {
     return Iterator{ .op = self.first_op };
 }
 
+/// Add a successor block to this block, updating both sides of the edge.
+/// * If the successor is already present, this is a no-op.
+/// * This is generally expected to be called in builder apis, not directly by the user.
+pub fn addSuccessor(self: *Block, succ: *Block) error{OutOfMemory}!void {
+    if (std.mem.indexOfScalar(*Block, self.successors.items, succ) != null) return;
+
+    try self.successors.append(self.expression.module.root.allocator, succ);
+    try succ.predecessors.append(self.expression.module.root.allocator, self);
+}
+
+// TODO: bit of a mismatch in architecture between dehy/rehy here; this function's rehy equivalent is implemented in the Expression rehydrator rather than freestanding.
 pub fn allocateDehydratedIndices(
     self: *Block,
     dehydrator: *ir.Sma.Dehydrator,
@@ -101,13 +112,6 @@ pub fn dehydrateInstructions(
     for (self.successors.items) |succ| {
         try succ.dehydrateInstructions(dehydrator, out);
     }
-}
-
-pub fn addSuccessor(self: *Block, succ: *Block) error{OutOfMemory}!void {
-    if (std.mem.indexOfScalar(*Block, self.successors.items, succ) != null) return;
-
-    try self.successors.append(self.expression.module.root.allocator, succ);
-    try succ.predecessors.append(self.expression.module.root.allocator, self);
 }
 
 pub fn rehydrate(

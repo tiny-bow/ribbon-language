@@ -45,7 +45,7 @@ pub fn rehydrate(sma_global: *const ir.Sma.Global, rehydrator: *ir.Sma.Rehydrato
         .module = module,
         .type = try rehydrator.rehydrateTerm(sma_global.type),
         .initializer = try rehydrator.rehydrateTerm(sma_global.initializer),
-        .name = try rehydrator.rehydrateName(sma_global.name),
+        .name = try rehydrator.tryRehydrateName(sma_global.name),
     };
     return global;
 }
