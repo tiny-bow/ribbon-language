@@ -10,9 +10,12 @@ const ir = @import("../ir.zig");
 
 /// The module this expression belongs to.
 module: *ir.Module,
+/// The function this expression forms the body of, if it is not a constant expression.
+function: ?*ir.Function = null,
 /// The type of this expression, which must be a value type or a polymorphic type that instantiates to a value type.
 /// * Note that if this expression is the body of a function, the type will be a function type.
 type: ir.Term,
+
 /// The entry block of this expression.
 entry: *ir.Block,
 /// Storage for the expression's instructions.
@@ -22,8 +25,13 @@ arena: std.heap.ArenaAllocator,
 /// The list of handler sets used by this expression.
 handler_sets: common.ArrayList(*ir.HandlerSet) = .empty,
 
+pub const Kind = enum(u1) {
+    constant,
+    function_body,
+};
+
 /// Create a new expression in the given module, pulling memory from the pool and assigning it a fresh identity.
-pub fn init(module: *ir.Module, ty: ir.Term) error{OutOfMemory}!*Expression {
+pub fn init(module: *ir.Module, function: ?*ir.Function, ty: ir.Term) error{OutOfMemory}!*Expression {
     const entry_name = try module.root.internName("entry");
 
     const self = try module.expression_pool.create();
@@ -33,6 +41,7 @@ pub fn init(module: *ir.Module, ty: ir.Term) error{OutOfMemory}!*Expression {
 
     self.* = Expression{
         .module = module,
+        .function = function,
         .type = ty,
 
         .entry = try .init(self, entry_name),
@@ -78,10 +87,10 @@ pub fn dehydrate(self: *const Expression, dehydrator: *ir.Sma.Dehydrator) error{
     return out;
 }
 
-pub fn rehydrate(sma_expr: *const ir.Sma.Expression, rehydrator: *ir.Sma.Rehydrator) error{ BadEncoding, OutOfMemory }!*Expression {
+pub fn rehydrate(sma_expr: *const ir.Sma.Expression, rehydrator: *ir.Sma.Rehydrator, function: ?*ir.Function) error{ BadEncoding, OutOfMemory }!*Expression {
     const module = rehydrator.ctx.modules.get(sma_expr.module) orelse return error.BadEncoding;
 
-    const expr = try ir.Expression.init(module, try rehydrator.rehydrateTerm(sma_expr.type));
+    const expr = try ir.Expression.init(module, function, try rehydrator.rehydrateTerm(sma_expr.type));
     errdefer expr.deinit();
 
     // TODO: using the builder api might be cleaner here; doesn't exist yet though

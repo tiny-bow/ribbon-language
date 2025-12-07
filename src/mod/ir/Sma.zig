@@ -377,7 +377,7 @@ pub const Rehydrator = struct {
 
             const sma_expr = &self.sma.expressions.items[index];
 
-            const expr = try ir.Expression.rehydrate(sma_expr, self);
+            const expr = try ir.Expression.rehydrate(sma_expr, self, null);
             errdefer expr.deinit();
 
             try self.index_to_expression.put(self.ctx.allocator, index, expr);

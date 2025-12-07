@@ -36,7 +36,7 @@ pub fn init(
 
     self.* = Function{
         .kind = kind,
-        .body = try .init(module, ty),
+        .body = try .init(module, self, ty),
         .name = name,
     };
 
@@ -72,7 +72,7 @@ pub fn rehydrate(
     func.* = Function{
         .kind = sma_func.kind,
         .name = try rehydrator.rehydrateName(sma_func.name),
-        .body = try ir.Expression.rehydrate(&sma_func.body, rehydrator),
+        .body = try ir.Expression.rehydrate(&sma_func.body, rehydrator, func),
     };
 
     return func;
