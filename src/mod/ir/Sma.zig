@@ -874,6 +874,14 @@ pub const Term = struct {
         return if (index >= self.operands.items.len) self.operands.items[index] else error.BadEncoding;
     }
 
+    pub fn getOperandOf(self: *const Sma.Term, kind: Sma.Operand.Kind, index: usize) error{BadEncoding}!u32 {
+        const op = try self.getOperand(index);
+        if (op.kind != kind) {
+            return error.BadEncoding;
+        }
+        return op.value;
+    }
+
     pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Term {
         const tag = try reader.takeInt(u8, .little);
         const operand_count = try reader.takeInt(u32, .little);

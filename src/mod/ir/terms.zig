@@ -38,8 +38,9 @@ pub const Implementation = struct {
     }
 
     pub fn dehydrate(self: *const Implementation, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
-        try out.appendSlice(dehydrator.sma.allocator, &.{
-            ir.Sma.Operand{ .kind = .term, .value = try dehydrator.dehydrateTerm(self.class) },
+        try out.append(dehydrator.sma.allocator, .{
+            .kind = .term,
+            .value = try dehydrator.dehydrateTerm(self.class),
         });
 
         for (self.members) |field| {
@@ -53,7 +54,17 @@ pub const Implementation = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Implementation) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.class = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        const members = try rehydrator.ctx.arena.allocator().alloc(Implementation.Field, @divExact(dehydrated.operands.items.len - 1, 2));
+        out.members = members;
+        for (0..out.members.len) |i| {
+            const name_op = try dehydrated.getOperandOf(.name, 1 + i * 2);
+            const value_op = try dehydrated.getOperandOf(.term, 2 + i * 2);
+            members[i] = .{
+                .name = try rehydrator.rehydrateName(name_op),
+                .value = try rehydrator.rehydrateTerm(value_op),
+            };
+        }
     }
 };
 
@@ -74,7 +85,7 @@ pub const Symbol = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Symbol) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.name = try rehydrator.rehydrateName(try dehydrated.getOperandOf(.name, 0));
     }
 };
 
@@ -127,7 +138,19 @@ pub const Class = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Class) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.name = try rehydrator.rehydrateName(try dehydrated.getOperandOf(.name, 0));
+
+        const elements = try rehydrator.ctx.arena.allocator().alloc(Class.Field, @divExact(dehydrated.operands.items.len - 1, 2));
+        out.elements = elements;
+
+        for (0..out.elements.len) |i| {
+            const name_op = try dehydrated.getOperandOf(.name, 1 + i * 2);
+            const type_op = try dehydrated.getOperandOf(.term, 2 + i * 2);
+            elements[i] = .{
+                .name = try rehydrator.rehydrateName(name_op),
+                .type = try rehydrator.rehydrateTerm(type_op),
+            };
+        }
     }
 };
 
@@ -180,7 +203,19 @@ pub const Effect = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Effect) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.name = try rehydrator.rehydrateName(try dehydrated.getOperandOf(.name, 0));
+
+        const elements = try rehydrator.ctx.arena.allocator().alloc(Effect.Field, @divExact(dehydrated.operands.items.len - 1, 2));
+        out.elements = elements;
+
+        for (0..out.elements.len) |i| {
+            const name_op = try dehydrated.getOperandOf(.name, 1 + i * 2);
+            const type_op = try dehydrated.getOperandOf(.term, 2 + i * 2);
+            elements[i] = .{
+                .name = try rehydrator.rehydrateName(name_op),
+                .type = try rehydrator.rehydrateTerm(type_op),
+            };
+        }
     }
 };
 
@@ -208,7 +243,8 @@ pub const Quantifier = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Quantifier) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.id = try dehydrated.getOperandOf(.uint, 0);
+        out.kind = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
 };
 
@@ -250,7 +286,7 @@ pub const LiftedDataKind = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *LiftedDataKind) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.unlifted_type = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
     }
 };
 
@@ -278,7 +314,8 @@ pub const ArrowKind = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *ArrowKind) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.input = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.output = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
 };
 
@@ -318,7 +355,8 @@ pub const IntegerType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IntegerType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.signedness = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.bit_width = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
 };
 
@@ -341,7 +379,7 @@ pub const FloatType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *FloatType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.bit_width = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
     }
 };
 
@@ -375,7 +413,9 @@ pub const ArrayType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *ArrayType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.len = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.sentinel_value = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+        out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
     }
 };
 
@@ -409,7 +449,9 @@ pub const PointerType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *PointerType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.alignment = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.address_space = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+        out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
     }
 };
 
@@ -447,7 +489,10 @@ pub const BufferType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *BufferType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.alignment = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.address_space = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+        out.sentinel_value = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
+        out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 3));
     }
 };
 
@@ -485,7 +530,10 @@ pub const SliceType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *SliceType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.alignment = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.address_space = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+        out.sentinel_value = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
+        out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 3));
     }
 };
 
@@ -511,7 +559,8 @@ pub const RowElementType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *RowElementType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.label = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
 };
 
@@ -550,6 +599,8 @@ pub const LabelType = union(enum) {
     }
 
     pub fn dehydrate(self: *const LabelType, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
+        try out.append(dehydrator.sma.allocator, .{ .kind = .uint, .value = @intFromEnum(@as(std.meta.Tag(LabelType), self.*)) });
+
         switch (self.*) {
             .name => |n| {
                 try out.appendSlice(dehydrator.sma.allocator, &.{
@@ -571,7 +622,23 @@ pub const LabelType = union(enum) {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *LabelType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        const discriminant_u32 = try dehydrated.getOperandOf(.uint, 0);
+        const discriminant: std.meta.Tag(LabelType) = @enumFromInt(discriminant_u32);
+
+        switch (discriminant) {
+            .name => {
+                out.* = .{ .name = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1)) };
+            },
+            .index => {
+                out.* = .{ .index = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1)) };
+            },
+            .exact => {
+                out.* = .{ .exact = .{
+                    .name = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1)),
+                    .index = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2)),
+                } };
+            },
+        }
     }
 };
 
@@ -602,7 +669,8 @@ pub const LiftedDataType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *LiftedDataType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.unlifted_type = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.value = try rehydrator.rehydrateExpression(try dehydrated.getOperandOf(.expression, 1));
     }
 };
 
@@ -677,7 +745,23 @@ pub const StructureType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *StructureType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.name = try rehydrator.rehydrateName(try dehydrated.getOperandOf(.name, 0));
+        out.layout = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+        out.backing_integer = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
+
+        const elements = try rehydrator.ctx.arena.allocator().alloc(StructureType.Field, @divExact(dehydrated.operands.items.len - 3, 3));
+        out.elements = elements;
+
+        for (0..out.elements.len) |i| {
+            const name_op = try dehydrated.getOperandOf(.name, 3 + i * 3);
+            const payload_op = try dehydrated.getOperandOf(.term, 4 + i * 3);
+            const alignment_op = try dehydrated.getOperandOf(.term, 5 + i * 3);
+            elements[i] = .{
+                .name = try rehydrator.rehydrateName(name_op),
+                .payload = try rehydrator.rehydrateTerm(payload_op),
+                .alignment_override = try rehydrator.rehydrateTerm(alignment_op),
+            };
+        }
     }
 };
 
@@ -741,7 +825,20 @@ pub const UnionType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *UnionType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.name = try rehydrator.rehydrateName(try dehydrated.getOperandOf(.name, 0));
+        out.layout = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+
+        const elements = try rehydrator.ctx.arena.allocator().alloc(UnionType.Field, @divExact(dehydrated.operands.items.len - 2, 2));
+        out.elements = elements;
+
+        for (0..out.elements.len) |i| {
+            const name_op = try dehydrated.getOperandOf(.name, 2 + i * 2);
+            const payload_op = try dehydrated.getOperandOf(.term, 3 + i * 2);
+            elements[i] = .{
+                .name = try rehydrator.rehydrateName(name_op),
+                .payload = try rehydrator.rehydrateTerm(payload_op),
+            };
+        }
     }
 };
 
@@ -815,7 +912,23 @@ pub const SumType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *SumType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.name = try rehydrator.rehydrateName(try dehydrated.getOperandOf(.name, 0));
+        out.tag_type = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+        out.layout = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
+
+        const elements = try rehydrator.ctx.arena.allocator().alloc(SumType.Field, @divExact(dehydrated.operands.items.len - 3, 3));
+        out.elements = elements;
+
+        for (0..out.elements.len) |i| {
+            const name_op = try dehydrated.getOperandOf(.name, 3 + i * 3);
+            const payload_op = try dehydrated.getOperandOf(.term, 4 + i * 3);
+            const tag_op = try dehydrated.getOperandOf(.term, 5 + i * 3);
+            elements[i] = .{
+                .name = try rehydrator.rehydrateName(name_op),
+                .payload = try rehydrator.rehydrateTerm(payload_op),
+                .tag = try rehydrator.rehydrateTerm(tag_op),
+            };
+        }
     }
 };
 
@@ -847,7 +960,9 @@ pub const FunctionType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *FunctionType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.input = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.output = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+        out.effects = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
     }
 };
 
@@ -883,7 +998,10 @@ pub const HandlerType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *HandlerType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.input = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.output = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+        out.handled_effect = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
+        out.added_effects = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 3));
     }
 };
 
@@ -929,7 +1047,14 @@ pub const PolymorphicType = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *PolymorphicType) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        const quantifiers = try rehydrator.ctx.arena.allocator().alloc(ir.Term, dehydrated.operands.items.len - 2);
+        out.quantifiers = quantifiers;
+        for (0..quantifiers.len) |i| {
+            quantifiers[i] = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, i));
+        }
+
+        out.qualifiers = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, quantifiers.len));
+        out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, quantifiers.len + 1));
     }
 };
 
@@ -957,7 +1082,8 @@ pub const IsSubRowConstraint = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IsSubRowConstraint) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.primary_row = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.subtype_row = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
 };
 
@@ -989,7 +1115,9 @@ pub const RowsConcatenateConstraint = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *RowsConcatenateConstraint) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.row_a = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.row_b = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+        out.row_result = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
     }
 };
 
@@ -1017,7 +1145,8 @@ pub const ImplementsClassConstraint = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *ImplementsClassConstraint) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.data = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.class = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
 };
 
@@ -1045,7 +1174,8 @@ pub const IsStructureConstraint = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IsStructureConstraint) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.data = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.row = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
 };
 
@@ -1073,7 +1203,8 @@ pub const IsUnionConstraint = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IsUnionConstraint) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.data = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.row = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
 };
 
@@ -1101,6 +1232,7 @@ pub const IsSumConstraint = struct {
     }
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IsSumConstraint) error{ BadEncoding, OutOfMemory }!void {
-        common.todo(noreturn, .{ dehydrated, rehydrator, out });
+        out.data = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+        out.row = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
 };
