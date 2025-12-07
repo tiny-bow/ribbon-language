@@ -149,8 +149,10 @@ pub const Cbr = enum(u128) {
                 if (comptime T_info.pointer.child == u8) {
                     if (comptime T_info.pointer.size == .slice) {
                         self.blake.update(value);
-                    } else {
+                    } else if (comptime T_info.pointer.size != .one) {
                         self.blake.update(std.mem.span(value));
+                    } else {
+                        self.blake.update(std.mem.asBytes(value));
                     }
                 } else {
                     self.blake.update(std.mem.asBytes(value));
@@ -187,8 +189,10 @@ pub const QuickHasher = struct {
             if (comptime T_info.pointer.child == u8) {
                 if (comptime T_info.pointer.size == .slice) {
                     self.fnv.update(value);
-                } else {
+                } else if (comptime T_info.pointer.size != .one) {
                     self.fnv.update(std.mem.span(value));
+                } else {
+                    self.fnv.update(std.mem.asBytes(value));
                 }
             } else {
                 self.fnv.update(std.mem.asBytes(value));

@@ -905,7 +905,7 @@ pub const Term = struct {
         hasher.update("[Term]");
 
         hasher.update("tag:");
-        hasher.update(&self.tag);
+        hasher.update(self.tag);
 
         hasher.update("operands.count:");
         hasher.update(self.operands.items.len);
@@ -969,7 +969,7 @@ pub const Instruction = struct {
         hasher.update("[Instruction]");
 
         hasher.update("command:");
-        hasher.update(&self.command);
+        hasher.update(self.command);
 
         hasher.update("type:");
         hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.type }).?);
