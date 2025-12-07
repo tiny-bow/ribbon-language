@@ -73,7 +73,41 @@ pub fn dehydrate(self: *const Expression, dehydrator: *ir.Sma.Dehydrator) error{
 
     var index_counter: u32 = 0;
 
-    try self.entry.allocateDehydratedIndices(dehydrator, &index_counter, &out.blocks);
+    var successor_queue = common.ArrayList(*ir.Block).empty;
+    defer successor_queue.deinit(dehydrator.sma.allocator);
+
+    try successor_queue.append(dehydrator.sma.allocator, self.entry);
+
+    while (successor_queue.pop()) |block| {
+        if (dehydrator.block_to_index.contains(block)) continue;
+
+        var instr_map = common.UniqueReprMap(*ir.Instruction, u32).empty;
+
+        const start = index_counter;
+
+        var it = block.iterate();
+        while (it.next()) |instr| {
+            const instr_index: u32 = index_counter;
+            index_counter += 1;
+
+            try instr_map.put(dehydrator.ctx.allocator, instr, instr_index);
+        }
+
+        const end = index_counter;
+        const count = end - start;
+
+        try dehydrator.block_to_index.put(dehydrator.ctx.allocator, block, .{ @intCast(out.blocks.items.len), instr_map });
+
+        try out.blocks.append(dehydrator.ctx.allocator, ir.Sma.Block{
+            .name = if (block.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index,
+            .start = start,
+            .count = count,
+        });
+
+        for (block.successors.items) |succ| {
+            try successor_queue.append(dehydrator.sma.allocator, succ);
+        }
+    }
 
     // Dehydrate handler sets;
     // NOTE: this must be done after the traversal above, since handler sets refer to blocks as cancellation points
@@ -82,7 +116,7 @@ pub fn dehydrate(self: *const Expression, dehydrator: *ir.Sma.Dehydrator) error{
         try out.handler_sets.append(dehydrator.sma.allocator, hs_id);
     }
 
-    try self.entry.dehydrateInstructions(dehydrator, &out.instructions);
+    try self.entry.dehydrate(dehydrator, &out.instructions);
 
     return out;
 }

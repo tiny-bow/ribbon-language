@@ -62,44 +62,7 @@ pub fn addSuccessor(self: *Block, succ: *Block) error{OutOfMemory}!void {
     try succ.predecessors.append(self.expression.module.root.allocator, self);
 }
 
-// TODO: bit of a mismatch in architecture between dehy/rehy here; this function's rehy equivalent is implemented in the Expression rehydrator rather than freestanding.
-pub fn allocateDehydratedIndices(
-    self: *Block,
-    dehydrator: *ir.Sma.Dehydrator,
-    index_counter: *u32,
-    out: *common.ArrayList(ir.Sma.Block),
-) error{ BadEncoding, OutOfMemory }!void {
-    if (dehydrator.block_to_index.contains(self)) return;
-
-    var instr_map = common.UniqueReprMap(*ir.Instruction, u32).empty;
-
-    const start = index_counter.*;
-
-    var it = self.iterate();
-    while (it.next()) |instr| {
-        const instr_index: u32 = index_counter.*;
-        index_counter.* += 1;
-
-        try instr_map.put(dehydrator.ctx.allocator, instr, instr_index);
-    }
-
-    const end = index_counter.*;
-    const count = end - start;
-
-    try dehydrator.block_to_index.put(dehydrator.ctx.allocator, self, .{ @intCast(out.items.len), instr_map });
-
-    try out.append(dehydrator.ctx.allocator, ir.Sma.Block{
-        .name = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index,
-        .start = start,
-        .count = count,
-    });
-
-    for (self.successors.items) |succ| {
-        try succ.allocateDehydratedIndices(dehydrator, index_counter, out);
-    }
-}
-
-pub fn dehydrateInstructions(
+pub fn dehydrate(
     self: *Block,
     dehydrator: *ir.Sma.Dehydrator,
     out: *common.ArrayList(ir.Sma.Instruction),
@@ -110,7 +73,7 @@ pub fn dehydrateInstructions(
     }
 
     for (self.successors.items) |succ| {
-        try succ.dehydrateInstructions(dehydrator, out);
+        try succ.dehydrate(dehydrator, out);
     }
 }
 
