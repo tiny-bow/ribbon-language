@@ -55,7 +55,7 @@ pub inline fn getBytes(self: *const Blob) []const u8 {
 /// Get the CBR for this blob.
 pub fn getCbr(self: *const Blob) ir.Cbr {
     var hasher = ir.Cbr.Hasher.init();
-    hasher.update("Blob");
+    hasher.update("[Blob]");
 
     hasher.update("layout:");
     hasher.update(self.layout);
@@ -76,7 +76,7 @@ pub const AdaptedHashContext = struct {
         return hasher.final();
     }
 
-    pub fn eql(_: @This(), a: *const Blob, b: struct { core.Alignment, []const u8 }) bool {
+    pub fn eql(_: @This(), b: struct { core.Alignment, []const u8 }, a: *const Blob) bool {
         const layout = core.Layout{ .alignment = b[0], .size = @intCast(b[1].len) };
         if (a.layout != layout) return false;
         return std.mem.eql(u8, a.getBytes(), b[1]);

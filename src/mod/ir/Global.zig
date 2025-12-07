@@ -30,8 +30,22 @@ pub fn init(module: *ir.Module, name: ?ir.Name, ty: ir.Term, initial: ir.Term) e
 
 pub fn dehydrate(self: *const Global, dehydrator: *ir.Sma.Dehydrator) error{ BadEncoding, OutOfMemory }!ir.Sma.Global {
     return ir.Sma.Global{
+        .module = self.module.guid,
         .name = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index,
         .type = try dehydrator.dehydrateTerm(self.type),
         .initializer = try dehydrator.dehydrateTerm(self.initializer),
     };
+}
+
+pub fn rehydrate(sma_global: *const ir.Sma.Global, rehydrator: *ir.Sma.Rehydrator) error{ BadEncoding, OutOfMemory }!*ir.Global {
+    const module = rehydrator.ctx.modules.get(sma_global.module) orelse return error.BadEncoding;
+
+    const global = try module.global_pool.create();
+    global.* = Global{
+        .module = module,
+        .type = try rehydrator.rehydrateTerm(sma_global.type),
+        .initializer = try rehydrator.rehydrateTerm(sma_global.initializer),
+        .name = try rehydrator.rehydrateName(sma_global.name),
+    };
+    return global;
 }

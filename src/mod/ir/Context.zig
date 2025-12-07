@@ -22,13 +22,8 @@ interned_name_set: common.StringSet = .empty,
 /// A set of all constant data blobs in the context, de-duplicated and owned by the context itself
 interned_data_set: common.HashSet(*const ir.Blob, ir.Blob.HashContext) = .empty,
 
-/// Contains all terms created in this context
-all_terms: common.ArrayList(ir.Term) = .empty,
-
 /// Contains terms that are not subject to interface association, such as ints and arrays
 shared_terms: common.HashSet(ir.Term, ir.Term.IdentityContext) = .empty,
-/// Contains terms that are commonly used, such as "i32"
-named_shared_terms: common.StringMap(ir.Term) = .empty,
 
 /// Map from @typeName to ir.Term.Tag
 tags: common.StringMap(ir.Term.Tag) = .empty,
@@ -36,16 +31,27 @@ tags: common.StringMap(ir.Term.Tag) = .empty,
 vtables: common.UniqueReprMap(ir.Term.Tag, ir.Term.VTable) = .empty,
 
 /// Initialize a new ir context on the given allocator.
-pub fn init(allocator: std.mem.Allocator) !*Context {
+pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!*Context {
     const self = try allocator.create(Context);
 
     self.* = Context{
         .allocator = allocator,
         .arena = .init(allocator),
     };
+    errdefer self.deinit();
 
     inline for (comptime std.meta.declarations(ir.terms)) |decl| {
-        try self.registerTermType(@field(ir.terms, decl.name));
+        self.registerTermType(@field(ir.terms, decl.name)) catch |err| {
+            switch (err) {
+                error.DuplicateTermType => {
+                    std.debug.panic("Duplicate term type registration for {s}\n", .{decl.name});
+                },
+                error.TooManyTermTypes => {
+                    std.debug.panic("Too many term types registered in ir context\n", .{});
+                },
+                error.OutOfMemory => return error.OutOfMemory,
+            }
+        };
     }
 
     return self;
@@ -57,21 +63,24 @@ pub fn deinit(self: *Context) void {
     while (module_it.next()) |module_p2p| module_p2p.*.deinit();
     self.modules.deinit(self.allocator);
 
-    self.all_terms.deinit(self.allocator);
     self.name_to_module_guid.deinit(self.allocator);
     self.interned_name_set.deinit(self.allocator);
     self.interned_data_set.deinit(self.allocator);
     self.shared_terms.deinit(self.allocator);
-    self.named_shared_terms.deinit(self.allocator);
 
     self.arena.deinit();
 
     self.allocator.destroy(self);
 }
 
-/// Get the ir.Term.Tag for a term type in the context. See also `registerTermType`.
+/// Get the ir.Term.Tag for a term type in the context. See also `registerTermType`, `tagFromName`.
 pub fn tagFromType(self: *Context, comptime T: type) ?ir.Term.Tag {
     return self.tags.get(@typeName(T));
+}
+
+/// Get the ir.Term.Tag for a type name. See also `registerTermType`, `tagFromType`.
+pub fn tagFromName(self: *Context, name: []const u8) ?ir.Term.Tag {
+    return self.tags.get(name);
 }
 
 /// Get the typename associated with a given ir.Term.Tag in the context.
@@ -100,6 +109,21 @@ pub fn registerTermType(self: *Context, comptime T: type) error{ DuplicateTermTy
 
     try self.vtables.put(self.allocator, tag, ir.Term.VTable{
         .name = @typeName(T),
+        .layout = core.Layout.of(T),
+        .offset = @offsetOf(ir.Term.Data(T), "value"),
+        .create = @ptrCast(&ir.Term.Data(T).allocate),
+        .destroy = &struct {
+            pub fn @"term_vtable:destroy"(value: *const anyopaque, ctx: *ir.Context) void {
+                const typed_ptr = @as(*const T, @ptrCast(@alignCast(value)));
+                const data_ptr: *const ir.Term.Data(T) = @alignCast(@fieldParentPtr("value", typed_ptr));
+                ctx.arena.allocator().destroy(data_ptr);
+            }
+        }.@"term_vtable:destroy",
+        .getShared = &struct {
+            pub fn @"term_vtable:getShared"(value: *const anyopaque, ctx: *ir.Context) ?ir.Term {
+                return ctx.shared_terms.getKeyAdapted(@as(*const T, @ptrCast(@alignCast(value))), ir.Term.AdaptedIdentityContext(T){ .ctx = ctx });
+            }
+        }.@"term_vtable:getShared",
         .eql = @ptrCast(&T.eql),
         .hash = @ptrCast(&T.hash),
         .dehydrate = @ptrCast(&T.dehydrate),
@@ -160,49 +184,32 @@ pub fn internData(self: *Context, alignment: core.Alignment, bytes: []const u8) 
 }
 
 /// Create a new term in the context. This allocates memory for the term value and returns both a typed pointer to the value and the type-erased ir.Term.
-pub fn createTerm(self: *Context, comptime T: type, module: ?*ir.Module) error{ ZigTypeNotRegistered, OutOfMemory }!struct { *T, ir.Term } {
-    const ptr = try ir.TermData(T).allocate(self, module);
+pub fn createTerm(self: *Context, comptime T: type) error{ ZigTypeNotRegistered, OutOfMemory }!struct { *T, ir.Term } {
+    const ptr = try ir.Term.Data(T).allocate(self);
     const term = ir.Term.fromPtr(self, ptr);
-    try self.all_terms.append(self.allocator, term);
     return .{ ptr, term };
 }
 
 /// Add a new term to the context. This provides type erasure and memory management for the term value.
-pub fn addTerm(self: *Context, module: ?*ir.Module, value: anytype) error{OutOfMemory}!ir.Term {
+pub fn addTerm(self: *Context, value: anytype) error{OutOfMemory}!ir.Term {
     const T = @TypeOf(value);
-    const ptr, const term = try self.createTerm(T, module);
+    const ptr, const term = try self.createTerm(T);
     ptr.* = value;
     return term;
 }
 
 /// Get or create a shared term in the context. If a name is provided, the term is also interned under that name for access with `getNamedSharedTerm`.
-pub fn getOrCreateSharedTerm(self: *Context, name: ?ir.Name, value: anytype) error{ MismatchedNamedTermDefinitions, OutOfMemory }!ir.Term {
+pub fn getOrCreateSharedTerm(self: *Context, value: anytype) error{OutOfMemory}!ir.Term {
     const T = @TypeOf(value);
     if (self.shared_terms.getKeyAdapted(&value, ir.Term.AdaptedIdentityContext(T){ .ctx = self })) |existing_term| {
-        if (name) |new_name| {
-            if (self.named_shared_terms.get(new_name)) |named_term| {
-                if (named_term != existing_term) return error.MismatchedNamedTermDefinitions;
-            } else {
-                try self.named_shared_terms.put(self.allocator, new_name, existing_term);
-            }
-        }
-
         return existing_term;
     } else {
         const new_term = try self.addTerm(null, value);
-        if (name) |new_name| {
-            if (self.named_shared_terms.contains(new_name)) return error.MismatchedNamedTermDefinitions;
-            try self.named_shared_terms.put(self.allocator, new_name, new_term);
-        }
+        new_term.toHeader().is_shared = true;
         try self.shared_terms.put(self.allocator, new_term, {});
 
         return new_term;
     }
-}
-
-/// Get a shared term from the context using the name passed when it was interned. See also `getOrCreateSharedTerm`.
-pub fn getNamedSharedTerm(self: *Context, name: ir.Name) ?ir.Term {
-    return self.named_shared_terms.get(name.value);
 }
 
 pub fn dehydrate(self: *Context, allocator: std.mem.Allocator) error{ BadEncoding, OutOfMemory }!*ir.Sma {
@@ -231,4 +238,18 @@ pub fn dehydrate(self: *Context, allocator: std.mem.Allocator) error{ BadEncodin
     }
 
     return dehydrator.finalize();
+}
+
+pub fn rehydrate(sma: *const ir.Sma, allocator: std.mem.Allocator) error{ BadEncoding, OutOfMemory }!*Context {
+    const ctx = try Context.init(allocator);
+    defer ctx.deinit();
+
+    var rehydrator = try ir.Sma.Rehydrator.init(ctx, sma);
+    defer rehydrator.deinit();
+
+    for (0..sma.modules.items.len) |i| {
+        _ = try rehydrator.rehydrateModule(@intCast(i));
+    }
+
+    return ctx;
 }

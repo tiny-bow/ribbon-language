@@ -17,7 +17,8 @@ version: common.SemVer = core.VERSION,
 tags: common.ArrayList([]const u8) = .empty,
 names: common.ArrayList([]const u8) = .empty,
 blobs: common.ArrayList(*const ir.Blob) = .empty,
-shared: common.ArrayList(u32) = .empty,
+
+shared: common.UniqueReprSet(u32) = .empty,
 cbr: common.UniqueReprMap(Sma.Operand, ir.Cbr) = .empty,
 
 terms: common.ArrayList(Sma.Term) = .empty,
@@ -139,6 +140,10 @@ pub const Dehydrator = struct {
             const cbr = sma_term.getCbr(self.sma);
             try self.sma.cbr.put(self.sma.allocator, .{ .kind = .term, .value = index }, cbr);
 
+            if (term.isShared()) {
+                try self.sma.shared.put(self.sma.allocator, index, {});
+            }
+
             return index;
         }
     }
@@ -237,20 +242,20 @@ pub const Dehydrator = struct {
 };
 
 pub const Rehydrator = struct {
-    sma: *Sma,
+    sma: *const Sma,
     ctx: *ir.Context,
 
-    index_to_tag: common.UniqueReprMap(u32, ir.Term.Tag) = .empty,
+    index_to_tag: common.UniqueReprMap(u8, ir.Term.Tag) = .empty,
     index_to_name: common.UniqueReprMap(u32, ir.Name) = .empty,
     index_to_blob: common.UniqueReprMap(u32, *const ir.Blob) = .empty,
     index_to_term: common.UniqueReprMap(u32, ir.Term) = .empty,
     index_to_module: common.UniqueReprMap(u32, *ir.Module) = .empty,
-    index_to_expression: common.UniqueReprMap(u32, *ir.Block) = .empty,
+    index_to_expression: common.UniqueReprMap(u32, *ir.Expression) = .empty,
+    index_to_handler_set: common.UniqueReprMap(u32, *ir.HandlerSet) = .empty,
     index_to_global: common.UniqueReprMap(u32, *ir.Global) = .empty,
     index_to_function: common.UniqueReprMap(u32, *ir.Function) = .empty,
-    index_to_block: common.UniqueReprMap(u32, struct { *ir.Block, common.UniqueReprMap(u32, *ir.Instruction) }) = .empty,
 
-    pub fn init(ctx: *ir.Context, sma: *Sma) !Rehydrator {
+    pub fn init(ctx: *ir.Context, sma: *const Sma) !Rehydrator {
         return Rehydrator{
             .sma = sma,
             .ctx = ctx,
@@ -266,10 +271,183 @@ pub const Rehydrator = struct {
         self.index_to_term.deinit(self.ctx.allocator);
         self.index_to_module.deinit(self.ctx.allocator);
         self.index_to_expression.deinit(self.ctx.allocator);
+        self.index_to_handler_set.deinit(self.ctx.allocator);
         self.index_to_global.deinit(self.ctx.allocator);
         self.index_to_function.deinit(self.ctx.allocator);
-        self.index_to_block.deinit(self.ctx.allocator);
         self.* = undefined;
+    }
+
+    pub fn rehydrateTag(self: *Rehydrator, index: u8) error{ BadEncoding, OutOfMemory }!ir.Term.Tag {
+        if (self.index_to_tag.get(index)) |tag| {
+            return tag;
+        } else {
+            if (index >= self.sma.tags.items.len) {
+                return error.BadEncoding;
+            }
+
+            const name = self.sma.tags.items[index];
+            const tag = self.ctx.tagFromName(name) orelse return error.BadEncoding;
+
+            try self.index_to_tag.put(self.ctx.allocator, index, tag);
+            return tag;
+        }
+    }
+
+    pub fn rehydrateName(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!ir.Name {
+        if (self.index_to_name.get(index)) |name| {
+            return name;
+        } else {
+            if (index >= self.sma.names.items.len) {
+                return error.BadEncoding;
+            }
+
+            const sma_name = self.sma.names.items[index];
+            const name = try self.ctx.internName(sma_name);
+
+            try self.index_to_name.put(self.ctx.allocator, index, name);
+            return name;
+        }
+    }
+
+    pub fn rehydrateBlob(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!*const ir.Blob {
+        if (self.index_to_blob.get(index)) |blob| {
+            return blob;
+        } else {
+            if (index >= self.sma.blobs.items.len) {
+                return error.BadEncoding;
+            }
+
+            const sma_blob = self.sma.blobs.items[index];
+            const blob = try self.ctx.internData(sma_blob.layout.alignment, sma_blob.getBytes());
+
+            try self.index_to_blob.put(self.ctx.allocator, index, blob);
+            return blob;
+        }
+    }
+
+    pub fn rehydrateTerm(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!ir.Term {
+        if (self.index_to_term.get(index)) |term| {
+            return term;
+        } else {
+            if (index >= self.sma.terms.items.len) {
+                return error.BadEncoding;
+            }
+
+            const sma_term = &self.sma.terms.items[index];
+            const tag = try self.rehydrateTag(sma_term.tag);
+
+            const vtable = self.ctx.vtables.get(tag) orelse return error.BadEncoding;
+
+            const term_value = vtable.create(self.ctx) catch |err| {
+                return switch (err) {
+                    error.ZigTypeNotRegistered => @panic("Term VTable exists but vtable.create reports ZigTypeNotRegistered"),
+                    error.OutOfMemory => error.OutOfMemory,
+                };
+            };
+            try vtable.rehydrate(sma_term, self, term_value);
+
+            var term = ir.Term{
+                .tag = tag,
+                .header_offset = vtable.offset,
+                .ptr = @intCast(@intFromPtr(term_value)),
+            };
+
+            if (self.sma.shared.contains(index)) {
+                if (vtable.getShared(term_value, self.ctx)) |shared_term| {
+                    // the arena can sometimes reclaim the temporary memory here, let's destroy it
+                    // TODO? a slightly more advanced memory management strategy could fully reclaim here, but this is fine for now
+                    vtable.destroy(term_value, self.ctx);
+
+                    term = shared_term;
+                }
+            }
+
+            try self.index_to_term.put(self.ctx.allocator, index, term);
+            return term;
+        }
+    }
+
+    pub fn rehydrateExpression(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!*ir.Expression {
+        if (self.index_to_expression.get(index)) |expr| {
+            return expr;
+        } else {
+            if (index >= self.sma.expressions.items.len) {
+                return error.BadEncoding;
+            }
+
+            const sma_expr = &self.sma.expressions.items[index];
+
+            const expr = try ir.Expression.rehydrate(sma_expr, self);
+            errdefer expr.deinit();
+
+            try self.index_to_expression.put(self.ctx.allocator, index, expr);
+
+            return expr;
+        }
+    }
+
+    pub fn rehydrateGlobal(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!*ir.Global {
+        if (self.index_to_global.get(index)) |global| {
+            return global;
+        } else {
+            if (index >= self.sma.globals.items.len) {
+                return error.BadEncoding;
+            }
+
+            const sma_global = &self.sma.globals.items[index];
+
+            const global = try ir.Global.rehydrate(sma_global, self);
+            errdefer global.module.global_pool.destroy(global) catch |err| {
+                log.err("Failed to destroy global on rehydrate error: {s}", .{@errorName(err)});
+            };
+
+            try self.index_to_global.put(self.ctx.allocator, index, global);
+
+            return global;
+        }
+    }
+
+    pub fn rehydrateFunction(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!*ir.Function {
+        if (self.index_to_function.get(index)) |function| {
+            return function;
+        } else {
+            if (index >= self.sma.functions.items.len) {
+                return error.BadEncoding;
+            }
+
+            const sma_function = &self.sma.functions.items[index];
+
+            const function = try ir.Function.rehydrate(sma_function, self);
+            errdefer {
+                function.deinit();
+                function.body.module.function_pool.destroy(function) catch |err| {
+                    log.err("Failed to destroy function on rehydrate error: {s}", .{@errorName(err)});
+                };
+            }
+
+            try self.index_to_function.put(self.ctx.allocator, index, function);
+
+            return function;
+        }
+    }
+
+    pub fn rehydrateModule(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!*ir.Module {
+        if (self.index_to_module.get(index)) |module| {
+            return module;
+        } else {
+            if (index >= self.sma.modules.items.len) {
+                return error.BadEncoding;
+            }
+
+            const sma_module = &self.sma.modules.items[index];
+
+            const module = try ir.Module.rehydrate(sma_module, self);
+            errdefer module.deinit();
+
+            try self.index_to_module.put(self.ctx.allocator, index, module);
+
+            return module;
+        }
     }
 };
 
@@ -376,15 +554,20 @@ pub const Export = struct {
 };
 
 pub const Global = struct {
+    module: ir.Module.GUID,
     name: u32,
     type: u32,
     initializer: u32,
 
     pub fn deserialize(reader: *std.io.Reader) error{ EndOfStream, ReadFailed }!Sma.Global {
+        const module_u128 = try reader.takeInt(u128, .little);
+        const module_guid: ir.Module.GUID = @enumFromInt(module_u128);
+
         const name = try reader.takeInt(u32, .little);
         const ty = try reader.takeInt(u32, .little);
         const initializer = try reader.takeInt(u32, .little);
         return Sma.Global{
+            .module = module_guid,
             .name = name,
             .type = ty,
             .initializer = initializer,
@@ -392,6 +575,7 @@ pub const Global = struct {
     }
 
     pub fn serialize(self: *Sma.Global, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeInt(u128, @intFromEnum(self.module), .little);
         try writer.writeInt(u32, self.name, .little);
         try writer.writeInt(u32, self.type, .little);
         try writer.writeInt(u32, self.initializer, .little);
@@ -415,6 +599,7 @@ pub const Global = struct {
 };
 
 pub const HandlerSet = struct {
+    module: ir.Module.GUID,
     handler_type: u32,
     result_type: u32,
     cancellation_point: u32,
@@ -425,6 +610,8 @@ pub const HandlerSet = struct {
     }
 
     pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.HandlerSet {
+        const module_u128 = try reader.takeInt(u128, .little);
+        const module_guid: ir.Module.GUID = @enumFromInt(module_u128);
         const handler_type = try reader.takeInt(u32, .little);
         const result_type = try reader.takeInt(u32, .little);
         const cancellation_point = try reader.takeInt(u32, .little);
@@ -439,6 +626,7 @@ pub const HandlerSet = struct {
         }
 
         return Sma.HandlerSet{
+            .module = module_guid,
             .handler_type = handler_type,
             .result_type = result_type,
             .cancellation_point = cancellation_point,
@@ -447,6 +635,7 @@ pub const HandlerSet = struct {
     }
 
     pub fn serialize(self: *Sma.HandlerSet, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeInt(u128, @intFromEnum(self.module), .little);
         try writer.writeInt(u32, self.handler_type, .little);
         try writer.writeInt(u32, self.result_type, .little);
         try writer.writeInt(u32, self.cancellation_point, .little);
@@ -530,17 +719,23 @@ pub const Function = struct {
 };
 
 pub const Expression = struct {
+    module: ir.Module.GUID,
     type: u32,
     handler_sets: common.ArrayList(u32) = .empty,
     blocks: common.ArrayList(Sma.Block) = .empty,
+    instructions: common.ArrayList(Sma.Instruction) = .empty,
 
     pub fn deinit(self: *Sma.Expression, allocator: std.mem.Allocator) void {
         self.handler_sets.deinit(allocator);
-        for (self.blocks.items) |*block| block.deinit(allocator);
         self.blocks.deinit(allocator);
+        for (self.instructions.items) |*inst| inst.deinit(allocator);
+        self.instructions.deinit(allocator);
     }
 
     pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Expression {
+        const module_u128 = try reader.takeInt(u128, .little);
+        const module_guid: ir.Module.GUID = @enumFromInt(module_u128);
+
         const type_id = try reader.takeInt(u32, .little);
 
         const handler_set_count = try reader.takeInt(u32, .little);
@@ -557,18 +752,31 @@ pub const Expression = struct {
         errdefer blocks.deinit(allocator);
 
         for (0..block_count) |_| {
-            const block = try Sma.Block.deserialize(reader, allocator);
+            const block = try Sma.Block.deserialize(reader);
             try blocks.append(allocator, block);
         }
 
+        var instructions = common.ArrayList(Sma.Instruction).empty;
+        errdefer instructions.deinit(allocator);
+
+        const instruction_count = try reader.takeInt(u32, .little);
+        for (0..instruction_count) |_| {
+            const inst = try Sma.Instruction.deserialize(reader, allocator);
+            try instructions.append(allocator, inst);
+        }
+
         return Sma.Expression{
+            .module = module_guid,
             .type = type_id,
             .handler_sets = handler_sets,
             .blocks = blocks,
+            .instructions = instructions,
         };
     }
 
     pub fn serialize(self: *Sma.Expression, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeInt(u128, @intFromEnum(self.module), .little);
+
         try writer.writeInt(u32, self.type, .little);
 
         try writer.writeInt(u32, @intCast(self.handler_sets.items.len), .little);
@@ -576,6 +784,9 @@ pub const Expression = struct {
 
         try writer.writeInt(u32, @intCast(self.blocks.items.len), .little);
         for (self.blocks.items) |*block| try block.serialize(writer);
+
+        try writer.writeInt(u32, @intCast(self.instructions.items.len), .little);
+        for (self.instructions.items) |*inst| try inst.serialize(writer);
     }
 
     pub fn getCbr(self: *const Sma.Expression, sma: *Sma) ir.Cbr {
@@ -600,45 +811,8 @@ pub const Expression = struct {
             hasher.update(i);
 
             hasher.update("block.value:");
-            hasher.update(block.getCbr(sma));
+            hasher.update(block.getCbr());
         }
-
-        return hasher.final();
-    }
-};
-
-pub const Block = struct {
-    instructions: common.ArrayList(Sma.Instruction) = .empty,
-
-    pub fn deinit(self: *Sma.Block, allocator: std.mem.Allocator) void {
-        for (self.instructions.items) |*inst| inst.deinit(allocator);
-        self.instructions.deinit(allocator);
-    }
-
-    pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Block {
-        const instruction_count = try reader.takeInt(u32, .little);
-
-        var instructions = common.ArrayList(Sma.Instruction).empty;
-        errdefer instructions.deinit(allocator);
-
-        for (0..instruction_count) |_| {
-            const inst = try Sma.Instruction.deserialize(reader, allocator);
-            try instructions.append(allocator, inst);
-        }
-
-        return Sma.Block{
-            .instructions = instructions,
-        };
-    }
-
-    pub fn serialize(self: *Sma.Block, writer: *std.io.Writer) error{WriteFailed}!void {
-        try writer.writeInt(u32, @intCast(self.instructions.items.len), .little);
-        for (self.instructions.items) |*inst| try inst.serialize(writer);
-    }
-
-    pub fn getCbr(self: *const Sma.Block, sma: *Sma) ir.Cbr {
-        var hasher = ir.Cbr.Hasher.init();
-        hasher.update("[Block]");
 
         hasher.update("instructions:");
         for (self.instructions.items, 0..) |inst, i| {
@@ -648,6 +822,41 @@ pub const Block = struct {
             hasher.update("instruction.value:");
             hasher.update(inst.getCbr(sma));
         }
+
+        return hasher.final();
+    }
+};
+
+pub const Block = struct {
+    name: u32,
+    start: u32,
+    count: u32,
+
+    pub fn deserialize(reader: *std.io.Reader) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Block {
+        return Sma.Block{
+            .name = try reader.takeInt(u32, .little),
+            .start = try reader.takeInt(u32, .little),
+            .count = try reader.takeInt(u32, .little),
+        };
+    }
+
+    pub fn serialize(self: *Sma.Block, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeInt(u32, self.name, .little);
+        try writer.writeInt(u32, self.start, .little);
+        try writer.writeInt(u32, self.count, .little);
+    }
+
+    pub fn getCbr(self: *const Sma.Block) ir.Cbr {
+        var hasher = ir.Cbr.Hasher.init();
+        hasher.update("[Block]");
+
+        // names here are strictly debug, definitely don't factor into cbr
+
+        hasher.update("start:");
+        hasher.update(self.start);
+
+        hasher.update("count:");
+        hasher.update(self.count);
 
         return hasher.final();
     }
@@ -716,6 +925,7 @@ pub const Term = struct {
 pub const Instruction = struct {
     command: u8,
     type: u32,
+    name: u32,
     operands: common.ArrayList(Sma.Operand) = .empty,
 
     pub fn deinit(self: *Sma.Instruction, allocator: std.mem.Allocator) void {
@@ -725,6 +935,7 @@ pub const Instruction = struct {
     pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Instruction {
         const command = try reader.takeInt(u8, .little);
         const ty = try reader.takeInt(u32, .little);
+        const name = try reader.takeInt(u32, .little);
         const operand_count = try reader.takeInt(u32, .little);
 
         var operands = common.ArrayList(Sma.Operand).empty;
@@ -738,6 +949,7 @@ pub const Instruction = struct {
         return Sma.Instruction{
             .command = command,
             .type = ty,
+            .name = name,
             .operands = operands,
         };
     }
@@ -745,6 +957,7 @@ pub const Instruction = struct {
     pub fn serialize(self: *Sma.Instruction, writer: *std.io.Writer) error{WriteFailed}!void {
         try writer.writeInt(u8, self.command, .little);
         try writer.writeInt(u32, self.type, .little);
+        try writer.writeInt(u32, self.name, .little);
         try writer.writeInt(u32, @intCast(self.operands.items.len), .little);
         for (self.operands.items) |*op| try op.serialize(writer);
     }
@@ -758,6 +971,8 @@ pub const Instruction = struct {
 
         hasher.update("type:");
         hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.type }).?);
+
+        // name is debug only, doesn't factor into cbr
 
         hasher.update("operands.count:");
         hasher.update(self.operands.items.len);
@@ -826,7 +1041,8 @@ pub fn init(allocator: std.mem.Allocator) !*Sma {
     return self;
 }
 
-pub fn deinit(self: *Sma) void {
+pub fn deinit(const_ptr: *const Sma) void {
+    const self = @constCast(const_ptr);
     self.arena.deinit();
 
     self.tags.deinit(self.allocator);
@@ -899,7 +1115,7 @@ pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ 
     const shared_count = try reader.takeInt(u32, .little);
     for (0..shared_count) |_| {
         const shared_index = try reader.takeInt(u32, .little);
-        try sma.shared.append(allocator, shared_index);
+        try sma.shared.put(allocator, shared_index, {});
     }
 
     const cbr_count = try reader.takeInt(u32, .little);
@@ -971,9 +1187,10 @@ pub fn serialize(self: *Sma, writer: *std.io.Writer) error{WriteFailed}!void {
     try writer.writeInt(u32, @intCast(self.blobs.items.len), .little);
     for (self.blobs.items) |blob| try blob.serialize(writer);
 
-    try writer.writeInt(u32, @intCast(self.shared.items.len), .little);
-    for (self.shared.items) |shared_index| {
-        try writer.writeInt(u32, shared_index, .little);
+    try writer.writeInt(u32, @intCast(self.shared.count()), .little);
+    var shared_it = self.shared.keyIterator();
+    while (shared_it.next()) |shared_index| {
+        try writer.writeInt(u32, shared_index.*, .little);
     }
 
     try writer.writeInt(u32, @intCast(self.cbr.count()), .little);

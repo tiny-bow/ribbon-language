@@ -32,7 +32,7 @@ pub const Implementation = struct {
         hasher.update(self.class);
         hasher.update(self.members.len);
         for (self.members) |field| {
-            hasher.update(field.name.value.ptr);
+            hasher.update(field.name.value);
             hasher.update(field.value);
         }
     }
@@ -66,7 +66,7 @@ pub const Symbol = struct {
     }
 
     pub fn hash(self: *const Symbol, hasher: *ir.QuickHasher) void {
-        hasher.update(self.name.value.ptr);
+        hasher.update(self.name.value);
     }
 
     pub fn dehydrate(self: *const Symbol, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{ BadEncoding, OutOfMemory }!void {
@@ -106,7 +106,7 @@ pub const Class = struct {
         hasher.update(self.name);
         hasher.update(self.elements.len);
         for (self.elements) |field| {
-            hasher.update(field.name.value.ptr);
+            hasher.update(field.name.value);
             hasher.update(field.type);
         }
     }
@@ -159,7 +159,7 @@ pub const Effect = struct {
         hasher.update(self.name);
         hasher.update(self.elements.len);
         for (self.elements) |field| {
-            hasher.update(field.name.value.ptr);
+            hasher.update(field.name.value);
             hasher.update(field.type);
         }
     }
@@ -716,7 +716,7 @@ pub const UnionType = struct {
         hasher.update(self.layout);
         hasher.update(self.elements.len);
         for (self.elements) |elem| {
-            hasher.update(elem.name.value.ptr);
+            hasher.update(elem.name.value);
             hasher.update(elem.payload);
         }
     }

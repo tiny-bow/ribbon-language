@@ -1,4 +1,7 @@
 const std = @import("std");
+const log = std.log.scoped(.@"ir.term");
+
+const core = @import("core");
 const common = @import("common");
 
 const ir = @import("../ir.zig");
@@ -20,12 +23,12 @@ pub const Term = packed struct(u64) {
     pub const Header = struct {
         /// The root context for this term.
         root: *ir.Context,
-        /// The module this term belongs to, if any.
-        module: ?*ir.Module,
         /// The tag identifying the term's type.
         tag: Term.Tag,
         /// The offset (forwards) from the header to the term value.
         value_offset: u8,
+        /// Whether the term is shared (interned) in the context.
+        is_shared: bool,
 
         /// Get the parent Data pair containing this header.
         fn toData(self: *Term.Header, comptime T: type) error{ZigTypeMismatch}!*Term.Data(T) {
@@ -73,6 +76,11 @@ pub const Term = packed struct(u64) {
     /// A vtable of functions for type erased term operations.
     pub const VTable = struct {
         name: []const u8,
+        layout: core.Layout,
+        offset: u8,
+        create: *const fn (*ir.Context) error{ ZigTypeNotRegistered, OutOfMemory }!*anyopaque,
+        destroy: *const fn (*const anyopaque, *ir.Context) void,
+        getShared: *const fn (value: *const anyopaque, ctx: *ir.Context) ?Term,
         eql: *const fn (*const anyopaque, *const anyopaque) bool,
         hash: *const fn (*const anyopaque, *ir.QuickHasher) void,
         dehydrate: *const fn (*const anyopaque, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{OutOfMemory}!void,
@@ -87,13 +95,13 @@ pub const Term = packed struct(u64) {
             header: Term.Header,
             value: T,
 
-            fn allocate(context: *ir.Context, module: ?*ir.Module) error{ ZigTypeNotRegistered, OutOfMemory }!*T {
+            pub fn allocate(context: *ir.Context) error{ ZigTypeNotRegistered, OutOfMemory }!*T {
                 const self = try context.arena.allocator().create(Self);
                 self.header = .{
                     .root = context,
-                    .module = module,
                     .tag = context.tagFromType(T) orelse return error.ZigTypeNotRegistered,
                     .value_offset = @offsetOf(Self, "value"),
+                    .is_shared = false,
                 };
                 return &self.value;
             }
@@ -129,7 +137,7 @@ pub const Term = packed struct(u64) {
     }
 
     /// Get the Term.Header for this term.
-    fn toHeader(self: Term) *Term.Header {
+    pub fn toHeader(self: Term) *Term.Header {
         return @ptrFromInt(self.ptr - self.header_offset);
     }
 
@@ -138,19 +146,14 @@ pub const Term = packed struct(u64) {
         return self.toHeader().root;
     }
 
-    /// Get the module this term belongs to, if any.
-    pub fn toModule(self: Term) ?*ir.Module {
-        return self.toHeader().module;
-    }
-
     /// Get the Data for this term.
     fn toData(self: Term, comptime T: type) error{ZigTypeMismatch}!*Term.Data(T) {
         return self.toHeader().toData();
     }
 
-    /// Write the term in SMA format to the given writer.
-    fn writeSma(self: Term, writer: *std.io.Writer) error{WriteFailed}!void {
-        try self.toHeader().writeSma(writer);
+    /// Check if this term is shared (interned) in the context.
+    pub fn isShared(self: Term) bool {
+        return self.toHeader().is_shared;
     }
 
     /// An adapted identity context for terms of type T before marshalling and type erasure; used when interning terms.
@@ -159,17 +162,20 @@ pub const Term = packed struct(u64) {
             ctx: *ir.Context,
 
             pub fn hash(self: @This(), t: *const T) u64 {
-                const tag = self.ctx.tagFromType(T);
+                const tag = self.ctx.tagFromType(T) orelse {
+                    log.err("Attempted to hash term of unregistered type: {s}\n", .{@typeName(T)});
+                    return 0;
+                };
                 var hasher = ir.QuickHasher.init();
-                hasher.hash(tag);
-                self.ctx.vtables[@intFromEnum(tag)].cbr(t, &hasher);
+                hasher.update(tag);
+                self.ctx.vtables.get(tag).?.hash(t, &hasher);
                 return hasher.final();
             }
 
-            pub fn eql(self: @This(), a: Term, b: *const T) bool {
-                const tag = self.ctx.tagFromType(T);
+            pub fn eql(self: @This(), b: *const T, a: Term) bool {
+                const tag = self.ctx.tagFromType(T).?;
                 if (a.tag != tag) return false;
-                return self.ctx.vtables[@intFromEnum(tag)].eql(a.toOpaquePtr(), b);
+                return self.ctx.vtables.get(tag).?.eql(a.toOpaquePtr(), b);
             }
         };
     }

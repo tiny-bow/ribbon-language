@@ -158,34 +158,59 @@ pub const Operation = enum(u8) {
     pub const extension_offset = @intFromEnum(Operation.breakpoint) + 1;
 };
 
-/// A pointer to the head of the singly-linked list of all Uses that refer to this Instruction.
-pub fn init(block: *ir.Block, ty: ir.Term, command: anytype, name: ?ir.Name, ops: []const Operand) error{OutOfMemory}!*Instruction {
+pub fn init(
+    block: *ir.Block,
+    ty: ir.Term,
+    command: anytype,
+    name: ?ir.Name,
+    ops: []const Operand,
+) error{ InvalidInitializer, OutOfMemory }!*Instruction {
+    const self = try ir.Instruction.preinit(block, ops.len);
+    // TODO: errdefer destroy
+    try self.postinit(ty, command, name, ops);
+    return self;
+}
+
+pub fn preinit(block: *ir.Block, num_ops: usize) error{OutOfMemory}!*Instruction {
+    const buf = try block.expression.arena.allocator().alignedAlloc(
+        u8,
+        .fromByteUnits(@alignOf(Instruction)),
+        @sizeOf(Instruction) + @sizeOf(Use) * num_ops,
+    );
+
+    const self_ptr: *Instruction = @ptrCast(buf.ptr);
+    self_ptr.* = Instruction{
+        .block = block,
+        .type = undefined,
+        .command = undefined,
+        .num_operands = num_ops,
+        .name = null,
+    };
+
+    return self_ptr;
+}
+
+pub fn postinit(self: *Instruction, ty: ir.Term, command: anytype, name: ?ir.Name, ops: []const Operand) error{ InvalidInitializer, OutOfMemory }!void {
+    const T = @TypeOf(command);
+
+    if (self.num_operands != ops.len) {
+        return error.InvalidInitializer;
+    }
+
     comptime {
         // invariant: the Instruction struct must be aligned such that the operands can be placed directly after it
         std.debug.assert(@alignOf(Instruction) >= @alignOf(Use));
 
-        const T = @TypeOf(command);
-        if (T != Operation and T != Termination) {
-            @compileError("Instruction command must be an Operation or Termination");
+        if (T != Operation and T != Termination and T != u8) {
+            @compileError("Instruction command must be an Operation, Termination or raw u8");
         }
     }
 
-    const buf = try block.arena.alignedAlloc(
-        u8,
-        .fromByteUnits(@alignOf(Instruction)),
-        @sizeOf(Instruction) + @sizeOf(Use) * ops.len,
-    );
+    self.type = ty;
+    self.command = if (comptime T != u8) @intFromEnum(command) else command;
+    self.name = name;
 
-    const self: *Instruction = @ptrCast(buf.ptr);
     const uses = self.operands();
-    self.* = Instruction{
-        .block = block,
-        .type = ty,
-        .command = @intFromEnum(command),
-        .num_operands = ops.len,
-        .name = name,
-    };
-
     for (ops, uses) |op, *use| {
         use.* = Use{
             .operand = op,
@@ -198,9 +223,22 @@ pub fn init(block: *ir.Block, ty: ir.Term, command: anytype, name: ?ir.Name, ops
             use.next = var_first_user;
             var_inst.first_user = use;
         }
-    }
 
-    return self;
+        // TODO: abstract the rest of this for extensions?
+        // TODO: should extensions be able to terminate? would require a different enum construction
+        // TODO: are extensions even necessary??? once we add intrinsics, they might not be
+        if (op == .block) {
+            if (self.isTermination()) {
+                try self.block.addSuccessor(op.block);
+            }
+        }
+
+        if (self.command == @intFromEnum(Termination.prompt)) {
+            if (op == .handler_set) {
+                try self.block.addSuccessor(op.handler_set.cancellation_point);
+            }
+        }
+    }
 }
 
 /// Get a slice of the operands encoded after this Instruction in memory.
@@ -244,9 +282,11 @@ pub fn isCommand(self: *Instruction, command: anytype) bool {
 
 pub fn dehydrate(self: *Instruction, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Instruction)) error{ BadEncoding, OutOfMemory }!void {
     const type_id = try dehydrator.dehydrateTerm(self.type);
+    const name_id = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index;
 
     var instr = ir.Sma.Instruction{
         .command = self.command,
+        .name = name_id,
         .type = type_id,
     };
     errdefer instr.deinit(dehydrator.sma.allocator);
@@ -265,4 +305,39 @@ pub fn dehydrate(self: *Instruction, dehydrator: *ir.Sma.Dehydrator, out: *commo
     }
 
     try out.append(dehydrator.sma.allocator, instr);
+}
+
+pub fn rehydrate(
+    self: *Instruction,
+    sma_instr: *const ir.Sma.Instruction,
+    rehydrator: *ir.Sma.Rehydrator,
+    index_to_block: []const *ir.Block,
+    index_to_instr: []const *ir.Instruction,
+) error{ BadEncoding, OutOfMemory }!void {
+    const ty = try rehydrator.rehydrateTerm(sma_instr.type);
+    const name = try rehydrator.rehydrateName(sma_instr.name);
+
+    var ops = common.ArrayList(Operand).empty;
+    defer ops.deinit(rehydrator.ctx.allocator);
+
+    for (sma_instr.operands.items) |sma_op| {
+        const operand: Operand = switch (sma_op.kind) {
+            .term => .{ .term = try rehydrator.rehydrateTerm(sma_op.value) },
+            .blob => .{ .blob = try rehydrator.rehydrateBlob(sma_op.value) },
+            .block => .{ .block = index_to_block[sma_op.value] },
+            .global => .{ .global = try rehydrator.rehydrateGlobal(sma_op.value) },
+            .handler_set => .{ .handler_set = self.block.expression.handler_sets.items[sma_op.value] },
+            .function => .{ .function = try rehydrator.rehydrateFunction(sma_op.value) },
+            .variable => .{ .variable = index_to_instr[sma_op.value] },
+            else => return error.BadEncoding,
+        };
+        try ops.append(rehydrator.ctx.allocator, operand);
+    }
+
+    self.postinit(ty, sma_instr.command, name, ops.items) catch |err| {
+        switch (err) {
+            error.InvalidInitializer => @panic("Rehydrated instruction has invalid initializer"),
+            error.OutOfMemory => return error.OutOfMemory,
+        }
+    };
 }

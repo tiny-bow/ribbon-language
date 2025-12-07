@@ -57,3 +57,23 @@ pub fn dehydrate(self: *const Function, dehydrator: *ir.Sma.Dehydrator) error{ B
         .body = try self.body.dehydrate(dehydrator),
     };
 }
+
+pub fn rehydrate(
+    sma_func: *const ir.Sma.Function,
+    rehydrator: *ir.Sma.Rehydrator,
+) error{ BadEncoding, OutOfMemory }!*Function {
+    const module = rehydrator.ctx.modules.get(sma_func.body.module) orelse return error.BadEncoding;
+
+    const func = try module.function_pool.create();
+    errdefer module.function_pool.destroy(func) catch |err| {
+        log.err("Failed to destroy function on rehydrate error: {s}", .{@errorName(err)});
+    };
+
+    func.* = Function{
+        .kind = sma_func.kind,
+        .name = try rehydrator.rehydrateName(sma_func.name),
+        .body = try ir.Expression.rehydrate(&sma_func.body, rehydrator),
+    };
+
+    return func;
+}

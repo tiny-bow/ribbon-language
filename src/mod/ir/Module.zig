@@ -2,6 +2,8 @@
 const Module = @This();
 
 const std = @import("std");
+const log = std.log.scoped(.@"ir.module");
+
 const common = @import("common");
 
 const ir = @import("../ir.zig");
@@ -141,4 +143,60 @@ pub fn dehydrate(self: *const Module, dehydrator: *ir.Sma.Dehydrator) error{ Bad
         .name = try dehydrator.dehydrateName(self.name),
         .exports = exports,
     };
+}
+
+pub fn rehydrate(sma_mod: *const ir.Sma.Module, rehydrator: *ir.Sma.Rehydrator) error{ BadEncoding, OutOfMemory }!*Module {
+    const root = rehydrator.ctx;
+    const name = try rehydrator.rehydrateName(sma_mod.name);
+
+    const module = try root.arena.allocator().create(Module);
+    module.* = Module{
+        .root = root,
+        .guid = sma_mod.guid,
+        .name = name,
+        .global_pool = .init(root.allocator),
+        .handler_set_pool = .init(root.allocator),
+        .function_pool = .init(root.allocator),
+        .expression_pool = .init(root.allocator),
+        .block_pool = .init(root.allocator),
+    };
+    errdefer module.deinit();
+
+    for (sma_mod.exports.items) |sma_export| {
+        const export_name = try rehydrator.rehydrateName(sma_export.name);
+        switch (sma_export.value.kind) {
+            .term => {
+                const term = try rehydrator.rehydrateTerm(sma_export.value.value);
+                module.exportTerm(export_name, term) catch |err| {
+                    return switch (err) {
+                        error.DuplicateModuleExports => error.BadEncoding,
+                        error.OutOfMemory => error.OutOfMemory,
+                    };
+                };
+            },
+            .global => {
+                const global = try rehydrator.rehydrateGlobal(sma_export.value.value);
+                module.exportGlobal(export_name, global) catch |err| {
+                    return switch (err) {
+                        error.DuplicateModuleExports => error.BadEncoding,
+                        error.OutOfMemory => error.OutOfMemory,
+                    };
+                };
+            },
+            .function => {
+                const function = try rehydrator.rehydrateFunction(sma_export.value.value);
+                module.exportFunction(export_name, function) catch |err| {
+                    return switch (err) {
+                        error.DuplicateModuleExports => error.BadEncoding,
+                        error.OutOfMemory => error.OutOfMemory,
+                    };
+                };
+            },
+            else => {
+                return error.BadEncoding;
+            },
+        }
+    }
+
+    return module;
 }

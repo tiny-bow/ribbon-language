@@ -55,48 +55,91 @@ pub fn iterate(self: *Block) Iterator {
 pub fn allocateDehydratedIndices(
     self: *Block,
     dehydrator: *ir.Sma.Dehydrator,
-    handler_sets: *common.ArrayList(*ir.HandlerSet),
+    index_counter: *u32,
     out: *common.ArrayList(ir.Sma.Block),
 ) error{ BadEncoding, OutOfMemory }!void {
     if (dehydrator.block_to_index.contains(self)) return;
 
     var instr_map = common.UniqueReprMap(*ir.Instruction, u32).empty;
 
+    const start = index_counter.*;
+
     var it = self.iterate();
     while (it.next()) |instr| {
-        const instr_index: u32 = @intCast(instr_map.count());
+        const instr_index: u32 = index_counter.*;
+        index_counter.* += 1;
+
         try instr_map.put(dehydrator.ctx.allocator, instr, instr_index);
-        for (instr.operands()) |use| {
-            if (use.operand == .handler_set) {
-                try handler_sets.append(dehydrator.ctx.allocator, use.operand.handler_set);
-            }
-        }
     }
+
+    const end = index_counter.*;
+    const count = end - start;
 
     try dehydrator.block_to_index.put(dehydrator.ctx.allocator, self, .{ @intCast(out.items.len), instr_map });
 
-    _ = try out.addOne(dehydrator.ctx.allocator); // unstable pointer
+    try out.append(dehydrator.ctx.allocator, ir.Sma.Block{
+        .name = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index,
+        .start = start,
+        .count = count,
+    });
 
     for (self.successors.items) |succ| {
-        try succ.allocateDehydratedIndices(dehydrator, handler_sets, out);
+        try succ.allocateDehydratedIndices(dehydrator, index_counter, out);
     }
 }
 
 pub fn dehydrateInstructions(
     self: *Block,
     dehydrator: *ir.Sma.Dehydrator,
-    out: *common.ArrayList(ir.Sma.Block),
+    out: *common.ArrayList(ir.Sma.Instruction),
 ) error{ BadEncoding, OutOfMemory }!void {
-    const block_entry = dehydrator.block_to_index.getPtr(self).?;
-    const block_index = block_entry[0];
-    var out_block = &out.items[block_index];
-
     var it = self.iterate();
     while (it.next()) |instr| {
-        try instr.dehydrate(dehydrator, &out_block.instructions);
+        try instr.dehydrate(dehydrator, out);
     }
 
     for (self.successors.items) |succ| {
         try succ.dehydrateInstructions(dehydrator, out);
+    }
+}
+
+pub fn addSuccessor(self: *Block, succ: *Block) error{OutOfMemory}!void {
+    if (std.mem.indexOfScalar(*Block, self.successors.items, succ) != null) return;
+
+    try self.successors.append(self.expression.module.root.allocator, succ);
+    try succ.predecessors.append(self.expression.module.root.allocator, self);
+}
+
+pub fn rehydrate(
+    self: *Block,
+    rehydrator: *ir.Sma.Rehydrator,
+    blocks: []const ir.Sma.Block,
+    instrs: []const ir.Sma.Instruction,
+    index_to_block: []const *ir.Block,
+    index_to_instr: []const *ir.Instruction,
+) error{ BadEncoding, OutOfMemory }!void {
+    const index = std.mem.indexOfScalar(*ir.Block, index_to_block, self).?;
+    const sma_block = &blocks[index];
+
+    // name was already rehydrated during init
+
+    for (sma_block.start..sma_block.start + sma_block.count) |instr_index| {
+        const instr = index_to_instr[instr_index];
+        const sma_instr = &instrs[instr_index];
+
+        try instr.rehydrate(sma_instr, rehydrator, index_to_block, index_to_instr);
+
+        if (self.first_op == null) {
+            self.first_op = instr;
+            self.last_op = instr;
+        } else {
+            instr.prev = self.last_op;
+            self.last_op.?.next = instr;
+            self.last_op = instr;
+        }
+    }
+
+    for (self.successors.items) |succ| {
+        try succ.rehydrate(rehydrator, blocks, instrs, index_to_block, index_to_instr);
     }
 }
