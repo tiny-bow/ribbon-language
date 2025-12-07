@@ -133,20 +133,19 @@ pub fn registerTermType(self: *Context, comptime T: type) error{ DuplicateTermTy
 }
 
 /// Create a new module in the context.
-pub fn createModule(self: *Context, name: []const u8, guid: ir.Module.GUID) error{ DuplicateModuleGUID, DuplicateModuleName, OutOfMemory }!*ir.Module {
+pub fn createModule(self: *Context, name: ir.Name, guid: ir.Module.GUID) error{ DuplicateModuleGUID, DuplicateModuleName, OutOfMemory }!*ir.Module {
     if (self.modules.contains(guid)) {
         return error.DuplicateModuleGUID;
     }
 
-    if (self.name_to_module_guid.contains(name)) {
+    if (self.name_to_module_guid.contains(name.value)) {
         return error.DuplicateModuleName;
     }
 
-    const interned_name = try self.internName(name);
-    const new_module = try ir.Module.init(self, interned_name, guid);
+    const new_module = try ir.Module.init(self, name, guid);
 
-    try self.name_to_module_guid.put(self.allocator, interned_name.value, guid);
-    errdefer _ = self.name_to_module_guid.remove(interned_name.value);
+    try self.name_to_module_guid.put(self.allocator, name.value, guid);
+    errdefer _ = self.name_to_module_guid.remove(name.value);
 
     try self.modules.put(self.allocator, guid, new_module);
     errdefer _ = self.modules.remove(guid);
@@ -240,16 +239,24 @@ pub fn dehydrate(self: *Context, allocator: std.mem.Allocator) error{ BadEncodin
     return dehydrator.finalize();
 }
 
-pub fn rehydrate(sma: *const ir.Sma, allocator: std.mem.Allocator) error{ BadEncoding, OutOfMemory }!*Context {
-    const ctx = try Context.init(allocator);
-    defer ctx.deinit();
-
-    var rehydrator = try ir.Sma.Rehydrator.init(ctx, sma);
+pub fn rehydrate(self: *ir.Context, sma: *const ir.Sma) error{ BadEncoding, OutOfMemory }!void {
+    var rehydrator = try ir.Sma.Rehydrator.init(self, sma);
     defer rehydrator.deinit();
 
-    for (0..sma.modules.items.len) |i| {
-        _ = try rehydrator.rehydrateModule(@intCast(i));
+    for (sma.modules.items) |sma_module| {
+        const name = try rehydrator.rehydrateName(sma_module.name);
+        _ = self.createModule(name, sma_module.guid) catch |err| {
+            return switch (err) {
+                error.DuplicateModuleGUID, error.DuplicateModuleName => error.BadEncoding,
+                error.OutOfMemory => error.OutOfMemory,
+            };
+        };
     }
 
-    return ctx;
+    var module_it = self.modules.valueIterator();
+    while (module_it.next()) |module_p2p| {
+        const sma_id = rehydrator.module_to_index.get(module_p2p.*.guid) orelse return error.BadEncoding;
+        const sma_module = &sma.modules.items[sma_id];
+        try module_p2p.*.rehydrate(sma_module, &rehydrator);
+    }
 }

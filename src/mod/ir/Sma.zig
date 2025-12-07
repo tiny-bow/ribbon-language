@@ -249,17 +249,23 @@ pub const Rehydrator = struct {
     index_to_name: common.UniqueReprMap(u32, ir.Name) = .empty,
     index_to_blob: common.UniqueReprMap(u32, *const ir.Blob) = .empty,
     index_to_term: common.UniqueReprMap(u32, ir.Term) = .empty,
-    index_to_module: common.UniqueReprMap(u32, *ir.Module) = .empty,
+    module_to_index: common.UniqueReprMap(ir.Module.GUID, u32) = .empty,
     index_to_expression: common.UniqueReprMap(u32, *ir.Expression) = .empty,
     index_to_handler_set: common.UniqueReprMap(u32, *ir.HandlerSet) = .empty,
     index_to_global: common.UniqueReprMap(u32, *ir.Global) = .empty,
     index_to_function: common.UniqueReprMap(u32, *ir.Function) = .empty,
 
     pub fn init(ctx: *ir.Context, sma: *const Sma) !Rehydrator {
-        return Rehydrator{
+        var self = Rehydrator{
             .sma = sma,
             .ctx = ctx,
         };
+
+        for (sma.modules.items, 0..) |module, i| {
+            try self.module_to_index.put(ctx.allocator, module.guid, @intCast(i));
+        }
+
+        return self;
     }
 
     pub fn deinit(self: *Rehydrator) void {
@@ -269,7 +275,7 @@ pub const Rehydrator = struct {
         self.index_to_name.deinit(self.ctx.allocator);
         self.index_to_blob.deinit(self.ctx.allocator);
         self.index_to_term.deinit(self.ctx.allocator);
-        self.index_to_module.deinit(self.ctx.allocator);
+        self.module_to_index.deinit(self.ctx.allocator);
         self.index_to_expression.deinit(self.ctx.allocator);
         self.index_to_handler_set.deinit(self.ctx.allocator);
         self.index_to_global.deinit(self.ctx.allocator);
@@ -428,25 +434,6 @@ pub const Rehydrator = struct {
             try self.index_to_function.put(self.ctx.allocator, index, function);
 
             return function;
-        }
-    }
-
-    pub fn rehydrateModule(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!*ir.Module {
-        if (self.index_to_module.get(index)) |module| {
-            return module;
-        } else {
-            if (index >= self.sma.modules.items.len) {
-                return error.BadEncoding;
-            }
-
-            const sma_module = &self.sma.modules.items[index];
-
-            const module = try ir.Module.rehydrate(sma_module, self);
-            errdefer module.deinit();
-
-            try self.index_to_module.put(self.ctx.allocator, index, module);
-
-            return module;
         }
     }
 };
