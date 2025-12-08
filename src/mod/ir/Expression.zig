@@ -44,9 +44,11 @@ pub fn init(module: *ir.Module, function: ?*ir.Function, ty: ir.Term) error{OutO
         .function = function,
         .type = ty,
 
-        .entry = try .init(self, entry_name),
+        .entry = undefined,
         .arena = .init(module.root.allocator),
     };
+
+    self.entry = try ir.Block.init(self, entry_name);
 
     return self;
 }
@@ -137,6 +139,16 @@ pub fn rehydrate(sma_expr: *const ir.Sma.Expression, rehydrator: *ir.Sma.Rehydra
 
     // first we need to rehydrate the blocks in an empty state so that we have index -> block mappings
     try index_to_block.append(rehydrator.ctx.allocator, expr.entry);
+
+    {
+        const sma_block = &sma_expr.blocks.items[0];
+        // entry block was already created
+        for (sma_block.start..sma_block.start + sma_block.count) |instr_index| {
+            const sma_instr = &sma_expr.instructions.items[instr_index];
+            const instr = try ir.Instruction.preinit(expr.entry, sma_instr.operands.items.len);
+            try index_to_instr.append(rehydrator.ctx.allocator, instr);
+        }
+    }
 
     for (sma_expr.blocks.items[1..]) |*sma_block| {
         const name = try rehydrator.rehydrateName(sma_block.name);

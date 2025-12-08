@@ -109,7 +109,7 @@ pub fn exportFunction(self: *Module, name: ir.Name, function: *ir.Function) erro
 
 pub fn dehydrate(self: *const Module, dehydrator: *ir.Sma.Dehydrator) error{ BadEncoding, OutOfMemory }!ir.Sma.Module {
     var exports = common.ArrayList(ir.Sma.Export).empty;
-    defer exports.deinit(dehydrator.ctx.allocator);
+    errdefer exports.deinit(dehydrator.ctx.allocator);
 
     var it = self.exported_symbols.iterator();
     while (it.next()) |entry| {
@@ -138,9 +138,11 @@ pub fn dehydrate(self: *const Module, dehydrator: *ir.Sma.Dehydrator) error{ Bad
 
     ir.Sma.Export.sort(exports.items);
 
+    const name_index = try dehydrator.dehydrateName(self.name);
+
     return ir.Sma.Module{
         .guid = self.guid,
-        .name = try dehydrator.dehydrateName(self.name),
+        .name = name_index,
         .exports = exports,
     };
 }

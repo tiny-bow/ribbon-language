@@ -1494,6 +1494,14 @@ pub const SemVer = struct {
         }
     }
 
+    pub fn preSlice(self: *const SemVer) []const u8 {
+        return std.mem.span(@as([*:0]const u8, @ptrCast(&self.pre)));
+    }
+
+    pub fn buildSlice(self: *const SemVer) []const u8 {
+        return std.mem.span(@as([*:0]const u8, @ptrCast(&self.build)));
+    }
+
     pub fn deserialize(reader: *std.io.Reader) std.io.Reader.Error!SemVer {
         var self = SemVer{};
         self.major = try reader.takeInt(u32, .little);
@@ -1509,20 +1517,12 @@ pub const SemVer = struct {
         return self;
     }
 
-    pub fn preSlice(self: *const SemVer) []const u8 {
-        return std.mem.span(@as([*:0]const u8, @ptrCast(&self.pre)));
-    }
-
-    pub fn buildSlice(self: *const SemVer) []const u8 {
-        return std.mem.span(@as([*:0]const u8, @ptrCast(&self.build)));
-    }
-
     pub fn serialize(self: *const SemVer, writer: *std.io.Writer) std.io.Writer.Error!void {
         try writer.writeInt(u32, self.major, .little);
         try writer.writeInt(u32, self.minor, .little);
         try writer.writeInt(u32, self.patch, .little);
-        try writer.writeAll(self.preSlice());
-        try writer.writeAll(self.buildSlice());
+        try writer.writeAll(&self.pre);
+        try writer.writeAll(&self.build);
     }
 
     pub fn fromStd(std_ver: std.SemanticVersion) SemVer {

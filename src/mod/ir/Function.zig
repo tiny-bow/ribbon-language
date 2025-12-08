@@ -36,9 +36,11 @@ pub fn init(
 
     self.* = Function{
         .kind = kind,
-        .body = try .init(module, self, ty),
+        .body = undefined,
         .name = name,
     };
+
+    self.body = try ir.Expression.init(module, self, ty);
 
     return self;
 }

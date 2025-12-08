@@ -68,6 +68,10 @@ pub const Dehydrator = struct {
         self.global_to_index.deinit(self.ctx.allocator);
         self.handler_set_to_index.deinit(self.ctx.allocator);
         self.function_to_index.deinit(self.ctx.allocator);
+        var block_it = self.block_to_index.valueIterator();
+        while (block_it.next()) |entry| {
+            entry[1].deinit(self.ctx.allocator);
+        }
         self.block_to_index.deinit(self.ctx.allocator);
         defer self.* = undefined;
         return self.sma;
@@ -269,8 +273,6 @@ pub const Rehydrator = struct {
     }
 
     pub fn deinit(self: *Rehydrator) void {
-        self.sma.deinit();
-
         self.index_to_tag.deinit(self.ctx.allocator);
         self.index_to_name.deinit(self.ctx.allocator);
         self.index_to_blob.deinit(self.ctx.allocator);
@@ -495,7 +497,7 @@ pub const Module = struct {
         // module names do not factor into cbr
 
         hasher.update("exports:");
-        for (self.exports.items, 0..) |ex, i| {
+        for (self.exports.items, 0..) |*ex, i| {
             hasher.update("export.index:");
             hasher.update(i);
 

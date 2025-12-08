@@ -67,6 +67,8 @@ pub fn deinit(self: *Context) void {
     self.interned_name_set.deinit(self.allocator);
     self.interned_data_set.deinit(self.allocator);
     self.shared_terms.deinit(self.allocator);
+    self.tags.deinit(self.allocator);
+    self.vtables.deinit(self.allocator);
 
     self.arena.deinit();
 
@@ -213,7 +215,7 @@ pub fn getOrCreateSharedTerm(self: *Context, value: anytype) error{ ZigTypeNotRe
 
 pub fn dehydrate(self: *Context, allocator: std.mem.Allocator) error{ BadEncoding, OutOfMemory }!*ir.Sma {
     var dehydrator = try ir.Sma.Dehydrator.init(self, allocator);
-    defer dehydrator.deinit();
+    errdefer dehydrator.deinit();
 
     // we must dehydrate modules in order for cbr purposes
     const sorted_guids = try self.allocator.alloc(ir.Module.GUID, self.modules.count());
