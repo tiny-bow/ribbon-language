@@ -185,12 +185,12 @@ pub fn internData(self: *Context, alignment: core.Alignment, bytes: []const u8) 
 /// Create a new term in the context. This allocates memory for the term value and returns both a typed pointer to the value and the type-erased ir.Term.
 pub fn createTerm(self: *Context, comptime T: type) error{ ZigTypeNotRegistered, OutOfMemory }!struct { *T, ir.Term } {
     const ptr = try ir.Term.Data(T).allocate(self);
-    const term = ir.Term.fromPtr(self, ptr);
+    const term = ir.Term.fromPtr(self, ptr) catch unreachable;
     return .{ ptr, term };
 }
 
 /// Add a new term to the context. This provides type erasure and memory management for the term value.
-pub fn addTerm(self: *Context, value: anytype) error{OutOfMemory}!ir.Term {
+pub fn addTerm(self: *Context, value: anytype) error{ ZigTypeNotRegistered, OutOfMemory }!ir.Term {
     const T = @TypeOf(value);
     const ptr, const term = try self.createTerm(T);
     ptr.* = value;
@@ -198,12 +198,12 @@ pub fn addTerm(self: *Context, value: anytype) error{OutOfMemory}!ir.Term {
 }
 
 /// Get or create a shared term in the context. If a name is provided, the term is also interned under that name for access with `getNamedSharedTerm`.
-pub fn getOrCreateSharedTerm(self: *Context, value: anytype) error{OutOfMemory}!ir.Term {
+pub fn getOrCreateSharedTerm(self: *Context, value: anytype) error{ ZigTypeNotRegistered, OutOfMemory }!ir.Term {
     const T = @TypeOf(value);
     if (self.shared_terms.getKeyAdapted(&value, ir.Term.AdaptedIdentityContext(T){ .ctx = self })) |existing_term| {
         return existing_term;
     } else {
-        const new_term = try self.addTerm(null, value);
+        const new_term = try self.addTerm(value);
         new_term.toHeader().is_shared = true;
         try self.shared_terms.put(self.allocator, new_term, {});
 

@@ -145,6 +145,8 @@ pub const Operation = enum(u8) {
     call,
     /// lowers a term to an ssa variable
     reify,
+    /// instantiates a polymorphic term or function with concrete type arguments
+    instantiate,
     /// pushes a new effect handler set onto the stack
     push_set,
     /// pops the current effect handler set from the stack

@@ -109,7 +109,7 @@ pub const Term = packed struct(u64) {
     }
 
     /// Create a term from a typed pointer to its value.
-    fn fromPtr(context: *ir.Context, ptr: anytype) error{ZigTypeMismatch}!Term {
+    pub fn fromPtr(context: *ir.Context, ptr: anytype) error{ZigTypeMismatch}!Term {
         const T = @typeInfo(@TypeOf(ptr)).pointer.child;
         return .{
             .tag = context.tagFromType(T) orelse return error.ZigTypeMismatch,

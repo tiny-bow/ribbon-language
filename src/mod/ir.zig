@@ -35,6 +35,7 @@ pub const Function = @import("ir/Function.zig");
 pub const Block = @import("ir/Block.zig");
 pub const Global = @import("ir/Global.zig");
 pub const Instruction = @import("ir/Instruction.zig");
+pub const Builder = @import("ir/Builder.zig");
 
 /// A reference to an interned symbolic name within the ir context.
 pub const Name = struct {
