@@ -107,7 +107,7 @@ find_closest := fun(point: any P, items: List (any T)) -> T | { Error Str }
 This example showcases some of Ribbon's core strengths. The signature `where T: { pos: P, .. }` demonstrates
 [structural polymorphism](#structural-polymorphism), allowing the function to work on any struct `T` that has a `pos`
 field of some type `P`. The constraint `where Dist P` is a [type class](#type-classes), ensuring that the position's
-type `P` has a `distance` function available. The `| { Error String }` annotation is Ribbon's
+type `P` has a `distance` function available. The `| { Error Str }` annotation is Ribbon's
 [side effect tracking](#side-effect-tracking) in action, making the potential for an error an explicit part of the
 function's contract that the type system will enforce is handled. Bringing it all together, all of the types shown here
 can be *fully inferred*, wherever desired.
