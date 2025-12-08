@@ -31,11 +31,7 @@ community-focused, [Apache 2.0 Licensed](./LICENSE) open-source project. It is u
 [Tiny Bow](https://tinybow.org), a nonprofit organization founded with the primary goal of supporting open-source,
 extensible software within the Ribbon ecosystem.
 
-We are in a focused development phase, with a `0.1.0` release targeted around the end of the year. This first major
-release will deliver a feature-complete bytecode compiler and interpreter. This will establish the foundational baseline
-for building the Ribbon ecosystem. From this point forward, API stability as well as the JIT and native backends will
-become the primary focal points of compiler development. This will allow development of the standard library to begin in
-earnest and enable the community to create the first experimental applications.
+We are in a focused development phase, with a `0.1.0` release coming soon.
 
 
 ### Contents
@@ -49,9 +45,7 @@ earnest and enable the community to create the first experimental applications.
     * [Dynamic Meta-Language](#dynamic-meta-language)
     * [Object Notation Language](#object-notation-language)
 * [Building from Source](#building-from-source)
-* [Source Overview](#source-overview)
 * [Status](#status)
-    * [Plan](./plan.md)
 * [Contributing](#contributing)
     * [Discussion](#discussion)
     * [Design](#design)
@@ -496,9 +490,6 @@ Zig handles the dependency management. Simply cloning the repository and running
 Running `zig build --help` will give an overview of the build api. Alternatively, [tasks.json](./.vscode/tasks.json)
 provides a good overview, even if you are not using VS Code.
 
-The driver (`zig build run`) as of now just parses code and prints the AST back to you, as current development is
-focused on the IR and backend.
-
 
 #### Notes
 
@@ -518,53 +509,10 @@ focused on the IR and backend.
 * If you're not using the Nix Flake, [zvm](https://www.zvm.app/) or [zigup](https://marler8997.github.io/zigup/) may be useful.
 
 
-
-### Source Overview
-
-* [Common Utilities](./src/common.zig) - Zig utilties not specific to Ribbon.
-* [Core Internals (Fiber, etc)](./src/mod/core.zig) - Defines the Ribbon runtime core: the vm execution fiber, the
-  bytecode definition, etc.
-* [X64 Target Abstractions](./src/mod/x64/) - Basic ABI abstraction and early implementation sketches for the machine
-  code assembly API.
-* [Binary Utilities](./src/mod/binary.zig) - Encoder, relative address map, and other memory level utilities for
-  assembling machine code, bytecode, and data.
-* [Bytecode Utilities](./src/mod/bytecode.zig) - Disassembler, builder, and other higher level utilities for working
-  with bytecodes.
-* [SoN/SSA Hybrid Intermediate Representation](./src/mod/ir.zig) - Ribbon's backend IR; a graph-based representation of
-  source code already semantically analyzed by frontends.
-* [Lexical & Syntactic Utilities](./src/mod/analysis.zig) - Source tracking structures, abstract lexer and parser.
-* [Reference Bytecode Interpreter](./src/mod/interpreter.zig) - The Zig-language reference implementation of the
-  bytecode interpretation logic and minimal host interface for execution on a Fiber.
-* [Backend & Bytecode Target](./src/mod/backend.zig) - Handles the conversion from the IR to bytecode and other backend
-  tasks.
-* [Meta-Language Frontend](./src/mod/meta_language.zig) - Meta-language specific parser, analysis, and data types.
-* [Driver Stub](./src/bin/main.zig) - Work-in-progress. A REPL interface is available (though the 'E' for 'Eval' is
-  still on the way!).
-* [Instruction Specification Architecture](./src/gen-base/zig/isa.zig) - Specifies the bytecode instruction encoding
-  using comptime-accessible Zig data. Source of truth for generated files.
-* [Build-time Zig, ASM & Markdown Codegen Facilities](./src/bin/tools/gen.zig) - Uses
-  [`isa.zig`](./src/gen-base/zig/isa.zig) to generate various source files for the Ribbon toolchain & documentation.
-
-
-#### Generated Files
-
-These files are generated and cached by the build system and are not under source control in this repo.
-
-* `Isa.md` - The full specification for the Ribbon Instruction Set Architecture (ISA). This document provides a
-  comprehensive guide to every opcode, its encoding, and its operational semantics.
-
-    It is exported into the design documentation: 
-    [Rendered](https://design.ribbon-lang.com/Bytecode-VM/Isa),
-    [Source](https://github.com/tiny-bow/language-design/doc/Bytecode%20VM/Isa.md).
-
-* `Instruction.zig` - The generated Zig API for working with Ribbon's bytecode. It defines the core opcode `enum`, types
-  encoding the shape of every instruction's operand payload, and other data structures used by the compiler, VM, and
-  disassembler.
-
-    To view it, first run `zig build dump-intermediates` to create the file; it will then be located at
-    `./zig-out/tmp/Instruction.zig`.
-
 ### Status
+
+The driver (`zig build run`) as of now just parses code and prints the AST back to you, as current development is
+focused on the IR and backend.
 
 #### What's Solid
 
@@ -601,33 +549,17 @@ These files are generated and cached by the build system and are not under sourc
 
 #### Missing Links
 
-While the current IR architecture is already robust and a valid compilation target, it has been deemed overly complex
-and unnecessarily hard to work with. The IR is currently being rewritten on [another branch](https://github.com/tiny-bow/ribbon-language/tree/ir-rewrite).
+Currently, the IR is a work in progress. Once it is feature stable, the build orchestration and meta-language frontend
+can be completed. This will form the 0.1.0 release.
 
-We have also created an in-depth implementation plan for the remaining components and phases of the runtime and compiler,
-available at [./plan.md](./plan.md).
-
-This plan details a unified architecture for the Ribbon compiler and runtime, focusing on parallel and incremental
-compilation, robust caching, and a cryptographically-sound model for interface identity. It outlines the separation of
-the compiler into distinct services—frontend analysis, backend code generation, and a central build
-orchestrator; enabling rapid builds, accurate dependency tracking, and seamless integration with tools like LSP servers.
-The document also describes the Serializable Module Artifact (SMA) format and the canonical binary representation (CBR)
-system, which together provide deterministic hashing for module interfaces and efficient incremental rebuilds.
-
-Beyond compilation, the plan introduces a two-phase hot-reloading system. The initial version supports fast restart on
-code changes, while the advanced version enables live state migration with type-safe, user-defined migration logic. This
-is achieved through a combination of runtime state tracking, effect handling, and atomic migration transactions,
-allowing applications to update code and preserve state without interruption.
-
-The implementation plan breaks down these systems into concrete development tasks and recommended order, serving as a
-roadmap for contributors to build out the next stages of Ribbon's toolchain.
+After 0.1.0, we will begin implementing the typed language, optimizations and the JIT backend. Once these have stabilized,
+native and other backends, and the creation of a standard library will form the next steps.
 
 ### Contributing
 
 Ribbon is built by and for its community, and every contribution is vital. Whether you contribute ideas, bug reports,
 code, or funding, you are helping us build a future where robust, joyful software creation is open to all. Join us in
 shaping Ribbon together!
-
 
 #### Discussion
 
