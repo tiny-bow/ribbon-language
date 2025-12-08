@@ -56,10 +56,13 @@ pub fn iterate(self: *Block) Iterator {
 /// * If the successor is already present, this is a no-op.
 /// * This is generally expected to be called in builder apis, not directly by the user.
 pub fn addSuccessor(self: *Block, succ: *Block) error{OutOfMemory}!void {
-    if (std.mem.indexOfScalar(*Block, self.successors.items, succ) != null) return;
+    if (std.mem.indexOfScalar(*Block, self.successors.items, succ) == null) {
+        try self.successors.append(self.expression.module.root.allocator, succ);
+    }
 
-    try self.successors.append(self.expression.module.root.allocator, succ);
-    try succ.predecessors.append(self.expression.module.root.allocator, self);
+    if (std.mem.indexOfScalar(*Block, succ.predecessors.items, self) == null) {
+        try succ.predecessors.append(self.expression.module.root.allocator, self);
+    }
 }
 
 pub fn dehydrate(
