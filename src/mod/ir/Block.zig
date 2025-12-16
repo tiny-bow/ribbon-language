@@ -22,17 +22,7 @@ predecessors: common.ArrayList(*Block) = .empty,
 /// Successor blocks in the control flow graph.
 successors: common.ArrayList(*Block) = .empty,
 
-/// An iterator over the instructions in a Block.
-pub const Iterator = struct {
-    op: ?*ir.Instruction,
-    /// Advance the linked list pointer and return the current instruction.
-    pub fn next(self: *Iterator) ?*ir.Instruction {
-        const current = self.op orelse return null;
-        self.op = current.next;
-        return current;
-    }
-};
-
+/// Initialize a new block within the given expression.
 pub fn init(expression: *ir.Expression, name: ?ir.Name) error{OutOfMemory}!*Block {
     const self = try expression.module.block_pool.create();
     self.* = Block{
@@ -42,14 +32,71 @@ pub fn init(expression: *ir.Expression, name: ?ir.Name) error{OutOfMemory}!*Bloc
     return self;
 }
 
+/// Free resources associated with this block.
+/// * Frees the block in the module block pool for reuse.
 pub fn deinit(self: *Block) void {
+    var it = self.iterate();
+    while (it.next()) |instr| {
+        instr.deinit();
+    }
+
     self.predecessors.deinit(self.expression.module.root.allocator);
     self.successors.deinit(self.expression.module.root.allocator);
+    self.expression.module.block_pool.destroy(self) catch |err| {
+        std.debug.print("Failed to destroy block on deinit: {s}\n", .{@errorName(err)});
+    };
 }
 
+/// An iterator over the Blocks in an ir Expression.
+pub const Iterator = struct {
+    allocator: std.mem.Allocator,
+    index: usize = 0,
+    queue: std.ArrayList(*Block) = .empty,
+    visited: common.UniqueReprSet(*Block) = .empty,
+
+    /// Create a new iterator starting at the given entry block.
+    /// * Note that this requires allocation, as it uses a queue and a visited set.
+    pub fn init(allocator: std.mem.Allocator, entry: *Block) error{OutOfMemory}!Iterator {
+        var it = Iterator{
+            .allocator = allocator,
+        };
+
+        try it.queue.append(allocator, entry);
+        try it.visited.put(allocator, entry, {});
+
+        return it;
+    }
+
+    /// Free resources associated with this iterator.
+    pub fn deinit(self: *Iterator) void {
+        self.queue.deinit(self.allocator);
+        self.visited.deinit(self.allocator);
+    }
+
+    /// Get the next block in the iteration, or null if the iteration is complete.
+    pub fn next(self: *Iterator) error{OutOfMemory}!?*Block {
+        if (self.index >= self.queue.items.len) {
+            return null;
+        }
+
+        const current = self.queue.items[self.index];
+        self.index += 1;
+
+        try self.visited.put(self.allocator, current, {});
+
+        for (current.successors.items) |succ| {
+            if (!self.visited.contains(succ)) {
+                try self.queue.append(self.allocator, succ);
+            }
+        }
+
+        return current;
+    }
+};
+
 /// Get an iterator over the instructions in this block.
-pub fn iterate(self: *Block) Iterator {
-    return Iterator{ .op = self.first_op };
+pub fn iterate(self: *Block) ir.Instruction.Iterator {
+    return ir.Instruction.Iterator{ .op = self.first_op };
 }
 
 /// Add a successor block to this block, updating both sides of the edge.

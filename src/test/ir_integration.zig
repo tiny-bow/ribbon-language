@@ -8,7 +8,6 @@ const ir = ribbon.ir;
 const core = ribbon.core;
 
 test "ir_full_cycle_pipeline" {
-    // We use the testing allocator for all steps to ensure we catch leaks
     const allocator = testing.allocator;
 
     // =========================================================================

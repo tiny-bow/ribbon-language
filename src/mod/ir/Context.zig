@@ -213,6 +213,7 @@ pub fn getOrCreateSharedTerm(self: *Context, value: anytype) error{ ZigTypeNotRe
     }
 }
 
+/// Dehydrate the context into a serializable module artifact (SMA).
 pub fn dehydrate(self: *Context, allocator: std.mem.Allocator) error{ BadEncoding, OutOfMemory }!*ir.Sma {
     var dehydrator = try ir.Sma.Dehydrator.init(self, allocator);
     errdefer dehydrator.deinit();
@@ -241,6 +242,7 @@ pub fn dehydrate(self: *Context, allocator: std.mem.Allocator) error{ BadEncodin
     return dehydrator.finalize();
 }
 
+/// Rehydrate a serializable module artifact (SMA) into the context.
 pub fn rehydrate(self: *ir.Context, sma: *const ir.Sma) error{ BadEncoding, OutOfMemory }!void {
     var rehydrator = try ir.Sma.Rehydrator.init(self, sma);
     defer rehydrator.deinit();

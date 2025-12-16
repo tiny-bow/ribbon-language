@@ -27,6 +27,10 @@ function_pool: common.ManagedPool(ir.Function),
 expression_pool: common.ManagedPool(ir.Expression),
 /// Pool allocator for blocks in this module.
 block_pool: common.ManagedPool(ir.Block),
+/// Pool allocator for instructions in this module.
+instruction_pool: common.ManagedPool(ir.Instruction),
+/// Operand Use pool allocator for this module.
+use_pool: common.ManagedPool(ir.Instruction.Use),
 
 /// Globally unique identifier for a module.
 pub const GUID = enum(u128) { _ };
@@ -54,6 +58,8 @@ pub fn init(root: *ir.Context, name: ir.Name, guid: Module.GUID) !*Module {
         .function_pool = .init(root.allocator),
         .expression_pool = .init(root.allocator),
         .block_pool = .init(root.allocator),
+        .instruction_pool = .init(root.allocator),
+        .use_pool = .init(root.allocator),
     };
 
     return self;
@@ -67,6 +73,10 @@ pub fn deinit(self: *Module) void {
     while (handler_it.next()) |handler_p2p| handler_p2p.*.deinit();
     self.handler_set_pool.deinit();
 
+    var global_it = self.global_pool.iterate();
+    while (global_it.next()) |global_p2p| global_p2p.*.deinit();
+    self.global_pool.deinit();
+
     var func_it = self.function_pool.iterate();
     while (func_it.next()) |func_p2p| func_p2p.*.deinit();
     self.function_pool.deinit();
@@ -78,6 +88,14 @@ pub fn deinit(self: *Module) void {
     var block_it = self.block_pool.iterate();
     while (block_it.next()) |block_p2p| block_p2p.*.deinit();
     self.block_pool.deinit();
+
+    var instr_it = self.instruction_pool.iterate();
+    while (instr_it.next()) |instr_p2p| instr_p2p.*.deinit();
+    self.instruction_pool.deinit();
+
+    var use_it = self.use_pool.iterate();
+    while (use_it.next()) |use_p2p| use_p2p.*.deinit();
+    self.use_pool.deinit();
 }
 
 /// Export a term from this module.

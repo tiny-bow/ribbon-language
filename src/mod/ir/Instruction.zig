@@ -12,8 +12,6 @@ block: *ir.Block,
 type: ir.Term,
 /// The command code for this operation, ie an Operation or Termination.
 command: u8,
-/// The number of operands encoded after this Instruction in memory.
-num_operands: usize,
 
 /// Optional debug name for the SSA variable binding the result of this operation.
 name: ?ir.Name = null,
@@ -26,6 +24,20 @@ next: ?*Instruction = null,
 /// The first use of the SSA variable produced by this instruction, or null if the variable is never used.
 first_user: ?*Use = null,
 
+/// The Use operands for this instruction.
+uses: common.ArrayList(*Use) = .empty,
+
+/// An iterator over the instructions in a Block.
+pub const Iterator = struct {
+    op: ?*Instruction,
+    /// Advance the linked list pointer and return the current instruction.
+    pub fn next(self: *Iterator) ?*Instruction {
+        const current = self.op orelse return null;
+        self.op = current.next;
+        return current;
+    }
+};
+
 /// A use of an operand by an instruction.
 pub const Use = struct {
     /// The operand being used.
@@ -34,6 +46,22 @@ pub const Use = struct {
     user: *Instruction,
     /// Next use of the same operand if it is an ssa variable.
     next: ?*Use = null,
+
+    pub fn init(user: *Instruction, operand: Operand) error{OutOfMemory}!*Use {
+        const self = try user.block.expression.module.use_pool.create();
+        self.* = Use{
+            .operand = operand,
+            .user = user,
+        };
+
+        return self;
+    }
+
+    pub fn deinit(self: *Use) void {
+        self.user.block.expression.module.use_pool.destroy(self) catch |err| {
+            std.debug.print("Failed to destroy use on deinit: {s}\n", .{@errorName(err)});
+        };
+    }
 };
 
 /// An operand to an instruction.
@@ -51,7 +79,7 @@ pub const Operand = union(enum) {
     /// A reference to a function.
     function: *ir.Function,
     /// A reference to an instruction producing an SSA variable.
-    variable: *ir.Instruction,
+    variable: *Instruction,
 };
 
 /// Defines the action performed by a Termination
@@ -167,57 +195,46 @@ pub fn init(
     name: ?ir.Name,
     ops: []const Operand,
 ) error{ InvalidInitializer, OutOfMemory }!*Instruction {
-    const self = try ir.Instruction.preinit(block, ops.len);
+    const self = try preinit(block);
     // TODO: errdefer destroy
     try self.postinit(ty, command, name, ops);
     return self;
 }
 
-pub fn preinit(block: *ir.Block, num_ops: usize) error{OutOfMemory}!*Instruction {
-    const buf = try block.expression.arena.allocator().alignedAlloc(
-        u8,
-        .fromByteUnits(@alignOf(Instruction)),
-        @sizeOf(Instruction) + @sizeOf(Use) * num_ops,
-    );
+/// Free resources associated with this instruction.
+/// * Frees the instruction in the module instruction pool for reuse.
+pub fn deinit(self: *Instruction) void {
+    for (self.operands()) |use| use.deinit();
+    self.uses.deinit(self.block.expression.module.root.allocator);
 
-    const self_ptr: *Instruction = @ptrCast(buf.ptr);
-    self_ptr.* = Instruction{
+    self.block.expression.module.instruction_pool.destroy(self) catch |err| {
+        std.debug.print("Failed to destroy instruction on deinit: {s}\n", .{@errorName(err)});
+    };
+}
+
+pub fn preinit(block: *ir.Block) error{OutOfMemory}!*Instruction {
+    const self = try block.expression.module.instruction_pool.create();
+
+    self.* = Instruction{
         .block = block,
         .type = undefined,
         .command = undefined,
-        .num_operands = num_ops,
         .name = null,
     };
 
-    return self_ptr;
+    return self;
 }
 
-pub fn postinit(self: *Instruction, ty: ir.Term, command: anytype, name: ?ir.Name, ops: []const Operand) error{ InvalidInitializer, OutOfMemory }!void {
+pub fn postinit(self: *Instruction, ty: ir.Term, command: anytype, name: ?ir.Name, ops: []const Operand) error{OutOfMemory}!void {
     const T = @TypeOf(command);
-
-    if (self.num_operands != ops.len) {
-        return error.InvalidInitializer;
-    }
-
-    comptime {
-        // invariant: the Instruction struct must be aligned such that the operands can be placed directly after it
-        std.debug.assert(@alignOf(Instruction) >= @alignOf(Use));
-
-        if (T != Operation and T != Termination and T != u8) {
-            @compileError("Instruction command must be an Operation, Termination or raw u8");
-        }
-    }
 
     self.type = ty;
     self.command = if (comptime T != u8) @intFromEnum(command) else command;
     self.name = name;
 
-    const uses = self.operands();
-    for (ops, uses) |op, *use| {
-        use.* = Use{
-            .operand = op,
-            .user = self,
-        };
+    for (ops) |op| {
+        const use = try Use.init(self, op);
+        errdefer use.deinit();
 
         if (op == .variable) {
             const var_inst = op.variable;
@@ -240,15 +257,14 @@ pub fn postinit(self: *Instruction, ty: ir.Term, command: anytype, name: ?ir.Nam
                 try self.block.addSuccessor(op.handler_set.cancellation_point);
             }
         }
+
+        try self.uses.append(self.block.expression.module.root.allocator, use);
     }
 }
 
 /// Get a slice of the operands encoded after this Instruction in memory.
-pub fn operands(self: *Instruction) []Use {
-    // invariant: the Instruction struct must be sized such that the operands can be placed directly after it
-    comptime std.debug.assert(common.alignDelta(@sizeOf(Instruction), @alignOf(Use)) == 0);
-
-    return @as([*]Use, @ptrCast(@alignCast(@as([*]u8, @ptrCast(self)) + @sizeOf(Instruction))))[0..self.num_operands];
+pub fn operands(self: *Instruction) []*Use {
+    return self.uses.items;
 }
 
 /// Determine if this Instruction is a Termination.
@@ -282,6 +298,7 @@ pub fn isCommand(self: *Instruction, command: anytype) bool {
     return self.command == expected_command;
 }
 
+/// Dehydrate this instruction into an SMA instruction.
 pub fn dehydrate(self: *Instruction, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Instruction)) error{ BadEncoding, OutOfMemory }!void {
     const type_id = try dehydrator.dehydrateTerm(self.type);
     const name_id = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index;
@@ -309,12 +326,13 @@ pub fn dehydrate(self: *Instruction, dehydrator: *ir.Sma.Dehydrator, out: *commo
     try out.append(dehydrator.sma.allocator, instr);
 }
 
+/// Rehydrate this instruction from an SMA instruction.
 pub fn rehydrate(
     self: *Instruction,
     sma_instr: *const ir.Sma.Instruction,
     rehydrator: *ir.Sma.Rehydrator,
     index_to_block: []const *ir.Block,
-    index_to_instr: []const *ir.Instruction,
+    index_to_instr: []const *Instruction,
 ) error{ BadEncoding, OutOfMemory }!void {
     const ty = try rehydrator.rehydrateTerm(sma_instr.type);
     const name = try rehydrator.tryRehydrateName(sma_instr.name);
@@ -336,10 +354,5 @@ pub fn rehydrate(
         try ops.append(rehydrator.ctx.allocator, operand);
     }
 
-    self.postinit(ty, sma_instr.command, name, ops.items) catch |err| {
-        switch (err) {
-            error.InvalidInitializer => @panic("Rehydrated instruction has invalid initializer"),
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
+    try self.postinit(ty, sma_instr.command, name, ops.items);
 }

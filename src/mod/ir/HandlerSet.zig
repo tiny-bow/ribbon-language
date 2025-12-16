@@ -14,13 +14,37 @@ handlers: common.ArrayList(*ir.Function) = .empty,
 handler_type: ir.Term,
 /// The type of value the handler set resolves to, either directly or by cancellation
 result_type: ir.Term,
-/// The basic block where this handler set yields its value
+/// The basic block where this handler set yields its value upon cancellation
 cancellation_point: *ir.Block,
 
-pub fn deinit(self: *HandlerSet) void {
-    self.handlers.deinit(self.module.root.allocator);
+/// Create a new handler set in the given module, pulling memory from the pool and assigning it a fresh identity.
+pub fn init(
+    module: *ir.Module,
+    handler_type: ir.Term,
+    result_type: ir.Term,
+    cancellation_point: *ir.Block,
+) error{OutOfMemory}!*HandlerSet {
+    const self = try module.handler_set_pool.create();
+    self.* = HandlerSet{
+        .module = module,
+        .handler_type = handler_type,
+        .result_type = result_type,
+        .cancellation_point = cancellation_point,
+    };
+    return self;
 }
 
+/// Deinitialize this handler set, freeing its resources.
+/// * Frees the handler set in the module handler set pool for reuse.
+pub fn deinit(self: *HandlerSet) void {
+    self.handlers.deinit(self.module.root.allocator);
+
+    self.module.handler_set_pool.destroy(self) catch |err| {
+        std.log.err("Failed to destroy handler set on deinit: {s}", .{@errorName(err)});
+    };
+}
+
+/// Dehydrate this handler set into a serializable module artifact (SMA).
 pub fn dehydrate(self: *const HandlerSet, dehydrator: *ir.Sma.Dehydrator) error{ BadEncoding, OutOfMemory }!ir.Sma.HandlerSet {
     const type_id = try dehydrator.dehydrateTerm(self.handler_type);
     const result_id = try dehydrator.dehydrateTerm(self.result_type);
@@ -44,6 +68,7 @@ pub fn dehydrate(self: *const HandlerSet, dehydrator: *ir.Sma.Dehydrator) error{
     return out;
 }
 
+/// Rehydrate an ir handler set from the given SMA handler set.
 pub fn rehydrate(
     sma_hs: *const ir.Sma.HandlerSet,
     rehydrator: *ir.Sma.Rehydrator,

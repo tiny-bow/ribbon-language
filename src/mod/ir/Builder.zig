@@ -27,12 +27,14 @@ temp_operands: common.ArrayList(ir.Instruction.Operand) = .empty,
 /// Api organization primitive. Groups instruction creation methods.
 instr: InstructionEncoder = .{},
 
+/// Initialize a new ir expression builder for the given context.
 pub fn init(context: *ir.Context) Builder {
     return .{
         .context = context,
     };
 }
 
+/// Free resources associated with this builder.
 pub fn deinit(self: *Builder) void {
     self.temp_operands.deinit(self.context.allocator);
 }
@@ -272,8 +274,9 @@ pub const InstructionEncoder = struct {
 
     pub fn phi(self: *InstructionEncoder, result_type: ir.Term, name: ?ir.Name, joins: []const *ir.Instruction) !*ir.Instruction {
         // TODO: most ir builder apis would allow adding operands after the phi node is created. This may in fact be necessary for certain flow patterns.
-        // currently, this isn't possible since instruction operand lists are immutable after creation.
-        // it may be desirable to use a pool + arraylist pattern like higher level items, instead.
+        // previously, this wasn't possible since instruction operand lists are immutable after creation.
+        // since we now use a pool + arraylist pattern like higher level items, instead, it should be possible to mutate the operand list after creation.
+        // however, this requires some care to update all the links correctly.
         const builder = self.getBuilder();
         builder.temp_operands.clearRetainingCapacity();
         for (joins) |join| {

@@ -9,11 +9,13 @@ const ir = @import("../ir.zig");
 
 layout: core.Layout,
 
+/// Free the blob from the allocator.
 pub fn deinit(self: *const Blob, allocator: std.mem.Allocator) void {
     const base: [*]const u8 = @ptrCast(self);
     allocator.free(base[0 .. @sizeOf(Blob) + self.layout.size]);
 }
 
+/// Clone the blob into a new allocation.
 pub fn clone(self: *const Blob, allocator: std.mem.Allocator) error{OutOfMemory}!*const Blob {
     const new_buf = try allocator.alignedAlloc(u8, .fromByteUnits(@alignOf(Blob)), @sizeOf(Blob) + self.layout.size);
     const new_blob: *Blob = @ptrCast(new_buf.ptr);
@@ -22,6 +24,7 @@ pub fn clone(self: *const Blob, allocator: std.mem.Allocator) error{OutOfMemory}
     return new_blob;
 }
 
+/// Deserialize a blob from the given reader.
 pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!*const Blob {
     const alignment = try reader.takeInt(u32, .little);
     const size = try reader.takeInt(u32, .little);
@@ -41,6 +44,7 @@ pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ 
     return blob;
 }
 
+/// Serialize the blob to the given writer.
 pub fn serialize(self: *const Blob, writer: *std.io.Writer) error{WriteFailed}!void {
     try writer.writeInt(u32, @intCast(self.layout.alignment), .little);
     try writer.writeInt(u32, @intCast(self.layout.size), .little);

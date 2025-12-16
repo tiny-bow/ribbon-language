@@ -23,6 +23,7 @@ pub const Kind = enum(u1) {
     handler,
 };
 
+/// Create a new function in the given module, pulling memory from the pool and assigning it a fresh identity.
 pub fn init(
     module: *ir.Module,
     kind: Kind,
@@ -45,10 +46,12 @@ pub fn init(
     return self;
 }
 
+/// Free resources associated with this function.
+/// * Frees the function in the module function pool for reuse.
 pub fn deinit(self: *Function) void {
     self.body.deinit();
-    self.body.module.expression_pool.destroy(self.body) catch |err| {
-        log.err("Failed to destroy function body on deinit: {s}", .{@errorName(err)});
+    self.body.module.function_pool.destroy(self) catch |err| {
+        log.err("Failed to destroy function on deinit: {s}", .{@errorName(err)});
     };
 }
 

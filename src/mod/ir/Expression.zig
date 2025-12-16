@@ -25,11 +25,6 @@ arena: std.heap.ArenaAllocator,
 /// The list of handler sets used by this expression.
 handler_sets: common.ArrayList(*ir.HandlerSet) = .empty,
 
-pub const Kind = enum(u1) {
-    constant,
-    function_body,
-};
-
 /// Create a new expression in the given module, pulling memory from the pool and assigning it a fresh identity.
 pub fn init(module: *ir.Module, function: ?*ir.Function, ty: ir.Term) error{OutOfMemory}!*Expression {
     const entry_name = try module.root.internName("entry");
@@ -54,18 +49,38 @@ pub fn init(module: *ir.Module, function: ?*ir.Function, ty: ir.Term) error{OutO
 }
 
 /// Deinitialize this expression, freeing its resources.
-/// * Does not return the expression to its module's pool.
+/// * Frees the expression in the module expression pool for reuse.
 pub fn deinit(self: *Expression) void {
+    var it = self.iterate() catch |err| {
+        log.err("Failed to destroy expression on deinit: {s}", .{@errorName(err)});
+        return;
+    };
+    defer it.deinit();
+
+    while (it.next() catch |err| {
+        log.err("Failed to destroy expression on deinit: {s}", .{@errorName(err)});
+        return;
+    }) |block| {
+        block.deinit();
+    }
+
     for (self.handler_sets.items) |handler_set| {
         handler_set.deinit();
-        self.module.handler_set_pool.destroy(handler_set) catch |err| {
-            log.err("Failed to destroy handler set on deinit: {s}", .{@errorName(err)});
-        };
     }
     self.handler_sets.deinit(self.module.root.allocator);
     self.arena.deinit();
+    self.module.expression_pool.destroy(self) catch |err| {
+        log.err("Failed to destroy expression on deinit: {s}", .{@errorName(err)});
+    };
 }
 
+/// Create an iterator over the Blocks in this expression.
+/// * Note that this requires allocation, as it uses a queue and a visited set.
+pub fn iterate(self: *Expression) !ir.Block.Iterator {
+    return ir.Block.Iterator.init(self.module.root.allocator, self.entry);
+}
+
+/// Dehydrate this ir expression into an SMA expression.
 pub fn dehydrate(self: *const Expression, dehydrator: *ir.Sma.Dehydrator) error{ BadEncoding, OutOfMemory }!ir.Sma.Expression {
     var out = ir.Sma.Expression{
         .module = self.module.guid,
@@ -123,13 +138,12 @@ pub fn dehydrate(self: *const Expression, dehydrator: *ir.Sma.Dehydrator) error{
     return out;
 }
 
+/// Rehydrate an ir expression from the given SMA expression.
 pub fn rehydrate(sma_expr: *const ir.Sma.Expression, rehydrator: *ir.Sma.Rehydrator, function: ?*ir.Function) error{ BadEncoding, OutOfMemory }!*Expression {
     const module = rehydrator.ctx.modules.get(sma_expr.module) orelse return error.BadEncoding;
 
     const expr = try ir.Expression.init(module, function, try rehydrator.rehydrateTerm(sma_expr.type));
     errdefer expr.deinit();
-
-    // TODO: using the builder api might be cleaner here; doesn't exist yet though
 
     var index_to_block = common.ArrayList(*ir.Block).empty;
     defer index_to_block.deinit(rehydrator.ctx.allocator);
@@ -143,9 +157,8 @@ pub fn rehydrate(sma_expr: *const ir.Sma.Expression, rehydrator: *ir.Sma.Rehydra
     {
         const sma_block = &sma_expr.blocks.items[0];
         // entry block was already created
-        for (sma_block.start..sma_block.start + sma_block.count) |instr_index| {
-            const sma_instr = &sma_expr.instructions.items[instr_index];
-            const instr = try ir.Instruction.preinit(expr.entry, sma_instr.operands.items.len);
+        for (sma_block.start..sma_block.start + sma_block.count) |_| {
+            const instr = try ir.Instruction.preinit(expr.entry);
             try index_to_instr.append(rehydrator.ctx.allocator, instr);
         }
     }
@@ -157,9 +170,8 @@ pub fn rehydrate(sma_expr: *const ir.Sma.Expression, rehydrator: *ir.Sma.Rehydra
 
         try index_to_block.append(rehydrator.ctx.allocator, block);
 
-        for (sma_block.start..sma_block.start + sma_block.count) |instr_index| {
-            const sma_instr = &sma_expr.instructions.items[instr_index];
-            const instr = try ir.Instruction.preinit(block, sma_instr.operands.items.len);
+        for (sma_block.start..sma_block.start + sma_block.count) |_| {
+            const instr = try ir.Instruction.preinit(block);
             try index_to_instr.append(rehydrator.ctx.allocator, instr);
         }
     }

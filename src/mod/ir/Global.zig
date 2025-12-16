@@ -28,6 +28,15 @@ pub fn init(module: *ir.Module, name: ?ir.Name, ty: ir.Term, initial: ir.Term) e
     return self;
 }
 
+/// Free resources associated with this global.
+/// * Frees the global in the module global pool for reuse.
+pub fn deinit(self: *Global) void {
+    self.module.global_pool.destroy(self) catch |err| {
+        std.debug.print("Failed to destroy global on deinit: {s}\n", .{@errorName(err)});
+    };
+}
+
+/// Dehydrate this global into a serializable module artifact (SMA).
 pub fn dehydrate(self: *const Global, dehydrator: *ir.Sma.Dehydrator) error{ BadEncoding, OutOfMemory }!ir.Sma.Global {
     return ir.Sma.Global{
         .module = self.module.guid,
@@ -37,6 +46,7 @@ pub fn dehydrate(self: *const Global, dehydrator: *ir.Sma.Dehydrator) error{ Bad
     };
 }
 
+/// Rehydrate an ir global from the given SMA global.
 pub fn rehydrate(sma_global: *const ir.Sma.Global, rehydrator: *ir.Sma.Rehydrator) error{ BadEncoding, OutOfMemory }!*ir.Global {
     const module = rehydrator.ctx.modules.get(sma_global.module) orelse return error.BadEncoding;
 
