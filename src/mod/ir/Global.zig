@@ -2,6 +2,7 @@
 const Global = @This();
 
 const std = @import("std");
+const log = std.log.scoped(.@"ir.global");
 
 const ir = @import("../ir.zig");
 
@@ -32,7 +33,7 @@ pub fn init(module: *ir.Module, name: ?ir.Name, ty: ir.Term, initial: ir.Term) e
 /// * Frees the global in the module global pool for reuse.
 pub fn deinit(self: *Global) void {
     self.module.global_pool.destroy(self) catch |err| {
-        std.debug.print("Failed to destroy global on deinit: {s}\n", .{@errorName(err)});
+        log.err("Failed to destroy global on deinit: {s}\n", .{@errorName(err)});
     };
 }
 

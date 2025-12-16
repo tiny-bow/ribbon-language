@@ -2,6 +2,8 @@
 const HandlerSet = @This();
 
 const std = @import("std");
+const log = std.log.scoped(.@"ir.handler_set");
+
 const common = @import("common");
 
 const ir = @import("../ir.zig");
@@ -40,7 +42,7 @@ pub fn deinit(self: *HandlerSet) void {
     self.handlers.deinit(self.module.root.allocator);
 
     self.module.handler_set_pool.destroy(self) catch |err| {
-        std.log.err("Failed to destroy handler set on deinit: {s}", .{@errorName(err)});
+        log.err("Failed to destroy handler set on deinit: {s}", .{@errorName(err)});
     };
 }
 

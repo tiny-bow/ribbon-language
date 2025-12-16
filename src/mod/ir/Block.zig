@@ -2,6 +2,8 @@
 const Block = @This();
 
 const std = @import("std");
+const log = std.log.scoped(.@"ir.block");
+
 const common = @import("common");
 
 const ir = @import("../ir.zig");
@@ -43,7 +45,7 @@ pub fn deinit(self: *Block) void {
     self.predecessors.deinit(self.expression.module.root.allocator);
     self.successors.deinit(self.expression.module.root.allocator);
     self.expression.module.block_pool.destroy(self) catch |err| {
-        std.debug.print("Failed to destroy block on deinit: {s}\n", .{@errorName(err)});
+        log.err("Failed to destroy block on deinit: {s}\n", .{@errorName(err)});
     };
 }
 

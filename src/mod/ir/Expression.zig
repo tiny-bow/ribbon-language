@@ -152,26 +152,23 @@ pub fn rehydrate(sma_expr: *const ir.Sma.Expression, rehydrator: *ir.Sma.Rehydra
     defer index_to_instr.deinit(rehydrator.ctx.allocator);
 
     // first we need to rehydrate the blocks in an empty state so that we have index -> block mappings
-    try index_to_block.append(rehydrator.ctx.allocator, expr.entry);
 
-    {
-        const sma_block = &sma_expr.blocks.items[0];
-        // entry block was already created
-        for (sma_block.start..sma_block.start + sma_block.count) |_| {
-            const instr = try ir.Instruction.preinit(expr.entry);
-            try index_to_instr.append(rehydrator.ctx.allocator, instr);
-        }
-    }
-
-    for (sma_expr.blocks.items[1..]) |*sma_block| {
-        const name = try rehydrator.rehydrateName(sma_block.name);
-        const block = try ir.Block.init(expr, name);
-        errdefer block.deinit();
+    for (sma_expr.blocks.items, 0..) |*sma_block, block_index| {
+        const block_name = try rehydrator.rehydrateName(sma_block.name);
+        const block =
+            if (block_index == 0) use_entry: {
+                expr.entry.name = block_name;
+                break :use_entry expr.entry;
+            } else try ir.Block.init(expr, block_name);
+        errdefer if (block_index != 0) block.deinit();
 
         try index_to_block.append(rehydrator.ctx.allocator, block);
 
-        for (sma_block.start..sma_block.start + sma_block.count) |_| {
-            const instr = try ir.Instruction.preinit(block);
+        for (sma_block.start..sma_block.start + sma_block.count) |instr_index| {
+            const sma_instr = &sma_expr.instructions.items[instr_index];
+            const ty = try rehydrator.rehydrateTerm(sma_instr.type);
+            const name = try rehydrator.tryRehydrateName(sma_instr.name);
+            const instr = try ir.Instruction.init(expr.entry, ty, sma_instr.command, name);
             try index_to_instr.append(rehydrator.ctx.allocator, instr);
         }
     }

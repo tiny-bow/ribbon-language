@@ -2,6 +2,8 @@
 const Instruction = @This();
 
 const std = @import("std");
+const log = std.log.scoped(.@"ir.instruction");
+
 const common = @import("common");
 
 const ir = @import("../ir.zig");
@@ -38,28 +40,89 @@ pub const Iterator = struct {
     }
 };
 
+/// A pair of references to a block and an instruction within it; used for phi nodes.
+pub const PhiPair = struct {
+    /// The predecessor block.
+    block: *ir.Block,
+    /// The instruction producing the value from that block.
+    value: *ir.Instruction,
+};
+
 /// A use of an operand by an instruction.
 pub const Use = struct {
     /// The operand being used.
     operand: Operand,
     /// Back pointer to the Instruction that uses this operand.
     user: *Instruction,
+
+    /// Previous use of the same operand if it is an ssa variable.
+    prev: ?*Use = null,
     /// Next use of the same operand if it is an ssa variable.
     next: ?*Use = null,
 
-    pub fn init(user: *Instruction, operand: Operand) error{OutOfMemory}!*Use {
+    pub fn unlink(self: *Use) void {
+        if (self.prev) |prev| {
+            prev.next = self.next;
+        } else if (self.operand == .variable) {
+            // this was the first use; update the instruction's first_user pointer
+            self.operand.variable.first_user = self.next;
+        }
+
+        if (self.next) |next| {
+            next.prev = self.prev;
+        }
+    }
+
+    pub fn append(self: *Use, next: *Use) void {
+        if (self.next) |nxt| {
+            nxt.append(next);
+        } else {
+            next.prev = self;
+            self.next = next;
+        }
+    }
+
+    pub fn init(user: *Instruction, op: Operand) error{OutOfMemory}!*Use {
         const self = try user.block.expression.module.use_pool.create();
         self.* = Use{
-            .operand = operand,
+            .operand = op,
             .user = user,
         };
+
+        try self.link();
 
         return self;
     }
 
+    pub fn link(self: *Use) error{OutOfMemory}!void {
+        if (self.operand == .variable) {
+            const var_inst = self.operand.variable;
+            if (var_inst.first_user) |first_user| {
+                first_user.append(self);
+            } else {
+                var_inst.first_user = self;
+            }
+        }
+
+        // TODO: abstract the rest of this for extensions?
+        // TODO: should extensions be able to terminate? would require a different enum construction
+        // TODO: are extensions even necessary??? once we add intrinsics, they might not be
+        if (self.operand == .block) {
+            if (self.user.isTermination()) {
+                try self.user.block.addSuccessor(self.operand.block);
+            }
+        }
+
+        if (self.user.command == @intFromEnum(Termination.prompt)) {
+            if (self.operand == .handler_set) {
+                try self.user.block.addSuccessor(self.operand.handler_set.cancellation_point);
+            }
+        }
+    }
+
     pub fn deinit(self: *Use) void {
         self.user.block.expression.module.use_pool.destroy(self) catch |err| {
-            std.debug.print("Failed to destroy use on deinit: {s}\n", .{@errorName(err)});
+            log.err("Failed to destroy use on deinit: {s}\n", .{@errorName(err)});
         };
     }
 };
@@ -188,16 +251,19 @@ pub const Operation = enum(u8) {
     pub const extension_offset = @intFromEnum(Operation.breakpoint) + 1;
 };
 
-pub fn init(
-    block: *ir.Block,
-    ty: ir.Term,
-    command: anytype,
-    name: ?ir.Name,
-    ops: []const Operand,
-) error{ InvalidInitializer, OutOfMemory }!*Instruction {
-    const self = try preinit(block);
-    // TODO: errdefer destroy
-    try self.postinit(ty, command, name, ops);
+/// Create a new instruction in the given block, pulling memory from the pool and assigning it a fresh identity.
+pub fn init(block: *ir.Block, ty: ir.Term, command: anytype, name: ?ir.Name) error{OutOfMemory}!*Instruction {
+    const T = @TypeOf(command);
+
+    const self = try block.expression.module.instruction_pool.create();
+
+    self.* = Instruction{
+        .block = block,
+        .type = ty,
+        .command = if (comptime T != u8) @intFromEnum(command) else command,
+        .name = name,
+    };
+
     return self;
 }
 
@@ -208,63 +274,55 @@ pub fn deinit(self: *Instruction) void {
     self.uses.deinit(self.block.expression.module.root.allocator);
 
     self.block.expression.module.instruction_pool.destroy(self) catch |err| {
-        std.debug.print("Failed to destroy instruction on deinit: {s}\n", .{@errorName(err)});
+        log.err("Failed to destroy instruction on deinit: {s}\n", .{@errorName(err)});
     };
-}
-
-pub fn preinit(block: *ir.Block) error{OutOfMemory}!*Instruction {
-    const self = try block.expression.module.instruction_pool.create();
-
-    self.* = Instruction{
-        .block = block,
-        .type = undefined,
-        .command = undefined,
-        .name = null,
-    };
-
-    return self;
-}
-
-pub fn postinit(self: *Instruction, ty: ir.Term, command: anytype, name: ?ir.Name, ops: []const Operand) error{OutOfMemory}!void {
-    const T = @TypeOf(command);
-
-    self.type = ty;
-    self.command = if (comptime T != u8) @intFromEnum(command) else command;
-    self.name = name;
-
-    for (ops) |op| {
-        const use = try Use.init(self, op);
-        errdefer use.deinit();
-
-        if (op == .variable) {
-            const var_inst = op.variable;
-            const var_first_user = var_inst.first_user;
-            use.next = var_first_user;
-            var_inst.first_user = use;
-        }
-
-        // TODO: abstract the rest of this for extensions?
-        // TODO: should extensions be able to terminate? would require a different enum construction
-        // TODO: are extensions even necessary??? once we add intrinsics, they might not be
-        if (op == .block) {
-            if (self.isTermination()) {
-                try self.block.addSuccessor(op.block);
-            }
-        }
-
-        if (self.command == @intFromEnum(Termination.prompt)) {
-            if (op == .handler_set) {
-                try self.block.addSuccessor(op.handler_set.cancellation_point);
-            }
-        }
-
-        try self.uses.append(self.block.expression.module.root.allocator, use);
-    }
 }
 
 /// Get a slice of the operands encoded after this Instruction in memory.
 pub fn operands(self: *Instruction) []*Use {
     return self.uses.items;
+}
+
+/// Append a phi pair to this instruction. Asserts this is a phi node.
+pub fn appendPhiPair(self: *Instruction, pair: PhiPair) error{OutOfMemory}!void {
+    std.debug.assert(self.isCommand(ir.Instruction.Operation.phi));
+    try self.appendOperand(.{ .block = pair.block });
+    try self.appendOperand(.{ .variable = pair.value });
+}
+
+/// Insert an operand at the given index. Moves any existing operands ahead of it forward.
+pub fn insertOperand(self: *Instruction, index: usize, op: Operand) error{OutOfMemory}!void {
+    const use = try Use.init(self, op);
+    errdefer use.deinit();
+
+    try self.uses.insert(self.block.expression.module.root.allocator, index, use);
+}
+
+/// Append an operand to the end of the operand list.
+pub fn appendOperand(self: *Instruction, op: Operand) error{OutOfMemory}!void {
+    const use = try Use.init(self, op);
+    errdefer use.deinit();
+
+    try self.uses.append(self.block.expression.module.root.allocator, use);
+}
+
+/// Remove the operand at the given index. Moves any existing operands ahead of it backward.
+pub fn removeOperand(self: *Instruction, index: usize) void {
+    const use = self.uses.items[index];
+    use.unlink();
+    _ = self.uses.orderedRemove(index);
+}
+
+/// Replace the operand at the given index with a new operand.
+pub fn replaceOperand(self: *Instruction, index: usize, new_op: Operand) error{OutOfMemory}!void {
+    const use = self.uses.items[index];
+    use.unlink();
+    use.* = Use{
+        .operand = new_op,
+        .user = self,
+    };
+
+    try use.link();
 }
 
 /// Determine if this Instruction is a Termination.
@@ -294,7 +352,7 @@ pub fn asOperation(self: *Instruction) ?Operation {
 
 /// Cast this Instruction's command to a specific value. Returns false if this Instruction does not match the expected command.
 pub fn isCommand(self: *Instruction, command: anytype) bool {
-    const expected_command = @intFromEnum(command);
+    const expected_command = if (comptime @TypeOf(command) != u8) @intFromEnum(command) else command;
     return self.command == expected_command;
 }
 
@@ -334,12 +392,6 @@ pub fn rehydrate(
     index_to_block: []const *ir.Block,
     index_to_instr: []const *Instruction,
 ) error{ BadEncoding, OutOfMemory }!void {
-    const ty = try rehydrator.rehydrateTerm(sma_instr.type);
-    const name = try rehydrator.tryRehydrateName(sma_instr.name);
-
-    var ops = common.ArrayList(Operand).empty;
-    defer ops.deinit(rehydrator.ctx.allocator);
-
     for (sma_instr.operands.items) |sma_op| {
         const operand: Operand = switch (sma_op.kind) {
             .term => .{ .term = try rehydrator.rehydrateTerm(sma_op.value) },
@@ -351,8 +403,7 @@ pub fn rehydrate(
             .variable => .{ .variable = index_to_instr[sma_op.value] },
             else => return error.BadEncoding,
         };
-        try ops.append(rehydrator.ctx.allocator, operand);
-    }
 
-    try self.postinit(ty, sma_instr.command, name, ops.items);
+        try self.appendOperand(operand);
+    }
 }

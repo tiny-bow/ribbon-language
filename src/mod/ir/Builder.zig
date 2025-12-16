@@ -21,9 +21,6 @@ block: ?*ir.Block = null,
 /// If null, instructions are inserted at the beginning of the block.
 insert_point: ?*ir.Instruction = null,
 
-/// Buffer for temporary intermediates when martialing operands for instruction creation.
-temp_operands: common.ArrayList(ir.Instruction.Operand) = .empty,
-
 /// Api organization primitive. Groups instruction creation methods.
 instr: InstructionEncoder = .{},
 
@@ -32,11 +29,6 @@ pub fn init(context: *ir.Context) Builder {
     return .{
         .context = context,
     };
-}
-
-/// Free resources associated with this builder.
-pub fn deinit(self: *Builder) void {
-    self.temp_operands.deinit(self.context.allocator);
 }
 
 /// Sets the insertion point to the end of the specified block.
@@ -96,13 +88,11 @@ pub fn createInstruction(
 ) !*ir.Instruction {
     const block = self.block orelse return error.NoInsertBlock;
 
-    // TODO: the current initialization pattern in Instruction
-    // is a bit awkard, since we are going to immediately redo some of the work.
-    // A better separation of concerns probably sees the Builder handle this directly.
+    const inst = try ir.Instruction.init(block, ty, command, name);
 
-    // ir.Instruction.init handles memory allocation via the block's arena
-    // and automatically adds block successors if operands are block.
-    const inst = try ir.Instruction.init(block, ty, command, name, operands);
+    for (operands) |operand| {
+        try inst.appendOperand(operand);
+    }
 
     self.insert(inst);
     return inst;
@@ -272,17 +262,15 @@ pub const InstructionEncoder = struct {
         );
     }
 
-    pub fn phi(self: *InstructionEncoder, result_type: ir.Term, name: ?ir.Name, joins: []const *ir.Instruction) !*ir.Instruction {
-        // TODO: most ir builder apis would allow adding operands after the phi node is created. This may in fact be necessary for certain flow patterns.
-        // previously, this wasn't possible since instruction operand lists are immutable after creation.
-        // since we now use a pool + arraylist pattern like higher level items, instead, it should be possible to mutate the operand list after creation.
-        // however, this requires some care to update all the links correctly.
+    pub fn phi(self: *InstructionEncoder, result_type: ir.Term, name: ?ir.Name, pairs: []const ir.Instruction.PhiPair) !*ir.Instruction {
         const builder = self.getBuilder();
-        builder.temp_operands.clearRetainingCapacity();
-        for (joins) |join| {
-            try builder.temp_operands.append(builder.context.allocator, .{ .variable = join });
+        const out = try builder.createInstruction(ir.Instruction.Operation.phi, result_type, &.{}, name);
+
+        for (pairs) |pair| {
+            try out.appendPhiPair(pair);
         }
-        return builder.createInstruction(ir.Instruction.Operation.phi, result_type, builder.temp_operands.items, name);
+
+        return out;
     }
 
     //
@@ -404,15 +392,14 @@ pub const InstructionEncoder = struct {
         name: ?ir.Name,
     ) !*ir.Instruction {
         const builder = self.getBuilder();
-        builder.temp_operands.clearRetainingCapacity();
 
-        try builder.temp_operands.append(builder.context.allocator, .{ .variable = callee });
+        const out = try builder.createInstruction(ir.Instruction.Operation.call, result_type, &.{.{ .variable = callee }}, name);
 
         for (args) |arg| {
-            try builder.temp_operands.append(builder.context.allocator, .{ .variable = arg });
+            try out.appendOperand(.{ .variable = arg });
         }
 
-        return builder.createInstruction(ir.Instruction.Operation.call, result_type, builder.temp_operands.items, name);
+        return out;
     }
 
     pub fn push_set(self: *InstructionEncoder, handler_set: *ir.HandlerSet) !*ir.Instruction {
