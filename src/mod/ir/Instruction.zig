@@ -113,7 +113,7 @@ pub const Use = struct {
             }
         }
 
-        if (self.user.command == @intFromEnum(Termination.prompt)) {
+        if (self.user.command == @intFromEnum(Termination.invoke)) {
             if (self.operand == .handler_set) {
                 try self.user.block.addSuccessor(self.operand.handler_set.cancellation_point);
             }
@@ -151,12 +151,12 @@ pub const Termination = enum(u8) {
     @"unreachable",
     /// returns a value from a function
     @"return",
-    /// calls an effect handler;
-    /// must provide one successor block for the nominal return; a second successor block is taken from the handlerset for the cancellation
-    // TODO: should this just take two successor blocks directly? not sure which would be better
-    prompt,
     /// returns a substitute value from an effect handler's binding block
     cancel,
+    /// calls an effectful function with observable effects
+    /// This has to be a termination because it may not return normally, rather it may cancel via an effect handler within the current handler set.
+    /// The instruction must therefore be provided with the successor block for nominal flow, and with the handler set who's cancellation point will be used if the call cancels.
+    invoke,
     /// unconditionally branches to a block
     br,
     /// conditionally branches to a block
@@ -210,12 +210,6 @@ pub const Operation = enum(u8) {
     gt,
     /// greater than or equal comparison
     ge,
-    /// logical and
-    l_and,
-    /// logical or
-    l_or,
-    /// logical not
-    l_not,
     /// bitwise and
     b_and,
     /// bitwise or
@@ -232,12 +226,13 @@ pub const Operation = enum(u8) {
     bitcast,
     /// indirect cast between types, changing value without changing meaning
     convert,
-    /// calls a standard function
+    /// calls a standard function with no observable effects
     call,
-    /// lowers a term to an ssa variable
+    /// calls an effect handler
+    prompt,
+    /// lowers a term to an ssa variable; can be used to give a value from a symbolic term, or
+    /// to instantiate a polymorphic term or function with concrete type arguments
     reify,
-    /// instantiates a polymorphic term or function with concrete type arguments
-    instantiate,
     /// pushes a new effect handler set onto the stack
     push_set,
     /// pops the current effect handler set from the stack

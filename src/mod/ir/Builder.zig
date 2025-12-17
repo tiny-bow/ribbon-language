@@ -155,17 +155,27 @@ pub const InstructionEncoder = struct {
 
     pub fn @"unreachable"(self: *InstructionEncoder) !*ir.Instruction {
         const builder = self.getBuilder();
-        const void_ty = try builder.context.getOrCreateSharedTerm(ir.terms.VoidType{});
-        return builder.createInstruction(ir.Instruction.Termination.@"unreachable", void_ty, &.{}, null);
+        const no_ret_ty = try builder.context.getOrCreateSharedTerm(ir.terms.NoReturnType{});
+        return builder.createInstruction(ir.Instruction.Termination.@"unreachable", no_ret_ty, &.{}, null);
     }
 
     pub fn @"return"(self: *InstructionEncoder, value: ?*ir.Instruction) !*ir.Instruction {
         const builder = self.getBuilder();
-        const void_ty = try builder.context.getOrCreateSharedTerm(ir.terms.VoidType{});
+        const no_ret_ty = try builder.context.getOrCreateSharedTerm(ir.terms.NoReturnType{});
         if (value) |v| {
-            return builder.createInstruction(ir.Instruction.Termination.@"return", void_ty, &.{.{ .variable = v }}, null);
+            return builder.createInstruction(ir.Instruction.Termination.@"return", no_ret_ty, &.{.{ .variable = v }}, null);
         } else {
-            return builder.createInstruction(ir.Instruction.Termination.@"return", void_ty, &.{}, null);
+            return builder.createInstruction(ir.Instruction.Termination.@"return", no_ret_ty, &.{}, null);
+        }
+    }
+
+    pub fn cancel(self: *InstructionEncoder, value: ?*ir.Instruction) !*ir.Instruction {
+        const builder = self.getBuilder();
+        const no_ret_ty = try builder.context.getOrCreateSharedTerm(ir.terms.NoReturnType{});
+        if (value) |v| {
+            return builder.createInstruction(ir.Instruction.Termination.cancel, no_ret_ty, &.{.{ .variable = v }}, null);
+        } else {
+            return builder.createInstruction(ir.Instruction.Termination.cancel, no_ret_ty, &.{}, null);
         }
     }
 
@@ -194,12 +204,44 @@ pub const InstructionEncoder = struct {
     pub fn panic(self: *InstructionEncoder) !*ir.Instruction {
         const builder = self.getBuilder();
         // TODO: Add operand for panic message/code if supported later
-        const void_ty = try builder.context.getOrCreateSharedTerm(ir.terms.VoidType{});
-        return builder.createInstruction(ir.Instruction.Termination.panic, void_ty, &.{}, null);
+        const no_ret_ty = try builder.context.getOrCreateSharedTerm(ir.terms.NoReturnType{});
+        return builder.createInstruction(ir.Instruction.Termination.panic, no_ret_ty, &.{}, null);
     }
 
-    // TODO: prompt and cancel instructions
-    // TODO: lift instruction
+    pub fn invoke(
+        self: *InstructionEncoder,
+        handler_set: *ir.HandlerSet,
+        return_ty: ir.Term,
+        callee: *ir.Instruction,
+        args: []const *ir.Instruction,
+        name: ?ir.Name,
+    ) !*ir.Instruction {
+        const builder = self.getBuilder();
+        const out = try builder.createInstruction(
+            ir.Instruction.Termination.invoke,
+            return_ty,
+            &.{
+                .{ .handler_set = handler_set },
+                .{ .term = return_ty },
+                .{ .variable = callee },
+            },
+            name,
+        );
+
+        for (args) |arg| {
+            try out.appendOperand(.{ .variable = arg });
+        }
+
+        return out;
+    }
+
+    pub fn lift(self: *InstructionEncoder, value: ?*ir.Instruction) !*ir.Instruction {
+        const builder = self.getBuilder();
+
+        const no_ret_ty = try builder.context.getOrCreateSharedTerm(ir.terms.NoReturnType{});
+
+        return builder.createInstruction(ir.Instruction.Termination.lift, no_ret_ty, if (value) |v| &.{.{ .variable = v }} else &.{}, null);
+    }
 
     //
     // --- Operations ---
@@ -327,23 +369,6 @@ pub const InstructionEncoder = struct {
     // --- Bitwise & Logical ---
     //
 
-    // TODO: do these logical ops even make sense given we want explicit control flow? seems like short-circuiting is the responsibility of the frontend.
-
-    pub fn l_and(self: *InstructionEncoder, lhs: *ir.Instruction, rhs: *ir.Instruction, name: ?ir.Name) !*ir.Instruction {
-        const builder = self.getBuilder();
-        return builder.createBinaryOp(.l_and, lhs, rhs, name);
-    }
-
-    pub fn l_or(self: *InstructionEncoder, lhs: *ir.Instruction, rhs: *ir.Instruction, name: ?ir.Name) !*ir.Instruction {
-        const builder = self.getBuilder();
-        return builder.createBinaryOp(.l_or, lhs, rhs, name);
-    }
-
-    pub fn l_not(self: *InstructionEncoder, val: *ir.Instruction, name: ?ir.Name) !*ir.Instruction {
-        const builder = self.getBuilder();
-        return builder.createUnaryOp(ir.Instruction.Operation.l_not, val, name);
-    }
-
     pub fn b_and(self: *InstructionEncoder, lhs: *ir.Instruction, rhs: *ir.Instruction, name: ?ir.Name) !*ir.Instruction {
         const builder = self.getBuilder();
         return builder.createBinaryOp(.b_and, lhs, rhs, name);
@@ -378,7 +403,16 @@ pub const InstructionEncoder = struct {
         return builder.createInstruction(ir.Instruction.Operation.convert, result_type, &.{.{ .variable = val }}, name);
     }
 
-    // TODO: reify and instantiate instructions
+    pub fn reify(self: *InstructionEncoder, result_type: ir.Term, val: ir.Term, args: []const ir.Instruction.Operand, name: ?ir.Name) !*ir.Instruction {
+        const builder = self.getBuilder();
+        const out = try builder.createInstruction(ir.Instruction.Operation.reify, result_type, &.{.{ .term = val }}, name);
+
+        for (args) |arg| {
+            try out.appendOperand(arg);
+        }
+
+        return out;
+    }
 
     //
     // --- Control & Effects ---
@@ -394,6 +428,24 @@ pub const InstructionEncoder = struct {
         const builder = self.getBuilder();
 
         const out = try builder.createInstruction(ir.Instruction.Operation.call, result_type, &.{.{ .variable = callee }}, name);
+
+        for (args) |arg| {
+            try out.appendOperand(.{ .variable = arg });
+        }
+
+        return out;
+    }
+
+    pub fn prompt(
+        self: *InstructionEncoder,
+        result_type: ir.Term,
+        effect_type: ir.Term,
+        args: []const *ir.Instruction,
+        name: ?ir.Name,
+    ) !*ir.Instruction {
+        const builder = self.getBuilder();
+
+        const out = try builder.createInstruction(ir.Instruction.Operation.prompt, result_type, &.{.{ .term = effect_type }}, name);
 
         for (args) |arg| {
             try out.appendOperand(.{ .variable = arg });
