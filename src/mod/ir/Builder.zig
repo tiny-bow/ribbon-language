@@ -208,7 +208,7 @@ pub const InstructionEncoder = struct {
         return builder.createInstruction(ir.Instruction.Termination.panic, no_ret_ty, &.{}, null);
     }
 
-    pub fn invoke(
+    pub fn call_esc(
         self: *InstructionEncoder,
         handler_set: *ir.HandlerSet,
         return_ty: ir.Term,
@@ -218,12 +218,39 @@ pub const InstructionEncoder = struct {
     ) !*ir.Instruction {
         const builder = self.getBuilder();
         const out = try builder.createInstruction(
-            ir.Instruction.Termination.invoke,
+            ir.Instruction.Termination.call_esc,
             return_ty,
             &.{
                 .{ .handler_set = handler_set },
                 .{ .term = return_ty },
                 .{ .variable = callee },
+            },
+            name,
+        );
+
+        for (args) |arg| {
+            try out.appendOperand(.{ .variable = arg });
+        }
+
+        return out;
+    }
+
+    pub fn prompt_esc(
+        self: *InstructionEncoder,
+        handler_set: *ir.HandlerSet,
+        return_ty: ir.Term,
+        effect_ty: ir.Term,
+        args: []const *ir.Instruction,
+        name: ?ir.Name,
+    ) !*ir.Instruction {
+        const builder = self.getBuilder();
+        const out = try builder.createInstruction(
+            ir.Instruction.Termination.prompt_esc,
+            return_ty,
+            &.{
+                .{ .handler_set = handler_set },
+                .{ .term = return_ty },
+                .{ .term = effect_ty },
             },
             name,
         );

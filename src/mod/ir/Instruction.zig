@@ -113,7 +113,7 @@ pub const Use = struct {
             }
         }
 
-        if (self.user.command == @intFromEnum(Termination.invoke)) {
+        if (self.user.command == @intFromEnum(Termination.call_esc) or self.user.command == @intFromEnum(Termination.prompt_esc)) {
             if (self.operand == .handler_set) {
                 try self.user.block.addSuccessor(self.operand.handler_set.cancellation_point);
             }
@@ -156,7 +156,11 @@ pub const Termination = enum(u8) {
     /// calls an effectful function with observable effects
     /// This has to be a termination because it may not return normally, rather it may cancel via an effect handler within the current handler set.
     /// The instruction must therefore be provided with the successor block for nominal flow, and with the handler set who's cancellation point will be used if the call cancels.
-    invoke,
+    call_esc,
+    /// prompts a local effect handler with observable effects
+    /// This has to be a termination because it may not return normally, rather it may cancel via an effect handler within the current handler set.
+    /// The instruction must therefore be provided with the successor block for nominal flow, and with the handler set who's cancellation point will be used if the call cancels.
+    prompt_esc,
     /// unconditionally branches to a block
     br,
     /// conditionally branches to a block
