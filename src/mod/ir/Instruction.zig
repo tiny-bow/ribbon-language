@@ -278,7 +278,10 @@ pub fn deinit(self: *Instruction) void {
 }
 
 /// Get a slice of the operands encoded after this Instruction in memory.
-pub fn operands(self: *Instruction) []*Use {
+pub fn operands(self: anytype) common.ExtrapolatePtr(@TypeOf(self), .{
+    .child = *Use,
+    .size = .slice,
+}) {
     return self.uses.items;
 }
 
@@ -325,32 +328,32 @@ pub fn replaceOperand(self: *Instruction, index: usize, new_op: Operand) error{O
 }
 
 /// Determine if this Instruction is a Termination.
-pub fn isTermination(self: *Instruction) bool {
+pub fn isTermination(self: *const Instruction) bool {
     return self.command < Operation.start_offset;
 }
 
 /// Determine if this Instruction is an Operation.
-pub fn isOperation(self: *Instruction) bool {
+pub fn isOperation(self: *const Instruction) bool {
     return self.command >= Operation.start_offset;
 }
 
 /// Determine if this Instruction is an extension op.
-pub fn isExtension(self: *Instruction) bool {
+pub fn isExtension(self: *const Instruction) bool {
     return self.command >= Operation.extension_offset;
 }
 
 /// Cast this Instruction's command to a Termination. Returns null if this Instruction is an Operation.
-pub fn asTermination(self: *Instruction) ?Termination {
+pub fn asTermination(self: *const Instruction) ?Termination {
     return if (self.isTermination()) @enumFromInt(self.command) else null;
 }
 
 /// Cast this Instruction's command to an Operation. Returns null if this Instruction is a Termination.
-pub fn asOperation(self: *Instruction) ?Operation {
+pub fn asOperation(self: *const Instruction) ?Operation {
     return if (self.isOperation()) @enumFromInt(self.command) else null;
 }
 
 /// Cast this Instruction's command to a specific value. Returns false if this Instruction does not match the expected command.
-pub fn isCommand(self: *Instruction, command: anytype) bool {
+pub fn isCommand(self: *const Instruction, command: anytype) bool {
     const expected_command = if (comptime @TypeOf(command) != u8) @intFromEnum(command) else command;
     return self.command == expected_command;
 }
@@ -404,5 +407,63 @@ pub fn rehydrate(
         };
 
         try self.appendOperand(operand);
+    }
+}
+
+/// Disassemble this instruction to the given writer.
+pub fn format(self: *const Instruction, writer: *std.io.Writer) error{WriteFailed}!void {
+    if (self.name) |n| {
+        try writer.print("{s} = ", .{n.value});
+    } else {
+        try writer.print("<unnamed{x}> = ", .{@intFromPtr(self)});
+    }
+
+    if (self.isTermination()) {
+        const term = self.asTermination().?;
+        try writer.print("{s}", .{@tagName(term)});
+    } else if (self.isExtension()) {
+        try writer.print("ext_{x}", .{self.command});
+    } else {
+        const op = self.asOperation().?;
+        try writer.print("{s}", .{@tagName(op)});
+    }
+
+    for (self.operands()) |use| {
+        try writer.print(" ", .{});
+        switch (use.operand) {
+            .term => |t| try t.format(writer),
+            .blob => |b| try writer.print("<blob_{x}>", .{@intFromPtr(b)}),
+            .block => |b| {
+                if (b.name) |n| {
+                    try writer.print(":{s}", .{n.value});
+                } else {
+                    try writer.print(":<unnamed{x}>", .{@intFromPtr(b)});
+                }
+            },
+            .global => |g| {
+                if (g.name) |n| {
+                    try writer.print("%{s}", .{n.value});
+                } else {
+                    try writer.print("%<unnamed{x}>", .{@intFromPtr(g)});
+                }
+            },
+            .handler_set => |hs| {
+                try writer.print("<handler_set{x}>", .{@intFromPtr(hs)});
+            },
+            .function => |f| {
+                if (f.name) |n| {
+                    try writer.print("@{s}", .{n.value});
+                } else {
+                    try writer.print("@<unnamed{x}>", .{@intFromPtr(f)});
+                }
+            },
+            .variable => |v| {
+                if (v.name) |n| {
+                    try writer.print("{s}", .{n.value});
+                } else {
+                    try writer.print("<unnamed{x}>", .{@intFromPtr(v)});
+                }
+            },
+        }
     }
 }

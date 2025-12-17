@@ -97,7 +97,7 @@ pub const Iterator = struct {
 };
 
 /// Get an iterator over the instructions in this block.
-pub fn iterate(self: *Block) ir.Instruction.Iterator {
+pub fn iterate(self: *const Block) ir.Instruction.Iterator {
     return ir.Instruction.Iterator{ .op = self.first_op };
 }
 
@@ -114,6 +114,7 @@ pub fn addSuccessor(self: *Block, succ: *Block) error{OutOfMemory}!void {
     }
 }
 
+/// Dehydrate this block into a serializable module artifact (SMA).
 pub fn dehydrate(
     self: *Block,
     dehydrator: *ir.Sma.Dehydrator,
@@ -129,6 +130,7 @@ pub fn dehydrate(
     }
 }
 
+/// Rehydrate this block from its SMA representation.
 pub fn rehydrate(
     self: *Block,
     rehydrator: *ir.Sma.Rehydrator,
@@ -160,5 +162,19 @@ pub fn rehydrate(
 
     for (self.successors.items) |succ| {
         try succ.rehydrate(rehydrator, blocks, instrs, index_to_block, index_to_instr);
+    }
+}
+
+/// Disassemble this block to the given writer.
+pub fn format(self: *const Block, writer: *std.io.Writer) error{WriteFailed}!void {
+    if (self.name) |n| {
+        try writer.print("{s}:\n", .{n.value});
+    } else {
+        try writer.print("<unnamed_{x}>:\n", .{@intFromPtr(self)});
+    }
+
+    var it = self.iterate();
+    while (it.next()) |instr| {
+        try writer.print("  {f}\n", .{instr});
     }
 }

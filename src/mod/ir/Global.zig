@@ -60,3 +60,12 @@ pub fn rehydrate(sma_global: *const ir.Sma.Global, rehydrator: *ir.Sma.Rehydrato
     };
     return global;
 }
+
+/// Disassemble this global to the given writer.
+pub fn format(self: *const Global, writer: *std.io.Writer) error{WriteFailed}!void {
+    if (self.name) |n| {
+        try writer.print("(global %{s}: {f} = {f})", .{ n.value, self.type, self.initializer });
+    } else {
+        try writer.print("(global %<unnamed{x}>: {f} = {f})", .{ @intFromPtr(self), self.type, self.initializer });
+    }
+}

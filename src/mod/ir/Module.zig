@@ -125,6 +125,7 @@ pub fn exportFunction(self: *Module, name: ir.Name, function: *ir.Function) erro
     gop.value_ptr.* = .{ .function = function };
 }
 
+/// Dehydrate this module into a serializable module artifact (SMA).
 pub fn dehydrate(self: *const Module, dehydrator: *ir.Sma.Dehydrator) error{ BadEncoding, OutOfMemory }!ir.Sma.Module {
     var exports = common.ArrayList(ir.Sma.Export).empty;
     errdefer exports.deinit(dehydrator.ctx.allocator);
@@ -165,6 +166,7 @@ pub fn dehydrate(self: *const Module, dehydrator: *ir.Sma.Dehydrator) error{ Bad
     };
 }
 
+/// Rehydrate this module from its SMA representation.
 pub fn rehydrate(self: *Module, sma_mod: *const ir.Sma.Module, rehydrator: *ir.Sma.Rehydrator) error{ BadEncoding, OutOfMemory }!void {
     for (sma_mod.exports.items) |sma_export| {
         const export_name = try rehydrator.rehydrateName(sma_export.name);
@@ -201,4 +203,20 @@ pub fn rehydrate(self: *Module, sma_mod: *const ir.Sma.Module, rehydrator: *ir.S
             },
         }
     }
+}
+
+/// Disassemble this module to the given writer.
+pub fn format(self: *const Module, writer: *std.io.Writer) error{WriteFailed}!void {
+    try writer.print("module {s} (guid={x}) {{\n", .{ self.name.value, self.guid });
+    var it = self.exported_symbols.iterator();
+    while (it.next()) |entry| {
+        try writer.print("  {s} := ", .{entry.key_ptr.*});
+        switch (entry.value_ptr.*) {
+            .term => |t| try t.format(writer),
+            .global => |g| try g.format(writer),
+            .function => |f| try f.format(writer),
+        }
+        try writer.writeAll("\n");
+    }
+    try writer.writeAll("}\n");
 }

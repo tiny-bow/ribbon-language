@@ -70,6 +70,22 @@ pub fn getCbr(self: *const Blob) ir.Cbr {
     return hasher.final();
 }
 
+/// Disassemble the blob to the given writer.
+pub fn format(self: *const Blob, writer: *std.io.Writer) error{WriteFailed}!void {
+    try writer.print("(Blob{x} alignment={d}, size={d}, bytes=", .{
+        @intFromPtr(self),
+        self.layout.alignment,
+        self.layout.size,
+    });
+
+    const bytes = self.getBytes();
+    for (bytes) |byte| {
+        try writer.print("{x}", .{byte});
+    }
+
+    try writer.writeAll(")");
+}
+
 /// An adapted hash context for blobs, used when interning yet-unmarshalled data.
 pub const AdaptedHashContext = struct {
     pub fn hash(_: @This(), descriptor: struct { core.Alignment, []const u8 }) u64 {

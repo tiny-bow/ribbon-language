@@ -66,6 +66,14 @@ pub const Implementation = struct {
             };
         }
     }
+
+    pub fn disas(self: *const Implementation, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("impl {f} {{\n", .{self.class});
+        for (self.members) |member| {
+            try writer.print("  {s} = {f}\n", .{ member.name.value, member.value });
+        }
+        try writer.writeAll("}\n");
+    }
 };
 
 /// A symbol is a term that can appear in both values and types, and is simply a nominative identity in the form of a name.
@@ -86,6 +94,10 @@ pub const Symbol = struct {
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Symbol) error{ BadEncoding, OutOfMemory }!void {
         out.name = try rehydrator.rehydrateName(try dehydrated.getOperandOf(.name, 0));
+    }
+
+    pub fn disas(self: *const Symbol, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("'{s}", .{self.name.value});
     }
 };
 
@@ -152,6 +164,14 @@ pub const Class = struct {
             };
         }
     }
+
+    pub fn disas(self: *const Class, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("class {s} {{\n", .{self.name.value});
+        for (self.elements) |element| {
+            try writer.print("  {s}: {f}\n", .{ element.name.value, element.type });
+        }
+        try writer.writeAll("}\n");
+    }
 };
 
 /// Data for an effect repr.
@@ -217,6 +237,14 @@ pub const Effect = struct {
             };
         }
     }
+
+    pub fn disas(self: *const Effect, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("effect {s} {{\n", .{self.name.value});
+        for (self.elements) |element| {
+            try writer.print("  {s}: {f}\n", .{ element.name.value, element.type });
+        }
+        try writer.writeAll("}\n");
+    }
 };
 
 /// Defines a variable in a Polymorphic repr.
@@ -245,6 +273,10 @@ pub const Quantifier = struct {
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *Quantifier) error{ BadEncoding, OutOfMemory }!void {
         out.id = try dehydrated.getOperandOf(.uint, 0);
         out.kind = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+    }
+
+    pub fn disas(self: *const Quantifier, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(quantifier{d} {f})", .{ self.id, self.kind });
     }
 };
 
@@ -288,6 +320,10 @@ pub const LiftedDataKind = struct {
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *LiftedDataKind) error{ BadEncoding, OutOfMemory }!void {
         out.unlifted_type = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
     }
+
+    pub fn disas(self: *const LiftedDataKind, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(lifted {f})", .{self.unlifted_type});
+    }
 };
 
 /// The kind of type constructors, functions on types.
@@ -316,6 +352,10 @@ pub const ArrowKind = struct {
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *ArrowKind) error{ BadEncoding, OutOfMemory }!void {
         out.input = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
         out.output = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+    }
+
+    pub fn disas(self: *const ArrowKind, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("({f} -> {f})", .{ self.input, self.output });
     }
 };
 
@@ -358,6 +398,10 @@ pub const IntegerType = struct {
         out.signedness = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
         out.bit_width = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
+
+    pub fn disas(self: *const IntegerType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(int signedness={f} bit_width={f})", .{ self.signedness, self.bit_width });
+    }
 };
 
 /// Type data for a floating point type repr.
@@ -380,6 +424,10 @@ pub const FloatType = struct {
 
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *FloatType) error{ BadEncoding, OutOfMemory }!void {
         out.bit_width = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
+    }
+
+    pub fn disas(self: *const FloatType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(float bit_width={f})", .{self.bit_width});
     }
 };
 
@@ -417,6 +465,10 @@ pub const ArrayType = struct {
         out.sentinel_value = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
         out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
     }
+
+    pub fn disas(self: *const ArrayType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(array len={f} sentinel_value={f} payload={f})", .{ self.len, self.sentinel_value, self.payload });
+    }
 };
 
 /// Type data for a pointer type repr.
@@ -452,6 +504,10 @@ pub const PointerType = struct {
         out.alignment = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
         out.address_space = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
         out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
+    }
+
+    pub fn disas(self: *const PointerType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(pointer alignment={f} address_space={f} payload={f})", .{ self.alignment, self.address_space, self.payload });
     }
 };
 
@@ -494,6 +550,10 @@ pub const BufferType = struct {
         out.sentinel_value = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
         out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 3));
     }
+
+    pub fn disas(self: *const BufferType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(buffer alignment={f} address_space={f} sentinel_value={f} payload={f})", .{ self.alignment, self.address_space, self.sentinel_value, self.payload });
+    }
 };
 
 /// Type data for a wide-pointer-to-many type repr.
@@ -535,6 +595,10 @@ pub const SliceType = struct {
         out.sentinel_value = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
         out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 3));
     }
+
+    pub fn disas(self: *const SliceType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(slice alignment={f} address_space={f} sentinel_value={f} payload={f})", .{ self.alignment, self.address_space, self.sentinel_value, self.payload });
+    }
 };
 
 /// Used for abstract data description.
@@ -561,6 +625,10 @@ pub const RowElementType = struct {
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *RowElementType) error{ BadEncoding, OutOfMemory }!void {
         out.label = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
         out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+    }
+
+    pub fn disas(self: *const RowElementType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(row_element label={f} payload={f})", .{ self.label, self.payload });
     }
 };
 
@@ -640,6 +708,20 @@ pub const LabelType = union(enum) {
             },
         }
     }
+
+    pub fn disas(self: *const LabelType, writer: *std.io.Writer) error{WriteFailed}!void {
+        switch (self.*) {
+            .name => |n| {
+                try writer.print("(label name={f})", .{n});
+            },
+            .index => |i| {
+                try writer.print("(label index={f})", .{i});
+            },
+            .exact => |e| {
+                try writer.print("(label name={f} index={f})", .{ e.name, e.index });
+            },
+        }
+    }
 };
 
 /// Used for compile time constants as types, such as integer values.
@@ -671,6 +753,10 @@ pub const LiftedDataType = struct {
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *LiftedDataType) error{ BadEncoding, OutOfMemory }!void {
         out.unlifted_type = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
         out.value = try rehydrator.rehydrateExpression(try dehydrated.getOperandOf(.expression, 1));
+    }
+
+    pub fn disas(self: *const LiftedDataType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(lifted_data unlifted_type={f} value={f})", .{ self.unlifted_type, self.value });
     }
 };
 
@@ -763,6 +849,14 @@ pub const StructureType = struct {
             };
         }
     }
+
+    pub fn disas(self: *const StructureType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(structure name={s} layout={f} backing_integer={f} elements=[\n", .{ self.name.value, self.layout, self.backing_integer });
+        for (self.elements) |elem| {
+            try writer.print("{{ name={s} payload={f} alignment_override={f} }}\n", .{ elem.name.value, elem.payload, elem.alignment_override });
+        }
+        try writer.writeAll("])");
+    }
 };
 
 /// Type data for a tagged sum type repr.
@@ -839,6 +933,14 @@ pub const UnionType = struct {
                 .payload = try rehydrator.rehydrateTerm(payload_op),
             };
         }
+    }
+
+    pub fn disas(self: *const UnionType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(union name={s} layout={f} elements=[\n", .{ self.name.value, self.layout });
+        for (self.elements) |elem| {
+            try writer.print("{{ name={s} payload={f} }}\n", .{ elem.name.value, elem.payload });
+        }
+        try writer.writeAll("])");
     }
 };
 
@@ -930,6 +1032,14 @@ pub const SumType = struct {
             };
         }
     }
+
+    pub fn disas(self: *const SumType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(sum name={s} tag_type={f} layout={f} elements=[\n", .{ self.name.value, self.tag_type, self.layout });
+        for (self.elements) |elem| {
+            try writer.print("{{ name={s} payload={f} tag={f} }}\n", .{ elem.name.value, elem.payload, elem.tag });
+        }
+        try writer.writeAll("])");
+    }
 };
 
 /// Type data for a function type repr.
@@ -963,6 +1073,10 @@ pub const FunctionType = struct {
         out.input = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
         out.output = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
         out.effects = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
+    }
+
+    pub fn disas(self: *const FunctionType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(function_type input={f} output={f} effects={f})", .{ self.input, self.output, self.effects });
     }
 };
 
@@ -1002,6 +1116,10 @@ pub const HandlerType = struct {
         out.output = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
         out.handled_effect = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
         out.added_effects = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 3));
+    }
+
+    pub fn disas(self: *const HandlerType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(handler_type input={f} output={f} handled_effect={f} added_effects={f})", .{ self.input, self.output, self.handled_effect, self.added_effects });
     }
 };
 
@@ -1056,6 +1174,14 @@ pub const PolymorphicType = struct {
         out.qualifiers = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, quantifiers.len));
         out.payload = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, quantifiers.len + 1));
     }
+
+    pub fn disas(self: *const PolymorphicType, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeAll("(polymorphic_type quantifiers=[\n");
+        for (self.quantifiers) |quant| {
+            try writer.print("{f}\n", .{quant});
+        }
+        try writer.print("] qualifiers={f} payload={f})", .{ self.qualifiers, self.payload });
+    }
 };
 
 /// Constraint checking that `subtype_row` is a subset of `primary_row`.
@@ -1084,6 +1210,10 @@ pub const IsSubRowConstraint = struct {
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IsSubRowConstraint) error{ BadEncoding, OutOfMemory }!void {
         out.primary_row = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
         out.subtype_row = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+    }
+
+    pub fn disas(self: *const IsSubRowConstraint, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(is_sub_row primary_row={f} subtype_row={f})", .{ self.primary_row, self.subtype_row });
     }
 };
 
@@ -1119,6 +1249,10 @@ pub const RowsConcatenateConstraint = struct {
         out.row_b = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
         out.row_result = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 2));
     }
+
+    pub fn disas(self: *const RowsConcatenateConstraint, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(rows_concatenate row_a={f} row_b={f} row_result={f})", .{ self.row_a, self.row_b, self.row_result });
+    }
 };
 
 /// Constraint checking that the `data` type implements the `class` typeclass.
@@ -1147,6 +1281,10 @@ pub const ImplementsClassConstraint = struct {
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *ImplementsClassConstraint) error{ BadEncoding, OutOfMemory }!void {
         out.data = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
         out.class = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+    }
+
+    pub fn disas(self: *const ImplementsClassConstraint, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(implements_class data={f} class={f})", .{ self.data, self.class });
     }
 };
 
@@ -1177,6 +1315,10 @@ pub const IsStructureConstraint = struct {
         out.data = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
         out.row = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
+
+    pub fn disas(self: *const IsStructureConstraint, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(is_structure data={f} row={f})", .{ self.data, self.row });
+    }
 };
 
 /// Constraint checking that the `data` type is a nominative identity for a union over the `row` type.
@@ -1206,6 +1348,10 @@ pub const IsUnionConstraint = struct {
         out.data = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
         out.row = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
     }
+
+    pub fn disas(self: *const IsUnionConstraint, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(is_union data={f} row={f})", .{ self.data, self.row });
+    }
 };
 
 /// Constraint checking that the `data` type is a nominative identity for a sum over the `row` type.
@@ -1234,5 +1380,9 @@ pub const IsSumConstraint = struct {
     pub fn rehydrate(dehydrated: *const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *IsSumConstraint) error{ BadEncoding, OutOfMemory }!void {
         out.data = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 0));
         out.row = try rehydrator.rehydrateTerm(try dehydrated.getOperandOf(.term, 1));
+    }
+
+    pub fn disas(self: *const IsSumConstraint, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.print("(is_sum data={f} row={f})", .{ self.data, self.row });
     }
 };

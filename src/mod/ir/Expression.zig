@@ -76,7 +76,7 @@ pub fn deinit(self: *Expression) void {
 
 /// Create an iterator over the Blocks in this expression.
 /// * Note that this requires allocation, as it uses a queue and a visited set.
-pub fn iterate(self: *Expression) !ir.Block.Iterator {
+pub fn iterate(self: *const Expression) !ir.Block.Iterator {
     return ir.Block.Iterator.init(self.module.root.allocator, self.entry);
 }
 
@@ -195,4 +195,29 @@ pub fn rehydrate(sma_expr: *const ir.Sma.Expression, rehydrator: *ir.Sma.Rehydra
     );
 
     return expr;
+}
+
+/// Disassemble this expression to the given writer.
+pub fn format(self: *const Expression, writer: *std.io.Writer) error{WriteFailed}!void {
+    try writer.print("(type: {f}, handler_sets: [\n", .{self.type});
+
+    for (self.handler_sets.items) |hs| {
+        try hs.format(writer);
+    }
+    try writer.writeAll("], cfg: {{\n");
+
+    var it = self.iterate() catch |err| {
+        log.err("Failed to disassemble expression: {s}", .{@errorName(err)});
+        return error.WriteFailed;
+    };
+    defer it.deinit();
+
+    while (it.next() catch |err| {
+        log.err("Failed to disassemble expression: {s}", .{@errorName(err)});
+        return error.WriteFailed;
+    }) |block| {
+        try block.format(writer);
+    }
+
+    try writer.print("}})\n", .{});
 }

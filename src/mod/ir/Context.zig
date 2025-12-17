@@ -130,6 +130,7 @@ pub fn registerTermType(self: *Context, comptime T: type) error{ DuplicateTermTy
         .hash = @ptrCast(&T.hash),
         .dehydrate = @ptrCast(&T.dehydrate),
         .rehydrate = @ptrCast(&T.rehydrate),
+        .disas = @ptrCast(&T.disas),
     });
     errdefer _ = self.vtables.remove(tag);
 }
@@ -262,5 +263,13 @@ pub fn rehydrate(self: *ir.Context, sma: *const ir.Sma) error{ BadEncoding, OutO
         const sma_id = rehydrator.module_to_index.get(module_p2p.*.guid) orelse return error.BadEncoding;
         const sma_module = &sma.modules.items[sma_id];
         try module_p2p.*.rehydrate(sma_module, &rehydrator);
+    }
+}
+
+/// Disassemble this context to the given writer.
+pub fn format(self: *const Context, writer: *std.io.Writer) error{WriteFailed}!void {
+    var module_it = self.modules.valueIterator();
+    while (module_it.next()) |module_p2p| {
+        try module_p2p.*.format(writer);
     }
 }

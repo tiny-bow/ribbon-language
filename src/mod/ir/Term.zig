@@ -85,6 +85,7 @@ pub const Term = packed struct(u64) {
         hash: *const fn (*const anyopaque, *ir.QuickHasher) void,
         dehydrate: *const fn (*const anyopaque, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Operand)) error{OutOfMemory}!void,
         rehydrate: *const fn (*const ir.Sma.Term, rehydrator: *ir.Sma.Rehydrator, out: *anyopaque) error{ BadEncoding, OutOfMemory }!void,
+        disas: *const fn (*const anyopaque, writer: *std.io.Writer) error{WriteFailed}!void,
     };
 
     /// A pair of a Term.Header and a value of type T. Defines the storage layout for Term objects.
@@ -156,6 +157,11 @@ pub const Term = packed struct(u64) {
         return self.toHeader().is_shared;
     }
 
+    /// Disassemble this term to the given writer.
+    pub fn format(self: Term, writer: *std.io.Writer) error{WriteFailed}!void {
+        try self.toHeader().root.vtables.get(self.tag).?.disas(self.toOpaquePtr(), writer);
+    }
+
     /// An adapted identity context for terms of type T before marshalling and type erasure; used when interning terms.
     pub fn AdaptedIdentityContext(comptime T: type) type {
         return struct {
@@ -215,6 +221,10 @@ pub const Term = packed struct(u64) {
 
             pub fn rehydrate(_: *const ir.Sma.Term, _: *ir.Sma.Rehydrator, _: *Self) error{ BadEncoding, OutOfMemory }!void {
                 // Identity types have no data to rehydrate
+            }
+
+            pub fn disas(_: *const Self, writer: *std.io.Writer) error{WriteFailed}!void {
+                try writer.print("({s})", .{name});
             }
         };
     }

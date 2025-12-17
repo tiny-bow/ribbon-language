@@ -60,6 +60,14 @@ test "ir_full_cycle_pipeline" {
     builder.positionAtEnd(else_block);
     _ = try builder.instr.@"return"(null);
 
+    // Print the drafted IR for visual verification
+    // std.debug.print(
+    //     \\=== Drafted IR ===
+    //     \\{f}
+    //     \\==================
+    //     \\
+    // , .{src_ctx});
+
     // =========================================================================
     // PHASE 2: DEHYDRATION
     // Convert the Context into a Serializable Module Artifact (SMA).

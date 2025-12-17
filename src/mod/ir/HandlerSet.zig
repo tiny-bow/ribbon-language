@@ -94,3 +94,20 @@ pub fn rehydrate(
 
     return hs;
 }
+
+/// Disassemble this handler set to the given writer.
+pub fn format(self: *const HandlerSet, writer: *std.io.Writer) error{WriteFailed}!void {
+    try writer.print("(handler_set{x}: handler_type={f}, result_type={f}, cancellation_point=", .{ @intFromPtr(self), self.handler_type, self.result_type });
+    if (self.cancellation_point.name) |name| {
+        try writer.writeAll(name.value);
+    } else {
+        try writer.print("<unnamed{x}>", .{@intFromPtr(self.cancellation_point)});
+    }
+    try writer.writeAll(", handlers=[\n");
+
+    for (self.handlers.items) |handler| {
+        try handler.format(writer);
+    }
+
+    try writer.writeAll("])\n");
+}

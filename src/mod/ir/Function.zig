@@ -55,6 +55,7 @@ pub fn deinit(self: *Function) void {
     };
 }
 
+/// Dehydrate this function into a serializable module artifact (SMA).
 pub fn dehydrate(self: *const Function, dehydrator: *ir.Sma.Dehydrator) error{ BadEncoding, OutOfMemory }!ir.Sma.Function {
     return ir.Sma.Function{
         .kind = self.kind,
@@ -63,6 +64,7 @@ pub fn dehydrate(self: *const Function, dehydrator: *ir.Sma.Dehydrator) error{ B
     };
 }
 
+/// Rehydrate an ir function from the given SMA function.
 pub fn rehydrate(
     sma_func: *const ir.Sma.Function,
     rehydrator: *ir.Sma.Rehydrator,
@@ -81,4 +83,13 @@ pub fn rehydrate(
     };
 
     return func;
+}
+
+/// Disassemble this function to the given writer.
+pub fn format(self: *const Function, writer: *std.io.Writer) error{WriteFailed}!void {
+    if (self.name) |n| {
+        try writer.print("(function @{s}:\n{f})", .{ n.value, self.body });
+    } else {
+        try writer.print("(function @<unnamed{x}>:\n{f})", .{ @intFromPtr(self), self.body });
+    }
 }
