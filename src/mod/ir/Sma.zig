@@ -234,7 +234,7 @@ pub const Dehydrator = struct {
             try self.function_to_index.put(self.ctx.allocator, function, index);
 
             var sma_function = try function.dehydrate(self);
-            errdefer sma_function.deinit(self.sma.allocator);
+            // sma function doesn't allocate, no need for errdefer
 
             try self.sma.functions.append(self.sma.allocator, sma_function);
 
@@ -467,6 +467,24 @@ pub const Rehydrator = struct {
         }
     }
 
+    /// Try to rehydrate a given optional SMA expression index into an ir Expression pointer, returning null if the index is the sentinel.
+    pub fn tryRehydrateExpression(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!?*ir.Expression {
+        if (index == Sma.sentinel_index) {
+            return null;
+        } else {
+            return try self.rehydrateExpression(index);
+        }
+    }
+
+    /// Attempt to rehydrate a term, returning null if the index is the sentinel.
+    pub fn tryRehydrateTerm(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!?ir.Term {
+        if (index == Sma.sentinel_index) {
+            return null;
+        } else {
+            return try self.rehydrateTerm(index);
+        }
+    }
+
     /// Rehydrate the given SMA global index into an ir Global pointer.
     /// * This may recursively rehydrate other items as needed.
     pub fn rehydrateGlobal(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!*ir.Global {
@@ -505,7 +523,7 @@ pub const Rehydrator = struct {
             const function = try ir.Function.rehydrate(sma_function, self);
             errdefer {
                 function.deinit();
-                function.body.module.function_pool.destroy(function) catch |err| {
+                function.module.function_pool.destroy(function) catch |err| {
                     log.err("Failed to destroy function on rehydrate error: {s}", .{@errorName(err)});
                 };
             }
@@ -523,6 +541,9 @@ pub const Module = struct {
     guid: ir.Module.GUID,
     /// The interned name index for this module.
     name: u32,
+    /// Whether or not the module is a primary module in its context.
+    /// I.E. whether its exports are fully serialized, or if they are included for dependency resolution only.
+    is_primary: bool,
     /// The exports defined by this module.
     exports: common.ArrayList(Sma.Export) = .empty,
 
@@ -537,6 +558,7 @@ pub const Module = struct {
         const guid: ir.Module.GUID = @enumFromInt(guid_u128);
 
         const name = try reader.takeInt(u32, .little);
+        const is_primary = try reader.takeInt(u8, .little) != 0;
 
         const export_count = try reader.takeInt(u32, .little);
         var exports = common.ArrayList(Sma.Export).empty;
@@ -549,6 +571,7 @@ pub const Module = struct {
         return Sma.Module{
             .guid = guid,
             .name = name,
+            .is_primary = is_primary,
             .exports = exports,
         };
     }
@@ -558,6 +581,7 @@ pub const Module = struct {
         try writer.writeInt(u128, @intFromEnum(self.guid), .little);
 
         try writer.writeInt(u32, self.name, .little);
+        try writer.writeInt(u8, @intFromBool(self.is_primary), .little);
 
         try writer.writeInt(u32, @intCast(self.exports.items.len), .little);
         for (self.exports.items) |*ex| try ex.serialize(writer);
@@ -772,39 +796,43 @@ pub const HandlerSet = struct {
 
 /// In-memory representation of an SMA function definition.
 pub const Function = struct {
+    /// The GUID of the module that defines this function.
+    module: ir.Module.GUID,
     /// The interned name index for this function.
     name: u32,
     /// The kind of this function.
     kind: ir.Function.Kind,
+    /// The type of this function.
+    type: u32,
     /// The body expression for this function.
-    body: Expression,
-
-    /// Deinitialize this SMA function, freeing its resources.
-    pub fn deinit(self: *Sma.Function, allocator: std.mem.Allocator) void {
-        self.body.deinit(allocator);
-    }
+    body: u32,
 
     /// Deserialize an SMA function from the given reader.
-    pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Function {
+    pub fn deserialize(reader: *std.io.Reader) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Function {
+        const module_u128 = try reader.takeInt(u128, .little);
+        const module_guid: ir.Module.GUID = @enumFromInt(module_u128);
         const name = try reader.takeInt(u32, .little);
         const kind_u8 = try reader.takeInt(u8, .little);
         const kind: ir.Function.Kind = @enumFromInt(kind_u8);
-
-        const body = try Sma.Expression.deserialize(reader, allocator);
+        const type_id = try reader.takeInt(u32, .little);
+        const body = try reader.takeInt(u32, .little);
 
         return Sma.Function{
+            .module = module_guid,
             .name = name,
             .kind = kind,
+            .type = type_id,
             .body = body,
         };
     }
 
     /// Serialize this SMA function to the given writer.
     pub fn serialize(self: *Sma.Function, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeInt(u128, @intFromEnum(self.module), .little);
         try writer.writeInt(u32, self.name, .little);
         try writer.writeInt(u8, @intFromEnum(self.kind), .little);
-
-        try self.body.serialize(writer);
+        try writer.writeInt(u32, self.type, .little);
+        try writer.writeInt(u32, self.body, .little);
     }
 
     /// Compute the canonical binary representation (CBR) hash for this SMA function.
@@ -818,8 +846,11 @@ pub const Function = struct {
         hasher.update("kind:");
         hasher.update(self.kind);
 
+        hasher.update("type:");
+        hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.type }).?);
+
         hasher.update("body:");
-        hasher.update(self.body.getCbr(sma));
+        hasher.update(sma.cbr.get(.{ .kind = .expression, .value = self.body }).?);
 
         return hasher.final();
     }
@@ -1208,6 +1239,7 @@ pub fn deinit(const_ptr: *const Sma) void {
     self.names.deinit(self.allocator);
     self.shared.deinit(self.allocator);
     self.globals.deinit(self.allocator);
+    self.functions.deinit(self.allocator);
     self.cbr.deinit(self.allocator);
 
     for (self.blobs.items) |blob| blob.deinit(self.allocator);
@@ -1221,9 +1253,6 @@ pub fn deinit(const_ptr: *const Sma) void {
 
     for (self.expressions.items) |*expression| expression.deinit(self.allocator);
     self.expressions.deinit(self.allocator);
-
-    for (self.functions.items) |*function| function.deinit(self.allocator);
-    self.functions.deinit(self.allocator);
 
     self.allocator.destroy(self);
 }
@@ -1320,7 +1349,7 @@ pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ 
 
     const function_count = try reader.takeInt(u32, .little);
     for (0..function_count) |_| {
-        const function = try Sma.Function.deserialize(reader, allocator);
+        const function = try Sma.Function.deserialize(reader);
         try sma.functions.append(allocator, function);
     }
 

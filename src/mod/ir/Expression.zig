@@ -18,9 +18,6 @@ type: ir.Term,
 
 /// The entry block of this expression.
 entry: *ir.Block,
-/// Storage for the expression's instructions.
-/// While less memory efficient than a Pool, this allows us to include operands in the same allocation as the instruction.
-arena: std.heap.ArenaAllocator,
 
 /// The list of handler sets used by this expression.
 handler_sets: common.ArrayList(*ir.HandlerSet) = .empty,
@@ -40,7 +37,6 @@ pub fn init(module: *ir.Module, function: ?*ir.Function, ty: ir.Term) error{OutO
         .type = ty,
 
         .entry = undefined,
-        .arena = .init(module.root.allocator),
     };
 
     self.entry = try ir.Block.init(self, entry_name);
@@ -68,7 +64,6 @@ pub fn deinit(self: *Expression) void {
         handler_set.deinit();
     }
     self.handler_sets.deinit(self.module.root.allocator);
-    self.arena.deinit();
     self.module.expression_pool.destroy(self) catch |err| {
         log.err("Failed to destroy expression on deinit: {s}", .{@errorName(err)});
     };

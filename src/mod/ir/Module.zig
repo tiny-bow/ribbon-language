@@ -14,6 +14,9 @@ root: *ir.Context,
 guid: Module.GUID,
 /// Symbolic name of this module.
 name: ir.Name,
+/// Whether or not the module is a primary module in its context.
+/// I.E. whether its exports should be fully serialized, or if they are included for dependency resolution only.
+is_primary: bool,
 
 /// Symbols exported from this module.
 exported_symbols: common.StringMap(Module.Binding) = .empty,
@@ -46,13 +49,14 @@ pub const Binding = union(enum) {
 };
 
 /// Create a new module in the given context.
-pub fn init(root: *ir.Context, name: ir.Name, guid: Module.GUID) !*Module {
+pub fn init(root: *ir.Context, name: ir.Name, guid: Module.GUID, is_primary: bool) !*Module {
     const self = try root.arena.allocator().create(Module);
 
     self.* = Module{
         .root = root,
         .guid = guid,
         .name = name,
+        .is_primary = is_primary,
         .global_pool = .init(root.allocator),
         .handler_set_pool = .init(root.allocator),
         .function_pool = .init(root.allocator),
@@ -162,6 +166,7 @@ pub fn dehydrate(self: *const Module, dehydrator: *ir.Sma.Dehydrator) error{ Bad
     return ir.Sma.Module{
         .guid = self.guid,
         .name = name_index,
+        .is_primary = self.is_primary,
         .exports = exports,
     };
 }

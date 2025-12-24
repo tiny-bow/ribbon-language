@@ -10,8 +10,12 @@ const ir = @import("../ir.zig");
 
 /// The kind of function, either a procedure or an effect handler.
 kind: Kind,
+/// The module this function belongs to.
+module: *ir.Module,
+/// The type of this function.
+type: ir.Term,
 /// The expression body for this function.
-body: *ir.Expression,
+body: ?*ir.Expression = null,
 /// Optional abi name for this function.
 name: ?ir.Name = null,
 
@@ -36,12 +40,12 @@ pub fn init(
     };
 
     self.* = Function{
+        .module = module,
+        .type = ty,
         .kind = kind,
-        .body = undefined,
+        .body = null,
         .name = name,
     };
-
-    self.body = try ir.Expression.init(module, self, ty);
 
     return self;
 }
@@ -49,18 +53,22 @@ pub fn init(
 /// Free resources associated with this function.
 /// * Frees the function in the module function pool for reuse.
 pub fn deinit(self: *Function) void {
-    self.body.deinit();
-    self.body.module.function_pool.destroy(self) catch |err| {
-        log.err("Failed to destroy function on deinit: {s}", .{@errorName(err)});
-    };
+    if (self.body) |b| {
+        b.deinit();
+        b.module.function_pool.destroy(self) catch |err| {
+            log.err("Failed to destroy function on deinit: {s}", .{@errorName(err)});
+        };
+    }
 }
 
 /// Dehydrate this function into a serializable module artifact (SMA).
 pub fn dehydrate(self: *const Function, dehydrator: *ir.Sma.Dehydrator) error{ BadEncoding, OutOfMemory }!ir.Sma.Function {
     return ir.Sma.Function{
+        .module = self.module.guid,
         .kind = self.kind,
+        .type = try dehydrator.dehydrateTerm(self.type),
         .name = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index,
-        .body = try self.body.dehydrate(dehydrator),
+        .body = if (self.module.is_primary and self.body != null) try dehydrator.dehydrateExpression(self.body.?) else ir.Sma.sentinel_index,
     };
 }
 
@@ -69,7 +77,7 @@ pub fn rehydrate(
     sma_func: *const ir.Sma.Function,
     rehydrator: *ir.Sma.Rehydrator,
 ) error{ BadEncoding, OutOfMemory }!*Function {
-    const module = rehydrator.ctx.modules.get(sma_func.body.module) orelse return error.BadEncoding;
+    const module = rehydrator.ctx.modules.get(sma_func.module) orelse return error.BadEncoding;
 
     const func = try module.function_pool.create();
     errdefer module.function_pool.destroy(func) catch |err| {
@@ -77,9 +85,11 @@ pub fn rehydrate(
     };
 
     func.* = Function{
+        .module = module,
         .kind = sma_func.kind,
+        .type = try rehydrator.rehydrateTerm(sma_func.type),
         .name = try rehydrator.tryRehydrateName(sma_func.name),
-        .body = try ir.Expression.rehydrate(&sma_func.body, rehydrator, func),
+        .body = if (module.is_primary) try rehydrator.tryRehydrateExpression(sma_func.body) else null,
     };
 
     return func;
@@ -87,9 +97,17 @@ pub fn rehydrate(
 
 /// Disassemble this function to the given writer.
 pub fn format(self: *const Function, writer: *std.io.Writer) error{WriteFailed}!void {
-    if (self.name) |n| {
-        try writer.print("(function @{s}:\n{f})", .{ n.value, self.body });
+    if (self.body) |b| {
+        if (self.name) |n| {
+            try writer.print("(function @{s}:\n{f})", .{ n.value, b });
+        } else {
+            try writer.print("(function @<unnamed{x}>:\n{f})", .{ @intFromPtr(self), b });
+        }
     } else {
-        try writer.print("(function @<unnamed{x}>:\n{f})", .{ @intFromPtr(self), self.body });
+        if (self.name) |n| {
+            try writer.print("(decl function @{s})", .{n.value});
+        } else {
+            try writer.print("(decl function @<unnamed{x}>)", .{@intFromPtr(self)});
+        }
     }
 }

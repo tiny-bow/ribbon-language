@@ -20,7 +20,7 @@ test "ir_full_cycle_pipeline" {
     // 1. Create a Module
     const mod_name = try src_ctx.internName("test_module");
     const mod_guid: ir.Module.GUID = @enumFromInt(0xDEAD_BEEF);
-    const src_mod = try src_ctx.createModule(mod_name, mod_guid);
+    const src_mod = try src_ctx.createModule(mod_name, mod_guid, true);
 
     // 2. Create Types (Void and Bool)
     const void_ty = try src_ctx.getOrCreateSharedTerm(ir.terms.VoidType{});
@@ -34,9 +34,10 @@ test "ir_full_cycle_pipeline" {
     try src_mod.exportFunction(fn_name, src_func);
 
     // 4. Create Basic Blocks
-    const entry_block = src_func.body.entry;
-    const then_block = try ir.Block.init(src_func.body, try src_ctx.internName("then_case"));
-    const else_block = try ir.Block.init(src_func.body, try src_ctx.internName("else_case"));
+    src_func.body = try ir.Expression.init(src_mod, src_func, src_func.type);
+    const entry_block = src_func.body.?.entry;
+    const then_block = try ir.Block.init(src_func.body.?, try src_ctx.internName("then_case"));
+    const else_block = try ir.Block.init(src_func.body.?, try src_ctx.internName("else_case"));
 
     // 5. Build Instructions
     var builder = ir.Builder.init(src_ctx);
@@ -138,7 +139,7 @@ test "ir_full_cycle_pipeline" {
     // However, exact iteration order of the pool depends on implementation details,
     // so we traverse via the CFG starting at entry.
 
-    const d_entry = dest_func.body.entry;
+    const d_entry = dest_func.body.?.entry;
 
     // Entry should have 2 instructions: stack_alloc, br_if
     var entry_it = d_entry.iterate();

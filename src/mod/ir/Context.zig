@@ -136,7 +136,7 @@ pub fn registerTermType(self: *Context, comptime T: type) error{ DuplicateTermTy
 }
 
 /// Create a new module in the context.
-pub fn createModule(self: *Context, name: ir.Name, guid: ir.Module.GUID) error{ DuplicateModuleGUID, DuplicateModuleName, OutOfMemory }!*ir.Module {
+pub fn createModule(self: *Context, name: ir.Name, guid: ir.Module.GUID, is_primary: bool) error{ DuplicateModuleGUID, DuplicateModuleName, OutOfMemory }!*ir.Module {
     if (self.modules.contains(guid)) {
         return error.DuplicateModuleGUID;
     }
@@ -145,7 +145,7 @@ pub fn createModule(self: *Context, name: ir.Name, guid: ir.Module.GUID) error{ 
         return error.DuplicateModuleName;
     }
 
-    const new_module = try ir.Module.init(self, name, guid);
+    const new_module = try ir.Module.init(self, name, guid, is_primary);
 
     try self.name_to_module_guid.put(self.allocator, name.value, guid);
     errdefer _ = self.name_to_module_guid.remove(name.value);
@@ -250,7 +250,7 @@ pub fn rehydrate(self: *ir.Context, sma: *const ir.Sma) error{ BadEncoding, OutO
 
     for (sma.modules.items) |sma_module| {
         const name = try rehydrator.rehydrateName(sma_module.name);
-        _ = self.createModule(name, sma_module.guid) catch |err| {
+        _ = self.createModule(name, sma_module.guid, sma_module.is_primary) catch |err| {
             return switch (err) {
                 error.DuplicateModuleGUID, error.DuplicateModuleName => error.BadEncoding,
                 error.OutOfMemory => error.OutOfMemory,

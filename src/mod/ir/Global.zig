@@ -10,14 +10,14 @@ const ir = @import("../ir.zig");
 module: *ir.Module,
 /// The type of this global variable.
 type: ir.Term,
-/// The initializer term for this global variable.
-initializer: ir.Term,
+/// The initializer expression for this global variable.
+initializer: ?*ir.Expression = null,
 
 /// Optional abi name for this global variable.
 name: ?ir.Name = null,
 
 /// Create a new global in the given module, pulling memory from the pool and assigning it a fresh identity.
-pub fn init(module: *ir.Module, name: ?ir.Name, ty: ir.Term, initial: ir.Term) error{OutOfMemory}!*Global {
+pub fn init(module: *ir.Module, name: ?ir.Name, ty: ir.Term, initial: ?*ir.Expression) error{OutOfMemory}!*Global {
     const self = try module.global_pool.create();
     self.* = Global{
         .module = module,
@@ -43,7 +43,7 @@ pub fn dehydrate(self: *const Global, dehydrator: *ir.Sma.Dehydrator) error{ Bad
         .module = self.module.guid,
         .name = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index,
         .type = try dehydrator.dehydrateTerm(self.type),
-        .initializer = try dehydrator.dehydrateTerm(self.initializer),
+        .initializer = if (self.module.is_primary and self.initializer != null) try dehydrator.dehydrateExpression(self.initializer.?) else ir.Sma.sentinel_index,
     };
 }
 
@@ -55,7 +55,7 @@ pub fn rehydrate(sma_global: *const ir.Sma.Global, rehydrator: *ir.Sma.Rehydrato
     global.* = Global{
         .module = module,
         .type = try rehydrator.rehydrateTerm(sma_global.type),
-        .initializer = try rehydrator.rehydrateTerm(sma_global.initializer),
+        .initializer = if (module.is_primary) try rehydrator.tryRehydrateExpression(sma_global.initializer) else null,
         .name = try rehydrator.tryRehydrateName(sma_global.name),
     };
     return global;
@@ -63,9 +63,17 @@ pub fn rehydrate(sma_global: *const ir.Sma.Global, rehydrator: *ir.Sma.Rehydrato
 
 /// Disassemble this global to the given writer.
 pub fn format(self: *const Global, writer: *std.io.Writer) error{WriteFailed}!void {
-    if (self.name) |n| {
-        try writer.print("(global %{s}: {f} = {f})", .{ n.value, self.type, self.initializer });
+    if (self.initializer) |i| {
+        if (self.name) |n| {
+            try writer.print("(global %{s}: {f} = {f})", .{ n.value, self.type, i });
+        } else {
+            try writer.print("(global %<unnamed{x}>: {f} = {f})", .{ @intFromPtr(self), self.type, i });
+        }
     } else {
-        try writer.print("(global %<unnamed{x}>: {f} = {f})", .{ @intFromPtr(self), self.type, self.initializer });
+        if (self.name) |n| {
+            try writer.print("(decl global %{s}: {f})", .{ n.value, self.type });
+        } else {
+            try writer.print("(decl global %<unnamed{x}>: {f})", .{ @intFromPtr(self), self.type });
+        }
     }
 }
