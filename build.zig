@@ -1,7 +1,9 @@
 const std = @import("std");
 
-const SUPPORTED_ARCH = &.{.x86_64};
-const SUPPORTED_OS = &.{ .windows, .linux };
+const SUPPORTED_ARCH = [_]std.Target.Cpu.Arch{ .x86_64, .aarch64 };
+const ARCH_PATHS = [_][]const u8{ x64_path, aarch64_path };
+const ARCH_MODULES = [_][]const ModuleDef{ &x64_arch_modules, &aarch64_arch_modules };
+const SUPPORTED_OS = [_]std.Target.Os.Tag{ .windows, .linux };
 
 const ModuleDef = struct {
     name: []const u8,
@@ -14,7 +16,6 @@ const module_path = src_path ++ "mod/";
 const test_path = src_path ++ "test/";
 const bin_path = src_path ++ "bin/";
 
-const x64_path = module_path ++ "x64/";
 const tool_path = bin_path ++ "tools/";
 
 const modules = [_]ModuleDef{
@@ -74,7 +75,8 @@ const modules = [_]ModuleDef{
     },
 };
 
-const arch_modules = [_]ModuleDef{
+const x64_path = module_path ++ "arch/x64/";
+const x64_arch_modules = [_]ModuleDef{
     .{
         .name = "abi",
         .imports = &.{ "core", "assembler" },
@@ -82,6 +84,19 @@ const arch_modules = [_]ModuleDef{
     .{
         .name = "machine",
         .imports = &.{ "abi", "common", "core", "assembler" },
+    },
+};
+
+const aarch64_path = module_path ++ "arch/aarch64/";
+const aarch64_arch_modules = [_]ModuleDef{
+    // TODO: add "assembler" when we have an aarch64 assembler
+    .{
+        .name = "abi",
+        .imports = &.{"core"},
+    },
+    .{
+        .name = "machine",
+        .imports = &.{ "abi", "common", "core" },
     },
 };
 
@@ -96,7 +111,7 @@ const tests = [_][]const u8{
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    validateTarget(target.result); // whitelisting doesnt really work the way we'd like here
+    const arch_path, const arch_modules = validateTarget(b, target.result); // whitelisting doesnt really work the way we'd like here
 
     // parse the zon to extract version for build_info //
     const zon = parseZon(b, struct { version: []const u8 });
@@ -180,10 +195,9 @@ pub fn build(b: *std.Build) !void {
     }).?.module("r64");
     module_map.put("assembler", assembler_mod) catch @panic("OOM");
 
-    const arch_path = b.path(x64_path);
-    inline for (arch_modules) |mod_def| {
+    for (arch_modules) |mod_def| {
         const mod = b.createModule(.{
-            .root_source_file = arch_path.path(b, mod_def.name ++ ".zig"),
+            .root_source_file = arch_path.path(b, b.fmt("{s}.zig", .{mod_def.name})),
             .target = target,
             .optimize = optimize,
         });
@@ -192,9 +206,9 @@ pub fn build(b: *std.Build) !void {
     }
 
     // create all standard modules //
-    inline for (modules) |mod_def| {
+    for (modules) |mod_def| {
         const mod = b.createModule(.{
-            .root_source_file = b.path(module_path ++ mod_def.name ++ ".zig"),
+            .root_source_file = b.path(b.fmt("{s}{s}.zig", .{ module_path, mod_def.name })),
             .target = target,
             .optimize = optimize,
         });
@@ -203,15 +217,8 @@ pub fn build(b: *std.Build) !void {
     }
 
     // link all standard and arch modules //
-    inline for (arch_modules ++ modules) |mod_def| {
-        const mod = module_map.get(mod_def.name).?;
-
-        for (mod_def.imports) |import_name| {
-            const import_mod = module_map.get(import_name) orelse
-                std.debug.panic("Module `{s}` imports unknown module `{s}`", .{ mod_def.name, import_name });
-            mod.addImport(import_name, import_mod);
-        }
-    }
+    for (modules) |mod_def| linkModule(&module_map, mod_def);
+    for (arch_modules) |mod_def| linkModule(&module_map, mod_def);
 
     // link all modules into root //
     {
@@ -345,8 +352,18 @@ pub fn build(b: *std.Build) !void {
     run_step.dependOn(&run_main.step);
 }
 
-fn validateTarget(target: std.Target) void {
-    if (std.mem.indexOfScalar(std.Target.Cpu.Arch, SUPPORTED_ARCH, target.cpu.arch) == null) {
+fn linkModule(module_map: *std.StringHashMap(*std.Build.Module), mod_def: ModuleDef) void {
+    const mod = module_map.get(mod_def.name).?;
+
+    for (mod_def.imports) |import_name| {
+        const import_mod = module_map.get(import_name) orelse
+            std.debug.panic("Module `{s}` imports unknown module `{s}`", .{ mod_def.name, import_name });
+        mod.addImport(import_name, import_mod);
+    }
+}
+
+fn validateTarget(b: *std.Build, target: std.Target) struct { std.Build.LazyPath, []const ModuleDef } {
+    const arch_idx = if (std.mem.indexOfScalar(std.Target.Cpu.Arch, &SUPPORTED_ARCH, target.cpu.arch)) |idx| idx else {
         if (target.cpu.arch.endian() == .big) {
             @panic(
                 \\
@@ -368,9 +385,9 @@ fn validateTarget(target: std.Target) void {
                 .{@tagName(target.cpu.arch)},
             );
         }
-    }
+    };
 
-    if (std.mem.indexOfScalar(std.Target.Os.Tag, SUPPORTED_OS, target.os.tag) == null) {
+    if (std.mem.indexOfScalar(std.Target.Os.Tag, &SUPPORTED_OS, target.os.tag) == null) {
         std.debug.panic(
             \\
             \\
@@ -383,6 +400,11 @@ fn validateTarget(target: std.Target) void {
             .{@tagName(target.os.tag)},
         );
     }
+
+    return .{
+        b.path(ARCH_PATHS[arch_idx]),
+        ARCH_MODULES[arch_idx],
+    };
 }
 
 fn parseZon(b: *std.Build, comptime T: type) T {

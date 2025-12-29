@@ -749,6 +749,31 @@ pub const Builtin = packed struct(u128) {
     }
 };
 
+/// A `BuiltinFunction`, but compiled at runtime.
+///
+/// Can be called within a `Fiber` using the `interpreter.invokeBuiltin` family of functions.
+///
+/// This is primarily a memory management structure,
+/// as the jit is expected to disown the memory upon finalization.
+pub const AllocatedBuiltinFunction = extern struct {
+    /// The function's bytes.
+    ptr: [*]align(common.PAGE_SIZE) const u8,
+    /// The function's length in bytes.
+    ///
+    /// Note that this is not necessarily the length of the mapped memory, as it is page aligned.
+    len: u64,
+
+    /// `munmap` all pages of a native function, freeing the memory.
+    pub fn deinit(self: AllocatedBuiltinFunction) void {
+        std.posix.munmap(@alignCast(self.ptr[0..common.alignTo(self.len, common.PAGE_SIZE)]));
+    }
+
+    /// Get the function's machine code as a slice.
+    pub fn toSlice(self: AllocatedBuiltinFunction) []align(common.PAGE_SIZE) const u8 {
+        return self.ptr[0..self.len];
+    }
+};
+
 /// A Ribbon effect handler set definition. Data is relative to the function.
 pub const HandlerSet = extern struct {
     /// The actual effect handlers used by this set.
