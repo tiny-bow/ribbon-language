@@ -111,7 +111,7 @@ const tests = [_][]const u8{
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const arch_path, const arch_modules = validateTarget(b, target.result); // whitelisting doesnt really work the way we'd like here
+    const arch_path, const arch_modules, const assembler_mod = validateTarget(b, target, optimize);
 
     // parse the zon to extract version for build_info //
     const zon = parseZon(b, struct { version: []const u8 });
@@ -189,11 +189,9 @@ pub fn build(b: *std.Build) !void {
     module_map.put("build_info", build_info_mod) catch @panic("OOM");
 
     // create x64-specific modules //
-    const assembler_mod = b.lazyDependency("r64", .{
-        .target = target,
-        .optimize = optimize,
-    }).?.module("r64");
-    module_map.put("assembler", assembler_mod) catch @panic("OOM");
+    if (assembler_mod) |asmm| {
+        module_map.put("assembler", asmm) catch @panic("OOM");
+    }
 
     for (arch_modules) |mod_def| {
         const mod = b.createModule(.{
@@ -235,7 +233,10 @@ pub fn build(b: *std.Build) !void {
     // link required modules into generator //
     gen_mod.addImport("isa", module_map.get("isa").?);
     gen_mod.addImport("abi", module_map.get("abi").?);
-    gen_mod.addImport("assembler", module_map.get("assembler").?);
+
+    if (assembler_mod) |asmm| {
+        gen_mod.addImport("assembler", asmm);
+    }
     gen_mod.addImport("core", module_map.get("core").?);
     gen_mod.addImport("common", module_map.get("common").?);
     gen_mod.addAnonymousImport("Isa_intro.md", .{
@@ -362,9 +363,9 @@ fn linkModule(module_map: *std.StringHashMap(*std.Build.Module), mod_def: Module
     }
 }
 
-fn validateTarget(b: *std.Build, target: std.Target) struct { std.Build.LazyPath, []const ModuleDef } {
-    const arch_idx = if (std.mem.indexOfScalar(std.Target.Cpu.Arch, &SUPPORTED_ARCH, target.cpu.arch)) |idx| idx else {
-        if (target.cpu.arch.endian() == .big) {
+fn validateTarget(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) struct { std.Build.LazyPath, []const ModuleDef, ?*std.Build.Module } {
+    const arch_idx = if (std.mem.indexOfScalar(std.Target.Cpu.Arch, &SUPPORTED_ARCH, target.result.cpu.arch)) |idx| idx else {
+        if (target.result.cpu.arch.endian() == .big) {
             @panic(
                 \\
                 \\
@@ -382,12 +383,12 @@ fn validateTarget(b: *std.Build, target: std.Target) struct { std.Build.LazyPath
                 \\
                 \\
             ,
-                .{@tagName(target.cpu.arch)},
+                .{@tagName(target.result.cpu.arch)},
             );
         }
     };
 
-    if (std.mem.indexOfScalar(std.Target.Os.Tag, &SUPPORTED_OS, target.os.tag) == null) {
+    if (std.mem.indexOfScalar(std.Target.Os.Tag, &SUPPORTED_OS, target.result.os.tag) == null) {
         std.debug.panic(
             \\
             \\
@@ -397,13 +398,20 @@ fn validateTarget(b: *std.Build, target: std.Target) struct { std.Build.LazyPath
             \\
             \\
         ,
-            .{@tagName(target.os.tag)},
+            .{@tagName(target.result.os.tag)},
         );
     }
 
     return .{
         b.path(ARCH_PATHS[arch_idx]),
         ARCH_MODULES[arch_idx],
+        switch (target.result.cpu.arch) {
+            .x86_64 => b.lazyDependency("r64", .{
+                .target = target,
+                .optimize = optimize,
+            }).?.module("r64"),
+            else => null,
+        },
     };
 }
 

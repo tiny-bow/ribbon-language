@@ -3,7 +3,6 @@ const gen = @This();
 const std = @import("std");
 
 const abi = @import("abi");
-const assembler = @import("assembler");
 const core = @import("core");
 const isa = @import("isa");
 const common = @import("common");
@@ -1341,6 +1340,8 @@ fn parseInstructionsFile(allocator: std.mem.Allocator, categories: []const isa.C
 }
 
 fn generateHeaderAssembly(includePlaceholders: bool, writer: *std.io.Writer) !void {
+    const assembler = @import("assembler");
+
     try writer.print("%define OP_SIZE 0x{x}\n\n", .{core.OPCODE_SIZE});
 
     inline for (comptime std.meta.fieldNames(core.Fiber)) |fieldName| {
