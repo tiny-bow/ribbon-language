@@ -849,8 +849,12 @@ pub const Function = struct {
         hasher.update("type:");
         hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.type }).?);
 
-        hasher.update("body:");
-        hasher.update(sma.cbr.get(.{ .kind = .expression, .value = self.body }).?);
+        if (sma.cbr.get(.{ .kind = .expression, .value = self.body })) |body_cbr| {
+            hasher.update("body:");
+            hasher.update(body_cbr);
+        } else {
+            hasher.update("declaration");
+        }
 
         return hasher.final();
     }
