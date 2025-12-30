@@ -12,8 +12,8 @@
             .hash = "repl-0.15.2-f-UafUrQAACMm_m2QXlvigyfcxRvDBycl8IsG--nHyUG",
         },
         .r64 = .{
-            .url = "git+https://github.com/tiny-bow/r64#6ba26024d79341b4f7118967da606fbaa6dacce8",
-            .hash = "r64-0.1.0-AAAAAPnEAwD2Lmutyv2P-DY4j-T1YSmIdCmzbyQt2N72",
+            .url = "git+https://github.com/tiny-bow/r64#641c79658359b007ae8efb0f0c0e7c8259656097",
+            .hash = "r64-0.15.2-zpPL9yDGAwAVBDLn9nz1o0fH5G1DgfX0f6J6at-EamRX",
             .lazy = true,
         },
         .raarch = .{
