@@ -15,7 +15,7 @@ pub const Stack = @import("common/Stack.zig");
 pub const AllocWriter = @import("common/AllocWriter.zig");
 pub const VirtualWriter = @import("common/VirtualWriter.zig");
 
-pub const PAGE_SIZE = std.heap.pageSize(); // this will halt compilation on targets with non statically-known page size
+pub const PAGE_SIZE = std.heap.page_size_min;
 
 pub const PeekableIteratorMode = union(enum) {
     error_type: type,
