@@ -2,7 +2,6 @@ const std = @import("std");
 
 const SUPPORTED_ARCH = [_]std.Target.Cpu.Arch{ .x86_64, .aarch64 };
 const ARCH_PATHS = [_][]const u8{ x64_path, aarch64_path };
-const ARCH_MODULES = [_][]const ModuleDef{ &x64_arch_modules, &aarch64_arch_modules };
 const SUPPORTED_OS = [_]std.Target.Os.Tag{ .windows, .linux };
 
 const ModuleDef = struct {
@@ -76,7 +75,9 @@ const modules = [_]ModuleDef{
 };
 
 const x64_path = module_path ++ "arch/x64/";
-const x64_arch_modules = [_]ModuleDef{
+const aarch64_path = module_path ++ "arch/aarch64/";
+
+const arch_modules = [_]ModuleDef{
     .{
         .name = "abi",
         .imports = &.{ "core", "assembler" },
@@ -84,19 +85,6 @@ const x64_arch_modules = [_]ModuleDef{
     .{
         .name = "machine",
         .imports = &.{ "abi", "common", "core", "assembler" },
-    },
-};
-
-const aarch64_path = module_path ++ "arch/aarch64/";
-const aarch64_arch_modules = [_]ModuleDef{
-    // TODO: add "assembler" when we have an aarch64 assembler
-    .{
-        .name = "abi",
-        .imports = &.{"core"},
-    },
-    .{
-        .name = "machine",
-        .imports = &.{ "abi", "common", "core" },
     },
 };
 
@@ -111,7 +99,7 @@ const tests = [_][]const u8{
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const arch_path, const arch_modules, const assembler_mod = validateTarget(b, target, optimize);
+    const arch_path, const assembler_mod = validateTarget(b, target, optimize);
 
     // parse the zon to extract version for build_info //
     const zon = parseZon(b, struct { version: []const u8 });
@@ -338,7 +326,7 @@ fn linkModule(module_map: *std.StringHashMap(*std.Build.Module), mod_def: Module
     }
 }
 
-fn validateTarget(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) struct { std.Build.LazyPath, []const ModuleDef, ?*std.Build.Module } {
+fn validateTarget(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) struct { std.Build.LazyPath, ?*std.Build.Module } {
     _ = optimize;
     const arch_idx = if (std.mem.indexOfScalar(std.Target.Cpu.Arch, &SUPPORTED_ARCH, target.result.cpu.arch)) |idx| idx else {
         if (target.result.cpu.arch.endian() == .big) {
@@ -380,9 +368,9 @@ fn validateTarget(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
 
     return .{
         b.path(ARCH_PATHS[arch_idx]),
-        ARCH_MODULES[arch_idx],
         switch (target.result.cpu.arch) {
             .x86_64 => b.lazyDependency("r64", .{}).?.module("r64"),
+            .aarch64 => b.lazyDependency("raarch", .{}).?.module("raarch"),
             else => null,
         },
     };
