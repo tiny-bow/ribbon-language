@@ -257,8 +257,6 @@ pub fn build(b: *std.Build) !void {
     const gen_tool = b.addExecutable(.{
         .name = "gen",
         .root_module = gen_mod,
-        .use_llvm = false,
-        .use_lld = false,
     });
 
     // markdown generator call //
