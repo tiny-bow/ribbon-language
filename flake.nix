@@ -1,5 +1,5 @@
 {
-  description = "Zig 0.15.1 overlay flake";
+  description = "Zig 0.15.2 overlay flake";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -7,7 +7,7 @@
     zig-overlay.url = "github:mitchellh/zig-overlay";
     zig-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
-    zls-overlay.url = "github:zigtools/zls/0.15.0";
+    zls-overlay.url = "github:zigtools/zls/0.15.1";
     zls-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
 
@@ -15,7 +15,7 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
-      zig = zig-overlay.packages.${system}."0.15.1";
+      zig = zig-overlay.packages.${system}."0.15.2";
       zls = zls-overlay.packages.${system}.default;
     in {
       formatter.${system} = pkgs.alejandra;

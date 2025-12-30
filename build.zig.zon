@@ -4,12 +4,12 @@
     .version = "0.1.0-draft+3",
     .dependencies = .{
         .rg = .{
-            .url = "git+https://github.com/tiny-bow/rg#db7a590bb184c793ee0a23e07a5ef7cc580864ae",
-            .hash = "rg-0.15.1-pACrkSwwMgOF9xNpd-nfu-gm2a-rmhJcRkqMfpuDcoKo",
+            .url = "git+https://github.com/tiny-bow/rg#8c22c3cb20d09fe380999c5d2b5026cb60c9ead2",
+            .hash = "rg-0.15.2-pACrkbUmMgMo12-9TvsoxL2EocvYfd9IQ7ZxapaMN4yv",
         },
         .repl = .{
-            .url = "git+https://github.com/tiny-bow/repl#96fa3621dabaf6ea70f6ddd41b9f78e9ca426b9a",
-            .hash = "repl-0.1.0-f-UafZ3QAAAuCpa_T-zPWvnKkYFjVUImw010qKYhc_aw",
+            .url = "git+https://github.com/tiny-bow/repl#04bedb2192fdebddddcd249e598622870a00c10c",
+            .hash = "repl-0.15.2-f-UafZ7QAAC9zI-8KPdDoN5lTbezxlLk7XEhcMI45zJ6",
         },
         .r64 = .{
             .url = "git+https://github.com/tiny-bow/r64#6ba26024d79341b4f7118967da606fbaa6dacce8",
