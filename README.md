@@ -495,8 +495,8 @@ provides a good overview, even if you are not using VS Code.
 
 * We are currently pinned to Zig version `0.15.1`.
 * 32-bit architectures are not currently planned to be supported.
-* Big-endian architectures are untested.
-* ARM architectures are untested.
+* Big-endian architectures are currently unsupported.
+* Confirmed working on Aarch64 (Alpine Linux 3.23), however we do not yet have an assembler for this architecture.
 * Windows has had minimal testing.
 * Confirmed working on Debian-based systems. (Ubuntu 22 & 24)
 * Primary development environment is currently:
