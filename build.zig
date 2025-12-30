@@ -147,23 +147,19 @@ pub fn build(b: *std.Build) !void {
     // special modules //
     const Instruction_mod = b.createModule(.{
         .root_source_file = null,
-        .target = target,
-        .optimize = optimize,
     });
 
     const build_info_mod = build_info_opts.createModule();
 
     const isa_mod = b.createModule(.{
         .root_source_file = b.path("src/gen-base/zig/isa.zig"),
-        .target = target,
-        .optimize = optimize,
     });
 
     // binary mods //
     const gen_mod = b.createModule(.{
         .root_source_file = b.path(tool_path ++ "gen.zig"),
-        .target = target,
-        .optimize = optimize,
+        .target = b.graph.host,
+        .optimize = .Debug,
     });
 
     const main_mod = b.createModule(.{
@@ -175,8 +171,6 @@ pub fn build(b: *std.Build) !void {
     // the exported ribbon module //
     const ribbon_mod = b.addModule("ribbon_language", .{
         .root_source_file = b.path(module_path ++ "root.zig"),
-        .target = target,
-        .optimize = optimize,
     });
 
     // initialize module map with special modules //
@@ -196,8 +190,6 @@ pub fn build(b: *std.Build) !void {
     for (arch_modules) |mod_def| {
         const mod = b.createModule(.{
             .root_source_file = arch_path.path(b, b.fmt("{s}.zig", .{mod_def.name})),
-            .target = target,
-            .optimize = optimize,
         });
 
         module_map.put(mod_def.name, mod) catch @panic("OOM");
@@ -207,8 +199,6 @@ pub fn build(b: *std.Build) !void {
     for (modules) |mod_def| {
         const mod = b.createModule(.{
             .root_source_file = b.path(b.fmt("{s}{s}.zig", .{ module_path, mod_def.name })),
-            .target = target,
-            .optimize = optimize,
         });
 
         module_map.put(mod_def.name, mod) catch @panic("OOM");
@@ -284,23 +274,10 @@ pub fn build(b: *std.Build) !void {
     var test_bins = std.StringHashMap(*std.Build.Step.Compile).init(b.allocator);
 
     // wrap standard modules with tests //
-    {
-        var it = module_map.iterator();
-        it: while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const value = entry.value_ptr.*;
+    const utest_bin = b.addTest(.{ .root_module = main_mod });
 
-            inline for (&.{ "rg", "repl", "build_info" }) |skip_name| {
-                if (std.mem.eql(u8, key, skip_name)) continue :it;
-            }
-
-            const test_bin = b.addTest(.{ .root_module = value });
-            test_bins.put(key, test_bin) catch @panic("OOM");
-
-            check_step.dependOn(&test_bin.step);
-            test_step.dependOn(&b.addRunArtifact(test_bin).step);
-        }
-    }
+    check_step.dependOn(&utest_bin.step);
+    test_step.dependOn(&b.addRunArtifact(utest_bin).step);
 
     // create integrated modules and tests //
     inline for (tests) |test_name| {
@@ -312,11 +289,11 @@ pub fn build(b: *std.Build) !void {
 
         test_mod.addImport("ribbon_language", ribbon_mod);
 
-        const test_bin = b.addTest(.{ .root_module = test_mod });
-        test_bins.put(test_name, test_bin) catch @panic("OOM");
+        const itest_bin = b.addTest(.{ .root_module = test_mod });
+        test_bins.put(test_name, itest_bin) catch @panic("OOM");
 
-        check_step.dependOn(&test_bin.step);
-        test_step.dependOn(&b.addRunArtifact(test_bin).step);
+        check_step.dependOn(&itest_bin.step);
+        test_step.dependOn(&b.addRunArtifact(itest_bin).step);
     }
 
     // setup generation tasks //
@@ -325,7 +302,7 @@ pub fn build(b: *std.Build) !void {
     dump_intermediates_step.dependOn(&b.addInstallFile(Isa_markdown, "tmp/Isa.md").step);
 
     docs_step.dependOn(&b.addInstallDirectory(.{
-        .source_dir = test_bins.get("ribbon_language").?.getEmittedDocs(),
+        .source_dir = utest_bin.getEmittedDocs(),
         .install_dir = .{ .custom = "docs" },
         .install_subdir = "api",
     }).step);
@@ -362,6 +339,7 @@ fn linkModule(module_map: *std.StringHashMap(*std.Build.Module), mod_def: Module
 }
 
 fn validateTarget(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) struct { std.Build.LazyPath, []const ModuleDef, ?*std.Build.Module } {
+    _ = optimize;
     const arch_idx = if (std.mem.indexOfScalar(std.Target.Cpu.Arch, &SUPPORTED_ARCH, target.result.cpu.arch)) |idx| idx else {
         if (target.result.cpu.arch.endian() == .big) {
             @panic(
@@ -404,10 +382,7 @@ fn validateTarget(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
         b.path(ARCH_PATHS[arch_idx]),
         ARCH_MODULES[arch_idx],
         switch (target.result.cpu.arch) {
-            .x86_64 => b.lazyDependency("r64", .{
-                .target = target,
-                .optimize = optimize,
-            }).?.module("r64"),
+            .x86_64 => b.lazyDependency("r64", .{}).?.module("r64"),
             else => null,
         },
     };
