@@ -8,8 +8,8 @@
             .hash = "rg-0.15.2-pACrkbUmMgMo12-9TvsoxL2EocvYfd9IQ7ZxapaMN4yv",
         },
         .repl = .{
-            .url = "git+https://github.com/tiny-bow/repl#04bedb2192fdebddddcd249e598622870a00c10c",
-            .hash = "repl-0.15.2-f-UafZ7QAAC9zI-8KPdDoN5lTbezxlLk7XEhcMI45zJ6",
+            .url = "git+https://github.com/tiny-bow/repl#0d808efcf2c59387611fbd87f5e8d6f6d3e5e14d",
+            .hash = "repl-0.15.2-f-UafUrQAACMm_m2QXlvigyfcxRvDBycl8IsG--nHyUG",
         },
         .r64 = .{
             .url = "git+https://github.com/tiny-bow/r64#6ba26024d79341b4f7118967da606fbaa6dacce8",
