@@ -99,7 +99,7 @@ const tests = [_][]const u8{
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const arch_path, const assembler_mod = validateTarget(b, target, optimize);
+    const arch_path, const assembler_mod = validateTarget(b, target, optimize) orelse return;
 
     // parse the zon to extract version for build_info //
     const zon = parseZon(b, struct { version: []const u8 });
@@ -171,9 +171,7 @@ pub fn build(b: *std.Build) !void {
     module_map.put("build_info", build_info_mod) catch @panic("OOM");
 
     // create x64-specific modules //
-    if (assembler_mod) |asmm| {
-        module_map.put("assembler", asmm) catch @panic("OOM");
-    }
+    module_map.put("assembler", assembler_mod) catch @panic("OOM");
 
     for (arch_modules) |mod_def| {
         const mod = b.createModule(.{
@@ -211,10 +209,7 @@ pub fn build(b: *std.Build) !void {
     // link required modules into generator //
     gen_mod.addImport("isa", module_map.get("isa").?);
     gen_mod.addImport("abi", module_map.get("abi").?);
-
-    if (assembler_mod) |asmm| {
-        gen_mod.addImport("assembler", asmm);
-    }
+    gen_mod.addImport("assembler", assembler_mod);
     gen_mod.addImport("core", module_map.get("core").?);
     gen_mod.addImport("common", module_map.get("common").?);
     gen_mod.addAnonymousImport("Isa_intro.md", .{
@@ -326,7 +321,7 @@ fn linkModule(module_map: *std.StringHashMap(*std.Build.Module), mod_def: Module
     }
 }
 
-fn validateTarget(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) struct { std.Build.LazyPath, ?*std.Build.Module } {
+fn validateTarget(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) ?struct { std.Build.LazyPath, *std.Build.Module } {
     _ = optimize;
     const arch_idx = if (std.mem.indexOfScalar(std.Target.Cpu.Arch, &SUPPORTED_ARCH, target.result.cpu.arch)) |idx| idx else {
         if (target.result.cpu.arch.endian() == .big) {
@@ -369,9 +364,9 @@ fn validateTarget(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
     return .{
         b.path(ARCH_PATHS[arch_idx]),
         switch (target.result.cpu.arch) {
-            .x86_64 => b.lazyDependency("r64", .{}).?.module("r64"),
-            .aarch64 => b.lazyDependency("raarch", .{}).?.module("raarch"),
-            else => null,
+            .x86_64 => if (b.lazyDependency("r64", .{})) |d| d.module("r64") else return null,
+            .aarch64 => if (b.lazyDependency("raarch", .{})) |d| d.module("raarch") else return null,
+            else => unreachable,
         },
     };
 }
