@@ -4,6 +4,7 @@ const Context = @This();
 const std = @import("std");
 const core = @import("core");
 const common = @import("common");
+const analysis = @import("analysis");
 
 const ir = @import("../ir.zig");
 
@@ -16,6 +17,9 @@ arena: std.heap.ArenaAllocator,
 modules: common.UniqueReprMap(ir.Module.GUID, *ir.Module) = .empty,
 /// Map from module name string to ir.Module.GUID
 name_to_module_guid: common.StringMap(ir.Module.GUID) = .empty,
+
+/// A set of all paths used by source attributions, de-duplicated and owned by the context itself
+interned_paths: common.StringSet = .empty,
 
 /// A set of all names in the context, de-duplicated and owned by the context itself
 interned_name_set: common.StringSet = .empty,
@@ -64,6 +68,7 @@ pub fn deinit(self: *Context) void {
     self.modules.deinit(self.allocator);
 
     self.name_to_module_guid.deinit(self.allocator);
+    self.interned_paths.deinit(self.allocator);
     self.interned_name_set.deinit(self.allocator);
     self.interned_data_set.deinit(self.allocator);
     self.shared_terms.deinit(self.allocator);
@@ -154,6 +159,27 @@ pub fn createModule(self: *Context, name: ir.Name, guid: ir.Module.GUID, is_prim
     errdefer _ = self.modules.remove(guid);
 
     return new_module;
+}
+
+/// Intern a source attribution path. If an identical path already exists, returns a reference to the existing path.
+pub fn internPath(self: *Context, path: []const u8) error{OutOfMemory}![]const u8 {
+    const gop = try self.interned_paths.getOrPut(self.allocator, path);
+
+    if (!gop.found_existing) {
+        const owned_buf = try self.arena.allocator().dupe(u8, path);
+        gop.key_ptr.* = owned_buf;
+    }
+
+    return gop.key_ptr.*;
+}
+
+/// Process a source attribution, interning the path.
+pub fn internSource(self: *Context, src: analysis.Source) error{OutOfMemory}!analysis.Source {
+    const interned_path = try self.internPath(src.name);
+    return analysis.Source{
+        .name = interned_path,
+        .location = src.location,
+    };
 }
 
 /// Intern a symbolic name in the context. If an identical name already exists, returns a reference to the existing name.

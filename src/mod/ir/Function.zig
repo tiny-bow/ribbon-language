@@ -5,6 +5,7 @@ const std = @import("std");
 const log = std.log.scoped(.@"ir.function");
 
 const common = @import("common");
+const analysis = @import("analysis");
 
 const ir = @import("../ir.zig");
 
@@ -18,6 +19,8 @@ type: ir.Term,
 body: ?*ir.Expression = null,
 /// Optional abi name for this function.
 name: ?ir.Name = null,
+/// Optional source attribution for this function.
+source: ?analysis.Source = null,
 
 /// The kind of a function, either a procedure or an effect handler.
 pub const Kind = enum(u1) {
@@ -33,6 +36,7 @@ pub fn init(
     kind: Kind,
     name: ?ir.Name,
     ty: ir.Term,
+    src: ?analysis.Source,
 ) error{OutOfMemory}!*Function {
     const self = try module.function_pool.create();
     errdefer module.function_pool.destroy(self) catch |err| {
@@ -45,6 +49,7 @@ pub fn init(
         .kind = kind,
         .body = null,
         .name = name,
+        .source = src,
     };
 
     return self;
@@ -69,6 +74,7 @@ pub fn dehydrate(self: *const Function, dehydrator: *ir.Sma.Dehydrator) error{ B
         .type = try dehydrator.dehydrateTerm(self.type),
         .name = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index,
         .body = if (self.module.is_primary and self.body != null) try dehydrator.dehydrateExpression(self.body.?) else ir.Sma.sentinel_index,
+        .source = if (self.source) |s| try dehydrator.dehydrateSource(s) else ir.Sma.sentinel_index,
     };
 }
 
@@ -90,6 +96,7 @@ pub fn rehydrate(
         .type = try rehydrator.rehydrateTerm(sma_func.type),
         .name = try rehydrator.tryRehydrateName(sma_func.name),
         .body = if (module.is_primary) try rehydrator.tryRehydrateExpression(sma_func.body) else null,
+        .source = try rehydrator.tryRehydrateSource(sma_func.source),
     };
 
     return func;

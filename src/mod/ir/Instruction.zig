@@ -5,6 +5,7 @@ const std = @import("std");
 const log = std.log.scoped(.@"ir.instruction");
 
 const common = @import("common");
+const analysis = @import("analysis");
 
 const ir = @import("../ir.zig");
 
@@ -28,6 +29,9 @@ first_user: ?*Use = null,
 
 /// The Use operands for this instruction.
 uses: common.ArrayList(*Use) = .empty,
+
+/// The optional source attribution for this instruction.
+source: ?analysis.Source = null,
 
 /// An iterator over the instructions in a Block.
 pub const Iterator = struct {
@@ -251,7 +255,7 @@ pub const Operation = enum(u8) {
 };
 
 /// Create a new instruction in the given block, pulling memory from the pool and assigning it a fresh identity.
-pub fn init(block: *ir.Block, ty: ir.Term, command: anytype, name: ?ir.Name) error{OutOfMemory}!*Instruction {
+pub fn init(block: *ir.Block, ty: ir.Term, command: anytype, name: ?ir.Name, src: ?analysis.Source) error{OutOfMemory}!*Instruction {
     const T = @TypeOf(command);
 
     const self = try block.expression.module.instruction_pool.create();
@@ -261,6 +265,7 @@ pub fn init(block: *ir.Block, ty: ir.Term, command: anytype, name: ?ir.Name) err
         .type = ty,
         .command = if (comptime T != u8) @intFromEnum(command) else command,
         .name = name,
+        .source = src,
     };
 
     return self;
@@ -362,11 +367,13 @@ pub fn isCommand(self: *const Instruction, command: anytype) bool {
 pub fn dehydrate(self: *Instruction, dehydrator: *ir.Sma.Dehydrator, out: *common.ArrayList(ir.Sma.Instruction)) error{ BadEncoding, OutOfMemory }!void {
     const type_id = try dehydrator.dehydrateTerm(self.type);
     const name_id = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index;
+    const src_id = if (self.source) |s| try dehydrator.dehydrateSource(s) else ir.Sma.sentinel_index;
 
     var instr = ir.Sma.Instruction{
         .command = self.command,
         .name = name_id,
         .type = type_id,
+        .source = src_id,
     };
     errdefer instr.deinit(dehydrator.sma.allocator);
 

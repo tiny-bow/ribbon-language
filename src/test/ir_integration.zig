@@ -28,7 +28,11 @@ test "ir_full_cycle_pipeline" {
 
     // 3. Create a Function
     const fn_name = try src_ctx.internName("branching_logic");
-    const src_func = try ir.Function.init(src_mod, .procedure, fn_name, void_ty);
+    const fn_src = try src_ctx.internSource(.{ .name = "ir_full_cycle_pipeline.zig", .location = .{ .buffer = 0, .visual = .{
+        .line = 1,
+        .column = 1,
+    } } });
+    const src_func = try ir.Function.init(src_mod, .procedure, fn_name, void_ty, fn_src);
 
     // Export the function so we can find it easily later
     try src_mod.exportFunction(fn_name, src_func);
@@ -47,19 +51,19 @@ test "ir_full_cycle_pipeline" {
     builder.positionAtEnd(entry_block);
 
     // We create a stack allocation to act as a variable/condition handle
-    const condition_var = try builder.instr.stack_alloc(void_ty, bool_ty, try src_ctx.internName("condition"));
+    const condition_var = try builder.instr.stack_alloc(void_ty, bool_ty, try src_ctx.internName("condition"), fn_src);
 
-    _ = try builder.instr.br_if(condition_var, then_block, else_block);
+    _ = try builder.instr.br_if(condition_var, then_block, else_block, null);
 
     // Block: Then
     // Logic: return
     builder.positionAtEnd(then_block);
-    _ = try builder.instr.@"return"(null);
+    _ = try builder.instr.@"return"(null, null);
 
     // Block: Else
     // Logic: return
     builder.positionAtEnd(else_block);
-    _ = try builder.instr.@"return"(null);
+    _ = try builder.instr.@"return"(null, null);
 
     // Print the drafted IR for visual verification
     // std.debug.print(

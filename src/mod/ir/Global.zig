@@ -4,6 +4,8 @@ const Global = @This();
 const std = @import("std");
 const log = std.log.scoped(.@"ir.global");
 
+const analysis = @import("analysis");
+
 const ir = @import("../ir.zig");
 
 /// The module this global variable belongs to.
@@ -16,8 +18,11 @@ initializer: ?*ir.Expression = null,
 /// Optional abi name for this global variable.
 name: ?ir.Name = null,
 
+/// Optional source attribution for this global variable.
+source: ?analysis.Source = null,
+
 /// Create a new global in the given module, pulling memory from the pool and assigning it a fresh identity.
-pub fn init(module: *ir.Module, name: ?ir.Name, ty: ir.Term, initial: ?*ir.Expression) error{OutOfMemory}!*Global {
+pub fn init(module: *ir.Module, name: ?ir.Name, ty: ir.Term, initial: ?*ir.Expression, src: ?analysis.Source) error{OutOfMemory}!*Global {
     const self = try module.global_pool.create();
     self.* = Global{
         .module = module,
@@ -25,6 +30,7 @@ pub fn init(module: *ir.Module, name: ?ir.Name, ty: ir.Term, initial: ?*ir.Expre
         .initializer = initial,
 
         .name = name,
+        .source = src,
     };
     return self;
 }
@@ -44,6 +50,7 @@ pub fn dehydrate(self: *const Global, dehydrator: *ir.Sma.Dehydrator) error{ Bad
         .name = if (self.name) |n| try dehydrator.dehydrateName(n) else ir.Sma.sentinel_index,
         .type = try dehydrator.dehydrateTerm(self.type),
         .initializer = if (self.module.is_primary and self.initializer != null) try dehydrator.dehydrateExpression(self.initializer.?) else ir.Sma.sentinel_index,
+        .source = if (self.source) |s| try dehydrator.dehydrateSource(s) else ir.Sma.sentinel_index,
     };
 }
 
@@ -57,6 +64,7 @@ pub fn rehydrate(sma_global: *const ir.Sma.Global, rehydrator: *ir.Sma.Rehydrato
         .type = try rehydrator.rehydrateTerm(sma_global.type),
         .initializer = if (module.is_primary) try rehydrator.tryRehydrateExpression(sma_global.initializer) else null,
         .name = try rehydrator.tryRehydrateName(sma_global.name),
+        .source = try rehydrator.tryRehydrateSource(sma_global.source),
     };
     return global;
 }

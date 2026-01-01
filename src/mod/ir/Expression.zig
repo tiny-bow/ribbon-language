@@ -163,7 +163,8 @@ pub fn rehydrate(sma_expr: *const ir.Sma.Expression, rehydrator: *ir.Sma.Rehydra
             const sma_instr = &sma_expr.instructions.items[instr_index];
             const ty = try rehydrator.rehydrateTerm(sma_instr.type);
             const name = try rehydrator.tryRehydrateName(sma_instr.name);
-            const instr = try ir.Instruction.init(expr.entry, ty, sma_instr.command, name);
+            const source = try rehydrator.tryRehydrateSource(sma_instr.source);
+            const instr = try ir.Instruction.init(expr.entry, ty, sma_instr.command, name, source);
             try index_to_instr.append(rehydrator.ctx.allocator, instr);
         }
     }

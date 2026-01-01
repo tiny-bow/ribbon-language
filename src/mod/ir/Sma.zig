@@ -6,6 +6,7 @@ const log = std.log.scoped(.@"ir.sma");
 
 const core = @import("core");
 const common = @import("common");
+const analysis = @import("analysis");
 
 const ir = @import("../ir.zig");
 
@@ -42,6 +43,12 @@ handler_sets: common.ArrayList(Sma.HandlerSet) = .empty,
 /// All procedures and effect handlers in the SMA, with their expression body inline.
 functions: common.ArrayList(Sma.Function) = .empty,
 
+/// All source attribution paths in the SMA.
+paths: common.ArrayList([]const u8) = .empty,
+
+/// All source attributions in the SMA.
+sources: common.ArrayList(Sma.Source) = .empty,
+
 /// 8-byte magic number identifying a binary as a Ribbon IR SMA.
 pub const magic = "RIBBONIR";
 /// Sentinel index value indicating a missing optional reference.
@@ -74,6 +81,10 @@ pub const Dehydrator = struct {
     function_to_index: common.UniqueReprMap(*ir.Function, u32) = .empty,
     /// Map from ir Block pointer to SMA block index and instruction indices.
     block_to_index: common.UniqueReprMap(*ir.Block, struct { u32, common.UniqueReprMap(*ir.Instruction, u32) }) = .empty,
+    /// Map from ir source attribution path to SMA path index.
+    path_to_index: common.StringMap(u32) = .empty,
+    /// Map from sma source attribution to SMA source index.
+    source_to_index: common.UniqueReprMap(Sma.Source, u32) = .empty,
 
     /// Create a new Dehydrator for the given context. The provided allocator will be used to manage all SMA memory.
     pub fn init(ctx: *ir.Context, allocator: std.mem.Allocator) !Dehydrator {
@@ -100,6 +111,8 @@ pub const Dehydrator = struct {
         self.global_to_index.deinit(self.ctx.allocator);
         self.handler_set_to_index.deinit(self.ctx.allocator);
         self.function_to_index.deinit(self.ctx.allocator);
+        self.path_to_index.deinit(self.ctx.allocator);
+        self.source_to_index.deinit(self.ctx.allocator);
         var block_it = self.block_to_index.valueIterator();
         while (block_it.next()) |entry| {
             entry[1].deinit(self.ctx.allocator);
@@ -129,10 +142,12 @@ pub const Dehydrator = struct {
             return index;
         } else {
             const index: u32 = @intCast(self.sma.names.items.len);
-            try self.name_to_index.put(self.ctx.allocator, name.value, index);
 
-            const owned_name = self.sma.arena.allocator().dupe(u8, name.value) catch return error.OutOfMemory;
+            const owned_name = try self.sma.arena.allocator().dupe(u8, name.value);
+
             try self.sma.names.append(self.sma.allocator, owned_name);
+
+            try self.name_to_index.put(self.ctx.allocator, name.value, index);
 
             var hasher = ir.Cbr.Hasher.init();
             hasher.update(name.value);
@@ -284,6 +299,43 @@ pub const Dehydrator = struct {
             return index;
         }
     }
+
+    /// Dehydrate a source attribution path into an SMA path index.
+    pub fn dehydratePath(self: *Dehydrator, path: []const u8) error{ BadEncoding, OutOfMemory }!u32 {
+        if (self.path_to_index.get(path)) |index| {
+            return index;
+        } else {
+            const index: u32 = @intCast(self.sma.paths.items.len);
+
+            const owned_path = try self.sma.arena.allocator().dupe(u8, path);
+
+            try self.sma.paths.append(self.sma.allocator, owned_path);
+            try self.path_to_index.put(self.ctx.allocator, owned_path, index);
+
+            return index;
+        }
+    }
+
+    /// Dehydrate a source attribution into an SMA source index.
+    pub fn dehydrateSource(self: *Dehydrator, src: analysis.Source) error{ BadEncoding, OutOfMemory }!u32 {
+        const path_id = try self.dehydratePath(src.name);
+
+        const sma_src = Sma.Source{
+            .path = path_id,
+            .location = src.location,
+        };
+
+        if (self.source_to_index.get(sma_src)) |index| {
+            return index;
+        } else {
+            const index: u32 = @intCast(self.sma.sources.items.len);
+
+            try self.sma.sources.append(self.sma.allocator, sma_src);
+            try self.source_to_index.put(self.ctx.allocator, sma_src, index);
+
+            return index;
+        }
+    }
 };
 
 /// Intermediary structure for rehydrating SMA format into IR.
@@ -311,6 +363,8 @@ pub const Rehydrator = struct {
     index_to_global: common.UniqueReprMap(u32, *ir.Global) = .empty,
     /// Map from SMA function index to ir Function pointer.
     index_to_function: common.UniqueReprMap(u32, *ir.Function) = .empty,
+    /// Map from SMA source attribution path to ir source attribution path.
+    index_to_path: common.UniqueReprMap(u32, []const u8) = .empty,
 
     /// Create a new Rehydrator for the given context and SMA.
     pub fn init(ctx: *ir.Context, sma: *const Sma) !Rehydrator {
@@ -338,6 +392,7 @@ pub const Rehydrator = struct {
         self.index_to_handler_set.deinit(self.ctx.allocator);
         self.index_to_global.deinit(self.ctx.allocator);
         self.index_to_function.deinit(self.ctx.allocator);
+        self.index_to_path.deinit(self.ctx.allocator);
         self.* = undefined;
     }
 
@@ -533,6 +588,87 @@ pub const Rehydrator = struct {
             return function;
         }
     }
+
+    /// Rehydrate an SMA source attribution index into an ir source path slice.
+    pub fn rehydratePath(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }![]const u8 {
+        if (self.index_to_path.get(index)) |path| {
+            return path;
+        } else {
+            if (index >= self.sma.paths.items.len) {
+                return error.BadEncoding;
+            }
+
+            const sma_path = self.sma.paths.items[index];
+
+            const path = try self.ctx.internPath(sma_path);
+
+            try self.index_to_path.put(self.ctx.allocator, index, path);
+
+            return path;
+        }
+    }
+
+    /// Rehydrate an SMA source index into an analysis.Source owned by the ir.
+    pub fn rehydrateSource(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!analysis.Source {
+        if (index >= self.sma.sources.items.len) {
+            return error.BadEncoding;
+        }
+
+        const sma_source = &self.sma.sources.items[index];
+
+        const path = try self.rehydratePath(sma_source.path);
+
+        return analysis.Source{
+            .name = path,
+            .location = sma_source.location,
+        };
+    }
+
+    /// Try to rehydrate an optional SMA source index into an analysis.Source, returning null if the index is the sentinel.
+    pub fn tryRehydrateSource(self: *Rehydrator, index: u32) error{ BadEncoding, OutOfMemory }!?analysis.Source {
+        if (index == Sma.sentinel_index) {
+            return null;
+        } else {
+            return try self.rehydrateSource(index);
+        }
+    }
+};
+
+/// In-memory representation of an SMA source attribution definition.
+pub const Source = packed struct(u256) {
+    /// Index of the interned source path/name.
+    path: u32,
+    /// Location indices in the named source; buffer, line and column.
+    location: analysis.Source.Location,
+    /// This padding is necessary for UniqueReprMap
+    _unused: u96 = 0,
+
+    /// Deserialize an SMA source attribution from the given reader.
+    pub fn deserialize(reader: *std.io.Reader) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Source {
+        const path = try reader.takeInt(u32, .little);
+        const buffer_loc = try reader.takeInt(u64, .little);
+        const line_loc = try reader.takeInt(u32, .little);
+        const column_loc = try reader.takeInt(u32, .little);
+
+        return .{
+            .path = path,
+            .location = .{
+                .buffer = buffer_loc,
+                .visual = .{
+                    .line = line_loc,
+                    .column = column_loc,
+                },
+            },
+        };
+    }
+
+    /// Serialize this SMA source attribution to the given writer.
+    pub fn serialize(self: *Sma.Source, writer: *std.io.Writer) error{WriteFailed}!void {
+        try writer.writeInt(u32, self.path, .little);
+        try writer.writeInt(u64, self.location.buffer, .little);
+        try writer.writeInt(u32, self.location.visual.line, .little);
+        try writer.writeInt(u32, self.location.visual.column, .little);
+    }
 };
 
 /// In-memory representation of an SMA module definition.
@@ -668,6 +804,8 @@ pub const Global = struct {
     type: u32,
     /// The initializer term index for this global.
     initializer: u32,
+    /// The source attribution for this global.
+    source: u32,
 
     /// Deserialize an SMA global variable from the given reader.
     pub fn deserialize(reader: *std.io.Reader) error{ EndOfStream, ReadFailed }!Sma.Global {
@@ -677,11 +815,14 @@ pub const Global = struct {
         const name = try reader.takeInt(u32, .little);
         const ty = try reader.takeInt(u32, .little);
         const initializer = try reader.takeInt(u32, .little);
+        const source = try reader.takeInt(u32, .little);
+
         return Sma.Global{
             .module = module_guid,
             .name = name,
             .type = ty,
             .initializer = initializer,
+            .source = source,
         };
     }
 
@@ -691,6 +832,7 @@ pub const Global = struct {
         try writer.writeInt(u32, self.name, .little);
         try writer.writeInt(u32, self.type, .little);
         try writer.writeInt(u32, self.initializer, .little);
+        try writer.writeInt(u32, self.source, .little);
     }
 
     /// Compute the canonical binary representation (CBR) hash for this SMA global variable.
@@ -698,7 +840,7 @@ pub const Global = struct {
         var hasher = ir.Cbr.Hasher.init();
         hasher.update("[Global]");
 
-        hasher.update("name:"); // TODO: not sure if abi names should factor into cbr
+        hasher.update("name:");
         hasher.update(sma.cbr.get(.{ .kind = .name, .value = self.name }).?);
 
         hasher.update("type:");
@@ -706,6 +848,8 @@ pub const Global = struct {
 
         hasher.update("initializer:");
         hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.initializer }).?);
+
+        // source does not factor into cbr
 
         return hasher.final();
     }
@@ -806,6 +950,8 @@ pub const Function = struct {
     type: u32,
     /// The body expression for this function.
     body: u32,
+    /// The source attribution for this function.
+    source: u32,
 
     /// Deserialize an SMA function from the given reader.
     pub fn deserialize(reader: *std.io.Reader) error{ EndOfStream, ReadFailed, OutOfMemory }!Sma.Function {
@@ -816,6 +962,7 @@ pub const Function = struct {
         const kind: ir.Function.Kind = @enumFromInt(kind_u8);
         const type_id = try reader.takeInt(u32, .little);
         const body = try reader.takeInt(u32, .little);
+        const source = try reader.takeInt(u32, .little);
 
         return Sma.Function{
             .module = module_guid,
@@ -823,6 +970,7 @@ pub const Function = struct {
             .kind = kind,
             .type = type_id,
             .body = body,
+            .source = source,
         };
     }
 
@@ -833,6 +981,7 @@ pub const Function = struct {
         try writer.writeInt(u8, @intFromEnum(self.kind), .little);
         try writer.writeInt(u32, self.type, .little);
         try writer.writeInt(u32, self.body, .little);
+        try writer.writeInt(u32, self.source, .little);
     }
 
     /// Compute the canonical binary representation (CBR) hash for this SMA function.
@@ -840,7 +989,7 @@ pub const Function = struct {
         var hasher = ir.Cbr.Hasher.init();
         hasher.update("[Function]");
 
-        hasher.update("name:"); // TODO: not sure if abi names should factor into cbr
+        hasher.update("name:");
         hasher.update(sma.cbr.get(.{ .kind = .name, .value = self.name }).?);
 
         hasher.update("kind:");
@@ -855,6 +1004,8 @@ pub const Function = struct {
         } else {
             hasher.update("declaration");
         }
+
+        // source attribution does not factor into cbr
 
         return hasher.final();
     }
@@ -1107,6 +1258,8 @@ pub const Instruction = struct {
     name: u32,
     /// The list of operands for this instruction.
     operands: common.ArrayList(Sma.Operand) = .empty,
+    /// The source attribution for this instruction.
+    source: u32,
 
     /// Deinitialize this SMA instruction, freeing its resources.
     pub fn deinit(self: *Sma.Instruction, allocator: std.mem.Allocator) void {
@@ -1118,6 +1271,7 @@ pub const Instruction = struct {
         const command = try reader.takeInt(u8, .little);
         const ty = try reader.takeInt(u32, .little);
         const name = try reader.takeInt(u32, .little);
+        const source = try reader.takeInt(u32, .little);
         const operand_count = try reader.takeInt(u32, .little);
 
         var operands = common.ArrayList(Sma.Operand).empty;
@@ -1133,6 +1287,7 @@ pub const Instruction = struct {
             .type = ty,
             .name = name,
             .operands = operands,
+            .source = source,
         };
     }
 
@@ -1141,7 +1296,9 @@ pub const Instruction = struct {
         try writer.writeInt(u8, self.command, .little);
         try writer.writeInt(u32, self.type, .little);
         try writer.writeInt(u32, self.name, .little);
+        try writer.writeInt(u32, self.source, .little);
         try writer.writeInt(u32, @intCast(self.operands.items.len), .little);
+
         for (self.operands.items) |*op| try op.serialize(writer);
     }
 
@@ -1156,7 +1313,7 @@ pub const Instruction = struct {
         hasher.update("type:");
         hasher.update(sma.cbr.get(.{ .kind = .term, .value = self.type }).?);
 
-        // name is debug only, doesn't factor into cbr
+        // name and source are debug only, dont't factor into cbr
 
         hasher.update("operands.count:");
         hasher.update(self.operands.items.len);
@@ -1245,6 +1402,8 @@ pub fn deinit(const_ptr: *const Sma) void {
     self.globals.deinit(self.allocator);
     self.functions.deinit(self.allocator);
     self.cbr.deinit(self.allocator);
+    self.paths.deinit(self.allocator);
+    self.sources.deinit(self.allocator);
 
     for (self.blobs.items) |blob| blob.deinit(self.allocator);
     self.blobs.deinit(self.allocator);
@@ -1357,6 +1516,21 @@ pub fn deserialize(reader: *std.io.Reader, allocator: std.mem.Allocator) error{ 
         try sma.functions.append(allocator, function);
     }
 
+    const path_count = try reader.takeInt(u32, .little);
+    for (0..path_count) |_| {
+        const path_len = try reader.takeInt(u32, .little);
+        const path_buf = try sma.arena.allocator().alloc(u8, path_len);
+        writer = std.io.Writer.fixed(path_buf);
+        reader.streamExact(&writer, path_len) catch return error.ReadFailed;
+        try sma.paths.append(allocator, path_buf);
+    }
+
+    const source_count = try reader.takeInt(u32, .little);
+    for (0..source_count) |_| {
+        const source = try Sma.Source.deserialize(reader);
+        try sma.sources.append(allocator, source);
+    }
+
     return sma;
 }
 
@@ -1412,4 +1586,13 @@ pub fn serialize(self: *Sma, writer: *std.io.Writer) error{WriteFailed}!void {
 
     try writer.writeInt(u32, @intCast(self.functions.items.len), .little);
     for (self.functions.items) |*function| try function.serialize(writer);
+
+    try writer.writeInt(u32, @intCast(self.paths.items.len), .little);
+    for (self.paths.items) |path| {
+        try writer.writeInt(u32, @intCast(path.len), .little);
+        try writer.writeAll(path);
+    }
+
+    try writer.writeInt(u32, @intCast(self.sources.items.len), .little);
+    for (self.sources.items) |*source| try source.serialize(writer);
 }
