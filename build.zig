@@ -54,6 +54,9 @@ const modules = [_]ModuleDef{
             "common",
             "ir",
             "frontend",
+            "backend",
+            "analysis",
+            "meta_language",
         },
     },
     .{
