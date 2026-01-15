@@ -16,16 +16,40 @@ test {
     std.testing.refAllDecls(@This());
 }
 
+pub const types = make_types: {
+    var fresh = ml.Cst.types.fresh;
+
+    break :make_types .{
+        .Int = ml.Cst.types.Int,
+        .String = ml.Cst.types.String,
+        .StringElement = ml.Cst.types.StringElement,
+        .StringSentinel = ml.Cst.types.StringSentinel,
+        .Identifier = ml.Cst.types.Identifier,
+        .Block = ml.Cst.types.Block,
+        .Seq = ml.Cst.types.Seq,
+        .List = ml.Cst.types.List,
+        .Apply = ml.Cst.types.Apply,
+        .Binary = ml.Cst.types.Binary,
+        .Prefix = ml.Cst.types.Prefix,
+        .Decl = ml.Cst.types.Decl,
+        .Assign = ml.Cst.types.Assign,
+        .Lambda = ml.Cst.types.Lambda,
+        .Symbol = ml.Cst.types.Symbol,
+        .Module = fresh.next(),
+        .fresh = fresh,
+    };
+};
+
 /// Represents a dependency specifier, e.g., `package "core@0.1.0"`.
 pub const DependencySpecifier = union(enum) {
     package: []const u8,
-    github: []const u8,
+    git: []const u8,
     path: []const u8,
 
     pub fn deinit(self: *DependencySpecifier, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .package => |s| allocator.free(s),
-            .github => |s| allocator.free(s),
+            .git => |s| allocator.free(s),
             .path => |s| allocator.free(s),
         }
     }
@@ -69,7 +93,7 @@ pub fn parseSource(
     source_name: []const u8,
     src: []const u8,
 ) (analysis.Parser.Error || error{ InvalidString, InvalidEscape, InvalidModuleDefinition } || std.io.Writer.Error)!?RMod {
-    var parser = try ml.Cst.getRModParser(allocator, lexer_settings, source_name, src);
+    var parser = try getRModParser(allocator, lexer_settings, source_name, src);
     var cst = try parser.parse() orelse return null;
     defer cst.deinit(allocator);
 
@@ -83,7 +107,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
     };
     errdefer def.deinit(allocator);
 
-    if (cst.type != ml.Cst.types.Module) {
+    if (cst.type != types.Module) {
         log.err("Expected root of .rmod CST to be a Module node, found {f}", .{cst.type});
         return error.InvalidModuleDefinition;
     }
@@ -93,24 +117,24 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
 
     // 1. Parse module name
     const name_cst = module_operands[0];
-    if (name_cst.type != ml.Cst.types.Identifier) return error.InvalidModuleDefinition;
+    if (name_cst.type != types.Identifier) return error.InvalidModuleDefinition;
     def.name = try allocator.dupe(u8, name_cst.token.data.sequence.asSlice());
 
     // 2. Parse module body (a sequence of assignments)
     const body_cst = module_operands[1];
     // Body is a Block -> Seq
-    if (body_cst.type != ml.Cst.types.Block or body_cst.operands.len != 1) return error.InvalidModuleDefinition;
+    if (body_cst.type != types.Block or body_cst.operands.len != 1) return error.InvalidModuleDefinition;
     const seq_cst = body_cst.operands.asSlice()[0];
-    if (seq_cst.type != ml.Cst.types.Seq) return error.InvalidModuleDefinition;
+    if (seq_cst.type != types.Seq) return error.InvalidModuleDefinition;
 
     for (seq_cst.operands.asSlice()) |*assignment_cst| {
-        if (assignment_cst.type != ml.Cst.types.Assign) return error.InvalidModuleDefinition;
+        if (assignment_cst.type != types.Assign) return error.InvalidModuleDefinition;
         if (assignment_cst.operands.len != 2) return error.InvalidModuleDefinition;
 
         const key_cst = &assignment_cst.operands.asSlice()[0];
         const value_cst = &assignment_cst.operands.asSlice()[1];
 
-        if (key_cst.type != ml.Cst.types.Identifier) return error.InvalidModuleDefinition;
+        if (key_cst.type != types.Identifier) return error.InvalidModuleDefinition;
         const key = key_cst.token.data.sequence.asSlice();
 
         if (std.mem.eql(u8, key, "sources")) {
@@ -129,12 +153,12 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
 
 fn parseSourceList(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList([]const u8)) !void {
     // Expects Block -> List
-    if (value_cst.type != ml.Cst.types.Block or value_cst.operands.len != 1) return error.InvalidModuleDefinition;
+    if (value_cst.type != types.Block or value_cst.operands.len != 1) return error.InvalidModuleDefinition;
     const list_cst = value_cst.operands.asSlice()[0];
-    if (list_cst.type != ml.Cst.types.List) return error.InvalidModuleDefinition;
+    if (list_cst.type != types.List) return error.InvalidModuleDefinition;
 
     for (list_cst.operands.asSlice()) |item_cst| {
-        if (item_cst.type != ml.Cst.types.String) return error.InvalidModuleDefinition;
+        if (item_cst.type != types.String) return error.InvalidModuleDefinition;
         var buf = std.io.Writer.Allocating.init(allocator);
         defer buf.deinit();
         try ml.Cst.assembleString(&buf.writer, source, &item_cst);
@@ -144,12 +168,12 @@ fn parseSourceList(allocator: std.mem.Allocator, source: []const u8, value_cst: 
 
 fn parseExtensionList(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList([]const u8)) !void {
     // Expects Block -> List
-    if (value_cst.type != ml.Cst.types.Block or value_cst.operands.len != 1) return error.InvalidModuleDefinition;
+    if (value_cst.type != types.Block or value_cst.operands.len != 1) return error.InvalidModuleDefinition;
     const list_cst = value_cst.operands.asSlice()[0];
-    if (list_cst.type != ml.Cst.types.List) return error.InvalidModuleDefinition;
+    if (list_cst.type != types.List) return error.InvalidModuleDefinition;
 
     for (list_cst.operands.asSlice()) |item_cst| {
-        if (item_cst.type != ml.Cst.types.Identifier) return error.InvalidModuleDefinition;
+        if (item_cst.type != types.Identifier) return error.InvalidModuleDefinition;
         try list.append(allocator, try allocator.dupe(u8, item_cst.token.data.sequence.asSlice()));
     }
     _ = source;
@@ -157,26 +181,26 @@ fn parseExtensionList(allocator: std.mem.Allocator, source: []const u8, value_cs
 
 fn parseDependencies(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, map: *common.StringMap(DependencySpecifier)) !void {
     // Expects Block -> Seq
-    if (value_cst.type != ml.Cst.types.Block or value_cst.operands.len != 1) return error.InvalidModuleDefinition;
+    if (value_cst.type != types.Block or value_cst.operands.len != 1) return error.InvalidModuleDefinition;
     const seq_cst = value_cst.operands.asSlice()[0];
-    if (seq_cst.type != ml.Cst.types.Seq) return error.InvalidModuleDefinition;
+    if (seq_cst.type != types.Seq) return error.InvalidModuleDefinition;
 
     for (seq_cst.operands.asSlice()) |item_cst| {
-        if (item_cst.type != ml.Cst.types.Assign or item_cst.operands.len != 2) return error.InvalidModuleDefinition;
+        if (item_cst.type != types.Assign or item_cst.operands.len != 2) return error.InvalidModuleDefinition;
 
         const alias_cst = item_cst.operands.asSlice()[0];
         const spec_cst = item_cst.operands.asSlice()[1];
 
-        if (alias_cst.type != ml.Cst.types.Identifier) return error.InvalidModuleDefinition;
-        if (spec_cst.type != ml.Cst.types.Apply or spec_cst.operands.len != 2) return error.InvalidModuleDefinition;
+        if (alias_cst.type != types.Identifier) return error.InvalidModuleDefinition;
+        if (spec_cst.type != types.Apply or spec_cst.operands.len != 2) return error.InvalidModuleDefinition;
 
         const alias = try allocator.dupe(u8, alias_cst.token.data.sequence.asSlice());
 
         const spec_type_cst = spec_cst.operands.asSlice()[0];
         const spec_val_cst = spec_cst.operands.asSlice()[1];
 
-        if (spec_type_cst.type != ml.Cst.types.Identifier) return error.InvalidModuleDefinition;
-        if (spec_val_cst.type != ml.Cst.types.String) return error.InvalidModuleDefinition;
+        if (spec_type_cst.type != types.Identifier) return error.InvalidModuleDefinition;
+        if (spec_val_cst.type != types.String) return error.InvalidModuleDefinition;
 
         const spec_type = spec_type_cst.token.data.sequence.asSlice();
 
@@ -186,8 +210,8 @@ fn parseDependencies(allocator: std.mem.Allocator, source: []const u8, value_cst
 
         const specifier: DependencySpecifier = if (std.mem.eql(u8, spec_type, "package"))
             .{ .package = spec_val }
-        else if (std.mem.eql(u8, spec_type, "github"))
-            .{ .github = spec_val }
+        else if (std.mem.eql(u8, spec_type, "git"))
+            .{ .git = spec_val }
         else if (std.mem.eql(u8, spec_type, "path"))
             .{ .path = spec_val }
         else
@@ -196,3 +220,114 @@ fn parseDependencies(allocator: std.mem.Allocator, source: []const u8, value_cst
         try map.put(allocator, alias, specifier);
     }
 }
+
+/// Get a parser for the module definition language.
+pub fn getRModParser(
+    allocator: std.mem.Allocator,
+    lexer_settings: analysis.Lexer.Settings,
+    source_name: []const u8,
+    src: []const u8,
+) analysis.Parser.Error!analysis.Parser {
+    const ml_syntax = getRModSyntax();
+    return ml_syntax.createParser(allocator, lexer_settings, src, .{
+        .ignore_space = false,
+        .source_name = source_name,
+    });
+}
+
+/// Get the syntax for the module definition language.
+pub fn getRModSyntax() *const analysis.Parser.Syntax {
+    const static = struct {
+        pub var syntax_mutex = std.Thread.Mutex{};
+        pub var syntax: ?analysis.Parser.Syntax = null;
+    };
+
+    static.syntax_mutex.lock();
+    defer static.syntax_mutex.unlock();
+
+    if (static.syntax) |*s| {
+        return s;
+    }
+
+    var out = analysis.Parser.Syntax.init(std.heap.page_allocator);
+
+    inline for (.{
+        ml.Cst.builtin_syntax.nud.leaf(),
+        syntax_defs.nud.module(),
+        ml.Cst.builtin_syntax.nud.leading_br(),
+        ml.Cst.builtin_syntax.nud.indent(),
+        ml.Cst.builtin_syntax.nud.double_quote(),
+    }) |nud| {
+        out.bindNud(nud) catch unreachable;
+    }
+
+    inline for (.{
+        ml.Cst.builtin_syntax.leds.assign(),
+        ml.Cst.builtin_syntax.leds.list(),
+        ml.Cst.builtin_syntax.leds.seq(),
+        ml.Cst.builtin_syntax.leds.apply(),
+    }) |led| {
+        out.bindLed(led) catch unreachable;
+    }
+
+    static.syntax = out;
+
+    return &static.syntax.?;
+}
+
+pub const syntax_defs = struct {
+    pub const nud = struct {
+        pub fn module() analysis.Parser.Nud {
+            return analysis.Parser.createNud(
+                "rmod_module",
+                std.math.maxInt(i16),
+                .{ .standard = .{ .sequence = .{ .standard = .fromSlice("module") } } },
+                null,
+                struct {
+                    pub fn module(
+                        parser: *analysis.Parser,
+                        bp: i16,
+                        token: analysis.Token,
+                    ) analysis.Parser.Error!?analysis.SyntaxTree {
+                        log.debug("module: parsing token {f}", .{token});
+                        try parser.lexer.advance(); // discard module token
+                        var name = try parser.pratt(std.math.minInt(i16)) orelse {
+                            log.debug("module: no name found; panic", .{});
+                            return error.UnexpectedInput;
+                        };
+                        errdefer name.deinit(parser.allocator);
+
+                        if (try parser.lexer.peek()) |next_tok| {
+                            if (next_tok.tag == .special and next_tok.data.special.escaped == false and next_tok.data.special.punctuation == .dot) {
+                                log.debug("module: found dot token {f}", .{next_tok});
+                                try parser.lexer.advance(); // discard dot
+                                var inner = try parser.pratt(std.math.minInt(i16)) orelse {
+                                    log.debug("module: no inner expression found; panic", .{});
+                                    return error.UnexpectedEof;
+                                };
+                                errdefer inner.deinit(parser.allocator);
+                                log.debug("module: got inner expression {f}", .{inner});
+                                const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                                buff[0] = name;
+                                buff[1] = inner;
+                                return analysis.SyntaxTree{
+                                    .source = .{ .name = parser.settings.source_name, .location = token.location },
+                                    .precedence = bp,
+                                    .type = types.Module,
+                                    .token = token,
+                                    .operands = .fromSlice(buff),
+                                };
+                            } else {
+                                log.debug("module: expected dot token, found {f}; panic", .{next_tok});
+                                return error.UnexpectedInput;
+                            }
+                        } else {
+                            log.debug("module: no dot token found; panic", .{});
+                            return error.UnexpectedEof;
+                        }
+                    }
+                }.module,
+            );
+        }
+    };
+};

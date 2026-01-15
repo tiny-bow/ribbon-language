@@ -27,9 +27,9 @@ pub const types = gen: {
         .Prefix = fresh.next(),
         .Decl = fresh.next(),
         .Assign = fresh.next(),
-        .Module = fresh.next(),
         .Lambda = fresh.next(),
         .Symbol = fresh.next(),
+        .fresh = fresh,
     };
 };
 
@@ -125,9 +125,6 @@ pub fn dumpTree(source: []const u8, writer: *std.io.Writer, cst: *const analysis
             try writer.writeAll("𝓵𝓲𝓼𝓽");
         },
 
-        types.Module => {
-            try writer.writeAll("𝓶𝓸𝓭");
-        },
         types.Lambda => {
             try writer.writeAll("λ");
         },
@@ -186,7 +183,6 @@ pub fn dumpSExprs(source: []const u8, writer: *std.io.Writer, cst: *const analys
         types.Assign => try writer.writeAll("⟨𝓪𝓼𝓼𝓲𝓰𝓷"),
         types.List => try writer.writeAll("⟨𝓵𝓲𝓼𝓽"),
 
-        types.Module => try writer.writeAll("⟨𝓶𝓸𝓭"),
         types.Lambda => try writer.writeAll("⟨λ"),
         types.Symbol => {
             try writer.writeAll("'");
@@ -311,115 +307,8 @@ pub fn getRmlSyntax() *const analysis.Parser.Syntax {
     return &static.syntax.?;
 }
 
-/// Get a parser for the module definition language.
-pub fn getRModParser(
-    allocator: std.mem.Allocator,
-    lexer_settings: analysis.Lexer.Settings,
-    source_name: []const u8,
-    src: []const u8,
-) analysis.Parser.Error!analysis.Parser {
-    const ml_syntax = getRModSyntax();
-    return ml_syntax.createParser(allocator, lexer_settings, src, .{
-        .ignore_space = false,
-        .source_name = source_name,
-    });
-}
-
-/// Get the syntax for the module definition language.
-pub fn getRModSyntax() *const analysis.Parser.Syntax {
-    const static = struct {
-        pub var syntax_mutex = std.Thread.Mutex{};
-        pub var syntax: ?analysis.Parser.Syntax = null;
-    };
-
-    static.syntax_mutex.lock();
-    defer static.syntax_mutex.unlock();
-
-    if (static.syntax) |*s| {
-        return s;
-    }
-
-    var out = analysis.Parser.Syntax.init(std.heap.page_allocator);
-
-    inline for (.{
-        builtin_syntax.nud.leaf(),
-        builtin_syntax.nud.module(),
-        builtin_syntax.nud.leading_br(),
-        builtin_syntax.nud.indent(),
-        builtin_syntax.nud.double_quote(),
-    }) |nud| {
-        out.bindNud(nud) catch unreachable;
-    }
-
-    inline for (.{
-        builtin_syntax.leds.assign(),
-        builtin_syntax.leds.list(),
-        builtin_syntax.leds.seq(),
-        builtin_syntax.leds.apply(),
-    }) |led| {
-        out.bindLed(led) catch unreachable;
-    }
-
-    static.syntax = out;
-
-    return &static.syntax.?;
-}
-
 pub const builtin_syntax = struct {
     pub const nud = struct {
-        pub fn module() analysis.Parser.Nud {
-            return analysis.Parser.createNud(
-                "rmod_module",
-                std.math.maxInt(i16),
-                .{ .standard = .{ .sequence = .{ .standard = .fromSlice("module") } } },
-                null,
-                struct {
-                    pub fn module(
-                        parser: *analysis.Parser,
-                        bp: i16,
-                        token: analysis.Token,
-                    ) analysis.Parser.Error!?analysis.SyntaxTree {
-                        log.debug("module: parsing token {f}", .{token});
-                        try parser.lexer.advance(); // discard module token
-                        var name = try parser.pratt(std.math.minInt(i16)) orelse {
-                            log.debug("module: no name found; panic", .{});
-                            return error.UnexpectedInput;
-                        };
-                        errdefer name.deinit(parser.allocator);
-
-                        if (try parser.lexer.peek()) |next_tok| {
-                            if (next_tok.tag == .special and next_tok.data.special.escaped == false and next_tok.data.special.punctuation == .dot) {
-                                log.debug("module: found dot token {f}", .{next_tok});
-                                try parser.lexer.advance(); // discard dot
-                                var inner = try parser.pratt(std.math.minInt(i16)) orelse {
-                                    log.debug("module: no inner expression found; panic", .{});
-                                    return error.UnexpectedEof;
-                                };
-                                errdefer inner.deinit(parser.allocator);
-                                log.debug("module: got inner expression {f}", .{inner});
-                                const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 2);
-                                buff[0] = name;
-                                buff[1] = inner;
-                                return analysis.SyntaxTree{
-                                    .source = .{ .name = parser.settings.source_name, .location = token.location },
-                                    .precedence = bp,
-                                    .type = types.Module,
-                                    .token = token,
-                                    .operands = .fromSlice(buff),
-                                };
-                            } else {
-                                log.debug("module: expected dot token, found {f}; panic", .{next_tok});
-                                return error.UnexpectedInput;
-                            }
-                        } else {
-                            log.debug("module: no dot token found; panic", .{});
-                            return error.UnexpectedEof;
-                        }
-                    }
-                }.module,
-            );
-        }
-
         pub fn function() analysis.Parser.Nud {
             return analysis.Parser.createNud(
                 "rml_function",

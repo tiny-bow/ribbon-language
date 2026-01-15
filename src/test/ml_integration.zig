@@ -19,7 +19,7 @@ test "module_cst" {
         \\    
         \\    dependencies =
         \\        std = package "core@0.1.0"
-        \\        gpu = github "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
+        \\        gpu = git "github.com/tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
         \\        linalg = path "../linear-algebra"
         \\   
         \\    extensions =
@@ -31,7 +31,7 @@ test "module_cst" {
     ;
 
     const expect =
-        \\𝓶𝓸𝓭
+        \\module
         \\  graphics
         \\  𝓲𝓷𝓭𝓮𝓷𝓽
         \\    𝓼𝓮𝓺
@@ -54,8 +54,8 @@ test "module_cst" {
         \\            𝓪𝓼𝓼𝓲𝓰𝓷
         \\              gpu
         \\              𝓪𝓹𝓹
-        \\                github
-        \\                "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
+        \\                git
+        \\                "github.com/tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
         \\            𝓪𝓼𝓼𝓲𝓰𝓷
         \\              linalg
         \\              𝓪𝓹𝓹
@@ -71,7 +71,7 @@ test "module_cst" {
         \\            linalg/vector-ops
     ;
 
-    var parser = try ml.Cst.getRModParser(std.testing.allocator, .{}, "test", input);
+    var parser = try ml.RMod.getRModParser(std.testing.allocator, .{}, "test", input);
     var syn = try parser.parse() orelse {
         log.err("Failed to parse source", .{});
         return error.NullCst;
@@ -97,7 +97,7 @@ test "module_parse" {
         \\
         \\    dependencies =
         \\        std = package "core@0.1.0"
-        \\        gpu = github "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
+        \\        gpu = git "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
         \\        linalg = path "../linear-algebra"
         \\
         \\    extensions =
@@ -125,8 +125,8 @@ test "module_parse" {
     try std.testing.expectEqualStrings("core@0.1.0", std_dep.package);
 
     const gpu_dep = def.dependencies.get("gpu").?;
-    try std.testing.expect(gpu_dep == .github);
-    try std.testing.expectEqualStrings("tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD", gpu_dep.github);
+    try std.testing.expect(gpu_dep == .git);
+    try std.testing.expectEqualStrings("tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD", gpu_dep.git);
 
     const linalg_dep = def.dependencies.get("linalg").?;
     try std.testing.expect(linalg_dep == .path);
