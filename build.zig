@@ -94,6 +94,7 @@ const tests = [_][]const u8{
     "binary_integration",
     "ir_integration",
     "ml_integration",
+    "printer_integration",
 };
 
 // FIXME: currently, we are not creating check/test entries for individual modules, only the tests above.

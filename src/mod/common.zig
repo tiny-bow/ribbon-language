@@ -14,6 +14,7 @@ pub const Id = @import("common/Id.zig");
 pub const Stack = @import("common/Stack.zig");
 pub const AllocWriter = @import("common/AllocWriter.zig");
 pub const VirtualWriter = @import("common/VirtualWriter.zig");
+pub const PrettyPrinter = @import("common/PrettyPrinter.zig");
 
 pub const PAGE_SIZE = std.heap.page_size_min;
 
