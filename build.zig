@@ -96,6 +96,12 @@ const tests = [_][]const u8{
     "ml_integration",
 };
 
+// FIXME: currently, we are not creating check/test entries for individual modules, only the tests above.
+//        this means worse sema and code coverage. however, the current build process is already quite complex:
+//        we have a gen step and lazy dependencies, which makes it hard to create per-module test binaries.
+//        a better system would see this encoded at a higher level, so that we may fetch dependencies for the host dynamically and such.
+// NOTE: until the above is fixed, we must ensure that code from sub-modules is used in a test, not just referenced.
+
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
