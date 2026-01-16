@@ -10,6 +10,47 @@ const ml = ribbon.meta_language;
 //     std.debug.print("ml_integration", .{});
 // }
 
+test "rpkg_parse" {
+    const file_text = @embedFile("min.rpkg");
+
+    var result = try ml.RPkg.parseSource(
+        std.testing.allocator,
+        .{},
+        "min.rpkg",
+        file_text,
+    ) orelse {
+        log.err("Failed to parse RPkg", .{});
+        return error.NullRPkg;
+    };
+    defer result.deinit(std.testing.allocator);
+
+    var buffer: [1024]u8 = undefined;
+    const fmt = std.fmt.bufPrint(&buffer, "{f}", .{result}) catch |err| {
+        log.err("Failed to format RPkg: {s}", .{@errorName(err)});
+        return err;
+    };
+    try std.testing.expectEqualStrings(
+        \\package mvp-test.
+        \\    version = 1.0.0
+        \\    dependencies =
+        \\        std = archive base @ 0.1.0
+        \\        rg = git https://github.com/tiny-bow/rg#8c22c3cb20d09fe380999c5d2b5026cb60c9ead2
+        \\    modules =
+        \\        internal [min.rpkg:7:16]: module text 0.
+        \\    visibility = internal
+        \\    inputs =
+        \\        ./text.rib
+        \\        ./text/
+        \\    imports =
+        \\        std.core as std
+        \\        rg.case-fold
+        \\    extensions =
+        \\        rg.syntax.utf32-literals
+        \\        unresolved graphics exported = ./min.rmod
+        \\
+    , fmt);
+}
+
 test "rmod_parse" {
     const file_text = @embedFile("min.rmod");
 

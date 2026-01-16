@@ -641,6 +641,23 @@ pub fn parse(self: *Parser) Error!?analysis.SyntaxTree {
     return try out;
 }
 
+pub fn dumpTokenStream(self: *Parser, writer: *std.io.Writer) !void {
+    const save_state = self.lexer;
+    defer self.lexer = save_state;
+    var i: isize = 0;
+    while (try self.lexer.next()) |tk| {
+        for (0..@intCast(i)) |_| {
+            try writer.writeAll("    ");
+        }
+
+        try writer.print("{f}\n", .{tk});
+
+        if (tk.tag == .indentation) {
+            i += @intFromEnum(tk.data.indentation);
+        }
+    }
+}
+
 /// Run the pratt algorithm at the current offset in the lexer stream.
 pub fn pratt(
     self: *Parser,

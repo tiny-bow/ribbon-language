@@ -1495,6 +1495,11 @@ pub const SemVer = struct {
         }
     }
 
+    pub fn parse(str: []const u8) !SemVer {
+        const std_ver = try std.SemanticVersion.parse(str);
+        return SemVer.fromStd(std_ver);
+    }
+
     pub fn preSlice(self: *const SemVer) []const u8 {
         return std.mem.span(@as([*:0]const u8, @ptrCast(&self.pre)));
     }
@@ -1528,9 +1533,9 @@ pub const SemVer = struct {
 
     pub fn fromStd(std_ver: std.SemanticVersion) SemVer {
         var self = SemVer{
-            .major = std_ver.major,
-            .minor = std_ver.minor,
-            .patch = std_ver.patch,
+            .major = @intCast(std_ver.major),
+            .minor = @intCast(std_ver.minor),
+            .patch = @intCast(std_ver.patch),
         };
 
         if (std_ver.pre) |pre| {

@@ -168,6 +168,11 @@ pub fn parseSource(
 
 /// Parses a `.rmod` Concrete Syntax Tree into a `RMod` struct.
 pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const analysis.SyntaxTree) !RMod {
+    log.debug("parsing RMod CST:\n{f}", .{ml.Cst.treeFormatter(.{
+        .source = source,
+        .tree = cst,
+    })});
+
     var def = RMod{
         .source = cst.source,
     };
@@ -182,14 +187,21 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
     if (module_operands.len != 1) return error.InvalidModuleDefinition;
 
     // Parse module body (a sequence of assignments)
-    const body_cst = module_operands[0];
-    // Body is a Block -> Seq
-    if (body_cst.type != types.Block or body_cst.operands.len != 1) return error.InvalidModuleDefinition;
-    const seq_cst = body_cst.operands.asSlice()[0];
-    if (seq_cst.type != types.Seq) return error.InvalidModuleDefinition;
+    const body_cst = &module_operands[0];
+    const seq_cst = if (body_cst.type != types.Block or body_cst.operands.len != 1) recover: {
+        log.debug("Expected module Body to be a Block containing a Seq, found {s}", .{types.getName(body_cst.type)});
+        break :recover body_cst;
+    } else &body_cst.operands.asSlice()[0];
+    const elements = if (seq_cst.type != types.Seq) recover: {
+        log.debug("Expected imports Block to contain a Seq, found {s}", .{types.getName(seq_cst.type)});
+        break :recover &.{seq_cst.*};
+    } else seq_cst.operands.asSlice();
 
-    for (seq_cst.operands.asSlice()) |*assignment_cst| {
-        if (assignment_cst.type != types.Assign) return error.InvalidModuleDefinition;
+    for (elements) |*assignment_cst| {
+        if (assignment_cst.type != types.Assign) {
+            log.debug("Expected module body element to be an Assign node, found {s}", .{types.getName(assignment_cst.type)});
+            return error.InvalidModuleDefinition;
+        }
         if (assignment_cst.operands.len != 2) return error.InvalidModuleDefinition;
 
         const key_cst = &assignment_cst.operands.asSlice()[0];
@@ -228,15 +240,15 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
 }
 
 fn parseInputList(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList([]const u8)) !void {
-    // Expects Block -> List
-    const list_cst = if (value_cst.type != types.Block or value_cst.operands.len != 1) recover: {
-        log.debug("Expected inputs value to be a Block containing a List, found {s}", .{types.getName(value_cst.type)});
+    // Expects Block -> Seq
+    const seq_cst = if (value_cst.type != types.Block or value_cst.operands.len != 1) recover: {
+        log.debug("Expected inputs value to be a Block containing a Seq, found {s}", .{types.getName(value_cst.type)});
         break :recover value_cst;
     } else &value_cst.operands.asSlice()[0];
-    const elements = if (list_cst.type != types.List) recover: {
-        log.debug("Expected inputs Block to contain a List, found {s}", .{types.getName(list_cst.type)});
-        break :recover &.{list_cst.*};
-    } else list_cst.operands.asSlice();
+    const elements = if (seq_cst.type != types.Seq) recover: {
+        log.debug("Expected inputs Block to contain a Seq, found {s}", .{types.getName(seq_cst.type)});
+        break :recover &.{seq_cst.*};
+    } else seq_cst.operands.asSlice();
 
     for (elements) |item_cst| {
         if (item_cst.type != types.String) {
@@ -251,15 +263,15 @@ fn parseInputList(allocator: std.mem.Allocator, source: []const u8, value_cst: *
 }
 
 fn parseImportList(allocator: std.mem.Allocator, _: []const u8, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList(Import.Aliased)) !void {
-    // Expects Block -> List
-    const list_cst = if (value_cst.type != types.Block or value_cst.operands.len != 1) recover: {
-        log.debug("Expected imports value to be a Block containing a List, found {s}", .{types.getName(value_cst.type)});
+    // Expects Block -> Seq
+    const seq_cst = if (value_cst.type != types.Block or value_cst.operands.len != 1) recover: {
+        log.debug("Expected imports value to be a Block containing a Seq, found {s}", .{types.getName(value_cst.type)});
         break :recover value_cst;
     } else &value_cst.operands.asSlice()[0];
-    const elements = if (list_cst.type != types.List) recover: {
-        log.debug("Expected imports Block to contain a List, found {s}", .{types.getName(list_cst.type)});
-        break :recover &.{list_cst.*};
-    } else list_cst.operands.asSlice();
+    const elements = if (seq_cst.type != types.Seq) recover: {
+        log.debug("Expected imports Block to contain a Seq, found {s}", .{types.getName(seq_cst.type)});
+        break :recover &.{seq_cst.*};
+    } else seq_cst.operands.asSlice();
 
     for (elements) |item_cst| {
         if (item_cst.type != types.Identifier and item_cst.type != types.Apply and item_cst.type != types.MemberAccess) return error.InvalidModuleDefinition;
@@ -312,15 +324,15 @@ fn parseImportBase(allocator: std.mem.Allocator, item_cst: *const analysis.Synta
 }
 
 fn parseExtensionList(allocator: std.mem.Allocator, _: []const u8, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList(Import.Extension)) !void {
-    // Expects Block -> List
-    const list_cst = if (value_cst.type != types.Block or value_cst.operands.len != 1) recover: {
-        log.debug("Expected extensions value to be a Block containing a List, found {s}", .{types.getName(value_cst.type)});
+    // Expects Block -> Seq
+    const seq_cst = if (value_cst.type != types.Block or value_cst.operands.len != 1) recover: {
+        log.debug("Expected extensions value to be a Block containing a Seq, found {s}", .{types.getName(value_cst.type)});
         break :recover value_cst;
     } else &value_cst.operands.asSlice()[0];
-    const elements = if (list_cst.type != types.List) recover: {
-        log.debug("Expected extensions Block to contain a List, found {s}", .{types.getName(list_cst.type)});
-        break :recover &.{list_cst.*};
-    } else list_cst.operands.asSlice();
+    const elements = if (seq_cst.type != types.Seq) recover: {
+        log.debug("Expected extensions Block to contain a Seq, found {s}", .{types.getName(seq_cst.type)});
+        break :recover &.{seq_cst.*};
+    } else seq_cst.operands.asSlice();
 
     for (elements) |item_cst| {
         var import: Import = .{ .module = undefined };
@@ -400,6 +412,7 @@ pub const types = make_types: {
 
     break :make_types .{
         .Int = ml.Cst.types.Int,
+        .Float = ml.Cst.types.Float,
         .String = ml.Cst.types.String,
         .StringElement = ml.Cst.types.StringElement,
         .StringSentinel = ml.Cst.types.StringSentinel,
@@ -449,7 +462,7 @@ pub const syntax_defs = struct {
                             if (next_tok.tag == .special and next_tok.data.special.escaped == false and next_tok.data.special.punctuation == .dot) {
                                 log.debug("module: found dot token {f}", .{next_tok});
                                 try parser.lexer.advance(); // discard dot
-                                var inner = try parser.pratt(std.math.minInt(i16)) orelse {
+                                var inner = try parser.pratt(std.math.minInt(i16) + 1) orelse {
                                     log.debug("module: no inner expression found; panic", .{});
                                     return error.UnexpectedEof;
                                 };

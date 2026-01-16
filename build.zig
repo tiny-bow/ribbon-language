@@ -296,6 +296,9 @@ pub fn build(b: *std.Build) !void {
     test_map.get("ml_integration").?.addAnonymousImport("min.rmod", .{
         .root_source_file = b.path("src/test/script/modules/min.rmod"),
     });
+    test_map.get("ml_integration").?.addAnonymousImport("min.rpkg", .{
+        .root_source_file = b.path("src/test/script/min.rpkg"),
+    });
 
     // setup generation tasks //
     const dump_intermediates_step = b.step("dump-intermediates", "Dump intermediate files to zig-out");

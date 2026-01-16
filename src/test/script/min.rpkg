@@ -1,8 +1,8 @@
 package mvp-test.
-    version = "1.0.0"
+    version = 1.0.0
     dependencies =
-        std = package "base@0.1.0"
-        rg = git "github.com/tiny-bow/rg#8c22c3cb20d09fe380999c5d2b5026cb60c9ead2"
+        std = pkg "base@0.1.0"
+        rg = git "https://github.com/tiny-bow/rg#8c22c3cb20d09fe380999c5d2b5026cb60c9ead2"
     modules =
         text = module.
             inputs =

@@ -111,6 +111,43 @@ pub fn assembleString(writer: *std.io.Writer, source: []const u8, string: *const
     }
 }
 
+pub const TreeFormattingArgs = struct {
+    source: []const u8,
+    tree: *const analysis.SyntaxTree,
+    level: usize = 0,
+};
+
+pub const SExprFormattingArgs = struct {
+    source: []const u8,
+    tree: *const analysis.SyntaxTree,
+};
+
+fn treeFormattingCallback(args: TreeFormattingArgs, writer: *std.io.Writer) std.io.Writer.Error!void {
+    dumpTree(args.source, writer, args.tree, args.level) catch |err| {
+        log.debug("failed to format tree: {s}", .{@errorName(err)});
+        return error.WriteFailed;
+    };
+}
+
+fn sexprFormattingCallback(args: SExprFormattingArgs, writer: *std.io.Writer) std.io.Writer.Error!void {
+    dumpSExprs(args.source, writer, args.tree) catch |err| {
+        log.debug("failed to format tree: {s}", .{@errorName(err)});
+        return error.WriteFailed;
+    };
+}
+
+pub fn treeFormatter(args: TreeFormattingArgs) std.fmt.Formatter(TreeFormattingArgs, treeFormattingCallback) {
+    return std.fmt.Formatter(TreeFormattingArgs, treeFormattingCallback){
+        .data = args,
+    };
+}
+
+pub fn sexprFormatter(args: SExprFormattingArgs) std.fmt.Formatter(SExprFormattingArgs, sexprFormattingCallback) {
+    return std.fmt.Formatter(SExprFormattingArgs, sexprFormattingCallback){
+        .data = args,
+    };
+}
+
 /// Dumps a cst as a nested tree to the given writer.
 pub fn dumpTree(source: []const u8, writer: *std.io.Writer, cst: *const analysis.SyntaxTree, level: usize) !void {
     const open = cst.operands.len > 0 and cst.type != types.String;
@@ -885,7 +922,7 @@ pub const builtin_syntax = struct {
         pub fn decl_inferred() analysis.Parser.Led {
             return analysis.Parser.createLed(
                 "rml_decl_inferred_type",
-                std.math.minInt(i16),
+                std.math.minInt(i16) + 1,
                 .{ .standard = .{ .sequence = .{ .standard = .fromSlice(":=") } } },
                 null,
                 struct {
@@ -923,7 +960,7 @@ pub const builtin_syntax = struct {
         pub fn assign() analysis.Parser.Led {
             return analysis.Parser.createLed(
                 "rml_assign",
-                std.math.minInt(i16),
+                std.math.minInt(i16) + 1,
                 .{ .standard = .{ .sequence = .{ .standard = .fromSlice("=") } } },
                 null,
                 struct {
