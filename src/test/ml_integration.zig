@@ -36,7 +36,7 @@ test "rpkg_parse" {
         \\        std = archive base @ 0.1.0
         \\        rg = git https://github.com/tiny-bow/rg#8c22c3cb20d09fe380999c5d2b5026cb60c9ead2
         \\    modules =
-        \\        internal [min.rpkg:7:16]: module text 0.
+        \\        internal [min.rpkg:8:16]: module text 0.
         \\    visibility = internal
         \\    inputs =
         \\        ./text.rib

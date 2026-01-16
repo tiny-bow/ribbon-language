@@ -1,7 +1,8 @@
+;; Test for minimum viable package parsing
 package mvp-test.
-    version = 1.0.0
+    version = 1.0.0 ;; bare semver
     dependencies =
-        std = pkg "base@0.1.0"
+        std = pkg "base@0.1.0" ;; TODO: could we maybe do the same here? proposed syntax: `base @ 0.1.0` with no `pkg`? that makes this sort of feel defaultish
         rg = git "https://github.com/tiny-bow/rg#8c22c3cb20d09fe380999c5d2b5026cb60c9ead2"
     modules =
         text = module.
