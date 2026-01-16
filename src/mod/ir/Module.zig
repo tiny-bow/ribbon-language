@@ -36,7 +36,10 @@ instruction_pool: common.ManagedPool(ir.Instruction),
 use_pool: common.ManagedPool(ir.Instruction.Use),
 
 /// Globally unique identifier for a module.
-pub const GUID = enum(u128) { _ };
+pub const GUID = enum(u128) {
+    invalid = 0,
+    _,
+};
 
 /// A binding exported from a module.
 pub const Binding = union(enum) {
