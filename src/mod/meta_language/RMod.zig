@@ -1,4 +1,5 @@
-//! In-memory representation of a parsed `.rmod` module definition file, and the cst parser to construct it.
+//! Defines a Ribbon module. This is the root structure parsed from a .rmod file, or inline within a .rpkg file.
+//! In-memory representation of a parsed module definition, and the cst parser to construct it.
 
 const RMod = @This();
 
@@ -16,72 +17,61 @@ test {
     std.testing.refAllDecls(@This());
 }
 
-pub const types = make_types: {
-    var fresh = ml.Cst.types.fresh;
+/// The module's canonical name.
+name: []const u8 = "untitled",
+/// The module definition's (.rmod or inline) source tracking location; may be absolute or relative depending on context.
+source: analysis.Source = .anonymous,
+/// The module's globally unique identifier, generated canonically from its dependency and source path.
+guid: ir.Module.GUID = .invalid,
+/// Whether this module is directly accessible to other modules outside its package.
+visibility: Visibility = .internal,
+/// Modules imported by this module.
+imports: []const Import.Aliased = &.{},
+/// Language extensions used by this module, which must be compiled prior to this module.
+extensions: []const Import.Extension = &.{},
+/// All source files that are part of this module. Paths may be absolute or relative depending on context.
+/// Source files are unordered and all contribute to a single module context.
+inputs: []const []const u8 = &.{},
 
-    break :make_types .{
-        .Int = ml.Cst.types.Int,
-        .String = ml.Cst.types.String,
-        .StringElement = ml.Cst.types.StringElement,
-        .StringSentinel = ml.Cst.types.StringSentinel,
-        .Identifier = ml.Cst.types.Identifier,
-        .Block = ml.Cst.types.Block,
-        .Seq = ml.Cst.types.Seq,
-        .List = ml.Cst.types.List,
-        .Apply = ml.Cst.types.Apply,
-        .Binary = ml.Cst.types.Binary,
-        .Prefix = ml.Cst.types.Prefix,
-        .Decl = ml.Cst.types.Decl,
-        .Assign = ml.Cst.types.Assign,
-        .Lambda = ml.Cst.types.Lambda,
-        .Symbol = ml.Cst.types.Symbol,
-        .Module = fresh.next(),
-        .fresh = fresh,
+/// Defines whether a module is internal to its package or exported for use by other packages.
+pub const Visibility = enum {
+    /// The module is only directly accessible within its own package.
+    internal,
+    /// The module is directly accessible to other packages that depend on its package.
+    exported,
+};
+
+/// References another module for import into a module definition.
+pub const Import = struct {
+    /// The package name containing the module, or null for the root package.
+    package: ?[]const u8 = null,
+    /// The module's canonical name as exported from its package.
+    module: []const u8,
+
+    /// An imported module, optionally with an alias.
+    pub const Aliased = struct {
+        /// The imported module.
+        import: Import,
+        /// An optional alias for the imported module to be referred to by, within the importing module.
+        alias: ?[]const u8 = null,
+    };
+
+    /// An imported language extension used by a module.
+    ///
+    /// Extensions are different from regular imports in a few ways:
+    /// 1. They must be compiled prior to the module that uses them, because they may be run at compile time.
+    /// 2. They may not define cyclic dependencies with other extensions or modules.
+    /// 3. They contain both the module import information and the name of the extension within that module.
+    pub const Extension = struct {
+        /// The imported module containing the extension.
+        import: Import,
+        /// The name of the extension within the imported module.
+        name: []const u8,
     };
 };
 
-/// Represents a dependency specifier, e.g., `package "core@0.1.0"`.
-pub const DependencySpecifier = union(enum) {
-    package: []const u8,
-    git: []const u8,
-    path: []const u8,
-
-    pub fn deinit(self: *DependencySpecifier, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .package => |s| allocator.free(s),
-            .git => |s| allocator.free(s),
-            .path => |s| allocator.free(s),
-        }
-    }
-};
-
-/// The canonical name of the module.
-name: []const u8 = "unknown",
-/// The source origin of the module definition.
-origin: analysis.Source = .anonymous,
-/// A list of source files and directories for the module.
-sources: common.ArrayList([]const u8) = .empty,
-/// A map of local dependency aliases to their full specifiers.
-dependencies: common.StringMap(DependencySpecifier) = .empty,
-/// A list of language extensions to activate for this module.
-extensions: common.ArrayList([]const u8) = .empty,
-
-/// Deinitializes the RMod, freeing all associated memory.
 pub fn deinit(self: *RMod, allocator: std.mem.Allocator) void {
-    allocator.free(self.name);
-
-    for (self.sources.items) |s| allocator.free(s);
-    self.sources.deinit(allocator);
-
-    var dep_it = self.dependencies.iterator();
-    while (dep_it.next()) |entry| {
-        allocator.free(entry.key_ptr.*);
-        entry.value_ptr.deinit(allocator);
-    }
-    self.dependencies.deinit(allocator);
-
-    for (self.extensions.items) |s| allocator.free(s);
-    self.extensions.deinit(allocator);
+    common.todo(noreturn, .{ self, allocator });
 }
 
 /// Parse a module definition language source string to an `RMod`.
@@ -103,12 +93,12 @@ pub fn parseSource(
 /// Parses a `.rmod` Concrete Syntax Tree into a `RMod` struct.
 pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const analysis.SyntaxTree) !RMod {
     var def = RMod{
-        .origin = cst.source,
+        .source = cst.source,
     };
     errdefer def.deinit(allocator);
 
     if (cst.type != types.Module) {
-        log.err("Expected root of .rmod CST to be a Module node, found {f}", .{cst.type});
+        log.err("Expected root of rmod CST to be a Module node, found {f}", .{cst.type});
         return error.InvalidModuleDefinition;
     }
 
@@ -137,10 +127,10 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
         if (key_cst.type != types.Identifier) return error.InvalidModuleDefinition;
         const key = key_cst.token.data.sequence.asSlice();
 
-        if (std.mem.eql(u8, key, "sources")) {
-            try parseSourceList(allocator, source, value_cst, &def.sources);
-        } else if (std.mem.eql(u8, key, "dependencies")) {
-            try parseDependencies(allocator, source, value_cst, &def.dependencies);
+        if (std.mem.eql(u8, key, "inputs")) {
+            try parseSourceList(allocator, source, value_cst, &def.inputs);
+        } else if (std.mem.eql(u8, key, "imports")) {
+            try parseImportList(allocator, source, value_cst, &def.imports);
         } else if (std.mem.eql(u8, key, "extensions")) {
             try parseExtensionList(allocator, source, value_cst, &def.extensions);
         } else {
@@ -151,7 +141,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
     return def;
 }
 
-fn parseSourceList(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList([]const u8)) !void {
+fn parseSourceList(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, list: *[]const []const u8) !void {
     // Expects Block -> List
     if (value_cst.type != types.Block or value_cst.operands.len != 1) return error.InvalidModuleDefinition;
     const list_cst = value_cst.operands.asSlice()[0];
@@ -166,7 +156,11 @@ fn parseSourceList(allocator: std.mem.Allocator, source: []const u8, value_cst: 
     }
 }
 
-fn parseExtensionList(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList([]const u8)) !void {
+fn parseImportList(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, list: *[]const Import.Aliased) !void {
+    common.todo(noreturn, .{ allocator, source, value_cst, list });
+}
+
+fn parseExtensionList(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, list: *[]const Import.Extension) !void {
     // Expects Block -> List
     if (value_cst.type != types.Block or value_cst.operands.len != 1) return error.InvalidModuleDefinition;
     const list_cst = value_cst.operands.asSlice()[0];
@@ -177,48 +171,6 @@ fn parseExtensionList(allocator: std.mem.Allocator, source: []const u8, value_cs
         try list.append(allocator, try allocator.dupe(u8, item_cst.token.data.sequence.asSlice()));
     }
     _ = source;
-}
-
-fn parseDependencies(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, map: *common.StringMap(DependencySpecifier)) !void {
-    // Expects Block -> Seq
-    if (value_cst.type != types.Block or value_cst.operands.len != 1) return error.InvalidModuleDefinition;
-    const seq_cst = value_cst.operands.asSlice()[0];
-    if (seq_cst.type != types.Seq) return error.InvalidModuleDefinition;
-
-    for (seq_cst.operands.asSlice()) |item_cst| {
-        if (item_cst.type != types.Assign or item_cst.operands.len != 2) return error.InvalidModuleDefinition;
-
-        const alias_cst = item_cst.operands.asSlice()[0];
-        const spec_cst = item_cst.operands.asSlice()[1];
-
-        if (alias_cst.type != types.Identifier) return error.InvalidModuleDefinition;
-        if (spec_cst.type != types.Apply or spec_cst.operands.len != 2) return error.InvalidModuleDefinition;
-
-        const alias = try allocator.dupe(u8, alias_cst.token.data.sequence.asSlice());
-
-        const spec_type_cst = spec_cst.operands.asSlice()[0];
-        const spec_val_cst = spec_cst.operands.asSlice()[1];
-
-        if (spec_type_cst.type != types.Identifier) return error.InvalidModuleDefinition;
-        if (spec_val_cst.type != types.String) return error.InvalidModuleDefinition;
-
-        const spec_type = spec_type_cst.token.data.sequence.asSlice();
-
-        var buf = std.io.Writer.Allocating.init(allocator);
-        try ml.Cst.assembleString(&buf.writer, source, &spec_val_cst);
-        const spec_val = try buf.toOwnedSlice();
-
-        const specifier: DependencySpecifier = if (std.mem.eql(u8, spec_type, "package"))
-            .{ .package = spec_val }
-        else if (std.mem.eql(u8, spec_type, "git"))
-            .{ .git = spec_val }
-        else if (std.mem.eql(u8, spec_type, "path"))
-            .{ .path = spec_val }
-        else
-            return error.InvalidModuleDefinition;
-
-        try map.put(allocator, alias, specifier);
-    }
 }
 
 /// Get a parser for the module definition language.
@@ -274,6 +226,30 @@ pub fn getRModSyntax() *const analysis.Parser.Syntax {
 
     return &static.syntax.?;
 }
+
+pub const types = make_types: {
+    var fresh = ml.Cst.types.fresh;
+
+    break :make_types .{
+        .Int = ml.Cst.types.Int,
+        .String = ml.Cst.types.String,
+        .StringElement = ml.Cst.types.StringElement,
+        .StringSentinel = ml.Cst.types.StringSentinel,
+        .Identifier = ml.Cst.types.Identifier,
+        .Block = ml.Cst.types.Block,
+        .Seq = ml.Cst.types.Seq,
+        .List = ml.Cst.types.List,
+        .Apply = ml.Cst.types.Apply,
+        .Binary = ml.Cst.types.Binary,
+        .Prefix = ml.Cst.types.Prefix,
+        .Decl = ml.Cst.types.Decl,
+        .Assign = ml.Cst.types.Assign,
+        .Lambda = ml.Cst.types.Lambda,
+        .Symbol = ml.Cst.types.Symbol,
+        .Module = fresh.next(),
+        .fresh = fresh,
+    };
+};
 
 pub const syntax_defs = struct {
     pub const nud = struct {
