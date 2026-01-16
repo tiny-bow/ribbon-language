@@ -5,6 +5,7 @@ const SyntaxTree = ribbon.analysis.SyntaxTree;
 const common = ribbon.common;
 const analysis = ribbon.analysis;
 const ml = ribbon.meta_language;
+const PP = common.PrettyPrinter;
 
 // test {
 //     std.debug.print("ml_integration", .{});
@@ -25,7 +26,7 @@ test "rpkg_parse" {
     defer result.deinit(std.testing.allocator);
 
     var buffer: [1024]u8 = undefined;
-    const fmt = std.fmt.bufPrint(&buffer, "{f}", .{result}) catch |err| {
+    const fmt = std.fmt.bufPrint(&buffer, "{f}", .{result.rendered(std.testing.allocator, .{})}) catch |err| {
         log.err("Failed to format RPkg: {s}", .{@errorName(err)});
         return err;
     };
@@ -33,21 +34,21 @@ test "rpkg_parse" {
         \\package mvp-test.
         \\    version = 1.0.0
         \\    dependencies =
-        \\        std = archive base @ 0.1.0
-        \\        rg = git https://github.com/tiny-bow/rg#8c22c3cb20d09fe380999c5d2b5026cb60c9ead2
+        \\        std = pkg "base@0.1.0"
+        \\        rg = git "https://github.com/tiny-bow/rg#8c22c3cb20d09fe380999c5d2b5026cb60c9ead2"
         \\    modules =
-        \\        internal [min.rpkg:8:16]: module text 0.
-        \\    visibility = internal
-        \\    inputs =
-        \\        ./text.rib
-        \\        ./text/
-        \\    imports =
-        \\        std.core as std
-        \\        rg.case-fold
-        \\    extensions =
-        \\        rg.syntax.utf32-literals
-        \\        unresolved graphics exported = ./min.rmod
-        \\
+        \\        module text (0).
+        \\            visibility = internal
+        \\            inputs =
+        \\                "./text.rib"
+        \\                "./text/"
+        \\            imports =
+        \\                std.core as std
+        \\                rg.case-fold
+        \\            extensions = rg.syntax.utf32-literals
+        \\        unresolved graphics.
+        \\            visibility = exported
+        \\            file_path = ./min.rmod
     , fmt);
 }
 
@@ -66,22 +67,19 @@ test "rmod_parse" {
     defer result.deinit(std.testing.allocator);
 
     var buffer: [1024]u8 = undefined;
-    const fmt = std.fmt.bufPrint(&buffer, "{f}", .{result}) catch |err| {
+    const fmt = std.fmt.bufPrint(&buffer, "{f}", .{result.rendered(std.testing.allocator, .{})}) catch |err| {
         log.err("Failed to format RMod: {s}", .{@errorName(err)});
         return err;
     };
 
     try std.testing.expectEqualStrings(
-        \\[min.rmod:1:1]: module 0.
+        \\module (0).
         \\    visibility = internal
-        \\    inputs =
-        \\        ./graphics.rib
+        \\    inputs = "./graphics.rib"
         \\    imports =
         \\        std.core
         \\        std.gpu
-        \\    extensions =
-        \\        std.syntax.spirv-annotations
-        \\
+        \\    extensions = std.syntax.spirv-annotations
     , fmt);
 }
 

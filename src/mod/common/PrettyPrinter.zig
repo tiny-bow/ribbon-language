@@ -24,6 +24,11 @@ pub fn deinit(pp: *PrettyPrinter) void {
     pp.arena.deinit();
 }
 
+/// Create a failure document.
+pub fn fail(_: *PrettyPrinter) *const Doc {
+    return &fail_doc;
+}
+
 /// Create a document that contains nothing.
 pub fn nil(_: *PrettyPrinter) *const Doc {
     return &nil_doc;
@@ -34,6 +39,16 @@ pub fn text(pp: *PrettyPrinter, str: []const u8) *const Doc {
     return pp.make(.{
         .text = pp.arena.allocator().dupe(u8, str) catch return &fail_doc,
     });
+}
+
+/// Formatted text. Must not contain newlines.
+pub fn print(pp: *PrettyPrinter, comptime fmt: []const u8, args: anytype) *const Doc {
+    var interface = std.io.Writer.Allocating.init(pp.gpa);
+    defer interface.deinit();
+
+    interface.writer.print(fmt, args) catch return &fail_doc;
+
+    return pp.text(interface.written());
 }
 
 /// A hard line break. Always breaks, preserving indentation.

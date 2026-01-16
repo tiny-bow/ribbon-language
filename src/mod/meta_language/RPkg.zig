@@ -41,7 +41,30 @@ pub const MaybeModule = union(enum) {
         name: []const u8,
         visibility: ml.RMod.Visibility,
         file_path: []const u8,
+
+        /// Pretty printer formatter
+        pub fn render(self: *const DeferredModule, pp: *common.PrettyPrinter) *const common.PrettyPrinter.Doc {
+            return pp.concat(&.{
+                pp.print("unresolved {s}.", .{self.name}),
+                pp.nest(1, pp.concat(&.{
+                    pp.line(),
+                    pp.text("visibility ="),
+                    pp.hang(1, pp.text(@tagName(self.visibility))),
+                    pp.line(),
+                    pp.text("file_path ="),
+                    pp.hang(1, pp.text(self.file_path)),
+                })),
+            });
+        }
     };
+
+    /// Pretty printer formatter
+    pub fn render(self: *const MaybeModule, pp: *common.PrettyPrinter) *const common.PrettyPrinter.Doc {
+        return switch (self.*) {
+            .definition => |*def| def.render(pp),
+            .deferred => |*deferred| deferred.render(pp),
+        };
+    }
 };
 
 /// Defines a dependency package request for a higher-level Ribbon package.
@@ -57,8 +80,6 @@ pub const Dependency = struct {
         .kind = .{ .source = .absolute },
         .value = "",
     },
-    /// The version specifier for the dependency.
-    version: ?common.SemVer = null,
 
     /// Defines the kind of a package dependency.
     pub const Kind = enum {
@@ -70,6 +91,20 @@ pub const Dependency = struct {
         /// TODO: how to access these in source files?
         other,
     };
+
+    /// Pretty printer formatter
+    pub fn render(self: *const Dependency, pp: *common.PrettyPrinter) *const common.PrettyPrinter.Doc {
+        return pp.concat(&.{
+            pp.print("{s} = ", .{self.name}),
+            if (self.fetch_origin.kind == .git)
+                pp.text("git")
+            else if (self.fetch_origin.kind == .archive)
+                if (self.fetch_origin.kind.archive == .registry) pp.text("pkg") else pp.text("arc")
+            else
+                pp.text("src"),
+            pp.print(" \"{s}\"", .{self.fetch_origin.value}),
+        });
+    }
 };
 
 /// Defines where and how to fetch a Dependency's source code.
@@ -123,11 +158,7 @@ pub fn format(self: *const RPkg, writer: *std.io.Writer) !void {
     try writer.print("    version = {f}\n", .{self.version});
     try writer.print("    dependencies =\n", .{});
     for (self.dependencies) |dep| {
-        try writer.print("        {s} = {s} {s}", .{ dep.name, @tagName(dep.fetch_origin.kind), dep.fetch_origin.value });
-        if (dep.version) |ver| {
-            try writer.print(" @ {f}", .{ver});
-        }
-        try writer.writeAll("\n");
+        try writer.print("        {s} = {s} {s}\n", .{ dep.name, @tagName(dep.fetch_origin.kind), dep.fetch_origin.value });
     }
     try writer.print("    modules =\n", .{});
     for (self.modules) |*mod| {
@@ -140,6 +171,88 @@ pub fn format(self: *const RPkg, writer: *std.io.Writer) !void {
             },
         }
     }
+}
+
+const RenderFmtData = struct {
+    allocator: std.mem.Allocator,
+    options: common.PrettyPrinter.RenderOptions,
+    rpkg: *const RPkg,
+    pub fn format(self: *const RenderFmtData, writer: *std.io.Writer) !void {
+        var pp = common.PrettyPrinter.init(self.allocator);
+        defer pp.deinit();
+
+        const doc = self.rpkg.render(&pp);
+
+        pp.render(doc, writer, self.options) catch |err| {
+            log.debug("Pretty printer render error: {s}", .{@errorName(err)});
+            return error.WriteFailed;
+        };
+    }
+};
+
+/// Helper to get a pretty printer formatted string inside a regular format call
+pub fn rendered(self: *const RPkg, allocator: std.mem.Allocator, options: common.PrettyPrinter.RenderOptions) RenderFmtData {
+    return RenderFmtData{
+        .allocator = allocator,
+        .options = options,
+        .rpkg = self,
+    };
+}
+
+/// Pretty printer formatter
+pub fn render(self: *const RPkg, pp: *common.PrettyPrinter) *const common.PrettyPrinter.Doc {
+    return pp.concat(&.{
+        pp.text("package"),
+        if (self.name.len != 0) pp.print(" {s}", .{self.name}) else pp.nil(),
+        pp.text("."),
+        pp.nest(1, pp.concat(&.{
+            pp.line(),
+            pp.text("version ="),
+            pp.hang(1, pp.print("{f}", .{self.version})),
+            pp.line(),
+            pp.text("dependencies ="),
+            dependencies: {
+                if (self.dependencies.len == 0) {
+                    break :dependencies pp.text(" ()");
+                } else if (self.dependencies.len == 1) {
+                    break :dependencies pp.concat(&.{
+                        pp.hang(1, self.dependencies[0].render(pp)),
+                    });
+                } else {
+                    var items = pp.gpa.alloc(*const common.PrettyPrinter.Doc, self.dependencies.len + 1) catch return pp.fail();
+                    defer pp.gpa.free(items);
+                    items[0] = pp.line();
+                    for (self.dependencies, 0..) |dep, i| {
+                        items[i + 1] = pp.concat(&.{
+                            dep.render(pp),
+                            if (i < self.dependencies.len - 1) pp.line() else pp.nil(),
+                        });
+                    }
+                    break :dependencies pp.nest(1, pp.concat(items));
+                }
+            },
+            pp.line(),
+            pp.text("modules ="),
+            modules: {
+                if (self.modules.len == 0) {
+                    break :modules pp.text(" ()");
+                } else if (self.modules.len == 1) {
+                    break :modules self.modules[0].render(pp);
+                } else {
+                    var items = pp.gpa.alloc(*const common.PrettyPrinter.Doc, self.modules.len + 1) catch return pp.fail();
+                    defer pp.gpa.free(items);
+                    items[0] = pp.line();
+                    for (self.modules, 0..) |*mod, i| {
+                        items[i + 1] = pp.concat(&.{
+                            mod.render(pp),
+                            if (i < self.modules.len - 1) pp.line() else pp.nil(),
+                        });
+                    }
+                    break :modules pp.nest(1, pp.concat(items));
+                }
+            },
+        })),
+    });
 }
 
 pub fn deinit(self: *RPkg, allocator: std.mem.Allocator) void {
@@ -325,19 +438,10 @@ fn parseDependencies(allocator: std.mem.Allocator, source: []const u8, value_cst
         };
 
         if (std.mem.eql(u8, spec_type, "pkg")) {
-            const split_index = std.mem.indexOf(u8, spec_val, "@") orelse return error.InvalidPackageDefinition;
-            const name = try allocator.dupe(u8, spec_val[0..split_index]);
-            const version_str = spec_val[split_index + 1 ..];
-            const version = common.SemVer.parse(version_str) catch {
-                log.debug("Failed to parse version string {s}", .{version_str});
-                return error.InvalidPackageDefinition;
-            };
-
             dep.fetch_origin = FetchOrigin{
                 .kind = .{ .archive = .registry },
-                .value = name,
+                .value = try allocator.dupe(u8, spec_val),
             };
-            dep.version = version;
         } else if (std.mem.eql(u8, spec_type, "src")) {
             const locality: FetchOrigin.SourceLocation =
                 if (std.mem.startsWith(u8, spec_val, "http://") or std.mem.startsWith(u8, spec_val, "https://"))

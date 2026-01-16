@@ -54,6 +54,14 @@ pub const Import = struct {
         import: Import,
         /// An optional alias for the imported module to be referred to by, within the importing module.
         alias: ?[]const u8 = null,
+
+        /// `std.fmt` impl
+        pub fn format(self: *const Aliased, writer: *std.io.Writer) !void {
+            try self.import.format(writer);
+            if (self.alias) |alias| {
+                try writer.print(" as {s}", .{alias});
+            }
+        }
     };
 
     /// An imported language extension used by a module.
@@ -67,7 +75,22 @@ pub const Import = struct {
         import: Import,
         /// The name of the extension within the imported module.
         name: []const u8,
+
+        /// `std.fmt` impl
+        pub fn format(self: *const Extension, writer: *std.io.Writer) !void {
+            try self.import.format(writer);
+            try writer.print(".{s}", .{self.name});
+        }
     };
+
+    /// `std.fmt` impl
+    pub fn format(self: *const Import, writer: *std.io.Writer) !void {
+        if (self.package) |pkg| {
+            try writer.print("{s}.{s}", .{ pkg, self.module });
+        } else {
+            try writer.writeAll(self.module);
+        }
+    }
 };
 
 pub fn deinit(self: *RMod, allocator: std.mem.Allocator) void {
@@ -123,29 +146,118 @@ pub fn format(self: *const RMod, writer: *std.io.Writer) !void {
 
     try writer.print("    imports =\n", .{});
     for (self.imports) |imp| {
-        if (imp.alias) |alias| {
-            if (imp.import.package) |pkg| {
-                try writer.print("        {s}.{s} as {s}\n", .{ pkg, imp.import.module, alias });
-            } else {
-                try writer.print("        {s} as {s}\n", .{ imp.import.module, alias });
-            }
-        } else {
-            if (imp.import.package) |pkg| {
-                try writer.print("        {s}.{s}\n", .{ pkg, imp.import.module });
-            } else {
-                try writer.print("        {s}\n", .{imp.import.module});
-            }
-        }
+        try writer.writeAll("        ");
+        try imp.format(writer);
+        try writer.writeAll("\n");
     }
 
     try writer.print("    extensions =\n", .{});
     for (self.extensions) |ext| {
-        if (ext.import.package) |pkg| {
-            try writer.print("        {s}.{s}.{s}\n", .{ pkg, ext.import.module, ext.name });
-        } else {
-            try writer.print("        {s}.{s}\n", .{ ext.import.module, ext.name });
-        }
+        try writer.writeAll("        ");
+        try ext.format(writer);
+        try writer.writeAll("\n");
     }
+}
+
+const RenderFmtData = struct {
+    allocator: std.mem.Allocator,
+    options: common.PrettyPrinter.RenderOptions,
+    rmod: *const RMod,
+    pub fn format(self: *const RenderFmtData, writer: *std.io.Writer) !void {
+        var pp = common.PrettyPrinter.init(self.allocator);
+        defer pp.deinit();
+
+        const doc = self.rmod.render(&pp);
+
+        pp.render(doc, writer, self.options) catch |err| {
+            log.debug("Pretty printer render error: {s}", .{@errorName(err)});
+            return error.WriteFailed;
+        };
+    }
+};
+
+/// Helper to get a pretty printer formatted string inside a regular format call
+pub fn rendered(self: *const RMod, allocator: std.mem.Allocator, options: common.PrettyPrinter.RenderOptions) RenderFmtData {
+    return RenderFmtData{
+        .allocator = allocator,
+        .options = options,
+        .rmod = self,
+    };
+}
+
+/// Pretty printer formatter
+pub fn render(self: *const RMod, pp: *common.PrettyPrinter) *const common.PrettyPrinter.Doc {
+    return pp.concat(&.{
+        pp.text("module"),
+        if (self.name.len != 0) pp.print(" {s}", .{self.name}) else pp.nil(),
+        pp.print(" ({x})", .{self.guid}),
+        pp.text("."),
+        pp.nest(1, pp.concat(&.{
+            pp.line(),
+            pp.text("visibility ="),
+            pp.hang(1, pp.text(@tagName(self.visibility))),
+            pp.line(),
+            pp.text("inputs ="),
+            inputs: {
+                if (self.inputs.len == 0) {
+                    break :inputs pp.text(" ()");
+                } else if (self.inputs.len == 1) {
+                    break :inputs pp.hang(1, pp.print("\"{s}\"", .{self.inputs[0]}));
+                } else {
+                    var items = pp.gpa.alloc(*const common.PrettyPrinter.Doc, self.inputs.len + 1) catch return pp.fail();
+                    defer pp.gpa.free(items);
+                    items[0] = pp.line();
+                    for (self.inputs, 0..) |input, i| {
+                        items[i + 1] = pp.concat(&.{
+                            pp.print("\"{s}\"", .{input}),
+                            if (i < self.inputs.len - 1) pp.line() else pp.nil(),
+                        });
+                    }
+                    break :inputs pp.nest(1, pp.concat(items));
+                }
+            },
+            pp.line(),
+            pp.text("imports ="),
+            imports: {
+                if (self.imports.len == 0) {
+                    break :imports pp.text(" ()");
+                } else if (self.imports.len == 1) {
+                    break :imports pp.hang(1, pp.print("{f}", .{self.imports[0]}));
+                } else {
+                    var items = pp.gpa.alloc(*const common.PrettyPrinter.Doc, self.imports.len + 1) catch return pp.fail();
+                    defer pp.gpa.free(items);
+                    items[0] = pp.line();
+                    for (self.imports, 0..) |imp, i| {
+                        items[i + 1] = pp.concat(&.{
+                            pp.print("{f}", .{imp}),
+                            if (i < self.imports.len - 1) pp.line() else pp.nil(),
+                        });
+                    }
+                    break :imports pp.nest(1, pp.concat(items));
+                }
+            },
+            pp.line(),
+            pp.text("extensions ="),
+            extensions: {
+                if (self.extensions.len == 0) {
+                    break :extensions pp.text(" ()");
+                } else if (self.extensions.len == 1) {
+                    break :extensions pp.hang(1, pp.print("{f}", .{self.extensions[0]}));
+                } else {
+                    var items = pp.gpa.alloc(*const common.PrettyPrinter.Doc, self.extensions.len + 1) catch return pp.fail();
+                    defer pp.gpa.free(items);
+                    items[0] = pp.line();
+                    for (self.extensions, 0..) |ext, i| {
+                        items[i + 1] = pp.concat(&.{
+                            pp.print("{f}", .{ext}),
+                            if (i < self.extensions.len - 1) pp.line() else pp.nil(),
+                        });
+                    }
+                    break :extensions pp.nest(1, pp.concat(items));
+                }
+            },
+        })),
+    });
 }
 
 /// Parse a module definition language source string to an `RMod`.
