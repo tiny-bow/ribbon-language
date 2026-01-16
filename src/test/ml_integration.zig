@@ -157,6 +157,8 @@ test "cst_parse" {
         .{ .input = "foo.1", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 foo 1⟩" }, // 62
         .{ .input = "foo.1.2", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 ⟨𝓶𝓮𝓶𝓫𝓮𝓻 foo 1⟩ 2⟩" }, // 62
         .{ .input = "test ;; i am a comment!", .expect = "test" }, // 63
+        .{ .input = "foo; bar;\nbaz\nqux", .expect = "⟨𝓼𝓮𝓺 foo bar ⟨𝓼𝓮𝓺 baz qux⟩⟩" }, // 64
+        .{ .input = "foo;\nbar;\nbaz\nqux", .expect = "⟨𝓼𝓮𝓺 foo bar ⟨𝓼𝓮𝓺 baz qux⟩⟩" }, // 65
     });
 }
 
