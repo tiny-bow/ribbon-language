@@ -31,7 +31,7 @@ token: analysis.Token,
 /// Subexpressions of this expression, if any.
 operands: Buffer,
 /// Attributes associated with this syntax tree node.
-attributes: []const analysis.Attribute = &.{},
+attributes: []const analysis.Attribute = &.{}, // TODO: this should probably be an ArrayList, it is frequently mutated during parsing if there are many attributes on an expression; Expr gives a layer of indirection anyway
 
 /// Deinitialize the sub-tree of this expression and free all memory allocated for it.
 pub fn deinit(self: *SyntaxTree, allocator: std.mem.Allocator) void {

@@ -161,7 +161,6 @@ test "cst_parse" {
 }
 
 test "cst_attributes" {
-    std.testing.log_level = .debug;
     const check = struct {
         pub fn testCstAttributes(input: []const u8, expect: []const u8) !ml.Expr {
             var parser = try ml.Cst.getRmlParser(std.testing.allocator, .{}, "test", input);
@@ -188,13 +187,13 @@ test "cst_attributes" {
         }
     }.testCstAttributes;
 
-    var a = try check(";; preceding\nfoo ;; comment", "foo");
+    var a = try check(";; preceeding1\n;; preceding2\nfoo ;; comment", "foo");
     defer a.deinit(std.testing.allocator);
 
     try std.testing.expectEqualDeep(&.{
         analysis.Attribute{
             .kind = .{ .comment = .pre },
-            .value = " preceding",
+            .value = " preceeding1",
             .source = analysis.Source{
                 .name = "test",
                 .location = .{
@@ -204,13 +203,24 @@ test "cst_attributes" {
             },
         },
         analysis.Attribute{
+            .kind = .{ .comment = .pre },
+            .value = " preceding2",
+            .source = analysis.Source{
+                .name = "test",
+                .location = .{
+                    .visual = .{ .line = 2, .column = 1 },
+                    .buffer = 15,
+                },
+            },
+        },
+        analysis.Attribute{
             .kind = .{ .comment = .post },
             .value = " comment",
             .source = analysis.Source{
                 .name = "test",
                 .location = .{
-                    .visual = .{ .line = 2, .column = 5 },
-                    .buffer = 17,
+                    .visual = .{ .line = 3, .column = 5 },
+                    .buffer = 33,
                 },
             },
         },
