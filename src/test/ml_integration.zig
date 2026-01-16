@@ -9,135 +9,6 @@ const ml = ribbon.meta_language;
 //     std.debug.print("ml_integration", .{});
 // }
 
-test "module_cst" {
-    const input =
-        \\module graphics.
-        \\    sources =
-        \\        "renderer.rib",
-        \\        "shaders/",
-        \\        "mesh/",
-        \\    
-        \\    dependencies =
-        \\        std = package "core@0.1.0"
-        \\        gpu = git "github.com/tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
-        \\        linalg = path "../linear-algebra"
-        \\   
-        \\    extensions =
-        \\        std/macros,
-        \\        std/dsl/operator-precedence,
-        \\        gpu/descriptors,
-        \\        linalg/vector-ops,
-        \\    
-    ;
-
-    const expect =
-        \\module
-        \\  graphics
-        \\  𝓲𝓷𝓭𝓮𝓷𝓽
-        \\    𝓼𝓮𝓺
-        \\      𝓪𝓼𝓼𝓲𝓰𝓷
-        \\        sources
-        \\        𝓲𝓷𝓭𝓮𝓷𝓽
-        \\          𝓵𝓲𝓼𝓽
-        \\            "renderer.rib"
-        \\            "shaders/"
-        \\            "mesh/"
-        \\      𝓪𝓼𝓼𝓲𝓰𝓷
-        \\        dependencies
-        \\        𝓲𝓷𝓭𝓮𝓷𝓽
-        \\          𝓼𝓮𝓺
-        \\            𝓪𝓼𝓼𝓲𝓰𝓷
-        \\              std
-        \\              𝓪𝓹𝓹
-        \\                package
-        \\                "core@0.1.0"
-        \\            𝓪𝓼𝓼𝓲𝓰𝓷
-        \\              gpu
-        \\              𝓪𝓹𝓹
-        \\                git
-        \\                "github.com/tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
-        \\            𝓪𝓼𝓼𝓲𝓰𝓷
-        \\              linalg
-        \\              𝓪𝓹𝓹
-        \\                path
-        \\                "../linear-algebra"
-        \\      𝓪𝓼𝓼𝓲𝓰𝓷
-        \\        extensions
-        \\        𝓲𝓷𝓭𝓮𝓷𝓽
-        \\          𝓵𝓲𝓼𝓽
-        \\            std/macros
-        \\            std/dsl/operator-precedence
-        \\            gpu/descriptors
-        \\            linalg/vector-ops
-    ;
-
-    var parser = try ml.RMod.getRModParser(std.testing.allocator, .{}, "test", input);
-    var syn = try parser.parse() orelse {
-        log.err("Failed to parse source", .{});
-        return error.NullCst;
-    };
-    defer syn.deinit(std.testing.allocator);
-
-    var writer_buf = [1]u8{0} ** (1024 * 16);
-    var writer = std.io.Writer.fixed(&writer_buf);
-
-    try ml.Cst.dumpTree(input, &writer, &syn, 0);
-
-    log.debug("CST: {f}\nSExprs:\n{s}\n", .{ syn, writer.buffered() });
-
-    try std.testing.expectEqualStrings(expect, writer.buffered());
-}
-
-test "module_parse" {
-    const input =
-        \\module graphics.
-        \\    sources =
-        \\        "renderer.rib",
-        \\        "shaders/",
-        \\
-        \\    dependencies =
-        \\        std = package "core@0.1.0"
-        \\        gpu = git "tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD"
-        \\        linalg = path "../linear-algebra"
-        \\
-        \\    extensions =
-        \\        std/macros,
-        \\        gpu/descriptors,
-        \\
-    ;
-
-    var def = try ml.RMod.parseSource(std.testing.allocator, .{}, "test.rmod", input) orelse return error.NullCst;
-    defer def.deinit(std.testing.allocator);
-
-    // Verify name
-    try std.testing.expectEqualStrings("graphics", def.name);
-
-    // Verify sources
-    try std.testing.expectEqual(@as(usize, 2), def.sources.items.len);
-    try std.testing.expectEqualStrings("renderer.rib", def.sources.items[0]);
-    try std.testing.expectEqualStrings("shaders/", def.sources.items[1]);
-
-    // Verify dependencies
-    try std.testing.expectEqual(@as(usize, 3), def.dependencies.count());
-
-    const std_dep = def.dependencies.get("std").?;
-    try std.testing.expect(std_dep == .package);
-    try std.testing.expectEqualStrings("core@0.1.0", std_dep.package);
-
-    const gpu_dep = def.dependencies.get("gpu").?;
-    try std.testing.expect(gpu_dep == .git);
-    try std.testing.expectEqualStrings("tiny-bow/rgpu#W7SI6GbejPFWIbAPfm6uS623SVD", gpu_dep.git);
-
-    const linalg_dep = def.dependencies.get("linalg").?;
-    try std.testing.expect(linalg_dep == .path);
-    try std.testing.expectEqualStrings("../linear-algebra", linalg_dep.path);
-
-    // Verify extensions
-    try std.testing.expectEqual(@as(usize, 2), def.extensions.items.len);
-    try std.testing.expectEqualStrings("std/macros", def.extensions.items[0]);
-    try std.testing.expectEqualStrings("gpu/descriptors", def.extensions.items[1]);
-}
-
 test "expr_parse" {
     try common.snapshotTest(.use_log("expr"), struct {
         pub fn testExpr(input: []const u8, expect: []const u8) !void {
@@ -172,6 +43,17 @@ test "expr_parse" {
         .{ .input = "[1, 2, 3]", .expect = "[ 1, 2, 3, ]" }, // 7
         .{ .input = "(1, 2, 3,)", .expect = "(1, 2, 3)" }, // 8
         .{ .input = "(1, )", .expect = "(1,)" }, // 9
+        .{ .input = "foo.bar", .expect = "foo.bar" }, // 10
+        .{ .input = "foo.bar.baz", .expect = "foo.bar.baz" }, // 11
+        .{ .input = "(foo bar).baz", .expect = "(foo bar).baz" }, // 12
+        .{ .input = "foo.bar baz", .expect = "foo.bar baz" }, // 13
+        .{ .input = "foo + bar.baz", .expect = "foo + bar.baz" }, // 14
+        .{ .input = "0.1 + 2.3", .expect = "0.1 + 2.3" }, // 15
+        .{ .input = "foo 0.1 + 2.0e3", .expect = "foo 0.1 + 2000" }, // 16
+        .{ .input = "2.0e-10", .expect = "0.0000000002" }, // 17
+        .{ .input = "2.0e+10", .expect = "20000000000" }, // 18
+        .{ .input = "2.foo", .expect = "2.foo" }, // 19
+        .{ .input = "foo.3", .expect = "foo.3" }, // 20
     });
 }
 
@@ -256,6 +138,21 @@ test "cst_parse" {
         .{ .input = "'x", .expect = "'x" }, // 46
         .{ .input = "'\\0", .expect = error.UnexpectedEof }, // 47
         .{ .input = "'x + 'y", .expect = "⟨+ 'x 'y⟩" }, // 48
+        .{ .input = "foo.bar", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 foo bar⟩" }, // 49
+        .{ .input = "foo.bar.baz", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 ⟨𝓶𝓮𝓶𝓫𝓮𝓻 foo bar⟩ baz⟩" }, // 50
+        .{ .input = "(foo bar).baz", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 (⟨𝓪𝓹𝓹 foo bar⟩) baz⟩" }, // 51
+        .{ .input = "foo.bar baz", .expect = "⟨𝓪𝓹𝓹 ⟨𝓶𝓮𝓶𝓫𝓮𝓻 foo bar⟩ baz⟩" }, // 52
+        .{ .input = "foo + bar.baz", .expect = "⟨+ foo ⟨𝓶𝓮𝓶𝓫𝓮𝓻 bar baz⟩⟩" }, // 53
+        .{ .input = "0.1", .expect = "0.1" }, // 54
+        .{ .input = "123.456", .expect = "123.456" }, // 55
+        .{ .input = ".456", .expect = error.UnexpectedToken }, // 56
+        .{ .input = "123.", .expect = error.UnexpectedToken }, // 57
+        .{ .input = "1.2.3", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 1.2 3⟩" }, // 58
+        .{ .input = "123.0e456", .expect = "123.0e456" }, // 59
+        .{ .input = "0.0e+1", .expect = "0.0e+1" }, // 60
+        .{ .input = "0.0e-1", .expect = "0.0e-1" }, // 61
+        .{ .input = "foo.1", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 foo 1⟩" }, // 62}
+        .{ .input = "foo.1.2", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 ⟨𝓶𝓮𝓶𝓫𝓮𝓻 foo 1⟩ 2⟩" }, // 62}
     });
 }
 

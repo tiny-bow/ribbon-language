@@ -15,6 +15,7 @@ pub const types = gen: {
 
     break :gen .{
         .Int = fresh.next(),
+        .Float = fresh.next(),
         .String = fresh.next(),
         .StringElement = fresh.next(),
         .StringSentinel = fresh.next(),
@@ -29,6 +30,7 @@ pub const types = gen: {
         .Assign = fresh.next(),
         .Lambda = fresh.next(),
         .Symbol = fresh.next(),
+        .MemberAccess = fresh.next(),
         .fresh = fresh,
     };
 };
@@ -94,6 +96,10 @@ pub fn dumpTree(source: []const u8, writer: *std.io.Writer, cst: *const analysis
     switch (cst.type) {
         types.Identifier, types.Int => {
             try writer.print("{s}", .{cst.token.data.sequence.asSlice()});
+        },
+        types.Float => {
+            const parts = cst.operands.asSlice();
+            try writer.print("{s}.{s}", .{ parts[0].token.data.sequence.asSlice(), parts[1].token.data.sequence.asSlice() });
         },
         types.String => {
             try writer.print("{u}", .{cst.token.data.special.punctuation.toChar()});
@@ -167,6 +173,10 @@ pub fn dumpTree(source: []const u8, writer: *std.io.Writer, cst: *const analysis
 pub fn dumpSExprs(source: []const u8, writer: *std.io.Writer, cst: *const analysis.SyntaxTree) !void {
     switch (cst.type) {
         types.Identifier, types.Int => try writer.print("{s}", .{cst.token.data.sequence.asSlice()}),
+        types.Float => {
+            const parts = cst.operands.asSlice();
+            try writer.print("{s}.{s}", .{ parts[0].token.data.sequence.asSlice(), parts[1].token.data.sequence.asSlice() });
+        },
         types.String => {
             try writer.print("{u}", .{cst.token.data.special.punctuation.toChar()});
             try assembleString(writer, source, cst);
@@ -199,6 +209,7 @@ pub fn dumpSExprs(source: []const u8, writer: *std.io.Writer, cst: *const analys
             }
             return;
         },
+        types.MemberAccess => try writer.writeAll("⟨𝓶𝓮𝓶𝓫𝓮𝓻"),
         else => {
             switch (cst.token.tag) {
                 .sequence => {
@@ -211,7 +222,7 @@ pub fn dumpSExprs(source: []const u8, writer: *std.io.Writer, cst: *const analys
     }
 
     switch (cst.type) {
-        types.String, types.Identifier, types.Int => return,
+        types.String, types.Identifier, types.Int, types.Float => return,
         types.Block => {
             for (cst.operands.asSlice(), 0..) |*child, i| {
                 if (i > 0) try writer.writeByte(' ');
@@ -298,6 +309,7 @@ pub fn getRmlSyntax() *const analysis.Parser.Syntax {
         builtin_syntax.leds.geq(),
         builtin_syntax.leds.logical_and(),
         builtin_syntax.leds.logical_or(),
+        builtin_syntax.leds.member_access_or_float(),
     }) |led| {
         out.bindLed(led) catch unreachable;
     }
@@ -1155,6 +1167,75 @@ pub const builtin_syntax = struct {
 
         pub fn logical_or() analysis.Parser.Led {
             return binop("rml_logical_or", -3000, "or", true);
+        }
+
+        pub fn member_access_or_float() analysis.Parser.Led {
+            return analysis.Parser.createLed(
+                "rml_member_access_or_float",
+                std.math.maxInt(i16),
+                .{
+                    .standard = .{
+                        .special = .{
+                            .standard = .{
+                                .escaped = .{ .standard = false },
+                                .punctuation = .{ .standard = .fromChar('.') },
+                            },
+                        },
+                    },
+                },
+                null,
+                struct {
+                    pub fn binop(
+                        parser: *analysis.Parser,
+                        lhs: analysis.SyntaxTree,
+                        bp: i16,
+                        token: analysis.Token,
+                    ) analysis.Parser.Error!?analysis.SyntaxTree {
+                        log.debug("rml_member_access_or_float: parsing token {f}", .{token});
+
+                        try parser.lexer.advance();
+
+                        const rhs = if (try parser.lexer.next()) |next_token| rhs: {
+                            if (next_token.location.buffer != token.location.buffer + 1) {
+                                log.debug("rml_member_access_or_float: rhs is disconnected, rejecting", .{});
+                                return null;
+                            }
+
+                            if (next_token.tag != .sequence) {
+                                log.debug("rml_member_access_or_float: rhs is not a sequence token, rejecting", .{});
+                                return null;
+                            }
+
+                            const first_char = rg.nthCodepoint(0, next_token.data.sequence.asSlice()) catch unreachable orelse unreachable;
+
+                            break :rhs analysis.SyntaxTree{
+                                .source = analysis.Source{
+                                    .location = next_token.location,
+                                    .name = parser.settings.source_name,
+                                },
+                                .precedence = bp,
+                                .type = if (rg.isDecimal(first_char)) types.Int else types.Identifier,
+                                .token = next_token,
+                                .operands = .empty,
+                            };
+                        } else {
+                            log.debug("rml_member_access_or_float: no next token found, rejecting", .{});
+                            return null;
+                        };
+
+                        const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                        buff[0] = lhs;
+                        buff[1] = rhs;
+                        return analysis.SyntaxTree{
+                            .source = lhs.source,
+                            .precedence = bp,
+                            .type = if (lhs.type == types.Int and rhs.type == types.Int) types.Float else types.MemberAccess,
+                            .token = token,
+                            .operands = .fromSlice(buff),
+                        };
+                    }
+                }.binop,
+            );
         }
     };
 };

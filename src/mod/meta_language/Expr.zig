@@ -30,6 +30,8 @@ data: Expr.Data,
 pub const Data = union(enum) {
     /// 64-bit signed integer literal.
     int: i64,
+    /// 64-bit floating point literal.
+    float: f64,
     /// Character literal.
     char: common.Char,
     /// String literal.
@@ -60,12 +62,21 @@ pub const Data = union(enum) {
     set: []Expr,
     /// Function abstraction.
     lambda: []Expr,
+    /// Member access.
+    member: struct {
+        parent: *Expr,
+        selector: union(enum) {
+            name: []const u8,
+            index: i64,
+        },
+    },
 
     /// Determines if the expression *potentially* requires parentheses,
     /// depending on the precedence of its possible-parent.
     pub fn mayRequireParens(self: *const Data) bool {
         switch (self.*) {
             .int => return false,
+            .float => return false,
             .char => return false,
             .string => return false,
             .identifier => return false,
@@ -80,6 +91,7 @@ pub const Data = union(enum) {
             .decl => return true,
             .set => return true,
             .lambda => return false,
+            .member => return false,
         }
     }
 
@@ -87,6 +99,7 @@ pub const Data = union(enum) {
     pub fn deinit(self: *Data, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .int => {},
+            .float => {},
             .char => {},
             .identifier => {},
             .symbol => {},
@@ -140,6 +153,10 @@ pub const Data = union(enum) {
                 for (self.lambda) |*child| child.deinit(allocator);
 
                 allocator.free(self.lambda);
+            },
+            .member => {
+                self.member.parent.deinit(allocator);
+                allocator.destroy(self.member.parent);
             },
         }
     }
@@ -212,8 +229,7 @@ pub fn deinit(self: *Expr, allocator: std.mem.Allocator) void {
 pub fn precedence(self: *const Expr) i16 {
     return switch (self.data) {
         .operator => return self.data.operator.precedence,
-        .int, .char, .string, .identifier, .symbol, .decl, .set, .lambda => std.math.maxInt(i16),
-        .list, .tuple, .array, .compound => std.math.maxInt(i16),
+        .int, .float, .char, .string, .identifier, .symbol, .decl, .set, .lambda, .member, .list, .tuple, .array, .compound => std.math.maxInt(i16),
         .seq => std.math.minInt(i16),
         .apply => 0,
     };
@@ -225,6 +241,7 @@ pub fn dumpTree(self: *const Expr, writer: *std.io.Writer, level: usize) !void {
 
     switch (self.data) {
         .int => try writer.print("{d}", .{self.data.int}),
+        .float => try writer.print("{d}", .{self.data.float}),
         .char => try writer.print("'{u}'", .{self.data.char}),
         .string => try writer.print("\"{s}\"", .{self.data.string}),
         .identifier => try writer.print("{s}", .{self.data.identifier}),
@@ -289,6 +306,15 @@ pub fn dumpTree(self: *const Expr, writer: *std.io.Writer, level: usize) !void {
                 try child.dumpTree(writer, level + 1);
             }
         },
+        .member => {
+            try writer.writeAll("𝓶𝓮𝓶𝓫𝓮𝓻\n");
+            try self.data.member.parent.dumpTree(writer, level + 1);
+            for (0..level + 1) |_| try writer.writeAll("  ");
+            switch (self.data.member.selector) {
+                .name => try writer.print("{s}\n", .{self.data.member.selector.name}),
+                .index => try writer.print("{d}\n", .{self.data.member.selector.index}),
+            }
+        },
     }
 
     try writer.writeByte('\n');
@@ -298,12 +324,14 @@ pub fn dumpTree(self: *const Expr, writer: *std.io.Writer, level: usize) !void {
 /// * This is *not* the same as the original text parsed to produce this expression;
 ///   it is a canonical representation of the expression.
 pub fn display(self: *const Expr, bp: i16, writer: *std.io.Writer) !void {
-    const need_parens = self.data.mayRequireParens() and self.precedence() < bp;
+    const prec = self.precedence();
+    const need_parens = self.data.mayRequireParens() and prec < bp;
 
     if (need_parens) try writer.writeByte('(');
 
     switch (self.data) {
         .int => try writer.print("{d}", .{self.data.int}),
+        .float => try writer.print("{d}", .{self.data.float}),
         .char => try writer.print("'{u}'", .{self.data.char}),
         .string => try writer.print("\"{s}\"", .{self.data.string}),
         .identifier => try writer.print("{s}", .{self.data.identifier}),
@@ -353,13 +381,21 @@ pub fn display(self: *const Expr, bp: i16, writer: *std.io.Writer) !void {
         .apply => {
             for (self.data.apply, 0..) |child, i| {
                 if (i > 0) try writer.writeAll(" ");
-                try child.display(0, writer);
+                try child.display(prec, writer);
             }
         },
         .operator => try writer.print("{f}", .{self.data.operator}),
         .decl => try writer.print("{f} := {f}", .{ self.data.decl[0], self.data.decl[1] }),
         .set => try writer.print("{f} = {f}", .{ self.data.set[0], self.data.set[1] }),
         .lambda => try writer.print("fun {f}. {f}", .{ self.data.lambda[0], self.data.lambda[1] }),
+        .member => {
+            try self.data.member.parent.display(prec, writer);
+            try writer.writeByte('.');
+            switch (self.data.member.selector) {
+                .name => try writer.print("{s}", .{self.data.member.selector.name}),
+                .index => try writer.print("{d}", .{self.data.member.selector.index}),
+            }
+        },
     }
 
     if (need_parens) try writer.writeByte(')');
@@ -418,6 +454,25 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             return Expr{
                 .source = cst.source,
                 .data = .{ .int = int },
+            };
+        },
+
+        ml.Cst.types.Float => {
+            const bytes1 = cst.operands.asSlice()[0].token.data.sequence.asSlice();
+            const bytes2 = cst.operands.asSlice()[1].token.data.sequence.asSlice();
+            var buf: [1024]u8 = undefined;
+            const bytes = std.fmt.bufPrint(&buf, "{s}.{s}", .{ bytes1, bytes2 }) catch |err| {
+                log.debug("parseCst: failed to assemble float literal: {}", .{err});
+                return error.BadEncoding;
+            };
+            const float = std.fmt.parseFloat(f64, bytes) catch |err| {
+                log.debug("parseCst: failed to parse float literal {s}: {}", .{ bytes, err });
+                return error.BadEncoding;
+            };
+
+            return Expr{
+                .source = cst.source,
+                .data = .{ .float = float },
             };
         },
 
@@ -716,6 +771,43 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                     .token = cst.token,
                     .precedence = cst.precedence,
                     .operands = buff,
+                } },
+            };
+        },
+
+        ml.Cst.types.MemberAccess => {
+            const operands = cst.operands.asSlice();
+            std.debug.assert(operands.len == 2);
+
+            const parent = try parseCst(allocator, source, &operands[0]);
+            const name_cst = &operands[1];
+
+            if (name_cst.type != ml.Cst.types.Identifier and name_cst.type != ml.Cst.types.Int) {
+                log.debug("parseCst: member access with non-identifier/index name cst type {f}", .{name_cst.type});
+                return error.UnexpectedInput;
+            }
+
+            const name = name_cst.token.data.sequence.asSlice();
+
+            const parent_ptr = try allocator.create(Expr);
+            errdefer allocator.destroy(parent_ptr);
+            parent_ptr.* = parent;
+
+            return Expr{
+                .source = cst.source,
+                .data = .{ .member = .{
+                    .parent = parent_ptr,
+                    .selector = selector: {
+                        if (name_cst.type == ml.Cst.types.Identifier) {
+                            break :selector .{ .name = name };
+                        } else {
+                            const index = std.fmt.parseInt(i64, name, 10) catch |err| {
+                                log.debug("parseCst: failed to parse member index {s}: {}", .{ name, err });
+                                return error.BadEncoding;
+                            };
+                            break :selector .{ .index = index };
+                        }
+                    },
                 } },
             };
         },

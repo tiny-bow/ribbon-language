@@ -586,12 +586,15 @@ pub fn parse(self: *Parser) Error!?analysis.SyntaxTree {
         if (std.meta.isError(out) or (try out) == null or !self.isEof()) {
             log.debug("getCst: parser result was null or error, or did not consume input {any} {any} {any}", .{ std.meta.isError(out), if (!std.meta.isError(out)) (try out) == null else false, !self.isEof() });
 
+            var err: ?Error = if (out) |_| null else |e| e;
             if (self.lexer.peek()) |maybe_cached_token| {
                 if (maybe_cached_token) |cached_token| {
                     log.debug("getCst: unused token in lexer cache {f}: `{f}`", .{ self.lexer.inner.location, cached_token });
                 }
-            } else |err| {
-                log.debug("syntax error: {s}", .{@errorName(err)});
+                err = err orelse Error.UnexpectedToken;
+            } else |e| {
+                log.debug("syntax error: {s}", .{@errorName(e)});
+                err = err orelse e;
             }
 
             const rem = self.lexer.inner.source[self.lexer.inner.location.buffer..];
@@ -601,6 +604,8 @@ pub fn parse(self: *Parser) Error!?analysis.SyntaxTree {
             } else if (rem.len > 0) {
                 log.debug("getCst: unexpected input after parsing {f}: `{s}` ({x})", .{ self.lexer.inner.location, rem, rem });
             }
+
+            return err.?;
         }
     }
 
