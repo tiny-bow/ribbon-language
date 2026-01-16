@@ -20,7 +20,7 @@ test {
 source: analysis.Source,
 /// The attributes of the expression.
 /// These are used to store metadata about the expression.
-attributes: common.StringMap(Expr) = .empty,
+attributes: []const analysis.Attribute,
 /// The data of the expression.
 data: Expr.Data,
 
@@ -215,13 +215,7 @@ pub const Operator = struct {
 
 /// Deinitializes the expression and its sub-expressions, freeing any allocated memory.
 pub fn deinit(self: *Expr, allocator: std.mem.Allocator) void {
-    var it = self.attributes.iterator();
-    while (it.next()) |entry| {
-        allocator.free(entry.key_ptr.*);
-        entry.value_ptr.deinit(allocator);
-    }
-
-    self.attributes.deinit(allocator);
+    allocator.free(self.attributes);
     self.data.deinit(allocator);
 }
 
@@ -419,6 +413,8 @@ pub fn parseSource(
     src: []const u8,
 ) (analysis.Parser.Error || error{ InvalidString, InvalidEscape } || std.io.Writer.Error)!?Expr {
     var parser = try ml.Cst.getRmlParser(allocator, lexer_settings, source_name, src);
+    defer parser.deinit();
+
     var cst = try parser.parse() orelse return null;
     defer cst.deinit(allocator);
 
@@ -429,11 +425,8 @@ pub fn parseSource(
 /// This removes comments, indentation, parens and other purely-syntactic elements,
 /// as well as finalizing literals, applying attributes etc.
 pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const analysis.SyntaxTree) !Expr {
-    switch (cst.type) {
-        ml.Cst.types.Identifier => return Expr{
-            .source = cst.source,
-            .data = .{ .identifier = cst.token.data.sequence.asSlice() },
-        },
+    const data: Data = data: switch (cst.type) {
+        ml.Cst.types.Identifier => .{ .identifier = cst.token.data.sequence.asSlice() },
 
         ml.Cst.types.Int => {
             const bytes = cst.token.data.sequence.asSlice();
@@ -451,10 +444,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                 return error.UnexpectedInput;
             };
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .int = int },
-            };
+            break :data .{ .int = int };
         },
 
         ml.Cst.types.Float => {
@@ -470,10 +460,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                 return error.BadEncoding;
             };
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .float = float },
-            };
+            break :data .{ .float = float };
         },
 
         ml.Cst.types.String => {
@@ -482,20 +469,14 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
 
             try ml.Cst.assembleString(&buf.writer, source, cst);
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .string = try buf.toOwnedSlice() },
-            };
+            break :data .{ .string = try buf.toOwnedSlice() };
         },
 
         ml.Cst.types.Symbol => {
             if (cst.token.tag == .sequence) {
                 const bytes = cst.token.data.sequence.asSlice();
 
-                return Expr{
-                    .source = cst.source,
-                    .data = .{ .symbol = bytes },
-                };
+                break :data .{ .symbol = bytes };
             }
 
             if (cst.token.tag != .special or cst.token.data.special.escaped != false) return error.UnexpectedInput;
@@ -506,10 +487,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
 
             _ = std.unicode.utf8Encode(char, buf) catch unreachable;
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .symbol = buf },
-            };
+            break :data .{ .symbol = buf };
         },
 
         ml.Cst.types.StringElement, ml.Cst.types.StringSentinel => return error.UnexpectedInput,
@@ -518,25 +496,10 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             if (cst.operands.len == 0) { // unit values
                 if (cst.token.tag != .special or cst.token.data.special.escaped != false) return error.UnexpectedInput;
 
-                return switch (cst.token.data.special.punctuation) {
-                    .paren_l => Expr{
-                        .source = cst.source,
-                        .data = .{
-                            .tuple = &.{},
-                        },
-                    },
-                    .brace_l => Expr{
-                        .source = cst.source,
-                        .data = .{
-                            .compound = &.{},
-                        },
-                    },
-                    .bracket_l => Expr{
-                        .source = cst.source,
-                        .data = .{
-                            .array = &.{},
-                        },
-                    },
+                break :data switch (cst.token.data.special.punctuation) {
+                    .paren_l => .{ .tuple = &.{} },
+                    .brace_l => .{ .compound = &.{} },
+                    .bracket_l => .{ .array = &.{} },
                     else => return error.UnexpectedInput,
                 };
             }
@@ -593,19 +556,13 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                             const buff = try allocator.alloc(Expr, 1);
                             buff[0] = inner;
 
-                            return Expr{
-                                .source = cst.source,
-                                .data = .{ .compound = buff },
-                            };
+                            break :data .{ .compound = buff };
                         },
                         .bracket_l => {
                             const buff = try allocator.alloc(Expr, 1);
                             buff[0] = inner;
 
-                            return Expr{
-                                .source = cst.source,
-                                .data = .{ .array = buff },
-                            };
+                            break :data .{ .array = buff };
                         },
                         else => return error.UnexpectedInput,
                     }
@@ -615,12 +572,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
 
         ml.Cst.types.List => {
             if (cst.operands.len == 0) {
-                return Expr{
-                    .source = cst.source,
-                    .data = .{
-                        .list = &.{},
-                    },
-                };
+                break :data .{ .list = &.{} };
             }
 
             var subs = try allocator.alloc(Expr, cst.operands.len);
@@ -630,20 +582,12 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                 subs[i] = try parseCst(allocator, source, child);
             }
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .list = subs },
-            };
+            break :data .{ .list = subs };
         },
 
         ml.Cst.types.Seq => {
             if (cst.operands.len == 0) {
-                return Expr{
-                    .source = cst.source,
-                    .data = .{
-                        .seq = &.{},
-                    },
-                };
+                break :data .{ .seq = &.{} };
             }
 
             var subs = try allocator.alloc(Expr, cst.operands.len);
@@ -653,20 +597,12 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                 subs[i] = try parseCst(allocator, source, child);
             }
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .seq = subs },
-            };
+            break :data .{ .seq = subs };
         },
 
         ml.Cst.types.Apply => {
             if (cst.operands.len == 0) {
-                return Expr{
-                    .source = cst.source,
-                    .data = .{
-                        .apply = &.{},
-                    },
-                };
+                break :data .{ .apply = &.{} };
             }
 
             var subs = try allocator.alloc(Expr, cst.operands.len);
@@ -676,10 +612,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                 subs[i] = try parseCst(allocator, source, child);
             }
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .apply = subs },
-            };
+            break :data .{ .apply = subs };
         },
 
         ml.Cst.types.Decl => {
@@ -693,10 +626,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             buff[0] = name_or_pattern;
             buff[1] = value;
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .decl = buff },
-            };
+            break :data .{ .decl = buff };
         },
 
         ml.Cst.types.Assign => {
@@ -710,10 +640,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             buff[0] = name_or_pattern;
             buff[1] = value;
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .set = buff },
-            };
+            break :data .{ .set = buff };
         },
 
         ml.Cst.types.Lambda => {
@@ -727,10 +654,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             buff[0] = name_or_pattern;
             buff[1] = value;
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .lambda = buff },
-            };
+            break :data .{ .lambda = buff };
         },
 
         ml.Cst.types.Prefix => {
@@ -742,14 +666,13 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             const buff = try allocator.alloc(Expr, 1);
             buff[0] = inner;
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .operator = .{
+            break :data .{
+                .operator = .{
                     .position = .prefix,
                     .token = cst.token,
                     .precedence = cst.precedence,
                     .operands = buff,
-                } },
+                },
             };
         },
 
@@ -764,14 +687,13 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             buff[0] = left;
             buff[1] = right;
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .operator = .{
+            break :data .{
+                .operator = .{
                     .position = .infix,
                     .token = cst.token,
                     .precedence = cst.precedence,
                     .operands = buff,
-                } },
+                },
             };
         },
 
@@ -793,9 +715,8 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             errdefer allocator.destroy(parent_ptr);
             parent_ptr.* = parent;
 
-            return Expr{
-                .source = cst.source,
-                .data = .{ .member = .{
+            break :data .{
+                .member = .{
                     .parent = parent_ptr,
                     .selector = selector: {
                         if (name_cst.type == ml.Cst.types.Identifier) {
@@ -808,7 +729,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                             break :selector .{ .index = index };
                         }
                     },
-                } },
+                },
             };
         },
 
@@ -816,5 +737,11 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             log.debug("parseCst: unexpected cst type {f}", .{cst.type});
             unreachable;
         },
-    }
+    };
+
+    return Expr{
+        .source = cst.source,
+        .attributes = try allocator.dupe(analysis.Attribute, cst.attributes),
+        .data = data,
+    };
 }

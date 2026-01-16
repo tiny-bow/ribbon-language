@@ -3,6 +3,7 @@ const log = std.log.scoped(.ml_integration);
 const ribbon = @import("ribbon_language");
 const SyntaxTree = ribbon.analysis.SyntaxTree;
 const common = ribbon.common;
+const analysis = ribbon.analysis;
 const ml = ribbon.meta_language;
 
 // test {
@@ -12,8 +13,9 @@ const ml = ribbon.meta_language;
 test "expr_parse" {
     try common.snapshotTest(.use_log("expr"), struct {
         pub fn testExpr(input: []const u8, expect: []const u8) !void {
-            _ = .{ input, expect };
             var parser = try ml.Cst.getRmlParser(std.testing.allocator, .{}, "test", input);
+            defer parser.deinit();
+
             var syn = try parser.parse() orelse {
                 log.err("Failed to parse source", .{});
                 return error.NullCst;
@@ -60,8 +62,9 @@ test "expr_parse" {
 test "cst_parse" {
     try common.snapshotTest(.use_log("cst"), struct {
         pub fn testCst(input: []const u8, expect: []const u8) !void {
-            _ = .{ input, expect };
             var parser = try ml.Cst.getRmlParser(std.testing.allocator, .{}, "test", input);
+            defer parser.deinit();
+
             var syn = try parser.parse() orelse {
                 log.err("Failed to parse source", .{});
                 return error.BadEncoding;
@@ -114,7 +117,7 @@ test "cst_parse" {
         .{ .input = "foo(1) * 3 * 2 +\n  1 * 2\nalert \"hello world\" + 2\ntest 2 3\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 22
         .{ .input = "foo(1) * 3 * 2 + (1 * 2); alert \"hello world\" + 2; test 2 3;", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 23
         .{ .input = "foo(1) * 3 * 2 + (1 * 2);\nalert \"hello world\" + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ (⟨* 1 2⟩)⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello world\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 24
-        .{ .input = "\n\n \nfoo(1) * 3 * 2 +\n  1 * 2;\nalert \"hello\nworld\" + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨+ ⟨𝓪𝓹𝓹 alert \"hello\nworld\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩" }, // 25
+        .{ .input = "\n\n \nfoo(1) * 3 * 2 +\n  1 * 2;\nalert \"hello\nworld\" + 2;\ntest 2 3;\n", .expect = "⟨𝓼𝓮𝓺 ⟨+ ⟨* ⟨* ⟨𝓪𝓹𝓹 foo (1)⟩ 3⟩ 2⟩ ⌊⟨* 1 2⟩⌋⟩ ⟨𝓼𝓮𝓺 ⟨+ ⟨𝓪𝓹𝓹 alert \"hello\nworld\"⟩ 2⟩ ⟨𝓪𝓹𝓹 test 2 3⟩⟩⟩" }, // 25
         .{ .input = "incr := fun x.\n  y := x + 1\n  y = y * 2\n  3 / y\n", .expect = "⟨𝓭𝓮𝓬𝓵 incr ⟨λ x ⌊⟨𝓼𝓮𝓺 ⟨𝓭𝓮𝓬𝓵 y ⟨+ x 1⟩⟩ ⟨𝓪𝓼𝓼𝓲𝓰𝓷 y ⟨* y 2⟩⟩ ⟨/ 3 y⟩⟩⌋⟩⟩" }, // 26
         .{ .input = "fun x y z. x * y * z", .expect = "⟨λ ⟨𝓪𝓹𝓹 x y z⟩ ⟨* ⟨* x y⟩ z⟩⟩" }, // 27
         .{ .input = "x, y, z", .expect = "⟨𝓵𝓲𝓼𝓽 x y z⟩" }, // 28
@@ -151,9 +154,109 @@ test "cst_parse" {
         .{ .input = "123.0e456", .expect = "123.0e456" }, // 59
         .{ .input = "0.0e+1", .expect = "0.0e+1" }, // 60
         .{ .input = "0.0e-1", .expect = "0.0e-1" }, // 61
-        .{ .input = "foo.1", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 foo 1⟩" }, // 62}
-        .{ .input = "foo.1.2", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 ⟨𝓶𝓮𝓶𝓫𝓮𝓻 foo 1⟩ 2⟩" }, // 62}
+        .{ .input = "foo.1", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 foo 1⟩" }, // 62
+        .{ .input = "foo.1.2", .expect = "⟨𝓶𝓮𝓶𝓫𝓮𝓻 ⟨𝓶𝓮𝓶𝓫𝓮𝓻 foo 1⟩ 2⟩" }, // 62
+        .{ .input = "test ;; i am a comment!", .expect = "test" }, // 63
     });
+}
+
+test "cst_attributes" {
+    std.testing.log_level = .debug;
+    const check = struct {
+        pub fn testCstAttributes(input: []const u8, expect: []const u8) !ml.Expr {
+            var parser = try ml.Cst.getRmlParser(std.testing.allocator, .{}, "test", input);
+            defer parser.deinit();
+
+            var syn = try parser.parse() orelse {
+                log.err("Failed to parse source", .{});
+                return error.NullCst;
+            };
+            defer syn.deinit(std.testing.allocator);
+
+            const expr = try ml.Expr.parseCst(std.testing.allocator, input, &syn);
+
+            log.info("input: {s}\nresult: {f}", .{ input, expr });
+
+            var buf = std.io.Writer.Allocating.init(std.testing.allocator);
+            defer buf.deinit();
+
+            try ml.Cst.dumpSExprs(input, &buf.writer, &syn);
+
+            try std.testing.expectEqualStrings(expect, buf.written());
+
+            return expr;
+        }
+    }.testCstAttributes;
+
+    var a = try check(";; preceding\nfoo ;; comment", "foo");
+    defer a.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualDeep(&.{
+        analysis.Attribute{
+            .kind = .{ .comment = .pre },
+            .value = " preceding",
+            .source = analysis.Source{
+                .name = "test",
+                .location = .{
+                    .visual = .{ .line = 1, .column = 1 },
+                    .buffer = 0,
+                },
+            },
+        },
+        analysis.Attribute{
+            .kind = .{ .comment = .post },
+            .value = " comment",
+            .source = analysis.Source{
+                .name = "test",
+                .location = .{
+                    .visual = .{ .line = 2, .column = 5 },
+                    .buffer = 17,
+                },
+            },
+        },
+    }, a.attributes);
+
+    var b = try check(";; preceeding!\nfoo ;; comment.\nbar ;; another", "⟨𝓼𝓮𝓺 foo bar⟩");
+    defer b.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualDeep(&.{
+        analysis.Attribute{
+            .kind = .{ .comment = .pre },
+            .value = " preceeding!",
+            .source = analysis.Source{
+                .name = "test",
+                .location = .{
+                    .visual = .{ .line = 1, .column = 1 },
+                    .buffer = 0,
+                },
+            },
+        },
+        analysis.Attribute{
+            .kind = .{ .comment = .post },
+            .value = " comment.",
+            .source = analysis.Source{
+                .name = "test",
+                .location = .{
+                    .visual = .{ .line = 2, .column = 5 },
+                    .buffer = 19,
+                },
+            },
+        },
+    }, b.data.seq[0].attributes);
+
+    try std.testing.expectEqualDeep(&.{
+        analysis.Attribute{
+            .kind = .{ .comment = .post },
+            .value = " another",
+            .source = analysis.Source{
+                .name = "test",
+                .location = .{
+                    .visual = .{ .line = 3, .column = 5 },
+                    .buffer = 35,
+                },
+            },
+        },
+    }, b.data.seq[1].attributes);
 }
 
 test "value_basics" {

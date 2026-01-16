@@ -471,6 +471,8 @@ syntax: *const Syntax,
 lexer: analysis.Lexer.Peekable,
 /// Settings for this parser.
 settings: Settings,
+/// Accumulates attributes for the next non-null succeeding nud
+attr_accum: common.ArrayList(analysis.Attribute) = .empty,
 
 pub const Settings = struct {
     /// Whether to ignore whitespace tokens when parsing; Default: false.
@@ -492,6 +494,13 @@ pub fn init(
         .lexer = lexer,
         .settings = settings,
     };
+}
+
+pub fn deinit(self: *Parser) void {
+    if (self.attr_accum.items.len != 0) {
+        log.err("unused attributes still in accumulator at deinit: {any}", .{self.attr_accum.items});
+    }
+    self.attr_accum.deinit(self.allocator);
 }
 
 pub fn isEof(self: *Parser) bool {
@@ -516,6 +525,19 @@ pub fn parseNud(self: *Parser, binding_power: i16, token: analysis.Token) Error!
         switch (nud.invoke(.{ self, nud.binding_power, &token, &out, &err })) {
             .okay => {
                 log.debug("pratt: nud {s} accepted input", .{nud.name});
+
+                if (self.attr_accum.items.len != 0 and out.type != .null) {
+                    const old_buf = out.attributes;
+                    var new_buf = try self.allocator.alloc(analysis.Attribute, old_buf.len + self.attr_accum.items.len);
+                    defer {
+                        self.allocator.free(old_buf);
+                        self.attr_accum.clearRetainingCapacity();
+                    }
+                    @memcpy(new_buf[0..old_buf.len], old_buf);
+                    @memcpy(new_buf[old_buf.len..], self.attr_accum.items);
+                    out.attributes = new_buf;
+                }
+
                 return out;
             },
             .panic => {
@@ -554,6 +576,13 @@ pub fn parseLed(self: *Parser, binding_power: i16, token: analysis.Token, lhs: a
         switch (led.invoke(.{ self, &lhs, led.binding_power, &token, &out, &err })) {
             .okay => {
                 log.debug("pratt: led {s} accepted input", .{led.name});
+
+                log.debug("{any}", .{out.attributes});
+
+                // TODO: should we try to intelligently float attributes from operands to parent node?
+                // this requires careful thought about source locations, and doesn't seem entirely appropriate in most circumstances
+                // probably leave it for sema?
+
                 return out;
             },
             .panic => {
@@ -685,6 +714,7 @@ pub fn pratt(
 
         if (try self.parseLed(binding_power, curr_token, lhs)) |new_lhs| {
             log.debug("pratt: infix {f} accepted", .{curr_token});
+            log.debug("{any}", .{new_lhs.attributes});
             save_state = self.lexer;
             lhs = new_lhs;
         } else {
@@ -698,6 +728,8 @@ pub fn pratt(
     }
 
     log.debug("pratt: exit", .{});
+
+    log.debug("{any}", .{lhs.attributes});
 
     return lhs;
 }

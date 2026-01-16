@@ -287,6 +287,7 @@ pub fn getRmlSyntax() *const analysis.Parser.Syntax {
         builtin_syntax.nud.logical_not(),
         builtin_syntax.nud.negate(),
         builtin_syntax.nud.abs(),
+        builtin_syntax.nud.leading_comment(),
     }) |nud| {
         out.bindNud(nud) catch unreachable;
     }
@@ -295,6 +296,7 @@ pub fn getRmlSyntax() *const analysis.Parser.Syntax {
         builtin_syntax.leds.decl_inferred(),
         builtin_syntax.leds.assign(),
         builtin_syntax.leds.list(),
+        builtin_syntax.leds.inline_seq_or_post_comment(),
         builtin_syntax.leds.seq(),
         builtin_syntax.leds.apply(),
         builtin_syntax.leds.mul(),
@@ -773,6 +775,82 @@ pub const builtin_syntax = struct {
                 }.leaf,
             );
         }
+
+        pub fn leading_comment() analysis.Parser.Nud {
+            return analysis.Parser.createNud(
+                "rml_leading_comment",
+                std.math.maxInt(i16),
+                .{
+                    .standard = .{
+                        .special = .{
+                            .standard = .{
+                                .escaped = .{ .standard = false },
+                                .punctuation = .{ .standard = .semicolon },
+                            },
+                        },
+                    },
+                },
+                null,
+                struct {
+                    pub fn leading_comment(
+                        parser: *analysis.Parser,
+                        _: i16,
+                        token: analysis.Token,
+                    ) analysis.Parser.Error!?analysis.SyntaxTree {
+                        log.debug("leading_comment: parsing token {f}", .{token});
+                        try parser.lexer.advance(); // discard first semi
+                        if (try parser.lexer.peek()) |next_token| {
+                            if (next_token.tag == .special and next_token.data.special.escaped == false and next_token.data.special.punctuation == .semicolon and next_token.location.buffer == token.location.buffer + 1) {
+                                log.debug("leading_comment: found second semi token {f}", .{next_token});
+                                try parser.lexer.advance(); // discard second semi
+
+                                var last = next_token;
+                                var broken = false;
+                                while (try parser.lexer.peek()) |maybe_endl| {
+                                    last = maybe_endl;
+                                    if (last.tag == .linebreak or last.tag == .indentation) {
+                                        log.debug("inline_seq_or_post_comment: found end-of-line after double semicolon", .{});
+                                        broken = true;
+                                        break;
+                                    } else {
+                                        try parser.lexer.advance();
+                                    }
+                                } else {
+                                    log.debug("inline_seq_or_post_comment: reached eof after double semicolon, last token was {f}", .{last});
+                                }
+
+                                const attr = analysis.Attribute{
+                                    .kind = .{ .comment = .pre },
+                                    .value = parser.lexer.inner.source[next_token.location.buffer + 1 .. if (broken) last.location.buffer else parser.lexer.inner.location.buffer],
+                                    .source = analysis.Source{
+                                        .name = parser.settings.source_name,
+                                        .location = token.location,
+                                    },
+                                };
+
+                                log.debug("accumulated new prefix comment attribute: {any}", .{attr});
+
+                                try parser.attr_accum.append(parser.allocator, attr);
+
+                                return analysis.SyntaxTree{
+                                    .source = .{ .name = parser.settings.source_name, .location = token.location },
+                                    .precedence = std.math.maxInt(i16),
+                                    .type = .null,
+                                    .token = token,
+                                    .operands = .empty,
+                                };
+                            } else {
+                                log.debug("leading_comment: expected second semi token, found {f}; reject", .{next_token});
+                                return null;
+                            }
+                        } else {
+                            log.debug("leading_comment: no second semi token found; panic", .{});
+                            return error.UnexpectedEof;
+                        }
+                    }
+                }.leading_comment,
+            );
+        }
     };
 
     pub const leds = struct {
@@ -954,17 +1032,145 @@ pub const builtin_syntax = struct {
             );
         }
 
+        pub fn inline_seq_or_post_comment() analysis.Parser.Led {
+            return analysis.Parser.createLed("rml_inline_seq_or_post_comment", std.math.minInt(i16), .{
+                .standard = .{
+                    .special = .{
+                        .standard = .{
+                            .escaped = .{ .standard = false },
+                            .punctuation = .{ .standard = .semicolon },
+                        },
+                    },
+                },
+            }, null, struct {
+                pub fn inline_seq_or_post_comment(
+                    parser: *analysis.Parser,
+                    lhs: analysis.SyntaxTree,
+                    bp: i16,
+                    token: analysis.Token,
+                ) analysis.Parser.Error!?analysis.SyntaxTree {
+                    log.debug("inline_seq_or_post_comment: lhs {f}", .{lhs});
+                    try parser.lexer.advance(); // discard semi
+                    if (try parser.lexer.peek()) |next_token| {
+                        if (next_token.tag == .special and next_token.data.special.punctuation == .semicolon and next_token.data.special.escaped == false and next_token.location.buffer == token.location.buffer + 1) {
+                            log.debug("inline_seq_or_post_comment: found another semicolon, this is an end-of-line comment", .{});
+
+                            try parser.lexer.advance(); // discard second semi
+
+                            var last = next_token;
+                            var broken = false;
+                            while (try parser.lexer.peek()) |maybe_endl| {
+                                last = maybe_endl;
+                                if (last.tag == .linebreak or last.tag == .indentation) {
+                                    log.debug("inline_seq_or_post_comment: found end-of-line after double semicolon", .{});
+                                    broken = true;
+                                    break;
+                                } else {
+                                    try parser.lexer.advance();
+                                }
+                            } else {
+                                log.debug("inline_seq_or_post_comment: reached eof after double semicolon, last token was {f}", .{last});
+                            }
+
+                            const old_buf = lhs.attributes;
+                            const new_buf = try parser.allocator.alloc(analysis.Attribute, old_buf.len + 1);
+
+                            defer parser.allocator.free(old_buf);
+
+                            @memcpy(new_buf[0..old_buf.len], old_buf);
+                            new_buf[old_buf.len] = analysis.Attribute{
+                                .kind = .{ .comment = .post },
+                                .value = parser.lexer.inner.source[next_token.location.buffer + 1 .. if (broken) last.location.buffer else parser.lexer.inner.location.buffer],
+                                .source = analysis.Source{
+                                    .name = parser.settings.source_name,
+                                    .location = token.location,
+                                },
+                            };
+
+                            log.debug("created new attribute buffer with post comment attribute: {any}", .{new_buf});
+
+                            var new_lhs = lhs;
+                            new_lhs.attributes = new_buf;
+                            return new_lhs;
+                        }
+                    }
+
+                    log.debug("inline_seq_or_post_comment: not an eol comment; parsing rhs after semicolon", .{});
+
+                    var rhs = if (try parser.pratt(std.math.minInt(i16))) |r| r else {
+                        log.debug("inline_seq_or_post_comment: no rhs; return lhs", .{});
+                        return lhs;
+                    };
+                    errdefer rhs.deinit(parser.allocator);
+                    log.debug("inline_seq_or_post_comment: found rhs {f}", .{rhs});
+                    if (lhs.type == types.Seq and rhs.type == types.Seq and lhs.token.tag == .special and rhs.token.tag == .special) {
+                        log.debug("inline_seq_or_post_comment: both lhs and rhs are seqs, concatenating", .{});
+                        const lhs_operands = lhs.operands.asSlice();
+                        const rhs_operands = rhs.operands.asSlice();
+                        defer parser.allocator.free(lhs_operands);
+                        defer parser.allocator.free(rhs_operands);
+                        const new_operands = try parser.allocator.alloc(analysis.SyntaxTree, lhs_operands.len + rhs_operands.len);
+                        @memcpy(new_operands[0..lhs_operands.len], lhs_operands);
+                        @memcpy(new_operands[lhs_operands.len..], rhs_operands);
+                        return .{
+                            .source = lhs.source,
+                            .precedence = bp,
+                            .type = types.Seq,
+                            .token = token,
+                            .operands = .fromSlice(new_operands),
+                        };
+                    } else if (lhs.type == types.Seq and lhs.token.tag == .special) {
+                        log.debug("inline_seq_or_post_comment: lhs is a seq, concatenating rhs", .{});
+                        const lhs_operands = lhs.operands.asSlice();
+                        defer parser.allocator.free(lhs_operands);
+                        const new_operands = try parser.allocator.alloc(analysis.SyntaxTree, lhs_operands.len + 1);
+                        @memcpy(new_operands[0..lhs_operands.len], lhs_operands);
+                        new_operands[lhs_operands.len] = rhs;
+                        return .{
+                            .source = lhs.source,
+                            .precedence = bp,
+                            .type = types.Seq,
+                            .token = token,
+                            .operands = .fromSlice(new_operands),
+                        };
+                    } else if (rhs.type == types.Seq and rhs.token.tag == .special) {
+                        log.debug("inline_seq_or_post_comment: rhs is a seq, concatenating lhs", .{});
+                        const rhs_operands = rhs.operands.asSlice();
+                        defer parser.allocator.free(rhs_operands);
+                        const new_operands = try parser.allocator.alloc(analysis.SyntaxTree, rhs_operands.len + 1);
+                        new_operands[0] = lhs;
+                        @memcpy(new_operands[1..], rhs_operands);
+                        return .{
+                            .source = lhs.source,
+                            .precedence = bp,
+                            .type = types.Seq,
+                            .token = token,
+                            .operands = .fromSlice(new_operands),
+                        };
+                    } else {
+                        log.debug("inline_seq_or_post_comment: creating new seq", .{});
+                    }
+                    const buff: []analysis.SyntaxTree = try parser.allocator.alloc(analysis.SyntaxTree, 2);
+                    log.debug("inline_seq_or_post_comment: buffer allocation {x}", .{@intFromPtr(buff.ptr)});
+                    buff[0] = lhs;
+                    buff[1] = rhs;
+                    log.debug("inline_seq_or_post_comment: buffer written; returning", .{});
+                    return analysis.SyntaxTree{
+                        .source = lhs.source,
+                        .precedence = bp,
+                        .type = types.Seq,
+                        .token = token,
+                        .operands = .fromSlice(buff),
+                    };
+                }
+            }.inline_seq_or_post_comment);
+        }
+
         pub fn seq() analysis.Parser.Led {
             return analysis.Parser.createLed(
                 "rml_seq",
                 std.math.minInt(i16),
-                .{ .any_of = &.{
-                    .linebreak,
-                    .{ .special = .{ .standard = .{
-                        .escaped = .{ .standard = false },
-                        .punctuation = .{ .standard = .semicolon },
-                    } } },
-                } },
+                .{ .standard = .linebreak },
                 null,
                 struct {
                     pub fn seq(
@@ -990,7 +1196,7 @@ pub const builtin_syntax = struct {
                         };
                         errdefer rhs.deinit(parser.allocator);
                         log.debug("seq: found rhs {f}", .{rhs});
-                        if (lhs.type == types.Seq and rhs.type == types.Seq) {
+                        if (lhs.type == types.Seq and rhs.type == types.Seq and lhs.token.tag == .linebreak and rhs.token.tag == .linebreak) {
                             log.debug("seq: both lhs and rhs are seqs, concatenating", .{});
                             const lhs_operands = lhs.operands.asSlice();
                             const rhs_operands = rhs.operands.asSlice();
@@ -1006,7 +1212,7 @@ pub const builtin_syntax = struct {
                                 .token = token,
                                 .operands = .fromSlice(new_operands),
                             };
-                        } else if (lhs.type == types.Seq) {
+                        } else if (lhs.type == types.Seq and lhs.token.tag == .linebreak) {
                             log.debug("seq: lhs is a seq, concatenating rhs", .{});
                             const lhs_operands = lhs.operands.asSlice();
                             defer parser.allocator.free(lhs_operands);
@@ -1020,7 +1226,7 @@ pub const builtin_syntax = struct {
                                 .token = token,
                                 .operands = .fromSlice(new_operands),
                             };
-                        } else if (rhs.type == types.Seq) {
+                        } else if (rhs.type == types.Seq and rhs.token.tag == .linebreak) {
                             log.debug("seq: rhs is a seq, concatenating lhs", .{});
                             const rhs_operands = rhs.operands.asSlice();
                             defer parser.allocator.free(rhs_operands);

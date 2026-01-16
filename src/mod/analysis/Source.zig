@@ -3,7 +3,7 @@
 const Source = @This();
 
 const std = @import("std");
-const log = std.log.scoped(.source_analysis);
+const log = std.log.scoped(.source);
 
 const common = @import("common");
 

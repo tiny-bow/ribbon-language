@@ -30,6 +30,8 @@ type: Type,
 token: analysis.Token,
 /// Subexpressions of this expression, if any.
 operands: Buffer,
+/// Attributes associated with this syntax tree node.
+attributes: []const analysis.Attribute = &.{},
 
 /// Deinitialize the sub-tree of this expression and free all memory allocated for it.
 pub fn deinit(self: *SyntaxTree, allocator: std.mem.Allocator) void {
@@ -39,6 +41,7 @@ pub fn deinit(self: *SyntaxTree, allocator: std.mem.Allocator) void {
         // empty buffer != empty slice
         allocator.free(xs);
     }
+    allocator.free(self.attributes);
 }
 
 /// `std.fmt` impl
