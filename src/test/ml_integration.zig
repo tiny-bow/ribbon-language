@@ -10,6 +10,40 @@ const ml = ribbon.meta_language;
 //     std.debug.print("ml_integration", .{});
 // }
 
+test "rmod_parse" {
+    const file_text = @embedFile("min.rmod");
+
+    var result = try ml.RMod.parseSource(
+        std.testing.allocator,
+        .{},
+        "min.rmod",
+        file_text,
+    ) orelse {
+        log.err("Failed to parse RMod", .{});
+        return error.NullRMod;
+    };
+    defer result.deinit(std.testing.allocator);
+
+    var buffer: [1024]u8 = undefined;
+    const fmt = std.fmt.bufPrint(&buffer, "{f}", .{result}) catch |err| {
+        log.err("Failed to format RMod: {s}", .{@errorName(err)});
+        return err;
+    };
+
+    try std.testing.expectEqualStrings(
+        \\[min.rmod:1:1]: module 0.
+        \\    visibility = internal
+        \\    inputs =
+        \\        ./graphics.rib
+        \\    imports =
+        \\        std.core
+        \\        std.gpu
+        \\    extensions =
+        \\        std.syntax.spirv-annotations
+        \\
+    , fmt);
+}
+
 test "expr_parse" {
     try common.snapshotTest(.use_log("expr"), struct {
         pub fn testExpr(input: []const u8, expect: []const u8) !void {

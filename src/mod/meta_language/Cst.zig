@@ -32,6 +32,30 @@ pub const types = gen: {
         .Symbol = fresh.next(),
         .MemberAccess = fresh.next(),
         .fresh = fresh,
+        .getName = struct {
+            pub fn CstTypeName(t: analysis.SyntaxTree.Type) []const u8 {
+                return switch (t) {
+                    types.Int => "Int",
+                    types.Float => "Float",
+                    types.String => "String",
+                    types.StringElement => "StringElement",
+                    types.StringSentinel => "StringSentinel",
+                    types.Identifier => "Identifier",
+                    types.Block => "Block",
+                    types.Seq => "Seq",
+                    types.List => "List",
+                    types.Apply => "Apply",
+                    types.Binary => "Binary",
+                    types.Prefix => "Prefix",
+                    types.Decl => "Decl",
+                    types.Assign => "Assign",
+                    types.Lambda => "Lambda",
+                    types.Symbol => "Symbol",
+                    types.MemberAccess => "MemberAccess",
+                    else => "Unknown",
+                };
+            }
+        }.CstTypeName,
     };
 };
 
@@ -274,8 +298,16 @@ pub fn getRmlSyntax() *const analysis.Parser.Syntax {
         return s;
     }
 
-    var out = analysis.Parser.Syntax.init(std.heap.page_allocator);
+    static.syntax = analysis.Parser.Syntax.init(std.heap.page_allocator);
 
+    bindRmlSyntax(&static.syntax.?) catch |err| {
+        std.debug.panic("Cannot getRmlSyntax: {s}", .{@errorName(err)});
+    };
+
+    return &static.syntax.?;
+}
+
+pub fn bindRmlSyntax(out: *analysis.Parser.Syntax) !void {
     inline for (.{
         builtin_syntax.nud.leaf(),
         builtin_syntax.nud.function(),
@@ -289,7 +321,7 @@ pub fn getRmlSyntax() *const analysis.Parser.Syntax {
         builtin_syntax.nud.abs(),
         builtin_syntax.nud.leading_comment(),
     }) |nud| {
-        out.bindNud(nud) catch unreachable;
+        try out.bindNud(nud);
     }
 
     inline for (.{
@@ -313,12 +345,8 @@ pub fn getRmlSyntax() *const analysis.Parser.Syntax {
         builtin_syntax.leds.logical_or(),
         builtin_syntax.leds.member_access_or_float(),
     }) |led| {
-        out.bindLed(led) catch unreachable;
+        try out.bindLed(led);
     }
-
-    static.syntax = out;
-
-    return &static.syntax.?;
 }
 
 pub const builtin_syntax = struct {

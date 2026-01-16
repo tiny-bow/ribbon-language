@@ -173,6 +173,7 @@ pub fn build(b: *std.Build) !void {
 
     // initialize module map with special modules //
     var module_map = std.StringHashMap(*std.Build.Module).init(b.allocator);
+    var test_map = std.StringHashMap(*std.Build.Module).init(b.allocator);
 
     module_map.put("rg", rg_mod) catch @panic("OOM");
     module_map.put("repl", repl_mod) catch @panic("OOM");
@@ -280,6 +281,8 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         });
 
+        test_map.put(test_name, test_mod) catch @panic("OOM");
+
         test_mod.addImport("ribbon_language", ribbon_mod);
 
         const itest_bin = b.addTest(.{ .root_module = test_mod });
@@ -288,6 +291,11 @@ pub fn build(b: *std.Build) !void {
         check_step.dependOn(&itest_bin.step);
         test_step.dependOn(&b.addRunArtifact(itest_bin).step);
     }
+
+    // add test inputs //
+    test_map.get("ml_integration").?.addAnonymousImport("min.rmod", .{
+        .root_source_file = b.path("src/test/script/modules/min.rmod"),
+    });
 
     // setup generation tasks //
     const dump_intermediates_step = b.step("dump-intermediates", "Dump intermediate files to zig-out");
