@@ -224,6 +224,7 @@ pub const Context = struct {
         if (self.hasDiagnostics()) {
             var buf: [1024]u8 = undefined;
             const writer = std.debug.lockStderrWriter(&buf);
+            defer std.debug.unlockStderrWriter();
             defer writer.flush() catch unreachable;
 
             if (header) |h| writer.print("{s}:\n", .{h}) catch unreachable;

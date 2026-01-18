@@ -36,6 +36,8 @@ pub fn main() !void {
     var line_accumulator = std.ArrayList(u8).empty;
     defer line_accumulator.deinit(allocator);
 
+    var out_buf: [4096]u8 = undefined;
+
     while (R.getInput(">") catch |err| {
         switch (err) {
             error.EndOfStream => {
@@ -61,8 +63,12 @@ pub fn main() !void {
 
         line_accumulator.appendSlice(allocator, input) catch @panic("OOM in line accumulator");
 
+        var diag = ribbon.analysis.Diagnostic.Context.init(allocator);
+        defer diag.deinit();
+
         var expr = ribbon.meta_language.Expr.parseSource(
             allocator,
+            &diag,
             .{ .attrOffset = .{ .column = 0, .line = line_count } },
             "stdin",
             line_accumulator.items,
@@ -70,7 +76,12 @@ pub fn main() !void {
             if (err == error.UnexpectedEof) {
                 std.debug.print("Incomplete input, waiting for more...\n", .{});
             } else {
-                log.err("Error parsing input: {}", .{err});
+                log.debug("Error parsing input: {}", .{err});
+                var stderr = std.debug.lockStderrWriter(&out_buf);
+                defer std.debug.unlockStderrWriter();
+
+                try diag.writeAll(stderr, .{});
+                try stderr.flush();
                 R.history.add(line_accumulator.items) catch @panic("OOM in history");
 
                 line_accumulator.clearRetainingCapacity();
@@ -85,7 +96,6 @@ pub fn main() !void {
         line_accumulator.clearRetainingCapacity();
 
         const stderr = std.fs.File.stderr();
-        var out_buf: [1024]u8 = undefined;
         var writer = stderr.writer(&out_buf);
         try expr.dumpTree(&writer.interface, 0);
         try writer.interface.flush();
