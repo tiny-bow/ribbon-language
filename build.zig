@@ -97,6 +97,7 @@ const tests = [_][]const u8{
     "binary_integration",
     "ir_integration",
     "ml_integration",
+    "orch_integration",
     "printer_integration",
 };
 

@@ -4,3 +4,4 @@ zig-out
 result
 .direnv
 .cache
+.rcache

@@ -20,6 +20,8 @@ test {
 
 /// The package's canonical name.
 name: []const u8 = "",
+/// The origin of this package.
+origin: PackageOrigin = .root,
 /// The package definition's source path; may be absolute or relative to the compiler's working directory.
 source_path: []const u8 = "",
 /// The package's version specifier.
@@ -28,6 +30,18 @@ version: common.SemVer = .{},
 dependencies: []const Dependency = &.{},
 /// The Ribbon modules defined within this package.
 modules: []const MaybeModule = &.{},
+
+/// Defines how an RPkg was obtained.
+pub const PackageOrigin = union(enum) {
+    /// The root package being compiled.
+    root,
+    /// A dependency package fetched from a remote Git repository.
+    git: []const u8,
+    /// A dependency package fetched from a local archive file.
+    archive: []const u8,
+    /// A dependency package fetched from a local source directory.
+    source: []const u8,
+};
 
 /// Defines a Ribbon package module, or a path to a module definition file yet to be parsed.
 pub const MaybeModule = union(enum) {
@@ -69,7 +83,7 @@ pub const MaybeModule = union(enum) {
 
 /// Defines a dependency package request for a higher-level Ribbon package.
 pub const Dependency = struct {
-    /// The dependency's canonical name within the root package.
+    /// The dependency's reference name within the root package.
     name: []const u8 = "",
     /// The source code location within the package definition where this dependency was defined.
     source: analysis.Source = .anonymous,
