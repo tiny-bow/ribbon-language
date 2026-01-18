@@ -5,6 +5,7 @@ const analysis = @This();
 const std = @import("std");
 
 pub const Source = @import("analysis/Source.zig");
+pub const Diagnostic = @import("analysis/Diagnostic.zig");
 pub const Attribute = @import("analysis/Attribute.zig");
 pub const Token = @import("analysis/Token.zig");
 pub const SyntaxTree = @import("analysis/SyntaxTree.zig");

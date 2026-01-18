@@ -310,12 +310,13 @@ pub fn dumpSExprs(source: []const u8, writer: *std.io.Writer, cst: *const analys
 /// Get a parser for the meta-language.
 pub fn getRmlParser(
     allocator: std.mem.Allocator,
+    diag: *analysis.Diagnostic.Context,
     lexer_settings: analysis.Lexer.Settings,
     source_name: []const u8,
     src: []const u8,
 ) analysis.Parser.Error!analysis.Parser {
     const ml_syntax = getRmlSyntax();
-    return ml_syntax.createParser(allocator, lexer_settings, src, .{
+    return ml_syntax.createParser(allocator, diag, lexer_settings, src, .{
         .ignore_space = false,
         .source_name = source_name,
     });
@@ -404,6 +405,13 @@ pub const builtin_syntax = struct {
                         try parser.lexer.advance(); // discard fn token
                         var patt = try parser.pratt(std.math.minInt(i16)) orelse {
                             log.debug("function: no pattern found; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "MissingFunctionInputPattern",
+                                parser.diag.text("Expected a function input pattern after 'fun' keyword."),
+                                &.{},
+                            );
                             return error.UnexpectedInput;
                         };
                         errdefer patt.deinit(parser.allocator);
@@ -414,6 +422,16 @@ pub const builtin_syntax = struct {
                                 try parser.lexer.advance(); // discard dot
                                 var inner = try parser.pratt(std.math.minInt(i16)) orelse {
                                     log.debug("function: no inner expression found; panic", .{});
+                                    try parser.report(
+                                        .@"error",
+                                        next_tok.location,
+                                        "MissingFunctionBody",
+                                        parser.diag.text("Expected a function body expression after '.' token."),
+                                        &.{.{
+                                            .source = .{ .name = parser.settings.source_name, .location = token.location },
+                                            .message = parser.diag.text("Function started here."),
+                                        }},
+                                    );
                                     return error.UnexpectedEof;
                                 };
                                 errdefer inner.deinit(parser.allocator);
@@ -430,10 +448,30 @@ pub const builtin_syntax = struct {
                                 };
                             } else {
                                 log.debug("function: expected dot token, found {f}; panic", .{next_tok});
+                                try parser.report(
+                                    .@"error",
+                                    next_tok.location,
+                                    "MissingFunctionDot",
+                                    parser.diag.text("Expected '.' token after function input pattern."),
+                                    &.{.{
+                                        .source = .{ .name = parser.settings.source_name, .location = token.location },
+                                        .message = parser.diag.text("Function started here."),
+                                    }},
+                                );
                                 return error.UnexpectedInput;
                             }
                         } else {
                             log.debug("function: no dot token found; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "MissingFunctionDot",
+                                parser.diag.text("Expected '.' token after function input pattern."),
+                                &.{.{
+                                    .source = .{ .name = parser.settings.source_name, .location = token.location },
+                                    .message = parser.diag.text("Function started here."),
+                                }},
+                            );
                             return error.UnexpectedEof;
                         }
                     }
@@ -483,6 +521,13 @@ pub const builtin_syntax = struct {
                         try parser.lexer.advance(); // discard indent
                         var inner = try parser.pratt(std.math.minInt(i16)) orelse {
                             log.debug("indent: no inner expression found; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "MissingIndentedBlockBody",
+                                parser.diag.text("Expected an indented block body after indentation."),
+                                &.{},
+                            );
                             return error.UnexpectedEof;
                         };
                         errdefer inner.deinit(parser.allocator);
@@ -502,10 +547,30 @@ pub const builtin_syntax = struct {
                                 };
                             } else {
                                 log.debug("indent: found unexpected token {f}; panic", .{next_tok});
+                                try parser.report(
+                                    .@"error",
+                                    next_tok.location,
+                                    "MissingIndentedBlockEnd",
+                                    parser.diag.text("Expected end of indented block."),
+                                    &.{.{
+                                        .source = .{ .name = parser.settings.source_name, .location = token.location },
+                                        .message = parser.diag.text("Block started here."),
+                                    }},
+                                );
                                 return error.UnexpectedInput;
                             }
                         } else {
                             log.debug("indent: no end of block token found; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                parser.lexer.inner.location,
+                                "MissingIndentedBlockEnd",
+                                parser.diag.text("Expected end of indented block."),
+                                &.{.{
+                                    .source = .{ .name = parser.settings.source_name, .location = token.location },
+                                    .message = parser.diag.text("Block started here."),
+                                }},
+                            );
                             return error.UnexpectedEof;
                         }
                     }
@@ -550,10 +615,30 @@ pub const builtin_syntax = struct {
                                 };
                             } else {
                                 log.debug("block: found unexpected token {f}; panic", .{next_tok});
+                                try parser.report(
+                                    .@"error",
+                                    next_tok.location,
+                                    "MissingBlockEnd",
+                                    parser.diag.text("Expected end of block."),
+                                    &.{.{
+                                        .source = .{ .name = parser.settings.source_name, .location = token.location },
+                                        .message = parser.diag.text("Block started here."),
+                                    }},
+                                );
                                 return error.UnexpectedInput;
                             }
                         } else {
                             log.debug("block: no end of block token found; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                parser.lexer.inner.location,
+                                "MissingBlockEnd",
+                                parser.diag.text("Expected end of indented block."),
+                                &.{.{
+                                    .source = .{ .name = parser.settings.source_name, .location = token.location },
+                                    .message = parser.diag.text("Block started here."),
+                                }},
+                            );
                             return error.UnexpectedEof;
                         }
                     }
@@ -577,6 +662,13 @@ pub const builtin_syntax = struct {
                         try parser.lexer.advance(); // discard beginning quote
                         const content = try parser.lexer.next() orelse {
                             log.debug("single_quote: no content found; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "IncompleteCharLiteral",
+                                parser.diag.text("Expected content or end quote after opening single quote."),
+                                &.{},
+                            );
                             return error.UnexpectedEof;
                         };
                         log.debug("single_quote: found content token {f}", .{content});
@@ -599,6 +691,13 @@ pub const builtin_syntax = struct {
                                         const is_space = content.location.buffer > token.location.buffer + 1;
                                         if (!is_space) {
                                             log.debug("token {f} not expected with no space between proceeding token; panic", .{content});
+                                            try parser.report(
+                                                .@"error",
+                                                content.location,
+                                                "EmptyCharLiteral",
+                                                parser.diag.text("Character literal cannot be empty."),
+                                                &.{},
+                                            );
                                             return error.UnexpectedInput;
                                         }
                                         log.debug("single_quote: found end quote token {f} with space between proceeding token", .{content});
@@ -614,6 +713,13 @@ pub const builtin_syntax = struct {
                             },
                             else => {
                                 log.debug("single_quote: found unexpected token {f}; panic", .{content});
+                                try parser.report(
+                                    .@"error",
+                                    content.location,
+                                    "InvalidCharLiteralContent",
+                                    parser.diag.text("Character literal content must be a single character or escape sequence."),
+                                    &.{},
+                                );
                                 return error.UnexpectedInput;
                             },
                         }
@@ -623,15 +729,36 @@ pub const builtin_syntax = struct {
                                 log.debug("single_quote: required to consume next token", .{});
                                 break :consume try parser.lexer.next() orelse {
                                     log.debug("single_quote: no secondary token found; panic", .{});
+                                    try parser.report(
+                                        .@"error",
+                                        token.location,
+                                        "IncompleteCharLiteral",
+                                        parser.diag.text("Expected content or end quote after opening single quote."),
+                                        &.{},
+                                    );
                                     return error.UnexpectedEof;
                                 };
                             } else null;
                             const end_quote = try parser.lexer.next() orelse {
                                 log.debug("single_quote: no end quote found; panic", .{});
+                                try parser.report(
+                                    .@"error",
+                                    token.location,
+                                    "IncompleteCharLiteral",
+                                    parser.diag.text("Expected closing single quote for character literal."),
+                                    &.{},
+                                );
                                 return error.UnexpectedEof;
                             };
                             if (end_quote.tag != .special or end_quote.data.special.escaped != false or end_quote.data.special.punctuation != .single_quote) {
                                 log.debug("single_quote: expected single quote to end literal, found {f}; panic", .{end_quote});
+                                try parser.report(
+                                    .@"error",
+                                    end_quote.location,
+                                    "InvalidCharLiteralTermination",
+                                    parser.diag.text("Expected closing single quote for character literal."),
+                                    &.{},
+                                );
                                 return error.UnexpectedInput;
                             }
                             const buff = try parser.allocator.alloc(analysis.SyntaxTree, if (consume_next) 3 else 2);
@@ -766,6 +893,13 @@ pub const builtin_syntax = struct {
                             }
                         } else {
                             log.debug("string: no end of string token found", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "IncompleteStringLiteral",
+                                parser.diag.text("Expected closing double quote for string literal."),
+                                &.{},
+                            );
                             return error.UnexpectedEof;
                         }
                     }
@@ -824,6 +958,13 @@ pub const builtin_syntax = struct {
                                 for (applicable_leds) |l| {
                                     log.debug("leaf: applicable led {s}", .{l.name});
                                 }
+                                try parser.report(
+                                    .@"error",
+                                    token.location,
+                                    "AmbiguousIdentifier",
+                                    parser.diag.text("Identifier is bound by multiple patterns; cannot parse as simple identifier."),
+                                    &.{},
+                                );
                                 return null;
                             } else {
                                 log.debug("leaf: identifier {s} is not bound by another pattern; parsing as identifier", .{s});
@@ -906,10 +1047,24 @@ pub const builtin_syntax = struct {
                                 };
                             } else {
                                 log.debug("leading_comment: expected second semi token, found {f}; reject", .{next_token});
+                                try parser.report(
+                                    .@"error",
+                                    next_token.location,
+                                    "InvalidLeadingComment",
+                                    parser.diag.text("Expected ';;' to start a leading comment."),
+                                    &.{},
+                                );
                                 return null;
                             }
                         } else {
                             log.debug("leading_comment: no second semi token found; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "InvalidLeadingComment",
+                                parser.diag.text("Expected ';;' to start a leading comment."),
+                                &.{},
+                            );
                             return error.UnexpectedEof;
                         }
                     }
@@ -935,11 +1090,25 @@ pub const builtin_syntax = struct {
                         log.debug("decl: parsing token {f}", .{token});
                         if (lhs.precedence == bp) {
                             log.debug("decl: lhs has same binding power; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "InvalidDeclaration",
+                                parser.diag.text("Invalid declaration syntax; left-hand side has same precedence as operator."),
+                                &.{},
+                            );
                             return error.UnexpectedInput;
                         }
                         try parser.lexer.advance(); // discard operator
                         const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
                             log.debug("decl: no rhs; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "IncompleteDeclaration",
+                                parser.diag.text("Expected right-hand side expression for declaration."),
+                                &.{},
+                            );
                             return error.UnexpectedInput;
                         };
                         const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
@@ -973,11 +1142,25 @@ pub const builtin_syntax = struct {
                         log.debug("assign: parsing token {f}", .{token});
                         if (lhs.precedence == bp) {
                             log.debug("assign: lhs has same binding power; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "InvalidAssignment",
+                                parser.diag.text("Invalid assignment syntax; left-hand side has same precedence as operator."),
+                                &.{},
+                            );
                             return error.UnexpectedInput;
                         }
                         try parser.lexer.advance(); // discard operator
                         const second_stmt = if (try parser.pratt(bp + 1)) |rhs| rhs else {
                             log.debug("assign: no rhs; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "IncompleteAssignment",
+                                parser.diag.text("Expected right-hand side expression for assignment."),
+                                &.{},
+                            );
                             return error.UnexpectedInput;
                         };
                         const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);
@@ -1342,12 +1525,26 @@ pub const builtin_syntax = struct {
                         const applicable_leds = try parser.syntax.findLeds(std.math.minInt(i16), &token);
                         if (applicable_leds.len != 1) { // self
                             log.debug("apply: found {d} applicable led(s), rejecting", .{applicable_leds.len});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "AmbiguousFunctionApplication",
+                                parser.diag.text("Function application operator is ambiguous or invalid in this context."),
+                                &.{},
+                            );
                             return null;
                         } else {
                             log.debug("apply: no applicable led(s) found for token {f} with bp >= {}", .{ token, 1 });
                         }
                         var rhs = try parser.pratt(bp + 1) orelse {
                             log.debug("apply: unable to parse rhs, rejecting", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "IncompleteFunctionApplication",
+                                parser.diag.text("Expected right-hand side expression for function application."),
+                                &.{},
+                            );
                             return null;
                         };
                         errdefer rhs.deinit(parser.allocator);
@@ -1469,11 +1666,25 @@ pub const builtin_syntax = struct {
                         const rhs = if (try parser.lexer.next()) |next_token| rhs: {
                             if (next_token.location.buffer != token.location.buffer + 1) {
                                 log.debug("rml_member_access_or_float: rhs is disconnected, rejecting", .{});
+                                try parser.report(
+                                    .@"error",
+                                    token.location,
+                                    "InvalidMemberAccessOrFloat",
+                                    parser.diag.text("Member access or float literal must be directly connected to the left-hand side."),
+                                    &.{},
+                                );
                                 return null;
                             }
 
                             if (next_token.tag != .sequence) {
                                 log.debug("rml_member_access_or_float: rhs is not a sequence token, rejecting", .{});
+                                try parser.report(
+                                    .@"error",
+                                    token.location,
+                                    "InvalidMemberAccessOrFloatToken",
+                                    parser.diag.text("Member access or float literal must be followed by an identifier or numeric literal."),
+                                    &.{},
+                                );
                                 return null;
                             }
 
@@ -1491,6 +1702,13 @@ pub const builtin_syntax = struct {
                             };
                         } else {
                             log.debug("rml_member_access_or_float: no next token found, rejecting", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "IncompleteMemberAccessOrFloat",
+                                parser.diag.text("Expected identifier or numeric literal after member access operator."),
+                                &.{},
+                            );
                             return null;
                         };
 
@@ -1527,6 +1745,13 @@ pub fn unop(comptime name: []const u8, binding_power: i16, symbol: []const u8) a
                 try parser.lexer.advance(); // discard not
                 var inner = try parser.pratt(bp) orelse none: {
                     log.debug(name ++ ": no inner expression found", .{});
+                    try parser.report(
+                        .@"error",
+                        token.location,
+                        "IncompleteUnaryOperation",
+                        parser.diag.text("Expected expression after unary operator."),
+                        &.{},
+                    );
                     break :none null;
                 };
                 errdefer if (inner) |*i| i.deinit(parser.allocator);
@@ -1563,12 +1788,30 @@ pub fn binop(comptime name: []const u8, binding_power: i16, symbol: []const u8, 
                 if (comptime !allow_fixity) {
                     if (lhs.precedence == bp) {
                         log.debug(name ++ ": lhs has same binding power; panic", .{});
+                        try parser.report(
+                            .@"error",
+                            token.location,
+                            "FixityError",
+                            parser.diag.filler(parser.diag.concat(&.{
+                                parser.diag.text("Cannot parse expression due to precedence conflict with left-hand side."),
+                                parser.diag.space(),
+                                parser.diag.text("(They are the same, but this is not allowed for this operator, as chaining it does not make sense.)"),
+                            })),
+                            &.{},
+                        );
                         return error.UnexpectedInput;
                     }
                 }
                 try parser.lexer.advance(); // discard operator
                 const rhs = if (try parser.pratt(bp + 1)) |r| r else {
                     log.debug(name ++ ": no rhs; panic", .{});
+                    try parser.report(
+                        .@"error",
+                        token.location,
+                        "IncompleteBinaryOperation",
+                        parser.diag.text("Expected right-hand side expression for binary operator."),
+                        &.{},
+                    );
                     return error.UnexpectedInput;
                 };
                 const buff = try parser.allocator.alloc(analysis.SyntaxTree, 2);

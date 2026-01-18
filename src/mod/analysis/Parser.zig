@@ -326,12 +326,13 @@ pub const Syntax = struct {
     pub fn createParser(
         self: *const Syntax,
         allocator: std.mem.Allocator,
+        diag: *analysis.Diagnostic.Context,
         lexer_settings: analysis.Lexer.Settings,
         src: []const u8,
         parser_settings: Parser.Settings,
     ) Error!Parser {
         const lexer = try analysis.Lexer.lexWithPeek(lexer_settings, src);
-        return Parser.init(allocator, self, lexer, parser_settings);
+        return Parser.init(allocator, self, lexer, diag, parser_settings);
     }
 };
 
@@ -473,6 +474,13 @@ lexer: analysis.Lexer.Peekable,
 settings: Settings,
 /// Accumulates attributes for the next non-null succeeding nud
 attr_accum: common.ArrayList(analysis.Attribute) = .empty,
+/// The diagnostic service to use for warnings and errors
+diag: *analysis.Diagnostic.Context,
+/// The last/wip diagnostic message (to be) raised by this parser, if any.
+last_diagnostic: ?analysis.Diagnostic = null,
+/// Rejection diagnostics that have accumulated during parsing;
+/// attached to a diagnostic if all alternatives fail.
+rejections: common.ArrayList(analysis.Diagnostic) = .empty,
 
 pub const Settings = struct {
     /// Whether to ignore whitespace tokens when parsing; Default: false.
@@ -486,11 +494,13 @@ pub fn init(
     allocator: std.mem.Allocator,
     syntax: *const Syntax,
     lexer: analysis.Lexer.Peekable,
+    diag: *analysis.Diagnostic.Context,
     settings: Settings,
 ) Parser {
     return Parser{
         .allocator = allocator,
         .syntax = syntax,
+        .diag = diag,
         .lexer = lexer,
         .settings = settings,
     };
@@ -501,19 +511,51 @@ pub fn deinit(self: *Parser) void {
         log.err("unused attributes still in accumulator at deinit: {any}", .{self.attr_accum.items});
     }
     self.attr_accum.deinit(self.allocator);
+    self.rejections.deinit(self.allocator);
 }
 
 pub fn isEof(self: *Parser) bool {
     return self.lexer.isEof();
 }
 
+fn collectPanic(self: *Parser) !void {
+    if (self.last_diagnostic) |*diag| {
+        const notes = try self.diag.pp.arena.allocator().alloc(analysis.Diagnostic.Note, diag.notes.len + self.rejections.items.len);
+        @memcpy(notes[0..diag.notes.len], diag.notes);
+        for (self.rejections.items, 0..) |*rej, i| {
+            notes[i + diag.notes.len] = rej.toNote(&self.diag.pp);
+        }
+        diag.notes = notes;
+        try self.diag.append(diag.*);
+    }
+}
+
+fn collectRejection(self: *Parser) !void {
+    if (self.last_diagnostic) |diag| {
+        try self.rejections.append(self.allocator, diag);
+        self.last_diagnostic = null;
+    }
+}
+
+pub fn report(
+    self: *Parser,
+    severity: analysis.Diagnostic.Severity,
+    location: analysis.Source.Location,
+    name: []const u8,
+    message: *const analysis.Diagnostic.Doc,
+    notes: []const analysis.Diagnostic.Note,
+) !void {
+    const diag = try self.diag.compose(severity, .{ .name = self.settings.source_name, .location = location }, name, message, notes);
+    self.last_diagnostic = diag;
+}
+
 pub fn parseNud(self: *Parser, binding_power: i16, token: analysis.Token) Error!?analysis.SyntaxTree {
     const nuds = try self.syntax.findNuds(binding_power, &token);
 
-    log.debug("pratt: found {} nuds", .{nuds.len});
+    log.debug("parseNud: found {} nuds", .{nuds.len});
 
     if (nuds.len == 0) {
-        log.debug("pratt: unexpected token {f}, no valid nuds found", .{token});
+        log.debug("parseNud: unexpected token {f}, no valid nuds found", .{token});
         return null;
     }
 
@@ -524,9 +566,14 @@ pub fn parseNud(self: *Parser, binding_power: i16, token: analysis.Token) Error!
     nuds: for (nuds) |nud| {
         switch (nud.invoke(.{ self, nud.binding_power, &token, &out, &err })) {
             .okay => {
-                log.debug("pratt: nud {s} accepted input", .{nud.name});
+                self.last_diagnostic = null;
+                self.rejections.clearRetainingCapacity();
+
+                log.debug("parseNud: nud {s} accepted input", .{nud.name});
 
                 if (self.attr_accum.items.len != 0 and out.type != .null) {
+                    log.debug("parseNud: have accumulated attributes, appending..", .{});
+
                     const old_buf = out.attributes;
                     var new_buf = try self.allocator.alloc(analysis.Attribute, old_buf.len + self.attr_accum.items.len);
                     defer {
@@ -538,21 +585,27 @@ pub fn parseNud(self: *Parser, binding_power: i16, token: analysis.Token) Error!
                     out.attributes = new_buf;
                 }
 
+                log.debug("parseNud: attributes of result {any}", .{out.attributes});
+
                 return out;
             },
             .panic => {
-                log.debug("pratt: nud {s} for {f} panicked", .{ nud.name, token });
+                log.debug("parseNud: nud {s} for {f} panicked", .{ nud.name, token });
+                try self.collectPanic();
+                log.debug("parseNud: restoring saved state", .{});
+                self.lexer = save_state;
                 return err;
             },
             .reject => {
-                log.debug("restoring saved state", .{});
+                log.debug("parseNud: nud {s} for {f} rejected", .{ nud.name, token });
+                try self.collectRejection();
+                log.debug("parseNud: restoring saved state", .{});
                 self.lexer = save_state;
-                log.debug("pratt: nud {s} for {f} rejected", .{ nud.name, token });
                 continue :nuds;
             },
         }
     } else {
-        log.debug("pratt: all nuds rejected token {f}", .{token});
+        log.debug("parseNud: all nuds rejected token {f}", .{token});
         return null;
     }
 }
@@ -560,10 +613,10 @@ pub fn parseNud(self: *Parser, binding_power: i16, token: analysis.Token) Error!
 pub fn parseLed(self: *Parser, binding_power: i16, token: analysis.Token, lhs: analysis.SyntaxTree) Error!?analysis.SyntaxTree {
     const leds = try self.syntax.findLeds(binding_power, &token);
 
-    log.debug("pratt: found {} leds", .{leds.len});
+    log.debug("parseLed: found {} leds", .{leds.len});
 
     if (leds.len == 0) {
-        log.debug("pratt: unexpected token {f}, no valid leds found", .{token});
+        log.debug("parseLed: unexpected token {f}, no valid leds found", .{token});
         return null;
     }
 
@@ -575,9 +628,12 @@ pub fn parseLed(self: *Parser, binding_power: i16, token: analysis.Token, lhs: a
     leds: for (leds) |led| {
         switch (led.invoke(.{ self, &lhs, led.binding_power, &token, &out, &err })) {
             .okay => {
-                log.debug("pratt: led {s} accepted input", .{led.name});
+                self.last_diagnostic = null;
+                self.rejections.clearRetainingCapacity();
 
-                log.debug("{any}", .{out.attributes});
+                log.debug("parseLed: led {s} accepted input", .{led.name});
+
+                log.debug("parseLed: attributes of result {any}", .{out.attributes});
 
                 // TODO: should we try to intelligently float attributes from operands to parent node?
                 // this requires careful thought about source locations, and doesn't seem entirely appropriate in most circumstances
@@ -586,18 +642,22 @@ pub fn parseLed(self: *Parser, binding_power: i16, token: analysis.Token, lhs: a
                 return out;
             },
             .panic => {
-                log.debug("pratt: led {s} for {f} panicked", .{ led.name, token });
+                log.debug("parseLed: led {s} for {f} panicked", .{ led.name, token });
+                try self.collectPanic();
+                log.debug("parseLed: restoring saved state", .{});
+                self.lexer = save_state;
                 return err;
             },
             .reject => {
-                log.debug("restoring saved state", .{});
+                log.debug("parseLed: led {s} for {f} rejected", .{ led.name, token });
+                try self.collectRejection();
+                log.debug("parseLed: restoring saved state", .{});
                 self.lexer = save_state;
-                log.debug("pratt: led {s} for {f} rejected", .{ led.name, token });
                 continue :leds;
             },
         }
     } else {
-        log.debug("pratt: all leds rejected {f}", .{token});
+        log.debug("parseLed: all leds rejected {f}", .{token});
         return null;
     }
 }
@@ -605,37 +665,57 @@ pub fn parseLed(self: *Parser, binding_power: i16, token: analysis.Token, lhs: a
 /// Run the pratt algorithm and attempt to parse the entire source bound in the lexer.
 ///
 /// * Returns null if the source is empty.
-/// * Returns an error if we cannot parse the entire source.
+/// * Unlike `pratt`, this returns an error if we cannot parse the entire source.
 pub fn parse(self: *Parser) Error!?analysis.SyntaxTree {
     const out = self.pratt(std.math.minInt(i16));
 
-    if (std.debug.runtime_safety) {
-        log.debug("getCst: parser result: {!?f}", .{out});
+    log.debug("parse: parser result: {!?f}", .{out});
 
-        if (std.meta.isError(out) or (try out) == null or !self.isEof()) {
-            log.debug("getCst: parser result was null or error, or did not consume input {any} {any} {any}", .{ std.meta.isError(out), if (!std.meta.isError(out)) (try out) == null else false, !self.isEof() });
+    if (std.meta.isError(out) or (try out) == null or !self.isEof()) {
+        log.debug("parse: parser result was null or error, or did not consume input {any} {any} {any}", .{ std.meta.isError(out), if (!std.meta.isError(out)) (try out) == null else false, !self.isEof() });
 
-            var err: ?Error = if (out) |_| null else |e| e;
-            if (self.lexer.peek()) |maybe_cached_token| {
-                if (maybe_cached_token) |cached_token| {
-                    log.debug("getCst: unused token in lexer cache {f}: `{f}`", .{ self.lexer.inner.location, cached_token });
-                }
-                err = err orelse Error.UnexpectedToken;
-            } else |e| {
-                log.debug("syntax error: {s}", .{@errorName(e)});
-                err = err orelse e;
+        var err: ?Error = if (out) |_| null else |e| e;
+        if (self.lexer.peek()) |maybe_cached_token| {
+            if (maybe_cached_token) |cached_token| {
+                log.debug("parse: unused token in lexer cache {f}: `{f}`", .{ self.lexer.inner.location, cached_token });
+                const diag = analysis.Diagnostic{
+                    .source = analysis.Source{
+                        .name = self.settings.source_name,
+                        .location = self.lexer.inner.location,
+                    },
+                    .name = @errorName(error.UnexpectedToken),
+                    .message = self.diag.print("Token {f} remaining in input", .{cached_token}),
+                    .severity = .@"error",
+                    .notes = &.{},
+                };
+                try self.diag.append(diag);
             }
-
-            const rem = self.lexer.inner.source[self.lexer.inner.location.buffer..];
-
-            if (self.lexer.inner.iterator.peek_cache) |cached_char| {
-                log.debug("getCst: unused character in lexer cache {f}: `{u}` ({x})", .{ self.lexer.inner.location, cached_char, cached_char });
-            } else if (rem.len > 0) {
-                log.debug("getCst: unexpected input after parsing {f}: `{s}` ({x})", .{ self.lexer.inner.location, rem, rem });
-            }
-
-            return err.?;
+            err = err orelse error.UnexpectedToken;
+        } else |e| {
+            log.debug("parse: syntax error: {s}", .{@errorName(e)});
+            const diag = analysis.Diagnostic{
+                .source = analysis.Source{
+                    .name = self.settings.source_name,
+                    .location = self.lexer.inner.location,
+                },
+                .name = @errorName(e),
+                .message = self.diag.text("Lexical errors are not recoverable"),
+                .severity = .@"error",
+                .notes = &.{},
+            };
+            try self.diag.append(diag);
+            err = err orelse e;
         }
+
+        const rem = self.lexer.inner.source[self.lexer.inner.location.buffer..];
+
+        if (self.lexer.inner.iterator.peek_cache) |cached_char| {
+            log.debug("parse: unused character in lexer cache {f}: `{u}` ({x})", .{ self.lexer.inner.location, cached_char, cached_char });
+        } else if (rem.len > 0) {
+            log.debug("parse: unexpected input after parsing {f}: `{s}` ({x})", .{ self.lexer.inner.location, rem, rem });
+        }
+
+        if (!self.isEof()) return err.?;
     }
 
     return try out;
@@ -659,6 +739,10 @@ pub fn dumpTokenStream(self: *Parser, writer: *std.io.Writer) !void {
 }
 
 /// Run the pratt algorithm at the current offset in the lexer stream.
+/// * Null will be returned if the input is empty or consists solely of ignored whitespace or attributes.
+/// * Note that this will also return a null value in the case where no valid parse was found;
+///   this is to allow using multiple parsers in subsections of strings.
+/// * The above cases can be distinguished by `isEof()`.
 pub fn pratt(
     self: *Parser,
     binding_power: i16,
@@ -685,7 +769,7 @@ pub fn pratt(
 
     var lhs = lhs: while (try self.lexer.peek()) |nth_first_token| {
         const x = try self.parseNud(binding_power, nth_first_token) orelse {
-            log.debug("restoring saved state", .{});
+            log.debug("pratt: restoring saved state", .{});
             self.lexer = save_state;
             log.debug("pratt: reached end of recognized input while consuming (possibly ignored) nud(s)", .{});
             return null;
@@ -700,9 +784,9 @@ pub fn pratt(
             break :lhs x;
         }
     } else {
-        log.debug("restoring saved state", .{});
-        self.lexer = save_state;
         log.debug("pratt: reached end of recognized input while consuming (possibly ignored) nud(s)", .{});
+        log.debug("pratt: restoring saved state", .{});
+        self.lexer = save_state;
         return null;
     };
     errdefer lhs.deinit(self.allocator);
@@ -731,13 +815,13 @@ pub fn pratt(
 
         if (try self.parseLed(binding_power, curr_token, lhs)) |new_lhs| {
             log.debug("pratt: infix {f} accepted", .{curr_token});
-            log.debug("{any}", .{new_lhs.attributes});
+            log.debug("pratt: infix attributes {any}", .{new_lhs.attributes});
             save_state = self.lexer;
             lhs = new_lhs;
         } else {
-            log.debug("restoring saved state", .{});
-            self.lexer = save_state;
             log.debug("pratt: {f} rejected as infix", .{curr_token});
+            log.debug("pratt: restoring saved state", .{});
+            self.lexer = save_state;
             break;
         }
     } else {
@@ -746,7 +830,7 @@ pub fn pratt(
 
     log.debug("pratt: exit", .{});
 
-    log.debug("{any}", .{lhs.attributes});
+    log.debug("pratt: final attributes {any}", .{lhs.attributes});
 
     return lhs;
 }

@@ -408,23 +408,24 @@ pub fn format(
 /// * Returns an error if we cannot parse the entire source.
 pub fn parseSource(
     allocator: std.mem.Allocator,
+    diag: *analysis.Diagnostic.Context,
     lexer_settings: analysis.Lexer.Settings,
     source_name: []const u8,
     src: []const u8,
 ) (analysis.Parser.Error || error{ InvalidString, InvalidEscape } || std.io.Writer.Error)!?Expr {
-    var parser = try ml.Cst.getRmlParser(allocator, lexer_settings, source_name, src);
+    var parser = try ml.Cst.getRmlParser(allocator, diag, lexer_settings, source_name, src);
     defer parser.deinit();
 
     var cst = try parser.parse() orelse return null;
     defer cst.deinit(allocator);
 
-    return try parseCst(allocator, src, &cst);
+    return try parseCst(allocator, diag, src, &cst);
 }
 
 /// Cleans up a concrete syntax tree, producing an `Expr`.
 /// This removes comments, indentation, parens and other purely-syntactic elements,
 /// as well as finalizing literals, applying attributes etc.
-pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const analysis.SyntaxTree) !Expr {
+pub fn parseCst(allocator: std.mem.Allocator, diag: *analysis.Diagnostic.Context, source: []const u8, cst: *const analysis.SyntaxTree) !Expr {
     const data: Data = data: switch (cst.type) {
         ml.Cst.types.Identifier => .{ .identifier = cst.token.data.sequence.asSlice() },
 
@@ -441,6 +442,13 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                 // The cst parser interpreted this as an integer, meaning it starts with a decimal digit.
                 // If we can't parse it as an integer, it is lexically invalid. User error.
                 log.debug("parseCst: failed to parse int literal {s}: {}", .{ bytes, err });
+                try diag.raise(
+                    .@"error",
+                    cst.source,
+                    "InvalidIntegerLiteral",
+                    diag.print("Invalid integer literal: {s}", .{bytes}),
+                    &.{},
+                );
                 return error.UnexpectedInput;
             };
 
@@ -453,10 +461,17 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             var buf: [1024]u8 = undefined;
             const bytes = std.fmt.bufPrint(&buf, "{s}.{s}", .{ bytes1, bytes2 }) catch |err| {
                 log.debug("parseCst: failed to assemble float literal: {}", .{err});
-                return error.BadEncoding;
+                return error.OutOfMemory;
             };
             const float = std.fmt.parseFloat(f64, bytes) catch |err| {
                 log.debug("parseCst: failed to parse float literal {s}: {}", .{ bytes, err });
+                try diag.raise(
+                    .@"error",
+                    cst.source,
+                    "InvalidFloatLiteral",
+                    diag.print("Invalid float literal: {s}", .{bytes}),
+                    &.{},
+                );
                 return error.BadEncoding;
             };
 
@@ -467,7 +482,18 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             var buf = std.io.Writer.Allocating.init(allocator);
             defer buf.deinit();
 
-            try ml.Cst.assembleString(&buf.writer, source, cst);
+            ml.Cst.assembleString(&buf.writer, source, cst) catch |err| {
+                if (err == error.InvalidEscape) {
+                    try diag.raise(
+                        .@"error",
+                        cst.source,
+                        "InvalidStringEscape",
+                        diag.text("String contains an invalid escape sequence."),
+                        &.{},
+                    );
+                }
+                return err;
+            };
 
             break :data .{ .string = try buf.toOwnedSlice() };
         },
@@ -479,7 +505,16 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                 break :data .{ .symbol = bytes };
             }
 
-            if (cst.token.tag != .special or cst.token.data.special.escaped != false) return error.UnexpectedInput;
+            if (cst.token.tag != .special or cst.token.data.special.escaped != false) {
+                try diag.raise(
+                    .@"error",
+                    cst.source,
+                    "InvalidSymbolLiteral",
+                    diag.text("Symbol literals may not be punctuation characters."),
+                    &.{},
+                );
+                return error.UnexpectedInput;
+            }
 
             const char = cst.token.data.special.punctuation.toChar();
             const buf = try allocator.alloc(u8, std.unicode.utf8CodepointSequenceLength(char) catch unreachable);
@@ -490,30 +525,36 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             break :data .{ .symbol = buf };
         },
 
-        ml.Cst.types.StringElement, ml.Cst.types.StringSentinel => return error.UnexpectedInput,
+        ml.Cst.types.StringElement, ml.Cst.types.StringSentinel => {
+            log.err("parseCst: unexpected StringElement/StringSentinel in parseCst", .{});
+            unreachable;
+        },
 
         ml.Cst.types.Block => {
             if (cst.operands.len == 0) { // unit values
-                if (cst.token.tag != .special or cst.token.data.special.escaped != false) return error.UnexpectedInput;
+                std.debug.assert(cst.token.tag == .special and cst.token.data.special.escaped == false);
 
                 break :data switch (cst.token.data.special.punctuation) {
                     .paren_l => .{ .tuple = &.{} },
                     .brace_l => .{ .compound = &.{} },
                     .bracket_l => .{ .array = &.{} },
-                    else => return error.UnexpectedInput,
+                    else => {
+                        log.err("parseCst: unexpected punctuation for Block: {s}", .{cst.token.data.sequence.asSlice()});
+                        unreachable;
+                    },
                 };
             }
 
             if (cst.token.tag == .indentation) {
-                if (cst.operands.len != 1) return error.UnexpectedInput;
-                return try parseCst(allocator, source, &cst.operands.asSlice()[0]);
+                std.debug.assert(cst.operands.len == 1);
+                return try parseCst(allocator, diag, source, &cst.operands.asSlice()[0]);
             }
 
             std.debug.assert(cst.token.tag == .special);
             std.debug.assert(cst.token.data.special.escaped == false);
 
             if (cst.operands.len == 1) {
-                const inner = try parseCst(allocator, source, &cst.operands.asSlice()[0]);
+                const inner = try parseCst(allocator, diag, source, &cst.operands.asSlice()[0]);
 
                 if (inner.data == .seq) {
                     return switch (cst.token.data.special.punctuation) {
@@ -547,7 +588,10 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                             .source = cst.source,
                             .data = .{ .array = inner.data.list },
                         },
-                        else => return error.UnexpectedInput,
+                        else => {
+                            log.err("parseCst: unexpected punctuation for Block with single List child: {s}", .{cst.token.data.sequence.asSlice()});
+                            unreachable;
+                        },
                     };
                 } else {
                     switch (cst.token.data.special.punctuation) {
@@ -564,10 +608,16 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
 
                             break :data .{ .array = buff };
                         },
-                        else => return error.UnexpectedInput,
+                        else => {
+                            log.err("parseCst: unexpected punctuation for Block with single non-seq/list child: {s}", .{cst.token.data.sequence.asSlice()});
+                            unreachable;
+                        },
                     }
                 }
-            } else return error.UnexpectedInput; // should not be possible
+            } else {
+                log.err("parseCst: unexpected multiple operands in Block: {d}", .{cst.operands.len});
+                unreachable;
+            }
         },
 
         ml.Cst.types.List => {
@@ -579,7 +629,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             errdefer allocator.free(subs);
 
             for (cst.operands.asSlice(), 0..) |*child, i| {
-                subs[i] = try parseCst(allocator, source, child);
+                subs[i] = try parseCst(allocator, diag, source, child);
             }
 
             break :data .{ .list = subs };
@@ -594,7 +644,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             errdefer allocator.free(subs);
 
             for (cst.operands.asSlice(), 0..) |*child, i| {
-                subs[i] = try parseCst(allocator, source, child);
+                subs[i] = try parseCst(allocator, diag, source, child);
             }
 
             break :data .{ .seq = subs };
@@ -609,7 +659,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             errdefer allocator.free(subs);
 
             for (cst.operands.asSlice(), 0..) |*child, i| {
-                subs[i] = try parseCst(allocator, source, child);
+                subs[i] = try parseCst(allocator, diag, source, child);
             }
 
             break :data .{ .apply = subs };
@@ -619,9 +669,8 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 2);
 
-            const name_or_pattern = try parseCst(allocator, source, &operands[0]);
-            const value = try parseCst(allocator, source, &operands[1]);
-
+            const name_or_pattern = try parseCst(allocator, diag, source, &operands[0]);
+            const value = try parseCst(allocator, diag, source, &operands[1]);
             const buff = try allocator.alloc(Expr, 2);
             buff[0] = name_or_pattern;
             buff[1] = value;
@@ -633,8 +682,8 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 2);
 
-            const name_or_pattern = try parseCst(allocator, source, &operands[0]);
-            const value = try parseCst(allocator, source, &operands[1]);
+            const name_or_pattern = try parseCst(allocator, diag, source, &operands[0]);
+            const value = try parseCst(allocator, diag, source, &operands[1]);
 
             const buff = try allocator.alloc(Expr, 2);
             buff[0] = name_or_pattern;
@@ -647,8 +696,8 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 2);
 
-            const name_or_pattern = try parseCst(allocator, source, &operands[0]);
-            const value = try parseCst(allocator, source, &operands[1]);
+            const name_or_pattern = try parseCst(allocator, diag, source, &operands[0]);
+            const value = try parseCst(allocator, diag, source, &operands[1]);
 
             const buff = try allocator.alloc(Expr, 2);
             buff[0] = name_or_pattern;
@@ -661,7 +710,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 1);
 
-            const inner = try parseCst(allocator, source, &operands[0]);
+            const inner = try parseCst(allocator, diag, source, &operands[0]);
 
             const buff = try allocator.alloc(Expr, 1);
             buff[0] = inner;
@@ -680,8 +729,8 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 2);
 
-            const left = try parseCst(allocator, source, &operands[0]);
-            const right = try parseCst(allocator, source, &operands[1]);
+            const left = try parseCst(allocator, diag, source, &operands[0]);
+            const right = try parseCst(allocator, diag, source, &operands[1]);
 
             const buff = try allocator.alloc(Expr, 2);
             buff[0] = left;
@@ -701,13 +750,10 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
             const operands = cst.operands.asSlice();
             std.debug.assert(operands.len == 2);
 
-            const parent = try parseCst(allocator, source, &operands[0]);
+            const parent = try parseCst(allocator, diag, source, &operands[0]);
             const name_cst = &operands[1];
 
-            if (name_cst.type != ml.Cst.types.Identifier and name_cst.type != ml.Cst.types.Int) {
-                log.debug("parseCst: member access with non-identifier/index name cst type {f}", .{name_cst.type});
-                return error.UnexpectedInput;
-            }
+            std.debug.assert(name_cst.type == ml.Cst.types.Identifier or name_cst.type == ml.Cst.types.Int);
 
             const name = name_cst.token.data.sequence.asSlice();
 
@@ -724,6 +770,13 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
                         } else {
                             const index = std.fmt.parseInt(i64, name, 10) catch |err| {
                                 log.debug("parseCst: failed to parse member index {s}: {}", .{ name, err });
+                                try diag.raise(
+                                    .@"error",
+                                    name_cst.source,
+                                    "InvalidMemberIndex",
+                                    diag.print("Invalid member index {s}; expected an integer", .{name}),
+                                    &.{},
+                                );
                                 return error.BadEncoding;
                             };
                             break :selector .{ .index = index };
@@ -735,6 +788,13 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
 
         else => {
             log.debug("parseCst: unexpected cst type {f}", .{cst.type});
+            try diag.raise(
+                .@"error",
+                cst.source,
+                "InvalidExpression",
+                diag.text("The concrete syntax tree could not be parsed into a valid expression."),
+                &.{},
+            );
             unreachable;
         },
     };

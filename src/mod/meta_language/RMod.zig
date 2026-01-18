@@ -265,21 +265,22 @@ pub fn render(self: *const RMod, pp: *common.PrettyPrinter) *const common.Pretty
 /// * Returns an error if we cannot parse the entire source.
 pub fn parseSource(
     allocator: std.mem.Allocator,
+    diag: *analysis.Diagnostic.Context,
     lexer_settings: analysis.Lexer.Settings,
     source_name: []const u8,
     src: []const u8,
 ) (analysis.Parser.Error || error{ InvalidString, InvalidEscape, InvalidModuleDefinition } || std.io.Writer.Error)!?RMod {
-    var parser = try getRModParser(allocator, lexer_settings, source_name, src);
+    var parser = try getRModParser(allocator, diag, lexer_settings, source_name, src);
     defer parser.deinit();
 
     var cst = try parser.parse() orelse return null;
     defer cst.deinit(allocator);
 
-    return try parseCst(allocator, src, &cst);
+    return try parseCst(allocator, diag, src, &cst);
 }
 
 /// Parses a `.rmod` Concrete Syntax Tree into a `RMod` struct.
-pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const analysis.SyntaxTree) !RMod {
+pub fn parseCst(allocator: std.mem.Allocator, diag: *analysis.Diagnostic.Context, source: []const u8, cst: *const analysis.SyntaxTree) !RMod {
     log.debug("parsing RMod CST:\n{f}", .{ml.Cst.treeFormatter(.{
         .source = source,
         .tree = cst,
@@ -292,12 +293,27 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
 
     if (cst.type != types.Module) {
         log.err("Expected root of rmod CST to be a Module node, found {f}", .{cst.type});
+        try diag.raise(
+            .@"error",
+            cst.source,
+            "InvalidModuleDefinition",
+            diag.text("Expected root of module definition to be a 'module' declaration."),
+            &.{},
+        );
         return error.InvalidModuleDefinition;
     }
 
     const module_operands = cst.operands.asSlice();
-    if (module_operands.len != 1) return error.InvalidModuleDefinition;
-
+    if (module_operands.len != 1) {
+        try diag.raise(
+            .@"error",
+            cst.source,
+            "InvalidModuleDefinition",
+            diag.text("Expected module to have exactly one operand. (A body block.)"),
+            &.{},
+        );
+        return error.InvalidModuleDefinition;
+    }
     // Parse module body (a sequence of assignments)
     const body_cst = &module_operands[0];
     const seq_cst = if (body_cst.type != types.Block or body_cst.operands.len != 1) recover: {
@@ -305,53 +321,76 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
         break :recover body_cst;
     } else &body_cst.operands.asSlice()[0];
     const elements = if (seq_cst.type != types.Seq) recover: {
-        log.debug("Expected imports Block to contain a Seq, found {s}", .{types.getName(seq_cst.type)});
+        log.debug("Expected module Block to contain a Seq, found {s}", .{types.getName(seq_cst.type)});
         break :recover &.{seq_cst.*};
     } else seq_cst.operands.asSlice();
 
     for (elements) |*assignment_cst| {
         if (assignment_cst.type != types.Assign) {
             log.debug("Expected module body element to be an Assign node, found {s}", .{types.getName(assignment_cst.type)});
+            try diag.raise(
+                .@"error",
+                assignment_cst.source,
+                "InvalidModuleBodyElement",
+                diag.print("Each module body element must be an assignment, but got {s}.", .{types.getName(assignment_cst.type)}),
+                &.{},
+            );
             return error.InvalidModuleDefinition;
         }
-        if (assignment_cst.operands.len != 2) return error.InvalidModuleDefinition;
 
         const key_cst = &assignment_cst.operands.asSlice()[0];
         const value_cst = &assignment_cst.operands.asSlice()[1];
 
-        if (key_cst.type != types.Identifier) return error.InvalidModuleDefinition;
+        if (key_cst.type != types.Identifier) {
+            log.debug("Expected assignment key to be an Identifier node, found {s}", .{types.getName(key_cst.type)});
+            try diag.raise(
+                .@"error",
+                key_cst.source,
+                "InvalidModuleKey",
+                diag.print("Module field keys must be identifiers, but got {s}.", .{types.getName(key_cst.type)}),
+                &.{},
+            );
+            return error.InvalidModuleDefinition;
+        }
         const key = key_cst.token.data.sequence.asSlice();
 
         if (std.mem.eql(u8, key, "inputs")) {
             var acc = common.ArrayList([]const u8).empty;
             defer acc.deinit(allocator);
 
-            try parseInputList(allocator, source, value_cst, &acc);
+            try parseInputList(allocator, diag, source, value_cst, &acc);
 
             def.inputs = try allocator.dupe([]const u8, acc.items);
         } else if (std.mem.eql(u8, key, "imports")) {
             var acc = common.ArrayList(Import.Aliased).empty;
             defer acc.deinit(allocator);
 
-            try parseImportList(allocator, source, value_cst, &acc);
+            try parseImportList(allocator, diag, value_cst, &acc);
 
             def.imports = try allocator.dupe(Import.Aliased, acc.items);
         } else if (std.mem.eql(u8, key, "extensions")) {
             var acc = common.ArrayList(Import.Extension).empty;
             defer acc.deinit(allocator);
 
-            try parseExtensionList(allocator, source, value_cst, &acc);
+            try parseExtensionList(allocator, diag, value_cst, &acc);
 
             def.extensions = try allocator.dupe(Import.Extension, acc.items);
         } else {
-            log.warn("Unknown key in .rmod file: {s}", .{key});
+            log.debug("Unknown key in .rmod file: {s}", .{key});
+            try diag.raise(
+                .warning,
+                key_cst.source,
+                "UnknownModuleKey",
+                diag.print("Unknown key '{s}' in module definition.", .{key}),
+                &.{},
+            );
         }
     }
 
     return def;
 }
 
-fn parseInputList(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList([]const u8)) !void {
+fn parseInputList(allocator: std.mem.Allocator, diag: *analysis.Diagnostic.Context, source: []const u8, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList([]const u8)) !void {
     // Expects Block -> Seq
     const seq_cst = if (value_cst.type != types.Block or value_cst.operands.len != 1) recover: {
         log.debug("Expected inputs value to be a Block containing a Seq, found {s}", .{types.getName(value_cst.type)});
@@ -365,6 +404,13 @@ fn parseInputList(allocator: std.mem.Allocator, source: []const u8, value_cst: *
     for (elements) |item_cst| {
         if (item_cst.type != types.String) {
             log.debug("Expected input item to be a String node, found {s}", .{types.getName(item_cst.type)});
+            try diag.raise(
+                .@"error",
+                item_cst.source,
+                "InvalidModuleInput",
+                diag.text("Expected module input to be a string literal."),
+                &.{},
+            );
             return error.InvalidModuleDefinition;
         }
         var buf = std.io.Writer.Allocating.init(allocator);
@@ -374,7 +420,7 @@ fn parseInputList(allocator: std.mem.Allocator, source: []const u8, value_cst: *
     }
 }
 
-fn parseImportList(allocator: std.mem.Allocator, _: []const u8, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList(Import.Aliased)) !void {
+fn parseImportList(allocator: std.mem.Allocator, diag: *analysis.Diagnostic.Context, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList(Import.Aliased)) !void {
     // Expects Block -> Seq
     const seq_cst = if (value_cst.type != types.Block or value_cst.operands.len != 1) recover: {
         log.debug("Expected imports value to be a Block containing a Seq, found {s}", .{types.getName(value_cst.type)});
@@ -386,31 +432,53 @@ fn parseImportList(allocator: std.mem.Allocator, _: []const u8, value_cst: *cons
     } else seq_cst.operands.asSlice();
 
     for (elements) |item_cst| {
-        if (item_cst.type != types.Identifier and item_cst.type != types.Apply and item_cst.type != types.MemberAccess) return error.InvalidModuleDefinition;
+        if (item_cst.type != types.Identifier and item_cst.type != types.Apply and item_cst.type != types.MemberAccess) {
+            log.debug("Expected import item to be an Identifier, Apply, or MemberAccess node, found {s}", .{types.getName(item_cst.type)});
+            try diag.raise(
+                .@"error",
+                item_cst.source,
+                "InvalidModuleImport",
+                diag.text("Expected module import to be an identifier, member access, or aliased import."),
+                &.{},
+            );
+            return error.InvalidModuleDefinition;
+        }
 
         var import: Import = .{ .module = undefined };
         var alias: ?[]const u8 = null;
 
         if (item_cst.type == types.Identifier or item_cst.type == types.MemberAccess) {
             // import without alias
-            parseImportBase(allocator, &item_cst, &import) catch |err| {
-                log.err("Failed to parse import base: {s}", .{@errorName(err)});
+            parseImportBase(allocator, diag, &item_cst, &import) catch |err| {
+                log.debug("Failed to parse import base: {s}", .{@errorName(err)});
                 return error.InvalidModuleDefinition;
             };
         } else {
             // import with alias
             if (item_cst.operands.len != 3 or item_cst.operands.asSlice()[1].type != types.Identifier or !std.mem.eql(u8, item_cst.operands.asSlice()[1].token.data.sequence.asSlice(), "as")) {
+                log.debug("Expected aliased import to be of the form (import as alias), found invalid structure", .{});
                 return error.InvalidModuleDefinition;
             }
             const target_cst = &item_cst.operands.asSlice()[0];
             const alias_cst = &item_cst.operands.asSlice()[2];
 
-            parseImportBase(allocator, target_cst, &import) catch |err| {
-                log.err("Failed to parse import base: {s}", .{@errorName(err)});
+            parseImportBase(allocator, diag, target_cst, &import) catch |err| {
+                log.debug("Failed to parse import base: {s}", .{@errorName(err)});
                 return error.InvalidModuleDefinition;
             };
 
-            if (alias_cst.type != types.Identifier) return error.InvalidModuleDefinition;
+            if (alias_cst.type != types.Identifier) {
+                log.debug("Expected alias in aliased import to be an Identifier node, found {s}", .{types.getName(alias_cst.type)});
+
+                try diag.raise(
+                    .@"error",
+                    item_cst.source,
+                    "InvalidModuleImportAlias",
+                    diag.print("Expected alias in aliased import to be an identifier, found {s}.", .{types.getName(alias_cst.type)}),
+                    &.{},
+                );
+                return error.InvalidModuleDefinition;
+            }
             alias = try allocator.dupe(u8, alias_cst.token.data.sequence.asSlice());
         }
 
@@ -421,21 +489,37 @@ fn parseImportList(allocator: std.mem.Allocator, _: []const u8, value_cst: *cons
     }
 }
 
-fn parseImportBase(allocator: std.mem.Allocator, item_cst: *const analysis.SyntaxTree, import: *Import) !void {
+fn parseImportBase(allocator: std.mem.Allocator, diag: *analysis.Diagnostic.Context, item_cst: *const analysis.SyntaxTree, import: *Import) !void {
     if (item_cst.type == types.Identifier) {
         // Identifier: local import
         import.module = try allocator.dupe(u8, item_cst.token.data.sequence.asSlice());
     } else if (item_cst.type == types.MemberAccess) {
         // MemberAccess: import from package
-        if (item_cst.operands.len != 2 or item_cst.operands.asSlice()[0].type != types.Identifier or item_cst.operands.asSlice()[1].type != types.Identifier) return error.InvalidModuleDefinition;
+        if (item_cst.operands.len != 2 or item_cst.operands.asSlice()[0].type != types.Identifier or item_cst.operands.asSlice()[1].type != types.Identifier) {
+            try diag.raise(
+                .@"error",
+                item_cst.source,
+                "InvalidModuleImport",
+                diag.text("Expected module import to be of the form 'module' or 'package.module'."),
+                &.{},
+            );
+            return error.InvalidModuleDefinition;
+        }
         import.package = try allocator.dupe(u8, item_cst.operands.asSlice()[0].token.data.sequence.asSlice());
         import.module = try allocator.dupe(u8, item_cst.operands.asSlice()[1].token.data.sequence.asSlice());
     } else {
+        try diag.raise(
+            .@"error",
+            item_cst.source,
+            "InvalidModuleImport",
+            diag.print("Expected module import to be an identifier or member access, found {s}.", .{types.getName(item_cst.type)}),
+            &.{},
+        );
         return error.InvalidModuleDefinition;
     }
 }
 
-fn parseExtensionList(allocator: std.mem.Allocator, _: []const u8, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList(Import.Extension)) !void {
+fn parseExtensionList(allocator: std.mem.Allocator, diag: *analysis.Diagnostic.Context, value_cst: *const analysis.SyntaxTree, list: *common.ArrayList(Import.Extension)) !void {
     // Expects Block -> Seq
     const seq_cst = if (value_cst.type != types.Block or value_cst.operands.len != 1) recover: {
         log.debug("Expected extensions value to be a Block containing a Seq, found {s}", .{types.getName(value_cst.type)});
@@ -450,12 +534,42 @@ fn parseExtensionList(allocator: std.mem.Allocator, _: []const u8, value_cst: *c
         var import: Import = .{ .module = undefined };
         var name: []const u8 = undefined;
 
-        if (item_cst.type != types.MemberAccess) return error.InvalidModuleDefinition;
+        if (item_cst.type != types.MemberAccess) {
+            log.debug("Expected extension item to be a MemberAccess node, found {s}", .{types.getName(item_cst.type)});
+            try diag.raise(
+                .@"error",
+                item_cst.source,
+                "InvalidModuleExtension",
+                diag.print("Expected module extension to be a member access expression (ie. mod.foo or pkg.mod.foo), found {s}", .{types.getName(item_cst.type)}),
+                &.{},
+            );
+            return error.InvalidModuleDefinition;
+        }
+
+        if (item_cst.operands.asSlice()[1].type != types.Identifier) {
+            log.debug("Expected extension name to be an Identifier node, found {s}", .{types.getName(item_cst.operands.asSlice()[1].type)});
+            try diag.raise(
+                .@"error",
+                item_cst.source,
+                "InvalidModuleExtensionName",
+                diag.print("Expected module extension name to be an identifier, found {s}.", .{types.getName(item_cst.operands.asSlice()[1].type)}),
+                &.{},
+            );
+            return error.InvalidModuleDefinition;
+        }
 
         if (item_cst.operands.asSlice()[0].type == types.MemberAccess) {
             // package.module.extension
             const pkg_mod_cst = &item_cst.operands.asSlice()[0];
             if (pkg_mod_cst.operands.len != 2 or pkg_mod_cst.operands.asSlice()[0].type != types.Identifier or pkg_mod_cst.operands.asSlice()[1].type != types.Identifier) {
+                log.debug("Expected extension import to be of the form 'package.module.extension', found invalid structure", .{});
+                try diag.raise(
+                    .@"error",
+                    item_cst.source,
+                    "InvalidModuleExtension",
+                    diag.text("Expected module extension base to be of the form 'package.module'."),
+                    &.{},
+                );
                 return error.InvalidModuleDefinition;
             }
             import.package = try allocator.dupe(u8, pkg_mod_cst.operands.asSlice()[0].token.data.sequence.asSlice());
@@ -464,6 +578,14 @@ fn parseExtensionList(allocator: std.mem.Allocator, _: []const u8, value_cst: *c
             // module.extension
             import.module = try allocator.dupe(u8, item_cst.operands.asSlice()[0].token.data.sequence.asSlice());
         } else {
+            log.debug("Expected extension import to be an Identifier or MemberAccess node, found {s}", .{types.getName(item_cst.operands.asSlice()[0].type)});
+            try diag.raise(
+                .@"error",
+                item_cst.source,
+                "InvalidModuleExtensionImport",
+                diag.print("Expected module extension import base to be an identifier or member access, (ie. pkg.mod or mod) found {s}.", .{types.getName(item_cst.operands.asSlice()[0].type)}),
+                &.{},
+            );
             return error.InvalidModuleDefinition;
         }
 
@@ -479,12 +601,13 @@ fn parseExtensionList(allocator: std.mem.Allocator, _: []const u8, value_cst: *c
 /// Get a parser for the module definition language.
 pub fn getRModParser(
     allocator: std.mem.Allocator,
+    diag: *analysis.Diagnostic.Context,
     lexer_settings: analysis.Lexer.Settings,
     source_name: []const u8,
     src: []const u8,
 ) analysis.Parser.Error!analysis.Parser {
     const ml_syntax = getRModSyntax();
-    return ml_syntax.createParser(allocator, lexer_settings, src, .{
+    return ml_syntax.createParser(allocator, diag, lexer_settings, src, .{
         .ignore_space = false,
         .source_name = source_name,
     });
@@ -576,6 +699,13 @@ pub const syntax_defs = struct {
                                 try parser.lexer.advance(); // discard dot
                                 var inner = try parser.pratt(std.math.minInt(i16) + 1) orelse {
                                     log.debug("module: no inner expression found; panic", .{});
+                                    try parser.report(
+                                        .@"error",
+                                        next_tok.location,
+                                        "InvalidModuleDeclaration",
+                                        parser.diag.text("Expected module body block after 'module.'"),
+                                        &.{},
+                                    );
                                     return error.UnexpectedEof;
                                 };
                                 errdefer inner.deinit(parser.allocator);
@@ -591,10 +721,24 @@ pub const syntax_defs = struct {
                                 };
                             } else {
                                 log.debug("module: expected dot token, found {f}; panic", .{next_tok});
+                                try parser.report(
+                                    .@"error",
+                                    next_tok.location,
+                                    "InvalidModuleDeclaration",
+                                    parser.diag.text("Expected a dot token after module keyword"),
+                                    &.{},
+                                );
                                 return error.UnexpectedInput;
                             }
                         } else {
                             log.debug("module: no dot token found; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "InvalidModuleDeclaration",
+                                parser.diag.text("Expected a dot token after module keyword"),
+                                &.{},
+                            );
                             return error.UnexpectedEof;
                         }
                     }

@@ -281,21 +281,22 @@ pub fn deinit(self: *RPkg, allocator: std.mem.Allocator) void {
 /// * Returns an error if we cannot parse the entire source.
 pub fn parseSource(
     allocator: std.mem.Allocator,
+    diag: *analysis.Diagnostic.Context,
     lexer_settings: analysis.Lexer.Settings,
     source_name: []const u8,
     src: []const u8,
 ) (analysis.Parser.Error || error{ InvalidString, InvalidEscape, InvalidPackageDefinition, InvalidModuleDefinition } || std.io.Writer.Error)!?RPkg {
-    var parser = try getRPkgParser(allocator, lexer_settings, source_name, src);
+    var parser = try getRPkgParser(allocator, diag, lexer_settings, source_name, src);
     defer parser.deinit();
 
     var cst = try parser.parse() orelse return null;
     defer cst.deinit(allocator);
 
-    return try parseCst(allocator, src, &cst);
+    return try parseCst(allocator, diag, src, &cst);
 }
 
 /// Parses a `.rpkg` Concrete Syntax Tree into a `RPkg` struct.
-pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const analysis.SyntaxTree) !RPkg {
+pub fn parseCst(allocator: std.mem.Allocator, diag: *analysis.Diagnostic.Context, source: []const u8, cst: *const analysis.SyntaxTree) !RPkg {
     log.debug("parsing package CST:\n{f}", .{ml.Cst.treeFormatter(.{
         .source = source,
         .tree = cst,
@@ -305,54 +306,99 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
     errdefer def.deinit(allocator);
 
     if (cst.type != types.Package) {
-        log.err("Expected root of rpkg CST to be a Package node, found {f}", .{cst.type});
+        log.debug("Expected root of rpkg CST to be a Package node, found {f}", .{cst.type});
+        try diag.raise(
+            .@"error",
+            cst.source,
+            "InvalidPackageDefinition",
+            diag.print("The root of an RPkg must be a package definition, but got {s}.", .{types.getName(cst.type)}),
+            &.{},
+        );
         return error.InvalidPackageDefinition;
     }
 
     const module_operands = cst.operands.asSlice();
-    if (module_operands.len != 2) return error.InvalidPackageDefinition;
 
     // Parse module name
     const name_cst = module_operands[0];
-    if (name_cst.type != types.Identifier) return error.InvalidPackageDefinition;
+    if (name_cst.type != types.Identifier) {
+        log.debug("Expected package name to be an Identifier, found {s}", .{types.getName(name_cst.type)});
+        try diag.raise(
+            .@"error",
+            name_cst.source,
+            "InvalidPackageName",
+            diag.print("The package name must be an identifier, but got {s}.", .{types.getName(name_cst.type)}),
+            &.{},
+        );
+        return error.InvalidPackageDefinition;
+    }
     def.name = try allocator.dupe(u8, name_cst.token.data.sequence.asSlice());
 
-    // Parse module body (a sequence of assignments)
-    const body_cst = module_operands[1];
-    // Body is a Block -> Seq
-    if (body_cst.type != types.Block or body_cst.operands.len != 1) return error.InvalidPackageDefinition;
-    const seq_cst = body_cst.operands.asSlice()[0];
-    if (seq_cst.type != types.Seq) return error.InvalidPackageDefinition;
+    // Parse package body (a sequence of assignments)
+    const body_cst = &module_operands[1];
+    const seq_cst = if (body_cst.type != types.Block or body_cst.operands.len != 1) recover: {
+        log.debug("Expected package Body to be a Block containing a Seq, found {s}", .{types.getName(body_cst.type)});
+        break :recover body_cst;
+    } else &body_cst.operands.asSlice()[0];
+    const elements = if (seq_cst.type != types.Seq) recover: {
+        log.debug("Expected package Block to contain a Seq, found {s}", .{types.getName(seq_cst.type)});
+        break :recover &.{seq_cst.*};
+    } else seq_cst.operands.asSlice();
 
-    for (seq_cst.operands.asSlice()) |*assignment_cst| {
-        if (assignment_cst.type != types.Assign) return error.InvalidPackageDefinition;
-        if (assignment_cst.operands.len != 2) return error.InvalidPackageDefinition;
+    for (elements) |*assignment_cst| {
+        if (assignment_cst.type != types.Assign) {
+            log.debug("Expected package body element to be an Assign, found {s}", .{types.getName(assignment_cst.type)});
+            try diag.raise(
+                .@"error",
+                assignment_cst.source,
+                "InvalidPackageBodyElement",
+                diag.print("Each package body element must be an assignment, but got {s}.", .{types.getName(assignment_cst.type)}),
+                &.{},
+            );
+            return error.InvalidPackageDefinition;
+        }
 
         const key_cst = &assignment_cst.operands.asSlice()[0];
         const value_cst = &assignment_cst.operands.asSlice()[1];
 
-        if (key_cst.type != types.Identifier) return error.InvalidPackageDefinition;
+        if (key_cst.type != types.Identifier) {
+            log.debug("Expected package field key to be an Identifier, found {s}", .{types.getName(key_cst.type)});
+            try diag.raise(
+                .@"error",
+                key_cst.source,
+                "InvalidPackageKey",
+                diag.print("Package field keys must be identifiers, but got {s}.", .{types.getName(key_cst.type)}),
+                &.{},
+            );
+            return error.InvalidPackageDefinition;
+        }
         const key = key_cst.token.data.sequence.asSlice();
 
         if (std.mem.eql(u8, key, "version")) {
-            try parseVersion(&def.version, value_cst);
+            try parseVersion(diag, &def.version, value_cst);
         } else if (std.mem.eql(u8, key, "dependencies")) {
             var acc = common.ArrayList(Dependency).empty;
             defer acc.deinit(allocator);
 
-            try parseDependencies(allocator, source, value_cst, &acc);
+            try parseDependencies(allocator, diag, source, value_cst, &acc);
 
             def.dependencies = try allocator.dupe(Dependency, acc.items);
         } else if (std.mem.eql(u8, key, "modules")) {
             var acc = common.ArrayList(MaybeModule).empty;
             defer acc.deinit(allocator);
 
-            try parseModules(allocator, source, value_cst, &acc);
+            try parseModules(allocator, diag, source, value_cst, &acc);
 
             def.modules = try allocator.dupe(MaybeModule, acc.items);
         } else {
-            log.err("Unknown RPkg field {s}", .{key});
-            return error.InvalidPackageDefinition;
+            log.debug("Unknown RPkg field {s}", .{key});
+            try diag.raise(
+                .warning,
+                key_cst.source,
+                "UnknownPackageKey",
+                diag.print("Unknown package field {s}.", .{key}),
+                &.{},
+            );
         }
     }
 
@@ -360,6 +406,7 @@ pub fn parseCst(allocator: std.mem.Allocator, source: []const u8, cst: *const an
 }
 
 fn parseVersion(
+    diag: *analysis.Diagnostic.Context,
     out: *common.SemVer,
     value_cst: *const analysis.SyntaxTree,
 ) !void {
@@ -367,35 +414,103 @@ fn parseVersion(
     switch (value_cst.type) {
         types.Float => {
             // major.minor
-            try parseMajorMinorVersion(out, value_cst);
+            try parseMajorMinorVersion(diag, out, value_cst);
         },
         types.MemberAccess => {
             // must be of the form major.minor.patch
             const major_minor = &value_cst.operands.asSlice()[0];
             const patch = &value_cst.operands.asSlice()[1];
-            if (major_minor.type != types.Float or patch.type != types.Int) return error.InvalidPackageDefinition;
-            try parseMajorMinorVersion(out, major_minor);
+            if (major_minor.type != types.Float or patch.type != types.Int) {
+                log.debug("Expected version MemberAccess parent to be Float/Int, found {s}.{s}", .{ types.getName(major_minor.type), types.getName(patch.type) });
+                try diag.raise(
+                    .@"error",
+                    value_cst.source,
+                    "BadVersionEncoding",
+                    diag.print("Invalid version format: expected major.minor.patch (all numbers), but got {s}.{s}.", .{ types.getName(major_minor.type), types.getName(patch.type) }),
+                    &.{},
+                );
+                return error.InvalidPackageDefinition;
+            }
+            try parseMajorMinorVersion(diag, out, major_minor);
             const patch_text = patch.token.data.sequence.asSlice();
-            out.patch = std.fmt.parseInt(u32, patch_text, 10) catch return error.BadEncoding;
+            out.patch = std.fmt.parseInt(u32, patch_text, 10) catch {
+                try diag.raise(
+                    .@"error",
+                    patch.source,
+                    "BadVersionEncoding",
+                    diag.print("Invalid patch version format: expected an integer, but got {s}.", .{patch_text}),
+                    &.{},
+                );
+                return error.BadEncoding;
+            };
         },
         else => {
             log.debug("Unsupported version CST type {s}", .{types.getName(value_cst.type)});
+            try diag.raise(
+                .@"error",
+                value_cst.source,
+                "BadVersionEncoding",
+                diag.print("Unsupported version format: expected major.minor or major.minor.patch, but got {s}.", .{types.getName(value_cst.type)}),
+                &.{},
+            );
             return error.InvalidPackageDefinition;
         },
     }
 }
 
 fn parseMajorMinorVersion(
+    diag: *analysis.Diagnostic.Context,
     out: *common.SemVer,
     value_cst: *const analysis.SyntaxTree,
 ) !void {
-    const major_text = value_cst.operands.asSlice()[0].token.data.sequence.asSlice();
-    const minor_text = value_cst.operands.asSlice()[1].token.data.sequence.asSlice();
-    out.major = std.fmt.parseInt(u32, major_text, 10) catch return error.BadEncoding;
-    out.minor = std.fmt.parseInt(u32, minor_text, 10) catch return error.BadEncoding;
+    const major_cst = value_cst.operands.asSlice()[0];
+    if (major_cst.type != types.Int) {
+        log.debug("Expected version major to be Int, found {s}", .{types.getName(major_cst.type)});
+        try diag.raise(
+            .@"error",
+            major_cst.source,
+            "BadVersionEncoding",
+            diag.print("Invalid major version format: expected an integer, but got {s}.", .{types.getName(major_cst.type)}),
+            &.{},
+        );
+        return error.InvalidPackageDefinition;
+    }
+    out.major = std.fmt.parseInt(u32, major_cst.token.data.sequence.asSlice(), 10) catch {
+        try diag.raise(
+            .@"error",
+            major_cst.source,
+            "BadVersionEncoding",
+            diag.print("Invalid major version format: expected an integer, but got {s}.", .{major_cst.token.data.sequence.asSlice()}),
+            &.{},
+        );
+        return error.BadEncoding;
+    };
+
+    const minor_cst = value_cst.operands.asSlice()[1];
+    if (minor_cst.type != types.Int) {
+        log.debug("Expected version minor to be Int, found {s}", .{types.getName(minor_cst.type)});
+        try diag.raise(
+            .@"error",
+            minor_cst.source,
+            "BadVersionEncoding",
+            diag.print("Invalid minor version format: expected an integer, but got {s}.", .{types.getName(minor_cst.type)}),
+            &.{},
+        );
+        return error.InvalidPackageDefinition;
+    }
+    out.minor = std.fmt.parseInt(u32, minor_cst.token.data.sequence.asSlice(), 10) catch {
+        try diag.raise(
+            .@"error",
+            minor_cst.source,
+            "BadVersionEncoding",
+            diag.print("Invalid minor version format: expected an integer, but got {s}.", .{minor_cst.token.data.sequence.asSlice()}),
+            &.{},
+        );
+        return error.BadEncoding;
+    };
 }
 
-fn parseDependencies(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, deps: *common.ArrayList(Dependency)) !void {
+fn parseDependencies(allocator: std.mem.Allocator, diag: *analysis.Diagnostic.Context, source: []const u8, value_cst: *const analysis.SyntaxTree, deps: *common.ArrayList(Dependency)) !void {
     // Expects Block -> Seq
     const seq_cst = if (value_cst.type != types.Block or value_cst.operands.len != 1) recover: {
         log.debug("Expected inputs value to be a Block containing a Seq, found {s}", .{types.getName(value_cst.type)});
@@ -407,21 +522,71 @@ fn parseDependencies(allocator: std.mem.Allocator, source: []const u8, value_cst
     } else seq_cst.operands.asSlice();
 
     for (elements) |*item_cst| {
-        if (item_cst.type != RPkg.types.Assign or item_cst.operands.len != 2) return error.InvalidPackageDefinition;
+        if (item_cst.type != RPkg.types.Assign) {
+            log.debug("Expected dependency item to be an Assign with 2 operands, found {s} with {d} operands", .{ types.getName(item_cst.type), item_cst.operands.len });
+            try diag.raise(
+                .@"error",
+                item_cst.source,
+                "InvalidPackageDependency",
+                diag.print("Each dependency must be an assignment of the form 'name = spec', but got {s}.", .{types.getName(item_cst.type)}),
+                &.{},
+            );
+            return error.InvalidPackageDefinition;
+        }
 
         const alias_cst = item_cst.operands.asSlice()[0];
         const spec_cst = item_cst.operands.asSlice()[1];
 
-        if (alias_cst.type != RPkg.types.Identifier) return error.InvalidPackageDefinition;
-        if (spec_cst.type != RPkg.types.Apply or spec_cst.operands.len != 2) return error.InvalidPackageDefinition;
+        if (alias_cst.type != RPkg.types.Identifier) {
+            log.debug("Expected dependency alias to be an Identifier, found {s}", .{types.getName(alias_cst.type)});
+            try diag.raise(
+                .@"error",
+                alias_cst.source,
+                "InvalidPackageDependencyName",
+                diag.print("Dependency names must be identifiers, but got {s}.", .{types.getName(alias_cst.type)}),
+                &.{},
+            );
+            return error.InvalidPackageDefinition;
+        }
+        if (spec_cst.type != RPkg.types.Apply or spec_cst.operands.len != 2) {
+            log.debug("Expected dependency spec to be an Apply with 2 operands, found {s} with {d} operands", .{ types.getName(spec_cst.type), spec_cst.operands.len });
+            try diag.raise(
+                .@"error",
+                spec_cst.source,
+                "InvalidPackageDependencySpecification",
+                diag.text("Dependency specifications must be of the form 'type \"value\"'."),
+                &.{},
+            );
+            return error.InvalidPackageDefinition;
+        }
 
         const alias = try allocator.dupe(u8, alias_cst.token.data.sequence.asSlice());
 
         const spec_type_cst = spec_cst.operands.asSlice()[0];
         const spec_val_cst = spec_cst.operands.asSlice()[1];
 
-        if (spec_type_cst.type != RPkg.types.Identifier) return error.InvalidPackageDefinition;
-        if (spec_val_cst.type != RPkg.types.String) return error.InvalidPackageDefinition;
+        if (spec_type_cst.type != RPkg.types.Identifier) {
+            log.debug("Expected dependency spec type to be an Identifier, found {s}", .{types.getName(spec_type_cst.type)});
+            try diag.raise(
+                .@"error",
+                spec_type_cst.source,
+                "InvalidPackageDependencySpecification",
+                diag.print("Dependency specification types must be identifiers, but got {s}.", .{types.getName(spec_type_cst.type)}),
+                &.{},
+            );
+            return error.InvalidPackageDefinition;
+        }
+        if (spec_val_cst.type != RPkg.types.String) {
+            log.debug("Expected dependency spec value to be a String, found {s}", .{types.getName(spec_val_cst.type)});
+            try diag.raise(
+                .@"error",
+                spec_val_cst.source,
+                "InvalidPackageDependencySpecification",
+                diag.print("Dependency specification values must be strings, but got {s}.", .{types.getName(spec_val_cst.type)}),
+                &.{},
+            );
+            return error.InvalidPackageDefinition;
+        }
 
         const spec_type = spec_type_cst.token.data.sequence.asSlice();
 
@@ -472,6 +637,14 @@ fn parseDependencies(allocator: std.mem.Allocator, source: []const u8, value_cst
                 .value = try allocator.dupe(u8, spec_val),
             };
         } else {
+            log.debug("Unknown dependency specification type {s}", .{spec_type});
+            try diag.raise(
+                .@"error",
+                spec_type_cst.source,
+                "InvalidPackageDependencyType",
+                diag.print("Unknown dependency specification type {s}.", .{spec_type}),
+                &.{},
+            );
             return error.InvalidPackageDefinition;
         }
 
@@ -479,7 +652,7 @@ fn parseDependencies(allocator: std.mem.Allocator, source: []const u8, value_cst
     }
 }
 
-fn parseModules(allocator: std.mem.Allocator, source: []const u8, value_cst: *const analysis.SyntaxTree, mods: *common.ArrayList(MaybeModule)) !void {
+fn parseModules(allocator: std.mem.Allocator, diag: *analysis.Diagnostic.Context, source: []const u8, value_cst: *const analysis.SyntaxTree, mods: *common.ArrayList(MaybeModule)) !void {
     // Expects Block -> Seq
     const seq_cst = if (value_cst.type != types.Block or value_cst.operands.len != 1) recover: {
         log.debug("Expected modules value to be a Block containing a Seq, found {s}", .{types.getName(value_cst.type)});
@@ -493,6 +666,13 @@ fn parseModules(allocator: std.mem.Allocator, source: []const u8, value_cst: *co
     for (elements) |*item_cst| {
         if (item_cst.type != types.Assign) {
             log.debug("Expected module item to be an Assign, found {s}", .{types.getName(item_cst.type)});
+            try diag.raise(
+                .@"error",
+                item_cst.source,
+                "InvalidModuleDefinition",
+                diag.print("Each module must be an assignment of the form '[export]? name = definition', but got {s}.", .{types.getName(item_cst.type)}),
+                &.{},
+            );
             return error.InvalidPackageDefinition;
         }
 
@@ -506,17 +686,31 @@ fn parseModules(allocator: std.mem.Allocator, source: []const u8, value_cst: *co
         }
         if (name.type != types.Identifier) {
             log.debug("Expected module name to be an Identifier, found {s}", .{types.getName(name.type)});
+            try diag.raise(
+                .@"error",
+                name.source,
+                "InvalidModuleName",
+                diag.print("Module names must be identifiers (optionally proceeded by the keyword 'exp[ort]'), but got {s}.", .{types.getName(name.type)}),
+                &.{},
+            );
             return error.InvalidPackageDefinition;
         }
 
         if (body_cst.type == types.Module) {
-            var module = try ml.RMod.parseCst(allocator, source, body_cst);
+            var module = try ml.RMod.parseCst(allocator, diag, source, body_cst);
             module.name = try allocator.dupe(u8, name.token.data.sequence.asSlice());
             module.visibility = visibility;
             try mods.append(allocator, .{ .definition = module });
         } else {
             if (body_cst.type != types.String) {
-                log.debug("Expected module body to be a String (file path), found {s}", .{types.getName(body_cst.type)});
+                log.debug("Expected module body to be a String (file path) or inline Module, found {s}", .{types.getName(body_cst.type)});
+                try diag.raise(
+                    .@"error",
+                    body_cst.source,
+                    "InvalidModuleDefinition",
+                    diag.print("Module definitions must be either inline .rmod syntax, or file path strings; but got {s}.", .{types.getName(body_cst.type)}),
+                    &.{},
+                );
                 return error.InvalidPackageDefinition;
             }
 
@@ -540,12 +734,13 @@ fn parseModules(allocator: std.mem.Allocator, source: []const u8, value_cst: *co
 /// Get a parser for the package definition language.
 pub fn getRPkgParser(
     allocator: std.mem.Allocator,
+    diag: *analysis.Diagnostic.Context,
     lexer_settings: analysis.Lexer.Settings,
     source_name: []const u8,
     src: []const u8,
 ) analysis.Parser.Error!analysis.Parser {
     const ml_syntax = getRPkgSyntax();
-    return ml_syntax.createParser(allocator, lexer_settings, src, .{
+    return ml_syntax.createParser(allocator, diag, lexer_settings, src, .{
         .ignore_space = false,
         .source_name = source_name,
     });
@@ -633,6 +828,13 @@ pub const syntax_defs = struct {
                         try parser.lexer.advance(); // discard package token
                         var name = try parser.pratt(std.math.minInt(i16)) orelse {
                             log.debug("package: no name found; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "InvalidPackageName",
+                                parser.diag.text("Expected package name after 'package' keyword."),
+                                &.{},
+                            );
                             return error.UnexpectedInput;
                         };
                         errdefer name.deinit(parser.allocator);
@@ -643,6 +845,13 @@ pub const syntax_defs = struct {
                                 try parser.lexer.advance(); // discard dot
                                 var inner = try parser.pratt(std.math.minInt(i16) + 1) orelse {
                                     log.debug("package: no inner expression found; panic", .{});
+                                    try parser.report(
+                                        .@"error",
+                                        next_tok.location,
+                                        "InvalidPackageBody",
+                                        parser.diag.text("Expected package body after '.'"),
+                                        &.{},
+                                    );
                                     return error.UnexpectedEof;
                                 };
                                 errdefer inner.deinit(parser.allocator);
@@ -659,10 +868,24 @@ pub const syntax_defs = struct {
                                 };
                             } else {
                                 log.debug("package: expected dot token, found {f}; panic", .{next_tok});
+                                try parser.report(
+                                    .@"error",
+                                    next_tok.location,
+                                    "InvalidPackageDefinition",
+                                    parser.diag.text("Expected package body after '.'"),
+                                    &.{},
+                                );
                                 return error.UnexpectedInput;
                             }
                         } else {
                             log.debug("package: no dot token found; panic", .{});
+                            try parser.report(
+                                .@"error",
+                                token.location,
+                                "InvalidPackageDefinition",
+                                parser.diag.text("Expected package body after '.'"),
+                                &.{},
+                            );
                             return error.UnexpectedEof;
                         }
                     }

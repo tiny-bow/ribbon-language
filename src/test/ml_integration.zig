@@ -14,8 +14,15 @@ const PP = common.PrettyPrinter;
 test "rpkg_parse" {
     const file_text = @embedFile("min.rpkg");
 
+    var diag = analysis.Diagnostic.Context.init(std.testing.allocator);
+    defer {
+        diag.dumpDiagnostics("rpkg_parse diag");
+        diag.deinit();
+    }
+
     var result = try ml.RPkg.parseSource(
         std.testing.allocator,
+        &diag,
         .{},
         "min.rpkg",
         file_text,
@@ -55,8 +62,15 @@ test "rpkg_parse" {
 test "rmod_parse" {
     const file_text = @embedFile("min.rmod");
 
+    var diag = analysis.Diagnostic.Context.init(std.testing.allocator);
+    defer {
+        diag.dumpDiagnostics("rmod_parse diag");
+        diag.deinit();
+    }
+
     var result = try ml.RMod.parseSource(
         std.testing.allocator,
+        &diag,
         .{},
         "min.rmod",
         file_text,
@@ -83,10 +97,33 @@ test "rmod_parse" {
     , fmt);
 }
 
+test "eof_rejection" {
+    const input = "123.";
+
+    var diag = analysis.Diagnostic.Context.init(std.testing.allocator);
+    defer diag.deinit();
+
+    var parser = try ml.Cst.getRmlParser(std.testing.allocator, &diag, .{}, "test", input);
+    defer parser.deinit();
+
+    try std.testing.expectError(error.UnexpectedToken, parser.parse());
+
+    var buf: [1024]u8 = undefined;
+    var writer = std.io.Writer.fixed(&buf);
+    try diag.writeAll(&writer, .{});
+    try std.testing.expectEqualStrings(
+        \\error[test:1:5]: Token [1:4 (3)]:p⟨.⟩ remaining in input
+        \\
+    ,
+        writer.buffered(),
+    );
+}
+
 test "expr_parse" {
-    try common.snapshotTest(.use_log("expr"), struct {
+    const check = struct {
+        var diag = analysis.Diagnostic.Context.init(std.testing.allocator);
         pub fn testExpr(input: []const u8, expect: []const u8) !void {
-            var parser = try ml.Cst.getRmlParser(std.testing.allocator, .{}, "test", input);
+            var parser = try ml.Cst.getRmlParser(std.testing.allocator, &diag, .{}, "test", input);
             defer parser.deinit();
 
             var syn = try parser.parse() orelse {
@@ -95,7 +132,7 @@ test "expr_parse" {
             };
             defer syn.deinit(std.testing.allocator);
 
-            var expr = try ml.Expr.parseCst(std.testing.allocator, input, &syn);
+            var expr = try ml.Expr.parseCst(std.testing.allocator, &diag, input, &syn);
             defer expr.deinit(std.testing.allocator);
 
             log.info("input: {s}\nresult: {f}", .{ input, expr });
@@ -107,7 +144,14 @@ test "expr_parse" {
 
             try std.testing.expectEqualStrings(expect, buf.written());
         }
-    }.testExpr, &.{
+    };
+
+    defer {
+        check.diag.dumpDiagnostics("expr_parse diag");
+        check.diag.deinit();
+    }
+
+    try common.snapshotTest(.use_log("expr"), check.testExpr, &.{
         .{ .input = "1 + 2", .expect = "1 + 2" }, // 0
         .{ .input = "1 * 2", .expect = "1 * 2" }, // 1
         .{ .input = "1 + 2 + 3", .expect = "1 + 2 + 3" }, // 2
@@ -133,9 +177,11 @@ test "expr_parse" {
 }
 
 test "cst_parse" {
-    try common.snapshotTest(.use_log("cst"), struct {
+    const check = struct {
+        var diag = analysis.Diagnostic.Context.init(std.testing.allocator);
+
         pub fn testCst(input: []const u8, expect: []const u8) !void {
-            var parser = try ml.Cst.getRmlParser(std.testing.allocator, .{}, "test", input);
+            var parser = try ml.Cst.getRmlParser(std.testing.allocator, &diag, .{}, "test", input);
             defer parser.deinit();
 
             var syn = try parser.parse() orelse {
@@ -164,7 +210,11 @@ test "cst_parse" {
 
             try std.testing.expectEqualStrings(expect, buf.written());
         }
-    }.testCst, &.{
+    };
+
+    defer check.diag.deinit();
+
+    try common.snapshotTest(.use_log("cst"), check.testCst, &.{
         .{ .input = "\n1", .expect = "1" }, // 0
         .{ .input = "()", .expect = "()" }, // 1
         .{ .input = "a b", .expect = "⟨𝓪𝓹𝓹 a b⟩" }, // 2
@@ -233,12 +283,43 @@ test "cst_parse" {
         .{ .input = "foo; bar;\nbaz\nqux", .expect = "⟨𝓼𝓮𝓺 foo bar ⟨𝓼𝓮𝓺 baz qux⟩⟩" }, // 64
         .{ .input = "foo;\nbar;\nbaz\nqux", .expect = "⟨𝓼𝓮𝓺 foo bar ⟨𝓼𝓮𝓺 baz qux⟩⟩" }, // 65
     });
+
+    var buf: [4096]u8 = undefined;
+    var writer = std.io.Writer.fixed(&buf);
+    try check.diag.writeAll(&writer, .{});
+
+    try std.testing.expectEqualStrings(
+        \\error[test:1:8]:
+        \\    Invalid declaration syntax; left-hand side has same precedence as operator.
+        \\error[test:1:10]: Token [1:8 (7)]:s⟨:=⟩ remaining in input
+        \\error[test:1:7]:
+        \\    Invalid assignment syntax; left-hand side has same precedence as operator.
+        \\error[test:1:8]: Token [1:7 (6)]:s⟨=⟩ remaining in input
+        \\error[test:1:7]:
+        \\    Invalid declaration syntax; left-hand side has same precedence as operator.
+        \\error[test:1:9]: Token [1:7 (6)]:s⟨:=⟩ remaining in input
+        \\error[test:1:8]:
+        \\    Invalid assignment syntax; left-hand side has same precedence as operator.
+        \\error[test:1:9]: Token [1:8 (7)]:s⟨=⟩ remaining in input
+        \\error[test:1:8]:
+        \\    Cannot parse expression due to precedence conflict with left-hand side.
+        \\    (They are the same, but this is not allowed for this operator, as chaining it does not make sense.)
+        \\error[test:1:10]: Token [1:8 (7)]:s⟨!=⟩ remaining in input
+        \\error[test:1:1]: Expected closing single quote for character literal.
+        \\error[test:1:2]: Token [1:1 (0)]:p⟨'⟩ remaining in input
+        \\error[test:1:2]: Token [1:1 (0)]:p⟨.⟩ remaining in input
+        \\error[test:1:5]: Token [1:4 (3)]:p⟨.⟩ remaining in input
+        \\
+    ,
+        writer.buffered(),
+    );
 }
 
 test "cst_attributes" {
     const check = struct {
+        var diag = analysis.Diagnostic.Context.init(std.testing.allocator);
         pub fn testCstAttributes(input: []const u8, expect: []const u8) !ml.Expr {
-            var parser = try ml.Cst.getRmlParser(std.testing.allocator, .{}, "test", input);
+            var parser = try ml.Cst.getRmlParser(std.testing.allocator, &diag, .{}, "test", input);
             defer parser.deinit();
 
             var syn = try parser.parse() orelse {
@@ -247,7 +328,7 @@ test "cst_attributes" {
             };
             defer syn.deinit(std.testing.allocator);
 
-            const expr = try ml.Expr.parseCst(std.testing.allocator, input, &syn);
+            const expr = try ml.Expr.parseCst(std.testing.allocator, &diag, input, &syn);
 
             log.info("input: {s}\nresult: {f}", .{ input, expr });
 
@@ -260,9 +341,14 @@ test "cst_attributes" {
 
             return expr;
         }
-    }.testCstAttributes;
+    };
 
-    var a = try check(";; preceeding1\n;; preceding2\nfoo ;; comment", "foo");
+    defer {
+        check.diag.dumpDiagnostics("cst_attributes diag");
+        check.diag.deinit();
+    }
+
+    var a = try check.testCstAttributes(";; preceeding1\n;; preceding2\nfoo ;; comment", "foo");
     defer a.deinit(std.testing.allocator);
 
     try std.testing.expectEqualDeep(&.{
@@ -301,7 +387,7 @@ test "cst_attributes" {
         },
     }, a.attributes);
 
-    var b = try check(";; preceeding!\nfoo ;; comment.\nbar ;; another", "⟨𝓼𝓮𝓺 foo bar⟩");
+    var b = try check.testCstAttributes(";; preceeding!\nfoo ;; comment.\nbar ;; another", "⟨𝓼𝓮𝓺 foo bar⟩");
     defer b.deinit(std.testing.allocator);
 
     try std.testing.expectEqualDeep(&.{
