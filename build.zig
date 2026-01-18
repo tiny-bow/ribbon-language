@@ -100,12 +100,6 @@ const tests = [_][]const u8{
     "printer_integration",
 };
 
-// FIXME: currently, we are not creating check/test entries for individual modules, only the tests above.
-//        this means worse sema and code coverage. however, the current build process is already quite complex:
-//        we have a gen step and lazy dependencies, which makes it hard to create per-module test binaries.
-//        a better system would see this encoded at a higher level, so that we may fetch dependencies for the host dynamically and such.
-// NOTE: until the above is fixed, we must ensure that code from sub-modules is used in a test, not just referenced.
-
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -174,6 +168,7 @@ pub fn build(b: *std.Build) !void {
     // initialize module map with special modules //
     var module_map = std.StringHashMap(*std.Build.Module).init(b.allocator);
     var test_map = std.StringHashMap(*std.Build.Module).init(b.allocator);
+    var test_bins = std.StringHashMap(*std.Build.Step.Compile).init(b.allocator);
 
     module_map.put("rg", rg_mod) catch @panic("OOM");
     module_map.put("repl", repl_mod) catch @panic("OOM");
@@ -187,7 +182,17 @@ pub fn build(b: *std.Build) !void {
     for (arch_modules) |mod_def| {
         const mod = b.createModule(.{
             .root_source_file = arch_path.path(b, b.fmt("{s}.zig", .{mod_def.name})),
+            .target = target,
+            .optimize = optimize,
         });
+
+        test_map.put(mod_def.name, mod) catch @panic("OOM");
+
+        const itest_bin = b.addTest(.{ .root_module = mod });
+        test_bins.put(mod_def.name, itest_bin) catch @panic("OOM");
+
+        check_step.dependOn(&itest_bin.step);
+        test_step.dependOn(&b.addRunArtifact(itest_bin).step);
 
         module_map.put(mod_def.name, mod) catch @panic("OOM");
     }
@@ -196,6 +201,8 @@ pub fn build(b: *std.Build) !void {
     for (modules) |mod_def| {
         const mod = b.createModule(.{
             .root_source_file = b.path(b.fmt("{s}{s}.zig", .{ module_path, mod_def.name })),
+            .target = target,
+            .optimize = optimize,
         });
 
         module_map.put(mod_def.name, mod) catch @panic("OOM");
@@ -263,9 +270,6 @@ pub fn build(b: *std.Build) !void {
     const Instruction_src_install = b.addInstallFileWithDir(Instruction_src, .{ .custom = "tmp" }, "Instruction.zig");
 
     Instruction_mod.root_source_file = Instruction_src;
-
-    // create module tests //
-    var test_bins = std.StringHashMap(*std.Build.Step.Compile).init(b.allocator);
 
     // wrap standard modules with tests //
     const utest_bin = b.addTest(.{ .root_module = main_mod });

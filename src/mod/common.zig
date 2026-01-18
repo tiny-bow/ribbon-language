@@ -988,13 +988,6 @@ pub fn isEnumVariant(comptime T: type, value: anytype) bool {
     return std.mem.indexOfScalar(std.meta.Tag(T), &field_values, value) != null;
 }
 
-pub fn stream(reader: *std.io.Reader, writer: *std.io.Writer) !void {
-    while (true) {
-        const byte: u8 = reader.takeByte() catch return;
-        try writer.writeByte(byte);
-    }
-}
-
 /// Similar to `std.mem.indexOf`, but for slices of slices.
 pub fn indexOfBuf(comptime T: type, haystack: []const []const T, needle: []const T) ?usize {
     if (needle.len == 0) return 0;

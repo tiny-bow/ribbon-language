@@ -953,7 +953,7 @@ fn paste(generatorName: []const u8, header: []const u8, commentPre: []const u8, 
     // the templates have a small disclaimer comment at the top, skip it.
     for (0..3) |_| _ = try reader.takeDelimiterInclusive('\n');
 
-    try common.stream(&reader, writer);
+    _ = try reader.stream(writer, .unlimited);
 
     try writer.writeAll("\n");
 }

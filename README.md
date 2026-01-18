@@ -496,7 +496,7 @@ provides a good overview, even if you are not using VS Code.
 * We are currently pinned to Zig version `0.15.1`.
 * 32-bit architectures are not currently planned to be supported.
 * Big-endian architectures are currently unsupported.
-* Confirmed working on Aarch64. (Alpine Linux 3.23)
+* Confirmed working on Aarch64 as of Dec 29 2025. (Alpine Linux 3.23)
 * Windows has had minimal testing.
 * Confirmed working on Debian-based systems. (Ubuntu 22 & 24)
 * Primary development environment is currently:
