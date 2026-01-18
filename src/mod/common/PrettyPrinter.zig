@@ -156,6 +156,48 @@ pub const Doc = union(enum) {
     /// A Union represents a choice: "Try LHS (Flat). If it fails, do RHS (Break)".
     /// Used to implement SoftLine and Fill.
     choice: struct { flat: *const Doc, broken: *const Doc },
+
+    /// `std.fmt` impl
+    pub fn format(self: *const Doc, writer: *std.io.Writer) !void {
+        switch (self.*) {
+            .fail => try writer.print("<<<fail>>>", .{}),
+            .nil => {},
+            .text => |s| try writer.print("{s}", .{s}),
+            .line => try writer.print("\\n", .{}),
+            .concat => |docs| {
+                try writer.print("Concat[", .{});
+                var first = true;
+                for (docs) |d| {
+                    if (!first) try writer.print(", ", .{});
+                    first = false;
+                    try d.format(writer);
+                }
+                try writer.print("]", .{});
+            },
+            .nest => |n| {
+                try writer.print("Nest({d}, ", .{n.indent});
+                try n.doc.format(writer);
+                try writer.print(")", .{});
+            },
+            .breaker => |g| {
+                try writer.print("Group(", .{});
+                try g.format(writer);
+                try writer.print(")", .{});
+            },
+            .filler => |f| {
+                try writer.print("Fill(", .{});
+                try f.format(writer);
+                try writer.print(")", .{});
+            },
+            .choice => |c| {
+                try writer.print("Choice(Flat: ", .{});
+                try c.flat.format(writer);
+                try writer.print(", Broken: ", .{});
+                try c.broken.format(writer);
+                try writer.print(")", .{});
+            },
+        }
+    }
 };
 
 const fail_doc: Doc = .fail;
@@ -193,6 +235,10 @@ pub fn render(pp: *PrettyPrinter, doc: *const Doc, writer: *std.io.Writer, optio
 
     try state.queue.append(pp.gpa, .{ .indent = options.indent_lvl, .mode = .fill, .doc = doc });
 
+    if (options.indent_lvl > 0) {
+        for (0..options.indent_lvl) |_| try writer.writeAll(options.indent_str);
+    }
+
     try state.renderLoop();
 }
 
@@ -223,9 +269,13 @@ const RenderState = struct {
                 },
                 .line => {
                     try self.writer.writeAll("\n");
-                    const indent_len = job.indent * self.indent_str.len;
-                    for (0..job.indent) |_| try self.writer.writeAll(self.indent_str);
-                    self.current_width = indent_len;
+                    if (self.queue.items.len > 0) {
+                        const indent_len = job.indent * self.indent_str.len;
+                        for (0..job.indent) |_| try self.writer.writeAll(self.indent_str);
+                        self.current_width = indent_len;
+                    } else {
+                        self.current_width = 0;
+                    }
                 },
                 .concat => |docs| {
                     // Push in reverse order
